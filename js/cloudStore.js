@@ -40,6 +40,7 @@ class CloudStore {
 
   // Salva as chaves no aparelho atual para não precisar redigitar
   saveConfig(url, anonKey) {
+    const isFirstActivation = !this.isConfigured();
     this.config.url = url.trim().replace(/\/$/, ''); // remove barra final
     this.config.anonKey = anonKey.trim();
     try {
@@ -51,7 +52,44 @@ class CloudStore {
     if (window.JR_CONFIG) {
       window.JR_CONFIG.mode = this.isConfigured() ? 'cloud' : 'local';
     }
+
+    // Na primeira vez que ativa a nuvem, zera os dados transacionais de exemplo
+    // Os dados mestre (motoristas, veículos, rotas, usuários) são mantidos
+    if (isFirstActivation) {
+      this._clearTransactionalData();
+    }
   }
+
+  // Zera apenas os dados de ocorrências/viagens (não apaga motoristas, veículos, etc.)
+  _clearTransactionalData() {
+    const transactionalKeys = [
+      'ocorrencias_devolucao',
+      'itens_devolucao',
+      'ocorrencias_rota',
+      'relatorios_divergencia',
+      'auditoria_produtividade',
+      'controle_viagens',
+      'ocorrencias_viagens',
+      'resumo_diario_cd',
+      'trocas_veiculos',
+      'cargas'
+    ];
+
+    try {
+      const rawDb = localStorage.getItem('jr_sac_db');
+      if (rawDb) {
+        const db = JSON.parse(rawDb);
+        transactionalKeys.forEach(key => {
+          if (Array.isArray(db[key])) db[key] = [];
+        });
+        localStorage.setItem('jr_sac_db', JSON.stringify(db));
+        console.log('[CloudStore] Dados transacionais zerados para início de produção.');
+      }
+    } catch(e) {
+      console.warn('[CloudStore] Erro ao zerar dados transacionais:', e);
+    }
+  }
+
 
   // Remove configuração salva (volta para modo local)
   clearConfig() {
