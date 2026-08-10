@@ -1,0 +1,43 @@
+{
+  "name": "JR Oper - Operações Logísticas",
+  "short_name": "JR Oper",
+  "description": "Sistema Corporativo Integrado de Operações Logísticas, SAC, Devoluções, CD e Frotas da JR Distribuidora",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0d4722",
+  "theme_color": "#134e2c",
+  "lang": "pt-BR",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "./public/icon-512.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./public/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "SAC / Devoluções",
+      "short_name": "SAC",
+      "description": "Abrir módulo de devoluções",
+      "url": "./index.html",
+      "icons": [{ "src": "./public/icon-512.png", "sizes": "96x96" }]
+    },
+    {
+      "name": "Centro de Distribuição",
+      "short_name": "CD",
+      "description": "Abrir módulo do CD",
+      "url": "./index.html",
+      "icons": [{ "src": "./public/icon-512.png", "sizes": "96x96" }]
+    }
+  ]
+}

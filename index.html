@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <script>
+    function showSystemError(msg, url, lineNo, colNo, error) {
+      console.error("Erro Detectado:", msg, url, lineNo, colNo, error);
+      var container = document.getElementById('main-content');
+      if (container && (container.innerHTML.includes('Carregando') || container.innerHTML.trim() === '')) {
+        var details = (error && (error.stack || error.message)) ? (error.stack || error.message) : String(msg);
+        if (lineNo) details += ' (Linha: ' + lineNo + (colNo ? ', Col: ' + colNo : '') + ')';
+        container.innerHTML = '<div style="background:#0f172a; border:2px solid #ef4444; border-radius:12px; padding:24px; max-width:650px; margin:40px auto; text-align:center; color:#ffffff; font-family:sans-serif; box-shadow:0 10px 25px rgba(0,0,0,0.5);">' +
+          '<div style="font-size:36px; margin-bottom:10px;">⚠️</div>' +
+          '<h2 style="font-size:18px; font-weight:bold; color:#f87171; margin-bottom:10px; text-transform:uppercase;">Falha na Inicialização do Sistema</h2>' +
+          '<p style="font-size:12px; color:#cbd5e1; margin-bottom:15px;">Ocorreu um erro na execução da interface:</p>' +
+          '<div style="background:#020617; color:#fca5a5; font-family:monospace; font-size:11px; padding:12px; border-radius:8px; border:1px solid #1e293b; text-align:left; overflow-x:auto; margin-bottom:20px; white-space:pre-wrap; max-height:200px;">' +
+          '<b>Erro:</b> ' + details + '</div>' +
+          '<button onclick="localStorage.clear(); sessionStorage.clear(); location.reload();" style="background:#10b981; color:#ffffff; font-weight:bold; padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-size:12px;">🔄 Limpar Cache e Reiniciar JR Oper</button>' +
+          '</div>';
+      }
+    }
+    window.onerror = function(msg, url, lineNo, colNo, error) {
+      if (msg === "Script error." && window._appInitialized) {
+        console.warn("Ignorado Script error. genérico do navegador.");
+        return true;
+      }
+      showSystemError(msg, url, lineNo, colNo, error);
+      return false;
+    };
+    window.addEventListener('unhandledrejection', function(e) {
+      console.error("Promessa rejeitada:", e.reason);
+    });
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>JR Oper - Sistema Integrado de Operações Logísticas</title>
+  <meta name="description" content="Plataforma corporativa integrada JR Distribuidora: SAC, Devoluções, CD, Rastreio de Frota e Operações Logísticas.">
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#134e2c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="./public/icon-512.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script src="./js/tailwind.cdn.js"></script>
+  <script>
+    if (typeof tailwind !== 'undefined') {
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: { sans: ['Plus Jakarta Sans', 'sans-serif'] },
+            colors: { jr: { green: '#0d4722', dark: '#082a14', accent: '#10b981', gold: '#fbbf24' } }
+          }
+        }
+      };
+    }
+  </script>
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #030712; color: #f3f4f6; -webkit-tap-highlight-color: transparent; }
+    #nav-menu { position: relative; }
+    select, input[type=text], input[type=number], input[type=email], input[type=password], textarea { -webkit-appearance: none; appearance: none; }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #1e3a2f; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #10b981; }
+
+    /* ==========================================
+       MODO CLARO (LIGHT MODE) - ALTO CONTRASTE
+       ========================================== */
+    html.light body {
+      background-color: #f1f5f9 !important;
+      color: #0f172a !important;
+    }
+
+    /* Cards & Containers */
+    html.light .bg-slate-950,
+    html.light .bg-slate-900 {
+      background-color: #ffffff !important;
+      color: #0f172a !important;
+      border-color: #cbd5e1 !important;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05) !important;
+    }
+
+    html.light .bg-slate-800 {
+      background-color: #f1f5f9 !important;
+      color: #0f172a !important;
+      border-color: #cbd5e1 !important;
+    }
+
+    html.light .bg-slate-800\/40,
+    html.light .bg-slate-800\/50,
+    html.light .bg-slate-800\/60,
+    html.light .bg-slate-900\/80,
+    html.light .hover\:bg-slate-800\/40:hover,
+    html.light .hover\:bg-slate-800\/50:hover {
+      background-color: #f8fafc !important;
+    }
+
+    /* Table Headers & Rows */
+    html.light thead.bg-slate-950,
+    html.light thead.bg-slate-900,
+    html.light tr.bg-slate-950 {
+      background-color: #e2e8f0 !important;
+      color: #0f172a !important;
+    }
+    html.light th {
+      color: #1e293b !important;
+      font-weight: 700 !important;
+    }
+    html.light td {
+      border-color: #e2e8f0 !important;
+    }
+    html.light .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+      border-color: #e2e8f0 !important;
+    }
+
+    /* Base Text Colors (High Contrast) */
+    html.light .text-white {
+      color: #0f172a !important;
+    }
+    html.light .text-slate-100,
+    html.light .text-slate-200,
+    html.light .text-slate-300 {
+      color: #1e293b !important;
+    }
+    html.light .text-slate-400 {
+      color: #334155 !important;
+    }
+    html.light .text-slate-500 {
+      color: #475569 !important;
+    }
+    html.light .text-slate-600 {
+      color: #64748b !important;
+    }
+
+    html.light .text-emerald-400,
+    html.light .text-emerald-300,
+    html.light .text-emerald-200 {
+      color: #047857 !important; /* Deep Emerald Green */
+    }
+    html.light .text-amber-400,
+    html.light .text-amber-400,
+    html.light .text-amber-300,
+    html.light .text-amber-200 {
+      color: #b45309 !important; /* Deep Amber / Bronze */
+    }
+    html.light .text-red-400,
+    html.light .text-red-300,
+    html.light .text-red-200 {
+      color: #b91c1c !important; /* Deep Red / Crimson */
+    }
+    html.light .text-purple-400,
+    html.light .text-purple-300 {
+      color: #6b21a8 !important; /* Deep Purple */
+    }
+    html.light .text-blue-400,
+    html.light .text-blue-300 {
+      color: #1d4ed8 !important; /* Deep Blue */
+    }
+    html.light .text-orange-400,
+    html.light .text-orange-300 {
+      color: #c2410c !important; /* Deep Orange */
+    }
+
+    /* Callout & Banner Containers in Light Mode */
+    html.light main .bg-emerald-950,
+    html.light main .bg-emerald-950\/30,
+    html.light main .bg-emerald-950\/40,
+    html.light main .bg-emerald-950\/60,
+    html.light main .bg-emerald-900\/60 {
+      background-color: #dcfce7 !important;
+      border-color: #86efac !important;
+      color: #14532d !important;
+    }
+    html.light .bg-amber-950,
+    html.light .bg-amber-950\/30,
+    html.light .bg-amber-950\/40,
+    html.light .bg-amber-900\/60 {
+      background-color: #fef3c7 !important;
+      border-color: #fde047 !important;
+      color: #78350f !important;
+    }
+    html.light .bg-red-950,
+    html.light .bg-red-950\/30,
+    html.light .bg-red-950\/40,
+    html.light .bg-red-900\/60 {
+      background-color: #fee2e2 !important;
+      border-color: #fca5a5 !important;
+      color: #7f1d1d !important;
+    }
+    html.light .bg-purple-950,
+    html.light .bg-purple-950\/30,
+    html.light .bg-purple-950\/40,
+    html.light .bg-purple-900\/60 {
+      background-color: #f3e8ff !important;
+      border-color: #d8b4fe !important;
+      color: #581c87 !important;
+    }
+    html.light .bg-blue-950,
+    html.light .bg-blue-950\/30,
+    html.light .bg-blue-950\/40,
+    html.light .bg-blue-900\/60 {
+      background-color: #dbeafe !important;
+      border-color: #93c5fd !important;
+      color: #1e3a8a !important;
+    }
+
+    /* Status Badges */
+    html.light .bg-amber-300 {
+      background-color: #fef3c7 !important;
+      color: #92400e !important;
+      border: 1px solid #fcd34d !important;
+    }
+
+    /* Form Inputs, Selects, Textareas */
+    html.light select,
+    html.light input[type=text],
+    html.light input[type=number],
+    html.light input[type=email],
+    html.light input[type=password],
+    html.light input[type=date],
+    html.light input[type=time],
+    html.light textarea {
+      background-color: #ffffff !important;
+      color: #0f172a !important;
+      border-color: #94a3b8 !important;
+    }
+    html.light select option {
+      background-color: #ffffff !important;
+      color: #0f172a !important;
+    }
+    html.light ::placeholder {
+      color: #64748b !important;
+    }
+
+    /* Header & Navbar (Preserve rich corporate dark green header with crisp high contrast) */
+    html.light header,
+    html.light header.bg-emerald-950,
+    html.light header.bg-slate-900 {
+      background-color: #064e3b !important;
+      border-color: #047857 !important;
+      color: #ffffff !important;
+    }
+    html.light header *,
+    html.light header .text-white,
+    html.light header .text-emerald-100 {
+      color: #ffffff !important;
+    }
+    html.light header .text-emerald-400,
+    html.light header .text-emerald-300,
+    html.light header .text-emerald-300\/70 {
+      color: #6ee7b7 !important;
+    }
+    html.light header #hamburger-btn {
+      background-color: #047857 !important;
+      border-color: #065f46 !important;
+      color: #ffffff !important;
+    }
+    html.light #btn-theme-toggle {
+      background-color: #047857 !important;
+      border-color: #065f46 !important;
+      color: #ffffff !important;
+    }
+
+    /* Header Dropdown Menu */
+    html.light #mobile-menu-dropdown {
+      background-color: #ffffff !important;
+      border-color: #cbd5e1 !important;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15) !important;
+    }
+    html.light #mobile-menu-dropdown .bg-slate-950 {
+      background-color: #f8fafc !important;
+      border-color: #e2e8f0 !important;
+    }
+    html.light #mobile-menu-dropdown .text-white {
+      color: #0f172a !important;
+    }
+    html.light #mobile-menu-dropdown .text-slate-300 {
+      color: #334155 !important;
+    }
+    html.light #mobile-menu-dropdown .hover\:bg-slate-800:hover {
+      background-color: #f1f5f9 !important;
+      color: #0f172a !important;
+    }
+    html.light #mobile-menu-dropdown .bg-emerald-800 {
+      background-color: #dcfce7 !important;
+      color: #14532d !important;
+    }
+
+    /* Footers & Modals */
+    html.light footer {
+      background-color: #f1f5f9 !important;
+      border-color: #cbd5e1 !important;
+      color: #475569 !important;
+    }
+    html.light footer .text-slate-600 {
+      color: #64748b !important;
+    }
+    html.light #modal-container .bg-slate-900 {
+      background-color: #ffffff !important;
+      border-color: #cbd5e1 !important;
+    }
+    html.light #modal-container .bg-slate-950 {
+      background-color: #f8fafc !important;
+      border-color: #e2e8f0 !important;
+    }
+
+    /* ==========================================
+       ESTILOS DE IMPRESSÃO (BOLETIM LIMPO)
+       ========================================== */
+    @media print {
+      header, footer, #nav-menu, #btn-theme-toggle, #user-info-area, .no-print {
+        display: none !important;
+      }
+      body {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+      }
+      main {
+        padding: 0 !important;
+        margin: 0 !important;
+        max-width: 100% !important;
+      }
+      .bg-slate-950, .bg-slate-900, .bg-slate-800 {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+        border-color: #cbd5e1 !important;
+        box-shadow: none !important;
+      }
+      .text-white, .text-slate-100, .text-slate-200, .text-slate-300 {
+        color: #0f172a !important;
+      }
+      .text-slate-400, .text-slate-500 {
+        color: #475569 !important;
+      }
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-950 text-slate-100 antialiased selection:bg-emerald-500 selection:text-white">
+
+  <header class="bg-emerald-950 border-b border-emerald-800/80 sticky top-0 z-50 shadow-xl">
+    <div class="max-w-7xl mx-auto px-3 sm:px-4 py-2.5 flex items-center justify-between gap-3 relative">
+      <div class="flex items-center gap-2.5 shrink-0">
+        <button onclick="toggleMobileMenu()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white p-2 rounded-lg transition" id="hamburger-btn" title="Menu de Navegação">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="flex items-center gap-2 cursor-pointer" onclick="switchTab('dashboard')">
+          <img src="./public/logo.png" alt="JR Oper Logo" class="w-9 h-9 rounded-xl shadow-md border border-emerald-600 object-cover" style="width: 36px; height: 36px; object-fit: cover;" onerror="this.style.display='none'">
+          <div>
+            <div class="flex items-center gap-1.5">
+              <span class="font-extrabold text-lg text-white tracking-wide leading-none">JR</span>
+              <span class="bg-emerald-800 text-emerald-200 text-[10px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase">OPER</span>
+            </div>
+            <div class="text-[10px] text-emerald-300/70 font-medium leading-none">Operações Logísticas Integradas</div>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <!-- BOTÃO DE MODO CLARO / ESCURO (SOL / LUA) -->
+        <button id="btn-theme-toggle" onclick="toggleTheme()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 p-2 rounded-lg text-xs font-bold flex items-center justify-center transition shadow shrink-0" title="Alternar Modo Claro / Escuro">
+          <span id="theme-icon" class="text-base">☀️</span>
+        </button>
+
+        <button id="btn-pwa-install" class="hidden bg-amber-500 hover:bg-amber-400 text-amber-950 font-black text-xs px-2 py-1.5 rounded-lg shadow-lg animate-bounce flex items-center gap-1">
+          📱 <span class="hidden sm:inline">Instalar</span>
+        </button>
+        <div id="user-info-area"></div>
+      </div>
+    </div>
+    <div id="nav-menu" class="absolute left-3 sm:left-4 top-full z-50"></div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 w-full flex-grow" id="main-content">
+    <div class="text-center py-20 text-slate-500">
+      <div class="text-2xl mb-2">⚙️</div>
+      Carregando sistema JR Oper...
+    </div>
+  </main>
+
+  <div id="modal-container" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"></div>
+
+  <footer class="bg-slate-950 border-t border-slate-900 py-3 text-center text-xs text-slate-500">
+    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+      <div><b>JR Distribuidora</b> 2026 – Sistema Integrado de Operações (JR Oper)</div>
+      <div class="flex items-center gap-3">
+        <span id="cloud-status-indicator" class="flex items-center gap-1 cursor-default" title="Status do Banco de Dados">⚫ <span style="color:#6b7280;font-size:10px;">Modo Local</span></span>
+        <button id="btn-cloud-config" onclick="openCloudConfigPanel()" class="bg-slate-800 hover:bg-emerald-800 border border-slate-700 hover:border-emerald-600 text-emerald-400 font-semibold px-2.5 py-1 rounded-lg transition-all text-xs flex items-center gap-1" title="Configurar Banco de Dados na Nuvem">
+          ☁️ Configurar Nuvem
+        </button>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ============================================================
+       PAINEL DE CONFIGURAÇÃO DA NUVEM (SUPABASE)
+       Permite conectar ao banco de dados sem editar código
+       ============================================================ -->
+  <div id="cloud-config-modal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.85); backdrop-filter:blur(6px); display:none; align-items:center; justify-content:center; padding:16px;">
+    <div style="background:linear-gradient(135deg,#0f1f14,#0d1a1a); border:1px solid #1e4d2f; border-radius:20px; padding:28px; max-width:520px; width:100%; box-shadow:0 25px 50px rgba(0,0,0,0.7); font-family:'Plus Jakarta Sans',sans-serif;">
+      
+      <!-- Cabeçalho -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+        <div>
+          <div style="font-size:22px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">☁️ Conexão com a Nuvem</div>
+          <div style="font-size:12px;color:#6ee7b7;margin-top:2px;">Banco de Dados Supabase — Gratuito</div>
+        </div>
+        <button onclick="closeCloudConfigPanel()" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;">✕</button>
+      </div>
+
+      <!-- Explicação simples -->
+      <div style="background:#0f2d1f;border:1px solid #1a4a2e;border-radius:12px;padding:14px;margin-bottom:20px;">
+        <div style="font-size:11px;color:#86efac;font-weight:700;margin-bottom:6px;">📌 O QUE ISSO FAZ?</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.6;">Conecta este aplicativo ao banco de dados na internet. Assim, <b style="color:#6ee7b7;">qualquer aparelho da empresa</b> (celular, tablet ou computador) vê os mesmos dados em tempo real.</div>
+      </div>
+
+      <!-- Campo URL -->
+      <div style="margin-bottom:14px;">
+        <label style="display:block;font-size:11px;font-weight:700;color:#6ee7b7;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔗 URL do Projeto Supabase</label>
+        <input id="cloud-url-input" type="url" placeholder="https://xyzabcdef.supabase.co"
+          style="width:100%;background:#0a1a0f;border:1.5px solid #1e4d2f;border-radius:10px;padding:12px 14px;color:#e2e8f0;font-size:13px;outline:none;box-sizing:border-box;transition:border-color 0.2s;"
+          onfocus="this.style.borderColor='#10b981'" onblur="this.style.borderColor='#1e4d2f'">
+        <div style="font-size:10px;color:#64748b;margin-top:4px;">Encontrado em: Supabase → Seu Projeto → Settings → API → Project URL</div>
+      </div>
+
+      <!-- Campo Chave -->
+      <div style="margin-bottom:14px;">
+        <label style="display:block;font-size:11px;font-weight:700;color:#6ee7b7;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔑 Chave Pública (anon public)</label>
+        <input id="cloud-key-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          style="width:100%;background:#0a1a0f;border:1.5px solid #1e4d2f;border-radius:10px;padding:12px 14px;color:#e2e8f0;font-size:13px;outline:none;box-sizing:border-box;transition:border-color 0.2s;"
+          onfocus="this.style.borderColor='#10b981'" onblur="this.style.borderColor='#1e4d2f'">
+        <div style="font-size:10px;color:#64748b;margin-top:4px;">Encontrado em: Supabase → Seu Projeto → Settings → API → anon / public</div>
+      </div>
+
+      <!-- Resultado do teste -->
+      <div id="cloud-test-result" style="display:none;background:#0f1f14;border-radius:10px;padding:12px;margin-bottom:16px;font-size:12px;border:1px solid #1e3a2f;"></div>
+
+      <!-- Botões -->
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button id="btn-test-cloud" onclick="testCloudConnection()" 
+          style="flex:1;background:linear-gradient(135deg,#064e3b,#065f46);border:1px solid #10b981;color:#6ee7b7;font-weight:700;padding:12px;border-radius:10px;cursor:pointer;font-size:13px;transition:all 0.2s;min-width:120px;">
+          🔌 Testar Conexão
+        </button>
+        <button id="btn-save-cloud" onclick="saveCloudConfig()"
+          style="flex:1;background:linear-gradient(135deg,#065f46,#047857);border:1px solid #10b981;color:#ffffff;font-weight:800;padding:12px;border-radius:10px;cursor:pointer;font-size:13px;transition:all 0.2s;min-width:120px;">
+          💾 Salvar e Ativar
+        </button>
+      </div>
+      
+      <!-- Botão desconectar (só aparece se estiver conectado) -->
+      <div id="btn-disconnect-area" style="margin-top:10px;display:none;">
+        <button onclick="disconnectCloud()"
+          style="width:100%;background:transparent;border:1px solid #ef4444;color:#f87171;font-weight:600;padding:10px;border-radius:10px;cursor:pointer;font-size:12px;transition:all 0.2s;">
+          🔌 Desconectar e Voltar ao Modo Local
+        </button>
+      </div>
+
+      <!-- Aviso se já conectado -->
+      <div id="cloud-already-connected" style="display:none;margin-top:14px;background:#0f2d1f;border:1px solid #10b981;border-radius:10px;padding:12px;">
+        <div style="font-size:12px;color:#6ee7b7;">✅ <b>Este aparelho já está conectado à Nuvem.</b><br><span style="color:#94a3b8;">Os dados são sincronizados automaticamente a cada 30 segundos.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // === FUNÇÕES DO PAINEL DE CONFIGURAÇÃO DA NUVEM ===
+    
+    function openCloudConfigPanel() {
+      const modal = document.getElementById('cloud-config-modal');
+      modal.style.display = 'flex';
+      
+      // Preenche os campos se já tiver configuração salva
+      if (window.cloudStore && window.cloudStore.isConfigured()) {
+        document.getElementById('cloud-url-input').value = window.cloudStore.config.url || '';
+        document.getElementById('cloud-key-input').value = window.cloudStore.config.anonKey || '';
+        document.getElementById('cloud-already-connected').style.display = 'block';
+        document.getElementById('btn-disconnect-area').style.display = 'block';
+      } else {
+        document.getElementById('cloud-already-connected').style.display = 'none';
+        document.getElementById('btn-disconnect-area').style.display = 'none';
+      }
+    }
+    
+    function closeCloudConfigPanel() {
+      document.getElementById('cloud-config-modal').style.display = 'none';
+      document.getElementById('cloud-test-result').style.display = 'none';
+    }
+    
+    // Fecha ao clicar fora do painel
+    document.getElementById('cloud-config-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeCloudConfigPanel();
+    });
+    
+    async function testCloudConnection() {
+      const url = document.getElementById('cloud-url-input').value.trim();
+      const key = document.getElementById('cloud-key-input').value.trim();
+      const resultDiv = document.getElementById('cloud-test-result');
+      const btn = document.getElementById('btn-test-cloud');
+      
+      if (!url || !key) {
+        resultDiv.style.display = 'block';
+        resultDiv.style.borderColor = '#ef4444';
+        resultDiv.innerHTML = '⚠️ <b style="color:#f87171;">Preencha os dois campos antes de testar.</b>';
+        return;
+      }
+      
+      btn.textContent = '⏳ Testando...';
+      btn.disabled = true;
+      resultDiv.style.display = 'block';
+      resultDiv.style.borderColor = '#f59e0b';
+      resultDiv.innerHTML = '🟡 <span style="color:#fcd34d;">Conectando ao Supabase...</span>';
+      
+      // Aplica temporariamente para testar
+      window.cloudStore.config.url = url.replace(/\/$/, '');
+      window.cloudStore.config.anonKey = key;
+      
+      const result = await window.cloudStore.testConnection();
+      
+      resultDiv.style.borderColor = result.success ? '#10b981' : '#ef4444';
+      resultDiv.style.color = result.success ? '#6ee7b7' : '#f87171';
+      resultDiv.innerHTML = result.message;
+      
+      btn.textContent = '🔌 Testar Conexão';
+      btn.disabled = false;
+    }
+    
+    async function saveCloudConfig() {
+      const url = document.getElementById('cloud-url-input').value.trim();
+      const key = document.getElementById('cloud-key-input').value.trim();
+      const resultDiv = document.getElementById('cloud-test-result');
+      const btn = document.getElementById('btn-save-cloud');
+      
+      if (!url || !key) {
+        resultDiv.style.display = 'block';
+        resultDiv.style.borderColor = '#ef4444';
+        resultDiv.innerHTML = '⚠️ <b style="color:#f87171;">Preencha os dois campos para ativar a Nuvem.</b>';
+        return;
+      }
+      
+      btn.textContent = '⏳ Testando e Salvando...';
+      btn.disabled = true;
+      resultDiv.style.display = 'block';
+      resultDiv.style.borderColor = '#f59e0b';
+      resultDiv.innerHTML = '🟡 <span style="color:#fcd34d;">Verificando conexão antes de salvar...</span>';
+      
+      window.cloudStore.config.url = url.replace(/\/$/, '');
+      window.cloudStore.config.anonKey = key;
+      const result = await window.cloudStore.testConnection();
+      
+      if (result.success) {
+        window.cloudStore.saveConfig(url, key);
+        window.cloudStore.startAutoSync();
+        resultDiv.style.borderColor = '#10b981';
+        resultDiv.style.color = '#6ee7b7';
+        resultDiv.innerHTML = '✅ <b>Salvo com sucesso!</b> Este aparelho agora está conectado à Nuvem. Sincronizando dados...';
+        document.getElementById('cloud-already-connected').style.display = 'block';
+        document.getElementById('btn-disconnect-area').style.display = 'block';
+        setTimeout(() => closeCloudConfigPanel(), 3000);
+      } else {
+        resultDiv.style.borderColor = '#ef4444';
+        resultDiv.style.color = '#f87171';
+        resultDiv.innerHTML = result.message + '<br><small style="color:#94a3b8;">Corrija os dados e tente novamente.</small>';
+      }
+      
+      btn.textContent = '💾 Salvar e Ativar';
+      btn.disabled = false;
+    }
+    
+    function disconnectCloud() {
+      if (!confirm('Deseja desconectar este aparelho do banco de dados na nuvem e voltar ao Modo Local?')) return;
+      window.cloudStore.clearConfig();
+      document.getElementById('cloud-already-connected').style.display = 'none';
+      document.getElementById('btn-disconnect-area').style.display = 'none';
+      document.getElementById('cloud-url-input').value = '';
+      document.getElementById('cloud-key-input').value = '';
+      document.getElementById('cloud-test-result').style.display = 'block';
+      document.getElementById('cloud-test-result').style.borderColor = '#64748b';
+      document.getElementById('cloud-test-result').style.color = '#94a3b8';
+      document.getElementById('cloud-test-result').innerHTML = '⚫ Desconectado. Este aparelho voltou ao Modo Local.';
+    }
+  </script>
+
+  <script src="./js/xlsx.full.min.js"></script>
+  <script src="./js/mockData.js"></script>
+  <script src="./js/config.js"></script>
+  <script src="./js/cloudStore.js"></script>
+  <script src="./js/store.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>

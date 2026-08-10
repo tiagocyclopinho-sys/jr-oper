@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🚀 Guia de Publicação — JR Oper</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    :root {
+      --green: #10b981;
+      --green-dark: #064e3b;
+      --green-light: #6ee7b7;
+      --bg: #030d07;
+      --card: #0a1a0f;
+      --card2: #0f2318;
+      --border: #1a4a2e;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --amber: #f59e0b;
+      --blue: #3b82f6;
+      --red: #ef4444;
+    }
+    
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+    
+    /* HERO */
+    .hero {
+      background: linear-gradient(135deg, #030d07 0%, #0d2b18 50%, #030d07 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 48px 24px 40px;
+      text-align: center;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3);
+      color: var(--green-light); font-size: 12px; font-weight: 700;
+      padding: 6px 14px; border-radius: 999px; margin-bottom: 20px;
+      letter-spacing: 0.5px; text-transform: uppercase;
+    }
+    .hero h1 {
+      font-size: clamp(26px, 5vw, 42px);
+      font-weight: 900;
+      color: #fff;
+      letter-spacing: -1px;
+      margin-bottom: 12px;
+    }
+    .hero h1 span { color: var(--green-light); }
+    .hero p {
+      font-size: 15px; color: var(--muted); max-width: 580px;
+      margin: 0 auto 28px; line-height: 1.7;
+    }
+    .hero-stats {
+      display: flex; flex-wrap: wrap; gap: 16px;
+      justify-content: center; margin-top: 16px;
+    }
+    .hero-stat {
+      background: rgba(16,185,129,0.08);
+      border: 1px solid rgba(16,185,129,0.2);
+      border-radius: 12px; padding: 12px 20px;
+      text-align: center;
+    }
+    .hero-stat strong { display: block; font-size: 20px; font-weight: 900; color: var(--green-light); }
+    .hero-stat span { font-size: 11px; color: var(--muted); }
+
+    /* FERRAMENTAS EXPLICADAS */
+    .section { max-width: 860px; margin: 0 auto; padding: 40px 20px; }
+    .section-title {
+      font-size: 11px; font-weight: 800; letter-spacing: 1.5px;
+      text-transform: uppercase; color: var(--green); margin-bottom: 20px;
+    }
+    .tools-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 14px; margin-bottom: 40px;
+    }
+    .tool-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 18px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .tool-card:hover { border-color: var(--green); transform: translateY(-2px); }
+    .tool-card .icon { font-size: 26px; margin-bottom: 10px; }
+    .tool-card h3 { font-size: 14px; font-weight: 800; color: #fff; margin-bottom: 6px; }
+    .tool-card .desc { font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .tool-card .tag {
+      display: inline-block; margin-top: 10px; font-size: 10px; font-weight: 700;
+      padding: 3px 10px; border-radius: 999px; letter-spacing: 0.5px; text-transform: uppercase;
+    }
+    .tag-use { background: rgba(16,185,129,0.15); color: var(--green-light); }
+    .tag-skip { background: rgba(148,163,184,0.1); color: #64748b; }
+    .tag-optional { background: rgba(245,158,11,0.12); color: #fcd34d; }
+
+    /* STEPS */
+    .steps { display: flex; flex-direction: column; gap: 24px; }
+    .step-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .step-card.active { border-color: var(--green); }
+    .step-card.done { border-color: #065f46; opacity: 0.85; }
+    
+    .step-header {
+      display: flex; align-items: center; gap: 16px;
+      padding: 20px 24px; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .step-header:hover { background: rgba(16,185,129,0.05); }
+    
+    .step-number {
+      width: 44px; height: 44px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 900; flex-shrink: 0;
+      background: linear-gradient(135deg, #064e3b, #047857);
+      border: 2px solid #10b981; color: #fff;
+      transition: all 0.3s;
+    }
+    .step-card.done .step-number {
+      background: linear-gradient(135deg, #047857, #10b981);
+      content: '✓';
+    }
+    
+    .step-info { flex: 1; }
+    .step-info h2 { font-size: 16px; font-weight: 800; color: #fff; margin-bottom: 4px; }
+    .step-info .meta { font-size: 12px; color: var(--muted); }
+    .step-info .meta strong { color: var(--green-light); }
+    
+    .step-chevron { color: var(--muted); font-size: 18px; transition: transform 0.3s; }
+    .step-card.open .step-chevron { transform: rotate(90deg); }
+    
+    .step-body {
+      display: none; padding: 0 24px 24px; border-top: 1px solid var(--border);
+    }
+    .step-card.open .step-body { display: block; }
+    
+    /* INSTRUÇÃO NUMERADA */
+    .instructions { margin-top: 20px; }
+    .inst {
+      display: flex; gap: 14px; margin-bottom: 16px;
+      padding: 14px; background: var(--card2);
+      border: 1px solid var(--border); border-radius: 12px;
+      transition: border-color 0.2s;
+    }
+    .inst:hover { border-color: rgba(16,185,129,0.4); }
+    .inst-num {
+      width: 28px; height: 28px; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--green-dark), #047857);
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 900; color: #fff;
+    }
+    .inst-text { flex: 1; }
+    .inst-text strong { display: block; font-size: 13px; color: #fff; margin-bottom: 4px; }
+    .inst-text p { font-size: 12px; color: var(--muted); }
+    .inst-text a { color: var(--green-light); text-decoration: none; }
+    .inst-text a:hover { text-decoration: underline; }
+    
+    /* CÓDIGO / CAIXA DE DESTAQUE */
+    .code-box {
+      background: #020d06; border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px; margin: 12px 0;
+      font-family: 'Courier New', monospace; font-size: 12px;
+      color: var(--green-light); overflow-x: auto; position: relative;
+    }
+    .code-box .comment { color: #475569; }
+    
+    .highlight-box {
+      background: rgba(16,185,129,0.06);
+      border: 1px solid rgba(16,185,129,0.25);
+      border-left: 4px solid var(--green);
+      border-radius: 10px; padding: 14px 16px; margin: 12px 0;
+      font-size: 13px;
+    }
+    .highlight-box .title { font-weight: 800; color: var(--green-light); margin-bottom: 6px; font-size: 12px; }
+    
+    .warning-box {
+      background: rgba(245,158,11,0.07);
+      border: 1px solid rgba(245,158,11,0.3);
+      border-left: 4px solid var(--amber);
+      border-radius: 10px; padding: 14px 16px; margin: 12px 0;
+      font-size: 13px; color: #fcd34d;
+    }
+    .warning-box .title { font-weight: 800; margin-bottom: 6px; font-size: 12px; }
+
+    /* CHECKBOX */
+    .check-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 14px; border-radius: 10px;
+      cursor: pointer; transition: background 0.15s; user-select: none;
+    }
+    .check-item:hover { background: rgba(16,185,129,0.05); }
+    .check-item input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--green); cursor: pointer; }
+    .check-item label { font-size: 13px; color: var(--muted); cursor: pointer; }
+    .check-item input:checked + label { color: var(--green-light); text-decoration: line-through; opacity: 0.7; }
+    
+    /* RESULTADO FINAL */
+    .result-section {
+      background: linear-gradient(135deg, #0a2d1a, #0d3520);
+      border: 1px solid rgba(16,185,129,0.3); border-radius: 20px;
+      padding: 32px; text-align: center; margin-top: 40px;
+    }
+    .result-section h2 { font-size: 26px; font-weight: 900; color: #fff; margin-bottom: 12px; }
+    .result-section p { font-size: 14px; color: var(--muted); max-width: 500px; margin: 0 auto 24px; }
+    .result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; text-align: left; }
+    .result-card {
+      background: rgba(16,185,129,0.07); border: 1px solid rgba(16,185,129,0.2);
+      border-radius: 12px; padding: 14px;
+    }
+    .result-card .rc-icon { font-size: 22px; margin-bottom: 8px; }
+    .result-card strong { display: block; font-size: 13px; color: var(--green-light); margin-bottom: 4px; }
+    .result-card span { font-size: 11px; color: var(--muted); }
+    
+    /* BTN */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 12px 22px; border-radius: 12px; font-weight: 800;
+      font-size: 13px; cursor: pointer; border: none;
+      transition: all 0.2s; text-decoration: none;
+    }
+    .btn-green {
+      background: linear-gradient(135deg, #064e3b, #047857);
+      color: #fff; border: 1px solid var(--green);
+    }
+    .btn-green:hover { background: linear-gradient(135deg, #047857, #059669); transform: translateY(-1px); }
+    .btn-outline {
+      background: transparent; color: var(--green-light);
+      border: 1px solid rgba(16,185,129,0.4);
+    }
+    .btn-outline:hover { background: rgba(16,185,129,0.08); }
+
+    /* PROGRESS BAR */
+    #progress-wrap {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(3,13,7,0.95); backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex; align-items: center; gap: 14px;
+    }
+    #progress-bar-track {
+      flex: 1; height: 6px; background: #1e3a2f;
+      border-radius: 999px; overflow: hidden;
+    }
+    #progress-bar-fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #10b981, #6ee7b7);
+      border-radius: 999px; transition: width 0.5s ease;
+    }
+    #progress-label { font-size: 11px; color: var(--green-light); font-weight: 700; white-space: nowrap; }
+    
+    /* TABS */
+    .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+    .tab-btn {
+      padding: 8px 16px; border-radius: 10px; font-size: 12px; font-weight: 700;
+      cursor: pointer; border: 1px solid var(--border); background: var(--card);
+      color: var(--muted); transition: all 0.2s;
+    }
+    .tab-btn.active { background: rgba(16,185,129,0.12); border-color: var(--green); color: var(--green-light); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    @media (max-width: 600px) {
+      .hero { padding: 32px 16px 28px; }
+      .section { padding: 28px 14px; }
+      .step-header { padding: 16px; }
+      .step-body { padding: 0 16px 20px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- BARRA DE PROGRESSO STICKY -->
+  <div id="progress-wrap">
+    <div id="progress-bar-track">
+      <div id="progress-bar-fill"></div>
+    </div>
+    <div id="progress-label">0 / 5 etapas concluídas</div>
+  </div>
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-badge">🚀 Guia de Publicação</div>
+    <h1>JR Oper — <span>Pronto para Operação</span></h1>
+    <p>Siga este guia passo a passo para publicar o sistema na internet e conectar ao banco de dados. <b>Nenhum conhecimento técnico necessário.</b></p>
+    <div class="hero-stats">
+      <div class="hero-stat"><strong>R$ 0,00</strong><span>Custo total</span></div>
+      <div class="hero-stat"><strong>~15 min</strong><span>Tempo estimado</span></div>
+      <div class="hero-stat"><strong>∞</strong><span>Aparelhos</span></div>
+      <div class="hero-stat"><strong>4</strong><span>Setores integrados</span></div>
+    </div>
+  </div>
+
+  <!-- SEÇÃO: PARA QUE SERVE CADA CONTA -->
+  <div class="section">
+    <div class="section-title">📋 Para que serve cada conta que você tem</div>
+    <div class="tools-grid">
+      
+      <div class="tool-card">
+        <div class="icon">🗄️</div>
+        <h3>Supabase</h3>
+        <div class="desc">O <b>banco de dados</b> do JR Oper. Armazena todas as ocorrências, devoluções, motoristas e dados da operação na internet.</div>
+        <span class="tag tag-use">✅ Vamos usar</span>
+      </div>
+
+      <div class="tool-card">
+        <div class="icon">🌐</div>
+        <h3>Vercel</h3>
+        <div class="desc">O <b>site/servidor</b> onde o JR Oper ficará hospedado. Gera um link para todos os colaboradores acessarem de qualquer aparelho.</div>
+        <span class="tag tag-use">✅ Vamos usar</span>
+      </div>
+
+      <div class="tool-card">
+        <div class="icon">🐙</div>
+        <h3>GitHub</h3>
+        <div class="desc">O <b>repositório de código</b>. É como uma pasta online que guarda os arquivos do sistema. O Vercel lê o código daqui.</div>
+        <span class="tag tag-use">✅ Vamos usar</span>
+      </div>
+
+      <div class="tool-card">
+        <div class="icon">📧</div>
+        <h3>Resend</h3>
+        <div class="desc">Serviço de envio de e-mails. Não é necessário para o JR Oper neste momento. Pode ser usado futuramente para alertas por e-mail.</div>
+        <span class="tag tag-optional">🕐 Futuro (opcional)</span>
+      </div>
+
+      <div class="tool-card">
+        <div class="icon">🔀</div>
+        <h3>Netlify</h3>
+        <div class="desc">Alternativa ao Vercel para hospedar sites. Como já vamos usar o Vercel, o Netlify não é necessário agora.</div>
+        <span class="tag tag-skip">⏭ Não precisa agora</span>
+      </div>
+
+      <div class="tool-card">
+        <div class="icon">🆓</div>
+        <h3>ProFreeHost</h3>
+        <div class="desc">Hospedagem gratuita básica. O Vercel é muito mais rápido e confiável. Não precisa usar o ProFreeHost.</div>
+        <span class="tag tag-skip">⏭ Não precisa usar</span>
+      </div>
+
+    </div>
+
+    <!-- LINHA DO QUE VAMOS FAZER -->
+    <div class="highlight-box">
+      <div class="title">🎯 RESUMO DO QUE VAMOS FAZER</div>
+      <p style="font-size:13px;color:#e2e8f0;line-height:1.8;">
+        <b style="color:#6ee7b7;">GitHub</b> guarda o código →
+        <b style="color:#6ee7b7;">Vercel</b> publica o site →
+        <b style="color:#6ee7b7;">Supabase</b> armazena os dados<br>
+        Resultado: um link que qualquer aparelho acessa e todos compartilham os dados.
+      </p>
+    </div>
+  </div>
+
+  <!-- SEÇÃO: DUAS VERSÕES -->
+  <div class="section" style="padding-top:0;">
+    <div class="section-title">📦 As duas versões do sistema</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:32px;">
+      
+      <div style="background:#0a1a0f;border:2px solid #1a4a2e;border-radius:16px;padding:20px;">
+        <div style="font-size:22px;margin-bottom:8px;">🏫</div>
+        <strong style="font-size:14px;color:#fff;display:block;margin-bottom:6px;">Versão Treinamento</strong>
+        <p style="font-size:12px;color:#94a3b8;line-height:1.7;">A que já existe no seu computador. Cada pessoa usa no próprio aparelho, os dados ficam apenas localmente (sem internet). Perfeito para treinar a equipe.</p>
+        <div style="margin-top:12px;padding:8px 12px;background:rgba(148,163,184,0.08);border-radius:8px;font-size:11px;color:#64748b;">
+          📂 Pasta atual: <code>jr-sac-corrigido</code>
+        </div>
+      </div>
+
+      <div style="background:#0a2d1a;border:2px solid rgba(16,185,129,0.4);border-radius:16px;padding:20px;">
+        <div style="font-size:22px;margin-bottom:8px;">🚀</div>
+        <strong style="font-size:14px;color:#6ee7b7;display:block;margin-bottom:6px;">Versão Produção (o que vamos fazer)</strong>
+        <p style="font-size:12px;color:#94a3b8;line-height:1.7;">Será publicada na internet. Todos os setores (SAC, CD, Financeiro, Frota) acessam pelo mesmo link e compartilham os dados em tempo real.</p>
+        <div style="margin-top:12px;padding:8px 12px;background:rgba(16,185,129,0.08);border-radius:8px;font-size:11px;color:#6ee7b7;">
+          🌐 Resultado: <code>jr-oper.vercel.app</code>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ETAPAS -->
+  <div class="section" style="padding-top:0;">
+    <div class="section-title">📋 Etapas do Deploy</div>
+    <div class="steps" id="steps-container">
+
+      <!-- ETAPA 1: SUPABASE - BANCO DE DADOS -->
+      <div class="step-card" data-step="1">
+        <div class="step-header" onclick="toggleStep(1)">
+          <div class="step-number">1</div>
+          <div class="step-info">
+            <h2>🗄️ Criar o Banco de Dados (Supabase)</h2>
+            <div class="meta">Tempo estimado: <strong>5 minutos</strong> · Custo: <strong>R$ 0,00 gratuito</strong></div>
+          </div>
+          <div class="step-chevron">›</div>
+        </div>
+        <div class="step-body">
+          <div class="highlight-box">
+            <div class="title">📌 O QUE É ISSO?</div>
+            É como criar uma <b>planilha inteligente na nuvem</b> que guarda todas as ocorrências, devoluções e dados do sistema. Qualquer aparelho que abrir o JR Oper vai ler e salvar nessa planilha online.
+          </div>
+
+          <div class="instructions">
+            <div class="inst">
+              <div class="inst-num">1</div>
+              <div class="inst-text">
+                <strong>Acesse o Supabase</strong>
+                <p>Abra <a href="https://supabase.com" target="_blank">supabase.com</a> e clique em <b>"Sign In"</b>. Entre com a conta que você já tem.</p>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">2</div>
+              <div class="inst-text">
+                <strong>Crie um novo projeto</strong>
+                <p>Clique em <b>"New Project"</b>. Preencha assim:<br>
+                • <b>Nome:</b> JR-Oper<br>
+                • <b>Senha do banco:</b> crie uma senha forte (anote!)<br>
+                • <b>Região:</b> escolha <b>South America (São Paulo)</b><br>
+                Clique em <b>"Create new project"</b> e aguarde ~2 minutos.</p>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">3</div>
+              <div class="inst-text">
+                <strong>Abra o Editor SQL</strong>
+                <p>No menu esquerdo do Supabase, clique em <b>"SQL Editor"</b> (ícone de banco de dados). Depois clique em <b>"New query"</b>.</p>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">4</div>
+              <div class="inst-text">
+                <strong>Execute o Schema (cria as tabelas)</strong>
+                <p>Abra o arquivo <code>database/schema.sql</code> da pasta do projeto com o Bloco de Notas. Selecione tudo (Ctrl+A), copie (Ctrl+C) e cole no editor do Supabase. Clique no botão verde <b>"Run"</b>.</p>
+                <div class="highlight-box" style="margin-top:10px;">
+                  <div class="title">✅ O QUE DEVE APARECER</div>
+                  "Success. No rows returned" — Isso é certo! Significa que as tabelas foram criadas.
+                </div>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">5</div>
+              <div class="inst-text">
+                <strong>Execute os dados iniciais dos setores</strong>
+                <p>Abra uma <b>nova query</b> no Supabase. Abra o arquivo <code>database/export_data.sql</code>, copie e cole. Clique em <b>"Run"</b>. Isso carrega os setores (SAC, CD, Financeiro, Frota) e usuários iniciais.</p>
+              </div>
+            </div>
+
+            <div class="check-item"><input type="checkbox" id="c1-1" onchange="updateProgress()"><label for="c1-1">Projeto JR-Oper criado no Supabase</label></div>
+            <div class="check-item"><input type="checkbox" id="c1-2" onchange="updateProgress()"><label for="c1-2">Schema.sql executado com sucesso</label></div>
+            <div class="check-item"><input type="checkbox" id="c1-3" onchange="updateProgress()"><label for="c1-3">Export_data.sql executado com sucesso</label></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ETAPA 2: PEGAR AS CHAVES DO SUPABASE -->
+      <div class="step-card" data-step="2">
+        <div class="step-header" onclick="toggleStep(2)">
+          <div class="step-number">2</div>
+          <div class="step-info">
+            <h2>🔑 Pegar as Chaves de Acesso do Supabase</h2>
+            <div class="meta">Tempo estimado: <strong>2 minutos</strong> · Você vai copiar 2 informações</div>
+          </div>
+          <div class="step-chevron">›</div>
+        </div>
+        <div class="step-body">
+          <div class="highlight-box">
+            <div class="title">📌 O QUE SÃO AS CHAVES?</div>
+            São como uma <b>senha especial</b> que autoriza o JR Oper a se conectar ao banco de dados. São 2 informações: a URL (endereço) e a chave anon (senha pública).
+          </div>
+
+          <div class="instructions">
+            <div class="inst">
+              <div class="inst-num">1</div>
+              <div class="inst-text">
+                <strong>Vá nas Configurações do Projeto</strong>
+                <p>No Supabase, no menu esquerdo, clique em <b>"Project Settings"</b> (ícone de engrenagem ⚙️ no rodapé do menu).</p>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">2</div>
+              <div class="inst-text">
+                <strong>Clique em "API"</strong>
+                <p>No submenu que aparece, clique em <b>"API"</b>. Você verá duas informações importantes.</p>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">3</div>
+              <div class="inst-text">
+                <strong>Copie a URL do Projeto</strong>
+                <p>Na seção <b>"Project URL"</b>, clique no ícone de copiar ao lado do endereço que começa com <code>https://</code>. <b>Cole em um bloco de notas.</b></p>
+                <div class="code-box"><span class="comment">Exemplo de URL (a sua será diferente):</span><br>https://abcdefgh.supabase.co</div>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">4</div>
+              <div class="inst-text">
+                <strong>Copie a Chave anon public</strong>
+                <p>Na seção <b>"Project API keys"</b>, copie a chave chamada <b>anon / public</b>. É uma sequência longa começando com <code>eyJ...</code>. <b>Cole no bloco de notas junto com a URL.</b></p>
+                <div class="warning-box">
+                  <div class="title">⚠️ IMPORTANTE</div>
+                  Copie a chave <b>anon public</b>, NÃO a <b>service_role</b>. A anon é a chave segura para uso público.
+                </div>
+              </div>
+            </div>
+
+            <div class="check-item"><input type="checkbox" id="c2-1" onchange="updateProgress()"><label for="c2-1">URL do projeto copiada (https://xxx.supabase.co)</label></div>
+            <div class="check-item"><input type="checkbox" id="c2-2" onchange="updateProgress()"><label for="c2-2">Chave anon public copiada (eyJ...)</label></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ETAPA 3: GITHUB -->
+      <div class="step-card" data-step="3">
+        <div class="step-header" onclick="toggleStep(3)">
+          <div class="step-number">3</div>
+          <div class="step-info">
+            <h2>🐙 Enviar o Código para o GitHub</h2>
+            <div class="meta">Tempo estimado: <strong>4 minutos</strong> · Faz isso uma vez só</div>
+          </div>
+          <div class="step-chevron">›</div>
+        </div>
+        <div class="step-body">
+          <div class="highlight-box">
+            <div class="title">📌 POR QUE O GITHUB?</div>
+            O Vercel (que publica o site) precisa que o código esteja no GitHub. É como colocar os arquivos em uma pasta online para o Vercel conseguir ler.
+          </div>
+
+          <!-- TABS: com git ou pela interface -->
+          <div class="tabs" style="margin-top:16px;">
+            <button class="tab-btn active" onclick="switchTab('github', 'web')">🌐 Pelo site (mais fácil)</button>
+            <button class="tab-btn" onclick="switchTab('github', 'git')">💻 Com Git (avançado)</button>
+          </div>
+
+          <div class="tab-content active" id="github-web">
+            <div class="instructions">
+              <div class="inst">
+                <div class="inst-num">1</div>
+                <div class="inst-text">
+                  <strong>Acesse o GitHub</strong>
+                  <p>Abra <a href="https://github.com" target="_blank">github.com</a> e entre com sua conta.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">2</div>
+                <div class="inst-text">
+                  <strong>Crie um novo repositório</strong>
+                  <p>Clique no botão <b>"+"</b> no topo direito → <b>"New repository"</b>. Preencha:<br>
+                  • <b>Repository name:</b> jr-oper<br>
+                  • <b>Visibilidade:</b> Private (privado)<br>
+                  Clique em <b>"Create repository"</b>.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">3</div>
+                <div class="inst-text">
+                  <strong>Faça o upload dos arquivos</strong>
+                  <p>Na página do repositório vazio, clique em <b>"uploading an existing file"</b>. Arraste toda a pasta <code>jr-sac-corrigido</code> para a área de upload. Aguarde o upload e clique em <b>"Commit changes"</b>.</p>
+                  <div class="warning-box" style="margin-top:10px;">
+                    <div class="title">⚠️ ATENÇÃO</div>
+                    Arraste o CONTEÚDO da pasta (os arquivos index.html, js/, etc.), não a pasta em si.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-content" id="github-git">
+            <div class="instructions">
+              <div class="inst">
+                <div class="inst-num">1</div>
+                <div class="inst-text">
+                  <strong>Abra o Terminal/PowerShell na pasta do projeto</strong>
+                  <p>Clique com botão direito dentro da pasta <code>jr-sac-corrigido</code> → <b>"Abrir no Terminal"</b>.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">2</div>
+                <div class="inst-text">
+                  <strong>Execute os comandos</strong>
+                  <div class="code-box">
+                    git init<br>
+                    git add .<br>
+                    git commit -m "JR Oper - Deploy inicial"<br>
+                    git remote add origin https://github.com/SEU-USUARIO/jr-oper.git<br>
+                    git push -u origin main
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="check-item"><input type="checkbox" id="c3-1" onchange="updateProgress()"><label for="c3-1">Repositório "jr-oper" criado no GitHub</label></div>
+          <div class="check-item"><input type="checkbox" id="c3-2" onchange="updateProgress()"><label for="c3-2">Arquivos do projeto enviados para o GitHub</label></div>
+        </div>
+      </div>
+
+      <!-- ETAPA 4: VERCEL - PUBLICAR O SITE -->
+      <div class="step-card" data-step="4">
+        <div class="step-header" onclick="toggleStep(4)">
+          <div class="step-number">4</div>
+          <div class="step-info">
+            <h2>🌐 Publicar o JR Oper na Internet (Vercel)</h2>
+            <div class="meta">Tempo estimado: <strong>3 minutos</strong> · Resultado: link público do sistema</div>
+          </div>
+          <div class="step-chevron">›</div>
+        </div>
+        <div class="step-body">
+          <div class="highlight-box">
+            <div class="title">📌 O QUE O VERCEL FAZ?</div>
+            Pega o código do GitHub e transforma em um site online com um endereço (URL) que qualquer um pode acessar. É automático: toda vez que você atualizar o código, o site atualiza sozinho.
+          </div>
+
+          <div class="instructions">
+            <div class="inst">
+              <div class="inst-num">1</div>
+              <div class="inst-text">
+                <strong>Acesse o Vercel</strong>
+                <p>Abra <a href="https://vercel.com" target="_blank">vercel.com</a> e clique em <b>"Log in"</b>. Entre com <b>"Continue with GitHub"</b> para vincular as duas contas.</p>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">2</div>
+              <div class="inst-text">
+                <strong>Adicione um novo projeto</strong>
+                <p>No painel do Vercel, clique em <b>"Add New → Project"</b>. O Vercel vai listar os repositórios do seu GitHub. Clique em <b>"Import"</b> ao lado do repositório <b>jr-oper</b>.</p>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">3</div>
+              <div class="inst-text">
+                <strong>Configure e publique</strong>
+                <p>Na tela de configuração do projeto:<br>
+                • <b>Framework Preset:</b> deixe em <b>"Other"</b><br>
+                • <b>Root Directory:</b> deixe vazio<br>
+                Clique em <b>"Deploy"</b>. Aguarde cerca de 30 segundos.</p>
+              </div>
+            </div>
+            <div class="inst">
+              <div class="inst-num">4</div>
+              <div class="inst-text">
+                <strong>🎉 Seu link está pronto!</strong>
+                <p>O Vercel vai mostrar um link como <code>jr-oper.vercel.app</code>. <b>Este é o endereço do JR Oper para toda a empresa!</b> Copie e salve esse link.</p>
+                <div class="highlight-box" style="margin-top:10px;">
+                  <div class="title">💡 DICA: Domínio personalizado</div>
+                  O Vercel permite usar um domínio próprio (ex: <code>jroper.jrdistribuidora.com.br</code>) gratuitamente. Isso pode ser configurado depois em Settings → Domains.
+                </div>
+              </div>
+            </div>
+
+            <div class="check-item"><input type="checkbox" id="c4-1" onchange="updateProgress()"><label for="c4-1">Conta do Vercel conectada ao GitHub</label></div>
+            <div class="check-item"><input type="checkbox" id="c4-2" onchange="updateProgress()"><label for="c4-2">Repositório jr-oper importado no Vercel</label></div>
+            <div class="check-item"><input type="checkbox" id="c4-3" onchange="updateProgress()"><label for="c4-3">Deploy realizado — link do site em mãos!</label></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ETAPA 5: CONECTAR AO BANCO E INSTALAR -->
+      <div class="step-card" data-step="5">
+        <div class="step-header" onclick="toggleStep(5)">
+          <div class="step-number">5</div>
+          <div class="step-info">
+            <h2>🔌 Conectar ao Banco e Instalar nos Aparelhos</h2>
+            <div class="meta">Tempo estimado: <strong>3 minutos</strong> · Faz em cada aparelho da empresa</div>
+          </div>
+          <div class="step-chevron">›</div>
+        </div>
+        <div class="step-body">
+
+          <!-- TABS: Conectar BD / Instalar Android / Instalar iPhone -->
+          <div class="tabs" style="margin-top:8px;">
+            <button class="tab-btn active" onclick="switchTab('step5', 'bd')">🗄️ Conectar Banco</button>
+            <button class="tab-btn" onclick="switchTab('step5', 'android')">🤖 Android</button>
+            <button class="tab-btn" onclick="switchTab('step5', 'ios')">🍎 iPhone</button>
+            <button class="tab-btn" onclick="switchTab('step5', 'pc')">💻 PC/Mac</button>
+          </div>
+
+          <div class="tab-content active" id="step5-bd">
+            <div class="highlight-box" style="margin-top:16px;">
+              <div class="title">📌 COMO FUNCIONA</div>
+              Após publicar o site no Vercel, você abre o JR Oper pelo link e usa o botão <b>"☁️ Configurar Nuvem"</b> no rodapé para colar as chaves do Supabase. Sem precisar editar nenhum arquivo.
+            </div>
+            <div class="instructions">
+              <div class="inst">
+                <div class="inst-num">1</div>
+                <div class="inst-text">
+                  <strong>Abra o link do JR Oper</strong>
+                  <p>No computador principal (o seu), acesse o link gerado pelo Vercel (ex: <code>jr-oper.vercel.app</code>).</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">2</div>
+                <div class="inst-text">
+                  <strong>Clique em "☁️ Configurar Nuvem"</strong>
+                  <p>No <b>rodapé</b> do JR Oper, você verá o botão <b>"☁️ Configurar Nuvem"</b>. Clique nele.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">3</div>
+                <div class="inst-text">
+                  <strong>Cole a URL e a Chave</strong>
+                  <p>No painel que abrir, cole:<br>
+                  • No campo <b>URL</b>: o endereço do Supabase (https://xxx.supabase.co)<br>
+                  • No campo <b>Chave</b>: a chave anon public (eyJ...)</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">4</div>
+                <div class="inst-text">
+                  <strong>Clique em "🔌 Testar Conexão" e depois "💾 Salvar e Ativar"</strong>
+                  <p>Se aparecer ✅, está conectado! O indicador no rodapé mudará para <b>🟢 Nuvem Ativa</b>. Repita esse processo em cada aparelho da empresa.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-content" id="step5-android">
+            <div class="instructions" style="margin-top:16px;">
+              <div class="inst">
+                <div class="inst-num">1</div>
+                <div class="inst-text">
+                  <strong>Abra o link no Chrome</strong>
+                  <p>No celular Android, abra o <b>Google Chrome</b> e acesse o link do Vercel.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">2</div>
+                <div class="inst-text">
+                  <strong>Instale o app</strong>
+                  <p>O Chrome mostrará um banner na parte de baixo da tela: <b>"Adicionar JR Oper à tela inicial"</b>. Toque nele. Se não aparecer, toque nos 3 pontinhos (⋮) no canto superior direito → <b>"Adicionar à tela inicial"</b>.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">3</div>
+                <div class="inst-text">
+                  <strong>Pronto!</strong>
+                  <p>O ícone do JR Oper aparecerá na tela inicial do celular. Toque nele para abrir como um aplicativo normal, sem a barra do navegador.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-content" id="step5-ios">
+            <div class="instructions" style="margin-top:16px;">
+              <div class="inst">
+                <div class="inst-num">1</div>
+                <div class="inst-text">
+                  <strong>Abra o link no Safari</strong>
+                  <p>No iPhone ou iPad, abra o <b>Safari</b> (obrigatório — Chrome não permite instalação no iOS) e acesse o link do Vercel.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">2</div>
+                <div class="inst-text">
+                  <strong>Toque no botão Compartilhar</strong>
+                  <p>Toque no ícone de compartilhar (um quadrado com seta para cima ⬆) na barra inferior do Safari.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">3</div>
+                <div class="inst-text">
+                  <strong>Adicionar à Tela de Início</strong>
+                  <p>Role a lista de opções para baixo e toque em <b>"Adicionar à Tela de Início"</b>. Confirme com <b>"Adicionar"</b>.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">4</div>
+                <div class="inst-text">
+                  <strong>Pronto!</strong>
+                  <p>O JR Oper aparece como app na tela inicial. Abre sem barra do Safari, como um app nativo.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-content" id="step5-pc">
+            <div class="instructions" style="margin-top:16px;">
+              <div class="inst">
+                <div class="inst-num">1</div>
+                <div class="inst-text">
+                  <strong>Abra o link no Chrome ou Edge</strong>
+                  <p>No computador, acesse o link do Vercel pelo Google Chrome ou Microsoft Edge.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">2</div>
+                <div class="inst-text">
+                  <strong>Instale o app</strong>
+                  <p>Na barra de endereço do Chrome/Edge, aparecerá um ícone de <b>instalar</b> (computador com seta ↓) no lado direito. Clique nele → <b>"Instalar"</b>. O JR Oper abre numa janela própria, sem abas do navegador.</p>
+                </div>
+              </div>
+              <div class="inst">
+                <div class="inst-num">3</div>
+                <div class="inst-text">
+                  <strong>Atalho na área de trabalho</strong>
+                  <p>O sistema cria automaticamente um atalho na área de trabalho. Basta dar dois cliques para abrir o JR Oper como se fosse um programa instalado.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="check-item"><input type="checkbox" id="c5-1" onchange="updateProgress()"><label for="c5-1">Banco de dados conectado (🟢 Nuvem Ativa no rodapé)</label></div>
+          <div class="check-item"><input type="checkbox" id="c5-2" onchange="updateProgress()"><label for="c5-2">App instalado nos aparelhos da equipe</label></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RESULTADO FINAL -->
+    <div class="result-section" id="result-section" style="display:none;">
+      <div style="font-size:48px;margin-bottom:16px;">🎉</div>
+      <h2>JR Oper está no ar!</h2>
+      <p>O sistema está publicado, conectado ao banco de dados e instalável em qualquer aparelho. Sua equipe pode começar a usar agora.</p>
+      <div class="result-grid" style="margin-bottom:24px;">
+        <div class="result-card">
+          <div class="rc-icon">🌐</div>
+          <strong>Site publicado</strong>
+          <span>Vercel — link seguro HTTPS</span>
+        </div>
+        <div class="result-card">
+          <div class="rc-icon">🗄️</div>
+          <strong>Banco conectado</strong>
+          <span>Supabase — dados em tempo real</span>
+        </div>
+        <div class="result-card">
+          <div class="rc-icon">📱</div>
+          <strong>Instalável</strong>
+          <span>Android, iPhone, PC, Mac, Tablet</span>
+        </div>
+        <div class="result-card">
+          <div class="rc-icon">🔄</div>
+          <strong>Multidispositivo</strong>
+          <span>Sync automático a cada 30s</span>
+        </div>
+        <div class="result-card">
+          <div class="rc-icon">📊</div>
+          <strong>Power BI Ready</strong>
+          <span>5 Views SQL prontas</span>
+        </div>
+        <div class="result-card">
+          <div class="rc-icon">🏫</div>
+          <strong>Treinamento</strong>
+          <span>Versão local intacta no PC</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SEÇÃO: DÚVIDAS FREQUENTES -->
+    <div style="margin-top:48px;">
+      <div class="section-title">❓ Dúvidas frequentes</div>
+      <div style="display:flex;flex-direction:column;gap:12px;">
+
+        <details style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:0;">
+          <summary style="padding:16px 20px;cursor:pointer;font-weight:700;font-size:13px;color:#fff;list-style:none;display:flex;align-items:center;gap:10px;">
+            <span>🔒</span> Os dados são seguros?
+          </summary>
+          <div style="padding:0 20px 16px;font-size:13px;color:var(--muted);line-height:1.7;">
+            Sim. O Supabase usa criptografia HTTPS/TLS em todas as conexões (o cadeado verde que aparece no navegador). Os dados ficam em servidores da AWS em São Paulo. Somente quem tiver o link do sistema e as chaves configuradas consegue acessar.
+          </div>
+        </details>
+
+        <details style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:0;">
+          <summary style="padding:16px 20px;cursor:pointer;font-weight:700;font-size:13px;color:#fff;list-style:none;display:flex;align-items:center;gap:10px;">
+            <span>💸</span> Quando começa a cobrar?
+          </summary>
+          <div style="padding:0 20px 16px;font-size:13px;color:var(--muted);line-height:1.7;">
+            O plano gratuito do Supabase suporta até <b>500MB de banco de dados e 2GB de tráfego por mês</b>. Para o JR Oper de uma distribuidora, isso é mais do que suficiente por anos. O Vercel gratuito suporta 100GB de tráfego por mês. Só pagaria se o sistema crescer muito além do normal.
+          </div>
+        </details>
+
+        <details style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:0;">
+          <summary style="padding:16px 20px;cursor:pointer;font-weight:700;font-size:13px;color:#fff;list-style:none;display:flex;align-items:center;gap:10px;">
+            <span>📴</span> E se a internet cair no trabalho?
+          </summary>
+          <div style="padding:0 20px 16px;font-size:13px;color:var(--muted);line-height:1.7;">
+            O JR Oper foi configurado para funcionar offline. Se a internet cair, o sistema continua funcionando com os dados salvos localmente. Quando a internet voltar, tudo é sincronizado automaticamente com o banco de dados.
+          </div>
+        </details>
+
+        <details style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:0;">
+          <summary style="padding:16px 20px;cursor:pointer;font-weight:700;font-size:13px;color:#fff;list-style:none;display:flex;align-items:center;gap:10px;">
+            <span>🔄</span> Como atualizar o sistema depois?
+          </summary>
+          <div style="padding:0 20px 16px;font-size:13px;color:var(--muted);line-height:1.7;">
+            Basta fazer upload dos arquivos atualizados no GitHub. O Vercel detecta automaticamente e publica a nova versão em menos de 1 minuto. Todos os usuários receberão a atualização na próxima vez que abrirem o app.
+          </div>
+        </details>
+
+        <details style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:0;">
+          <summary style="padding:16px 20px;cursor:pointer;font-weight:700;font-size:13px;color:#fff;list-style:none;display:flex;align-items:center;gap:10px;">
+            <span>🏫</span> A versão de treinamento fica separada?
+          </summary>
+          <div style="padding:0 20px 16px;font-size:13px;color:var(--muted);line-height:1.7;">
+            Sim. A versão de treinamento é a pasta local no seu computador, aberta diretamente pelo arquivo <code>index.html</code>. Ela usa o modo "local" e não se conecta a nenhum banco. A versão de produção é o link do Vercel. São completamente independentes.
+          </div>
+        </details>
+
+      </div>
+    </div>
+
+  </div>
+
+  <footer style="background:#020d07;border-top:1px solid #1a4a2e;text-align:center;padding:24px;margin-top:40px;">
+    <div style="font-size:12px;color:#475569;">
+      <b style="color:#6ee7b7;">JR Distribuidora</b> — Guia de Deploy do JR Oper · Gerado automaticamente pelo sistema
+    </div>
+  </footer>
+
+  <script>
+    // ===================== ACCORDION STEPS =====================
+    function toggleStep(num) {
+      const card = document.querySelector(`.step-card[data-step="${num}"]`);
+      const isOpen = card.classList.contains('open');
+      
+      // Fecha todos
+      document.querySelectorAll('.step-card').forEach(c => c.classList.remove('open'));
+      
+      // Abre o clicado se estava fechado
+      if (!isOpen) card.classList.add('open');
+    }
+
+    // Abre o primeiro step por padrão
+    toggleStep(1);
+
+    // ===================== TABS =====================
+    function switchTab(group, tabId) {
+      // Remove active de todos os botões e conteúdos do grupo
+      document.querySelectorAll(`[id^="${group}-"]`).forEach(el => el.classList.remove('active'));
+      
+      // Para botões, precisa pegar de forma diferente
+      const allBtns = event.target.closest('.tabs').querySelectorAll('.tab-btn');
+      allBtns.forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+      
+      // Ativa o conteúdo correto
+      const content = document.getElementById(`${group}-${tabId}`);
+      if (content) content.classList.add('active');
+    }
+
+    // ===================== PROGRESSO =====================
+    function updateProgress() {
+      const all = document.querySelectorAll('input[type="checkbox"]');
+      const checked = document.querySelectorAll('input[type="checkbox"]:checked');
+      const total = 5; // 5 etapas
+      
+      // Conta etapas completas
+      const stepCompletions = {
+        1: ['c1-1','c1-2','c1-3'],
+        2: ['c2-1','c2-2'],
+        3: ['c3-1','c3-2'],
+        4: ['c4-1','c4-2','c4-3'],
+        5: ['c5-1','c5-2']
+      };
+      
+      let stepsCompleted = 0;
+      for (const [step, ids] of Object.entries(stepCompletions)) {
+        const done = ids.every(id => {
+          const el = document.getElementById(id);
+          return el && el.checked;
+        });
+        if (done) {
+          stepsCompleted++;
+          document.querySelector(`.step-card[data-step="${step}"]`).classList.add('done');
+        } else {
+          document.querySelector(`.step-card[data-step="${step}"]`).classList.remove('done');
+        }
+      }
+      
+      const pct = Math.round((stepsCompleted / total) * 100);
+      document.getElementById('progress-bar-fill').style.width = pct + '%';
+      document.getElementById('progress-label').textContent = `${stepsCompleted} / ${total} etapas concluídas`;
+      
+      if (stepsCompleted === total) {
+        document.getElementById('result-section').style.display = 'block';
+        document.getElementById('result-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('progress-label').textContent = '🎉 Deploy concluído!';
+      } else {
+        document.getElementById('result-section').style.display = 'none';
+      }
+    }
+  </script>
+
+</body>
+</html>
