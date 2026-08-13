@@ -4,7 +4,7 @@
 // Cache offline para funcionar sem internet
 // =================================================================
 
-const CACHE_NAME = 'jr-oper-v4.7.0';
+const CACHE_NAME = 'jr-oper-v4.7.2';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
@@ -18,7 +18,8 @@ const FILES_TO_CACHE = [
   './js/tailwind.cdn.js',
   './js/xlsx.full.min.js',
   './public/icon-512.png',
-  './public/logo.png'
+  './public/logo.png',
+  './public/logo_jr_branca.png'
 ];
 
 // INSTALAÇÃO: salva os arquivos no cache do aparelho

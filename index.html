@@ -20,8 +20,8 @@
       }
     }
     window.onerror = function(msg, url, lineNo, colNo, error) {
-      if (msg === "Script error." && window._appInitialized) {
-        console.warn("Ignorado Script error. genérico do navegador.");
+      if (typeof msg === 'string' && (msg === "Script error." || msg.indexOf("Script error") !== -1)) {
+        console.warn("Ignorado Script error. genérico do ambiente.");
         return true;
       }
       showSystemError(msg, url, lineNo, colNo, error);
@@ -346,7 +346,7 @@
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
         <div class="flex items-center gap-2 cursor-pointer" onclick="switchTab('dashboard')">
-          <img src="./public/logo.png" alt="JR Oper Logo" class="w-9 h-9 rounded-xl shadow-md border border-emerald-600 object-cover" style="width: 36px; height: 36px; object-fit: cover;" onerror="this.style.display='none'">
+          <img src="./public/logo_jr_branca.png" alt="JR Oper Logo" class="h-9 w-auto rounded-lg object-contain shadow-sm" style="height: 36px; mix-blend-mode: screen;" onerror="this.style.display='none'">
           <div>
             <div class="flex items-center gap-1.5">
               <span class="font-extrabold text-lg text-white tracking-wide leading-none">JR</span>
@@ -355,6 +355,7 @@
             <div class="text-[10px] text-emerald-300/70 font-medium leading-none">Operações Logísticas Integradas</div>
           </div>
         </div>
+        <span id="modo-treinamento-badge"></span>
       </div>
       <div class="flex items-center gap-2">
         <!-- BOTÃO DE MODO CLARO / ESCURO (SOL / LUA) -->
@@ -381,202 +382,38 @@
   <div id="modal-container" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4"></div>
 
   <footer class="bg-slate-950 border-t border-slate-900 py-3 text-center text-xs text-slate-500">
-    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+    <div class="max-w-7xl mx-auto px-4 flex items-center justify-center">
       <div><b>JR Distribuidora</b> 2026 – Sistema Integrado de Operações (JR Oper)</div>
-      <div class="flex items-center gap-3">
-        <span id="cloud-status-indicator" class="flex items-center gap-1 cursor-default" title="Status do Banco de Dados">⚫ <span style="color:#6b7280;font-size:10px;">Modo Local</span></span>
-        <button id="btn-cloud-config" onclick="openCloudConfigPanel()" class="bg-slate-800 hover:bg-emerald-800 border border-slate-700 hover:border-emerald-600 text-emerald-400 font-semibold px-2.5 py-1 rounded-lg transition-all text-xs flex items-center gap-1" title="Configurar Banco de Dados na Nuvem">
-          ☁️ Configurar Nuvem
-        </button>
-      </div>
     </div>
   </footer>
 
-  <!-- ============================================================
-       PAINEL DE CONFIGURAÇÃO DA NUVEM (SUPABASE)
-       Permite conectar ao banco de dados sem editar código
-       ============================================================ -->
-  <div id="cloud-config-modal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.85); backdrop-filter:blur(6px); display:none; align-items:center; justify-content:center; padding:16px;">
-    <div style="background:linear-gradient(135deg,#0f1f14,#0d1a1a); border:1px solid #1e4d2f; border-radius:20px; padding:28px; max-width:520px; width:100%; box-shadow:0 25px 50px rgba(0,0,0,0.7); font-family:'Plus Jakarta Sans',sans-serif;">
-      
-      <!-- Cabeçalho -->
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
-        <div>
-          <div style="font-size:22px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">☁️ Conexão com a Nuvem</div>
-          <div style="font-size:12px;color:#6ee7b7;margin-top:2px;">Banco de Dados Supabase — Gratuito</div>
-        </div>
-        <button onclick="closeCloudConfigPanel()" style="background:#1e293b;border:1px solid #334155;color:#94a3b8;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;">✕</button>
-      </div>
-
-      <!-- Explicação simples -->
-      <div style="background:#0f2d1f;border:1px solid #1a4a2e;border-radius:12px;padding:14px;margin-bottom:20px;">
-        <div style="font-size:11px;color:#86efac;font-weight:700;margin-bottom:6px;">📌 O QUE ISSO FAZ?</div>
-        <div style="font-size:12px;color:#94a3b8;line-height:1.6;">Conecta este aplicativo ao banco de dados na internet. Assim, <b style="color:#6ee7b7;">qualquer aparelho da empresa</b> (celular, tablet ou computador) vê os mesmos dados em tempo real.</div>
-      </div>
-
-      <!-- Campo URL -->
-      <div style="margin-bottom:14px;">
-        <label style="display:block;font-size:11px;font-weight:700;color:#6ee7b7;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔗 URL do Projeto Supabase</label>
-        <input id="cloud-url-input" type="url" placeholder="https://xyzabcdef.supabase.co"
-          style="width:100%;background:#0a1a0f;border:1.5px solid #1e4d2f;border-radius:10px;padding:12px 14px;color:#e2e8f0;font-size:13px;outline:none;box-sizing:border-box;transition:border-color 0.2s;"
-          onfocus="this.style.borderColor='#10b981'" onblur="this.style.borderColor='#1e4d2f'">
-        <div style="font-size:10px;color:#64748b;margin-top:4px;">Encontrado em: Supabase → Seu Projeto → Settings → API → Project URL</div>
-      </div>
-
-      <!-- Campo Chave -->
-      <div style="margin-bottom:14px;">
-        <label style="display:block;font-size:11px;font-weight:700;color:#6ee7b7;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔑 Chave Pública (anon public)</label>
-        <input id="cloud-key-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-          style="width:100%;background:#0a1a0f;border:1.5px solid #1e4d2f;border-radius:10px;padding:12px 14px;color:#e2e8f0;font-size:13px;outline:none;box-sizing:border-box;transition:border-color 0.2s;"
-          onfocus="this.style.borderColor='#10b981'" onblur="this.style.borderColor='#1e4d2f'">
-        <div style="font-size:10px;color:#64748b;margin-top:4px;">Encontrado em: Supabase → Seu Projeto → Settings → API → anon / public</div>
-      </div>
-
-      <!-- Resultado do teste -->
-      <div id="cloud-test-result" style="display:none;background:#0f1f14;border-radius:10px;padding:12px;margin-bottom:16px;font-size:12px;border:1px solid #1e3a2f;"></div>
-
-      <!-- Botões -->
-      <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <button id="btn-test-cloud" onclick="testCloudConnection()" 
-          style="flex:1;background:linear-gradient(135deg,#064e3b,#065f46);border:1px solid #10b981;color:#6ee7b7;font-weight:700;padding:12px;border-radius:10px;cursor:pointer;font-size:13px;transition:all 0.2s;min-width:120px;">
-          🔌 Testar Conexão
-        </button>
-        <button id="btn-save-cloud" onclick="saveCloudConfig()"
-          style="flex:1;background:linear-gradient(135deg,#065f46,#047857);border:1px solid #10b981;color:#ffffff;font-weight:800;padding:12px;border-radius:10px;cursor:pointer;font-size:13px;transition:all 0.2s;min-width:120px;">
-          💾 Salvar e Ativar
-        </button>
-      </div>
-      
-      <!-- Botão desconectar (só aparece se estiver conectado) -->
-      <div id="btn-disconnect-area" style="margin-top:10px;display:none;">
-        <button onclick="disconnectCloud()"
-          style="width:100%;background:transparent;border:1px solid #ef4444;color:#f87171;font-weight:600;padding:10px;border-radius:10px;cursor:pointer;font-size:12px;transition:all 0.2s;">
-          🔌 Desconectar e Voltar ao Modo Local
-        </button>
-      </div>
-
-      <!-- Aviso se já conectado -->
-      <div id="cloud-already-connected" style="display:none;margin-top:14px;background:#0f2d1f;border:1px solid #10b981;border-radius:10px;padding:12px;">
-        <div style="font-size:12px;color:#6ee7b7;">✅ <b>Este aparelho já está conectado à Nuvem.</b><br><span style="color:#94a3b8;">Os dados são sincronizados automaticamente a cada 30 segundos.</span></div>
-      </div>
-    </div>
-  </div>
-
   <script>
-    // === FUNÇÕES DO PAINEL DE CONFIGURAÇÃO DA NUVEM ===
-    
-    function openCloudConfigPanel() {
-      const modal = document.getElementById('cloud-config-modal');
-      modal.style.display = 'flex';
-      
-      // Preenche os campos se já tiver configuração salva
-      if (window.cloudStore && window.cloudStore.isConfigured()) {
-        document.getElementById('cloud-url-input').value = window.cloudStore.config.url || '';
-        document.getElementById('cloud-key-input').value = window.cloudStore.config.anonKey || '';
-        document.getElementById('cloud-already-connected').style.display = 'block';
-        document.getElementById('btn-disconnect-area').style.display = 'block';
-      } else {
-        document.getElementById('cloud-already-connected').style.display = 'none';
-        document.getElementById('btn-disconnect-area').style.display = 'none';
-      }
-    }
-    
-    function closeCloudConfigPanel() {
-      document.getElementById('cloud-config-modal').style.display = 'none';
-      document.getElementById('cloud-test-result').style.display = 'none';
-    }
-    
-    // Fecha ao clicar fora do painel
-    document.getElementById('cloud-config-modal').addEventListener('click', function(e) {
-      if (e.target === this) closeCloudConfigPanel();
-    });
-    
-    async function testCloudConnection() {
-      const url = document.getElementById('cloud-url-input').value.trim();
-      const key = document.getElementById('cloud-key-input').value.trim();
-      const resultDiv = document.getElementById('cloud-test-result');
-      const btn = document.getElementById('btn-test-cloud');
-      
-      if (!url || !key) {
-        resultDiv.style.display = 'block';
-        resultDiv.style.borderColor = '#ef4444';
-        resultDiv.innerHTML = '⚠️ <b style="color:#f87171;">Preencha os dois campos antes de testar.</b>';
+    function executarResetGlobalTreinamento() {
+      // PRIORIDADE 7b/7f: modal customizado (em vez de prompt() nativo) +
+      // confirmação dupla, já que esta ação apaga dados operacionais.
+      if (typeof abrirModalConfirmacaoAdmin !== 'function') {
+        alert('Erro ao carregar o app. Recarregue a página e tente novamente.');
         return;
       }
-      
-      btn.textContent = '⏳ Testando...';
-      btn.disabled = true;
-      resultDiv.style.display = 'block';
-      resultDiv.style.borderColor = '#f59e0b';
-      resultDiv.innerHTML = '🟡 <span style="color:#fcd34d;">Conectando ao Supabase...</span>';
-      
-      // Aplica temporariamente para testar
-      window.cloudStore.config.url = url.replace(/\/$/, '');
-      window.cloudStore.config.anonKey = key;
-      
-      const result = await window.cloudStore.testConnection();
-      
-      resultDiv.style.borderColor = result.success ? '#10b981' : '#ef4444';
-      resultDiv.style.color = result.success ? '#6ee7b7' : '#f87171';
-      resultDiv.innerHTML = result.message;
-      
-      btn.textContent = '🔌 Testar Conexão';
-      btn.disabled = false;
-    }
-    
-    async function saveCloudConfig() {
-      const url = document.getElementById('cloud-url-input').value.trim();
-      const key = document.getElementById('cloud-key-input').value.trim();
-      const resultDiv = document.getElementById('cloud-test-result');
-      const btn = document.getElementById('btn-save-cloud');
-      
-      if (!url || !key) {
-        resultDiv.style.display = 'block';
-        resultDiv.style.borderColor = '#ef4444';
-        resultDiv.innerHTML = '⚠️ <b style="color:#f87171;">Preencha os dois campos para ativar a Nuvem.</b>';
-        return;
-      }
-      
-      btn.textContent = '⏳ Testando e Salvando...';
-      btn.disabled = true;
-      resultDiv.style.display = 'block';
-      resultDiv.style.borderColor = '#f59e0b';
-      resultDiv.innerHTML = '🟡 <span style="color:#fcd34d;">Verificando conexão antes de salvar...</span>';
-      
-      window.cloudStore.config.url = url.replace(/\/$/, '');
-      window.cloudStore.config.anonKey = key;
-      const result = await window.cloudStore.testConnection();
-      
-      if (result.success) {
-        window.cloudStore.saveConfig(url, key);
-        window.cloudStore.startAutoSync();
-        resultDiv.style.borderColor = '#10b981';
-        resultDiv.style.color = '#6ee7b7';
-        resultDiv.innerHTML = '✅ <b>Salvo com sucesso!</b> Este aparelho agora está conectado à Nuvem. Sincronizando dados...';
-        document.getElementById('cloud-already-connected').style.display = 'block';
-        document.getElementById('btn-disconnect-area').style.display = 'block';
-        setTimeout(() => closeCloudConfigPanel(), 3000);
-      } else {
-        resultDiv.style.borderColor = '#ef4444';
-        resultDiv.style.color = '#f87171';
-        resultDiv.innerHTML = result.message + '<br><small style="color:#94a3b8;">Corrija os dados e tente novamente.</small>';
-      }
-      
-      btn.textContent = '💾 Salvar e Ativar';
-      btn.disabled = false;
-    }
-    
-    function disconnectCloud() {
-      if (!confirm('Deseja desconectar este aparelho do banco de dados na nuvem e voltar ao Modo Local?')) return;
-      window.cloudStore.clearConfig();
-      document.getElementById('cloud-already-connected').style.display = 'none';
-      document.getElementById('btn-disconnect-area').style.display = 'none';
-      document.getElementById('cloud-url-input').value = '';
-      document.getElementById('cloud-key-input').value = '';
-      document.getElementById('cloud-test-result').style.display = 'block';
-      document.getElementById('cloud-test-result').style.borderColor = '#64748b';
-      document.getElementById('cloud-test-result').style.color = '#94a3b8';
-      document.getElementById('cloud-test-result').innerHTML = '⚫ Desconectado. Este aparelho voltou ao Modo Local.';
+      abrirModalConfirmacaoAdmin({
+        titulo: 'Reset Global de Treinamento',
+        mensagem: 'Isso apaga todos os dados operacionais e de treinamento (devoluções, viagens, ocorrências, resumos). Cadastros mestre (usuários, motoristas, veículos, produtos) são preservados. Esta ação não pode ser desfeita.',
+        palavraConfirmacao: 'RESETAR',
+        onConfirm: (pwd) => {
+          if (typeof db !== 'undefined' && typeof db.resetGlobalTreinamento === 'function') {
+            const res = db.resetGlobalTreinamento(pwd);
+            if (res.success) {
+              alert(res.message);
+              if (typeof closeCloudConfigPanel === 'function') closeCloudConfigPanel();
+              location.reload();
+            } else {
+              alert(res.message);
+            }
+          } else {
+            alert('Erro ao acessar o banco de dados.');
+          }
+        }
+      });
     }
   </script>
 

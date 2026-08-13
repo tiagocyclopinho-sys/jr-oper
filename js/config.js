@@ -12,6 +12,17 @@ window.JR_CONFIG = {
   // Modo de Operação: 'local' (LocalStorage no navegador) ou 'cloud' (Supabase/Postgres)
   mode: "local",
 
+  // PRIORIDADE 7c: Senha mestra de administrador centralizada em um único
+  // ponto. Antes, o valor '4533215' estava hardcoded em 6+ lugares
+  // diferentes (js/app.js, js/store.js, index.html) — trocar a senha no
+  // futuro exigia caçar e editar cada um manualmente. Agora só se edita aqui.
+  adminPassword: "4533215",
+
+  // PRIORIDADE 8: data de início do uso real (produção). Antes dessa data,
+  // o app exibe o badge "🧪 Modo Treinamento" no cabeçalho; a partir dela,
+  // "✅ Modo Produção". Apenas informativo, não bloqueia nada.
+  dataInicioProducao: "2026-08-26",
+
   // Configurações do Banco na Nuvem (Preencher quando criar a conta no Supabase - 100% Gratuito)
   supabase: {
     url: "",      // Ex: "https://xyzcompany.supabase.co"

@@ -91,13 +91,22 @@ class Store {
   init() {
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
-      const currentVersion = '4.7.0';
-      if (!localStorage.getItem('jr_sac_db') || storedVersion !== currentVersion) {
+      const currentVersion = '6.1.0';
+      if (!localStorage.getItem('jr_sac_db')) {
+        // Primeira vez: grava banco inicial
         try {
           localStorage.setItem('jr_sac_db', JSON.stringify(INITIAL_DATA));
           localStorage.setItem('jr_sac_version', currentVersion);
         } catch(eSet) {
           console.warn("Nao foi possivel gravar jr_sac_db inicial no localStorage:", eSet);
+        }
+      } else if (storedVersion !== currentVersion) {
+        // Migração: preserva dados existentes e atualiza versão
+        console.info(`[Store] Migrando versão ${storedVersion} → ${currentVersion} (dados preservados)`);
+        try {
+          localStorage.setItem('jr_sac_version', currentVersion);
+        } catch(eMig) {
+          console.warn("Nao foi possivel atualizar versão no localStorage:", eMig);
         }
       }
       const rawDb = localStorage.getItem('jr_sac_db');
@@ -111,6 +120,16 @@ class Store {
       this.data = (typeof INITIAL_DATA !== 'undefined') ? JSON.parse(JSON.stringify(INITIAL_DATA)) : {};
     }
 
+    // Garantir sincronia com bases mestres completas (15.139 Clientes e 4.010 Produtos da planilha Dados SAC.xlsx)
+    if (typeof INITIAL_DATA !== 'undefined') {
+      if (!Array.isArray(this.data.clientes) || (INITIAL_DATA.clientes && this.data.clientes.length < INITIAL_DATA.clientes.length)) {
+        this.data.clientes = JSON.parse(JSON.stringify(INITIAL_DATA.clientes));
+      }
+      if (!Array.isArray(this.data.produtos) || (INITIAL_DATA.produtos && this.data.produtos.length < INITIAL_DATA.produtos.length)) {
+        this.data.produtos = JSON.parse(JSON.stringify(INITIAL_DATA.produtos));
+      }
+    }
+
     const ensureArray = (key) => {
       if (!Array.isArray(this.data[key])) {
         this.data[key] = (typeof INITIAL_DATA !== 'undefined' && Array.isArray(INITIAL_DATA[key])) ? JSON.parse(JSON.stringify(INITIAL_DATA[key])) : [];
@@ -121,6 +140,7 @@ class Store {
     ensureArray('roles_disponiveis');
     ensureArray('usuarios');
     ensureArray('separadores_conferentes');
+    ensureArray('colaboradores_cd');
     ensureArray('setores');
     ensureArray('motoristas');
     ensureArray('ajudantes');
@@ -142,6 +162,79 @@ class Store {
     ensureArray('motivos_ocorrencia');
     ensureArray('resumo_diario_cd');
     ensureArray('trocas_veiculos');
+    ensureArray('audit_logs');
+    ensureArray('retencoes_frota');
+    ensureArray('reentregas');
+
+    // Seed inicial para reentregas caso vazio
+    if (this.data.reentregas.length === 0) {
+      const hojeStr = new Date().toISOString().split('T')[0];
+      this.data.reentregas = [
+        {
+          id: 1718000000001,
+          data: hojeStr,
+          carga_numero: "43125",
+          rota_nome: "ROTA 03 - ZUL",
+          motorista_nome: "ROBERTO CARLOS",
+          placa: "BRA2E19",
+          novo_motorista: null,
+          entregas_saiu: 28,
+          entregas_feitas: 24,
+          entregas_reentrega: 4,
+          motivo: "CLIENTE AUSENTE / ESTABELECIMENTO FECHADO NO HORÁRIO",
+          status: "PENDENTE",
+          criado_por: "SISTEMA",
+          criado_em: new Date().toISOString(),
+          is_deleted: false
+        },
+        {
+          id: 1718000000002,
+          data: hojeStr,
+          carga_numero: "43118",
+          rota_nome: "ROTA 07 - GUARULHOS",
+          motorista_nome: "LUIZ EDUARDO",
+          placa: "CZT3042",
+          novo_motorista: "MARCOS SILVA",
+          entregas_saiu: 32,
+          entregas_feitas: 30,
+          entregas_reentrega: 2,
+          motivo: "ATRASO DEVIDO A TRÂNSITO INTENSO NA VIA DUTRA",
+          status: "REALIZADA",
+          criado_por: "SISTEMA",
+          criado_em: new Date().toISOString(),
+          is_deleted: false
+        }
+      ];
+    }
+
+    // Migração/Sincronia automática do cadastro estruturado de Colaboradores do CD
+    if (typeof INITIAL_DATA !== 'undefined' && Array.isArray(INITIAL_DATA.colaboradores_cd)) {
+      if (!Array.isArray(this.data.colaboradores_cd) || this.data.colaboradores_cd.length === 0) {
+        this.data.colaboradores_cd = JSON.parse(JSON.stringify(INITIAL_DATA.colaboradores_cd));
+      } else {
+        INITIAL_DATA.colaboradores_cd.forEach(initItem => {
+          if (!this.data.colaboradores_cd.some(c => String(c.id) === String(initItem.id) || (c.nome && initItem.nome && c.nome.toUpperCase().trim() === initItem.nome.toUpperCase().trim()))) {
+            this.data.colaboradores_cd.push(JSON.parse(JSON.stringify(initItem)));
+          }
+        });
+      }
+    }
+    ensureArray('registro_versoes');
+
+    // Preenche motivos padrão se estiver vazio
+    if (this.data.motivos_devolucao.length === 0) {
+      this.data.motivos_devolucao = [
+        'Avaria de Transporte',
+        'Produto Vencido',
+        'Falta de Mercadoria',
+        'Erro de Pedido / Emissão',
+        'Cliente Recusou / Fechado',
+        'Divergência de Preço / Descrição',
+        'Avaria Interna CD',
+        'Troca Comercial',
+        'Outros'
+      ];
+    }
 
     try {
       this.migratePasswords();
@@ -362,7 +455,7 @@ class Store {
 
   // SAC Devoluções Methods
   getDevolucoes() {
-    return (this.data.ocorrencias_devolucao || []).map(d => {
+    return (this.data.ocorrencias_devolucao || []).filter(d => !d.is_deleted).map(d => {
       const carga = this.data.cargas.find(c => c.id == d.carga_id) || {};
       const veiculoDirect = this.data.veiculos.find(v => v.id == d.veiculo_id);
       const veiculoCarga = this.data.veiculos.find(v => v.id == carga.veiculo_id);
@@ -443,11 +536,21 @@ class Store {
       motivo_reclamado: devolucaoData.motivo_reclamado,
       valor_reclamado: parseFloat(devolucaoData.valor_reclamado) || 0,
       detalhamento_texto: devolucaoData.detalhamento_texto,
-      foto_url: devolucaoData.foto_url || '',
+      // ADENDO (Mídia): antes só o 1º item de cada array era salvo
+      // (foto_url/video_url apontavam para [0] e o vídeo era descartado
+      // — video_url ficava sempre '' aqui). Agora persistimos os arrays
+      // completos de fotos e vídeos anexados na Abertura, e mantemos
+      // foto_url/video_url como aliases (1º item) por compatibilidade
+      // com telas antigas que ainda leem esses campos únicos.
+      fotos_abertura: Array.isArray(devolucaoData.fotos_abertura) ? devolucaoData.fotos_abertura : (devolucaoData.foto_url ? [devolucaoData.foto_url] : []),
+      videos_abertura: Array.isArray(devolucaoData.videos_abertura) ? devolucaoData.videos_abertura : (devolucaoData.video_url ? [devolucaoData.video_url] : []),
+      foto_url: (Array.isArray(devolucaoData.fotos_abertura) && devolucaoData.fotos_abertura[0]) || devolucaoData.foto_url || '',
+      fotos_investigacao: [],
+      videos_investigacao: [],
       cliente_emite_nf: devolucaoData.cliente_emite_nf === 'sim' || devolucaoData.cliente_emite_nf === true,
       forma_acerto: devolucaoData.forma_acerto,
       motivo_real_causa_raiz: '',
-      video_url: '',
+      video_url: (Array.isArray(devolucaoData.videos_abertura) && devolucaoData.videos_abertura[0]) || devolucaoData.video_url || '',
       descricao_monitoramento: '',
       separador_id: null,
       conferente_id: null,
@@ -490,6 +593,21 @@ class Store {
       dev.tipo_erro_outro = updateData.tipo_erro_outro;
       dev.video_url = updateData.video_url || dev.video_url || '';
       dev.video_investigacao_url = updateData.video_investigacao_url || dev.video_investigacao_url || '';
+      // ADENDO (Mídia): fotos/vídeos anexados durante a Investigação são
+      // ACUMULADOS (não sobrescritos) — cada nova submissão pode adicionar
+      // mais evidências ao histórico da ocorrência, sem apagar as
+      // anteriores. Também guarda a foto/vídeo únicos legados dentro do
+      // array, para as galerias novas conseguirem enxergá-los.
+      if (!Array.isArray(dev.fotos_investigacao)) dev.fotos_investigacao = [];
+      if (!Array.isArray(dev.videos_investigacao)) dev.videos_investigacao = [];
+      if (Array.isArray(updateData.fotos_investigacao_novas)) {
+        dev.fotos_investigacao.push(...updateData.fotos_investigacao_novas);
+      }
+      if (Array.isArray(updateData.videos_investigacao_novas)) {
+        dev.videos_investigacao.push(...updateData.videos_investigacao_novas);
+      } else if (updateData.video_investigacao_url && !dev.videos_investigacao.includes(updateData.video_investigacao_url)) {
+        dev.videos_investigacao.push(updateData.video_investigacao_url);
+      }
       dev.descricao_monitoramento = updateData.descricao_monitoramento || '';
       // Persiste o NOME do separador/conferente (vindo dos selects com nomes reais)
       dev.separador_apurado  = updateData.separador_apurado  || '';
@@ -499,9 +617,22 @@ class Store {
       dev.conferente_id = updateData.conferente_id ? parseInt(updateData.conferente_id) : dev.conferente_id || null;
       dev.setor_encaminhado_id = updateData.setor_encaminhado_id ? parseInt(updateData.setor_encaminhado_id) : null;
       dev.acao_tomada = updateData.acao_tomada;
-      if (!dev.status_gestao || dev.status_gestao === 'PENDENTE') {
-        dev.status_gestao = 'PENDENTE_GESTOR';
-      }
+      if (updateData.responsavel_analise) dev.responsavel_analise = updateData.responsavel_analise;
+      // PRIORIDADE 1: toda edição feita em Análise e Monitoramento reabre a
+      // tratativa para o Gestor, mesmo que o chamado já estivesse
+      // PENDENTE_GESTOR ou CONCLUIDO. Antes, essa reabertura só acontecia
+      // quando o status ainda era PENDENTE/vazio, o que fazia a Gestão de
+      // Tratativas "não perceber" edições feitas depois da 1ª apuração.
+      dev.status_gestao = 'PENDENTE_GESTOR';
+      dev.atualizado_em = new Date().toISOString();
+      dev.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+
+      this.logAudit({
+        acao: 'EDICAO_INVESTIGACAO',
+        modulo: 'ocorrencias_devolucao',
+        registro_id: id,
+        diff: { depois: { motivo_real_causa_raiz: dev.motivo_real_causa_raiz, responsavel_analise: dev.responsavel_analise, status_gestao: dev.status_gestao } }
+      });
 
       if (updateData.registra_desconto && updateData.separador_id) {
         if (!this.data.auditoria_produtividade) this.data.auditoria_produtividade = [];
@@ -559,7 +690,7 @@ class Store {
 
   // Ocorrências de Rota
   getOcorrenciasRota() {
-    return (this.data.ocorrencias_rota || []).map(r => {
+    return (this.data.ocorrencias_rota || []).filter(r => !r.is_deleted).map(r => {
       const carga = this.data.cargas.find(c => c.id == r.carga_id) || {};
       const veiculo = this.data.veiculos.find(v => v.id == r.veiculo_id) || {};
       const motorista = this.data.motoristas.find(m => m.id == r.motorista_id) || {};
@@ -724,7 +855,7 @@ class Store {
 
   // ===== CRUD CONTROLE DE VIAGENS (LARGADAS) =====
   getControleViagens() {
-    return this.data.controle_viagens || [];
+    return (this.data.controle_viagens || []).filter(x => !x.is_deleted);
   }
 
   addViagem(viagemData) {
@@ -772,7 +903,7 @@ class Store {
 
   // ===== CRUD OCORRÊNCIAS OPERACIONAIS DE VIAGEM =====
   getOcorrenciasViagens() {
-    return this.data.ocorrencias_viagens || [];
+    return (this.data.ocorrencias_viagens || []).filter(x => !x.is_deleted);
   }
 
   addOcorrenciaViagem(ocData) {
@@ -849,8 +980,8 @@ class Store {
       turno: turno || '2º TURNO - FRIO',
       gestor: gestorPadrao,
       movimentacao: {
-        recebimento: { peso: 61515.30, aux_junior: 4, movimentador: 7, conferente: 4, empilhador: 2, cargas_previstas: 3, cargas_realizadas: 3, cargas_veiculos: 3 },
-        expedicao: { peso: 54034.85, aux_junior: 4, movimentador: 7, conferente: 4, empilhador: 2, cargas_previstas: 22, cargas_realizadas: 22, cargas_veiculos: 16 }
+        recebimento: { peso: 0, aux_junior: 0, movimentador: 0, conferente: 0, empilhador: 0, cargas_previstas: 0, cargas_realizadas: 0, cargas_veiculos: 0 },
+        expedicao: { peso: 0, aux_junior: 0, movimentador: 0, conferente: 0, empilhador: 0, cargas_previstas: 0, cargas_realizadas: 0, cargas_veiculos: 0 }
       },
       faltas_condutas: [],
       ocorrencias: [],
@@ -874,7 +1005,7 @@ class Store {
 
   // ===== CRUD TROCAS DE VEÍCULOS =====
   getTrocasVeiculos() {
-    return this.data.trocas_veiculos || [];
+    return (this.data.trocas_veiculos || []).filter(x => !x.is_deleted);
   }
 
   addTrocaVeiculo(trocaData) {
@@ -912,6 +1043,69 @@ class Store {
   }
 
   // ===== MÉTODOS GETTERS DE CADASTROS PARA EXPORTAÇÃO CSV E CONSULTA =====
+  getColaboradoresCD(filtroFuncao = '') {
+    const list = (this.data.colaboradores_cd || []).filter(c => !c.is_deleted);
+    if (!filtroFuncao) return list;
+    const term = filtroFuncao.toUpperCase();
+    return list.filter(c => String(c.funcao || '').toUpperCase().includes(term));
+  }
+
+  getSeparadores() {
+    const colabs = this.getColaboradoresCD();
+    const filtered = colabs.filter(c => c.ativo && (c.funcao.includes('SEPARADOR') || c.funcao.includes('PICKING') || c.funcao.includes('MOVIMENTADOR') || c.funcao.includes('AUXILIAR')));
+    return filtered.length > 0 ? filtered.map(c => c.nome) : (this.data.separadores_conferentes || []);
+  }
+
+  getConferentes() {
+    const colabs = this.getColaboradoresCD();
+    const filtered = colabs.filter(c => c.ativo && c.funcao.includes('CONFERENTE'));
+    return filtered.length > 0 ? filtered.map(c => c.nome) : (this.data.separadores_conferentes || []);
+  }
+
+  getEmpilhadores() {
+    const colabs = this.getColaboradoresCD();
+    const filtered = colabs.filter(c => c.ativo && (c.funcao.includes('EMPILHADEIRA') || c.funcao.includes('OPERADOR')));
+    return filtered.length > 0 ? filtered.map(c => c.nome) : (this.data.separadores_conferentes || []);
+  }
+
+  saveColaboradorCD(colabData) {
+    if (!this.data.colaboradores_cd) this.data.colaboradores_cd = [];
+    let item;
+    if (colabData.id) {
+      item = this.data.colaboradores_cd.find(c => c.id == colabData.id);
+      if (item) {
+        Object.assign(item, {
+          chapa: colabData.chapa !== undefined ? colabData.chapa : item.chapa || '',
+          nome: String(colabData.nome || item.nome).trim().toUpperCase(),
+          secao: String(colabData.secao || item.secao || '').trim().toUpperCase(),
+          funcao: String(colabData.funcao || item.funcao || 'SEPARADOR').trim().toUpperCase(),
+          cpf: String(colabData.cpf !== undefined ? colabData.cpf : item.cpf || '').trim(),
+          ativo: colabData.ativo !== undefined ? Boolean(colabData.ativo) : true
+        });
+      }
+    }
+    if (!item) {
+      item = {
+        id: Date.now(),
+        chapa: colabData.chapa || '',
+        nome: String(colabData.nome || '').trim().toUpperCase(),
+        secao: String(colabData.secao || 'CARREGAMENTO FRIOS - 1 TURNO').trim().toUpperCase(),
+        funcao: String(colabData.funcao || 'SEPARADOR').trim().toUpperCase(),
+        cpf: String(colabData.cpf || '').trim(),
+        ativo: colabData.ativo !== undefined ? Boolean(colabData.ativo) : true
+      };
+      if (!item.nome) return null;
+      this.data.colaboradores_cd.unshift(item);
+    }
+    this.logAudit({ acao: 'SALVAR_COLABORADOR', modulo: 'colaboradores_cd', registro_id: item.id, diff: { depois: item } });
+    this.save();
+    return item;
+  }
+
+  deleteColaboradorCD(id) {
+    return this.softDelete('colaboradores_cd', id);
+  }
+
   getUsuarios() {
     return this.data.usuarios || [];
   }
@@ -925,7 +1119,248 @@ class Store {
   }
 
   getClientes() {
-    return this.data.clientes || [];
+    return (this.data.clientes || []).filter(x => !x.is_deleted);
+  }
+
+  addCliente(clienteData) {
+    if (!this.data.clientes) this.data.clientes = [];
+    const item = {
+      id: Date.now(),
+      codigo: clienteData.codigo || `CLI-${Date.now().toString().slice(-4)}`,
+      nome: String(clienteData.nome || '').trim().toUpperCase(),
+      cidade: clienteData.cidade || '',
+      uf: clienteData.uf || 'GO',
+      cnpj_cpf: clienteData.cnpj_cpf || '',
+      criado_em: new Date().toISOString()
+    };
+    if (!item.nome) return null;
+    this.data.clientes.unshift(item);
+    this.logAudit({ acao: 'CRIACAO', modulo: 'clientes', registro_id: item.id, diff: { depois: item } });
+    this.save();
+    return item;
+  }
+
+  deleteCliente(id) {
+    return this.softDelete('clientes', id);
+  }
+
+  // ===== GOVERNANÇA: SOFT DELETE, LIXEIRA, AUDITORIA & VERSIONAMENTO =====
+  // PRIORIDADE 7c: fonte única da senha de admin (window.JR_CONFIG.adminPassword)
+  getAdminPassword() {
+    return (typeof window !== 'undefined' && window.JR_CONFIG && window.JR_CONFIG.adminPassword) || '4533215';
+  }
+
+  softDelete(collection, id) {
+    if (!this.data[collection]) return false;
+    const item = this.data[collection].find(x => x.id == id);
+    if (!item) return false;
+    item.is_deleted = true;
+    item.deleted_at = new Date().toISOString();
+    item.deleted_by = this.currentUser ? { id: this.currentUser.id, nome: this.currentUser.nome } : { id: 0, nome: 'SISTEMA' };
+    
+    this.logAudit({
+      acao: 'EXCLUSAO_LOGICA',
+      modulo: collection,
+      registro_id: id,
+      diff: { antes: item }
+    });
+    this.save();
+    return true;
+  }
+
+  restoreItem(collection, id) {
+    if (!this.data[collection]) return false;
+    const item = this.data[collection].find(x => x.id == id);
+    if (!item) return false;
+    item.is_deleted = false;
+    item.restored_at = new Date().toISOString();
+    item.restored_by = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+
+    this.logAudit({
+      acao: 'RESTAURACAO',
+      modulo: collection,
+      registro_id: id,
+      diff: { depois: item }
+    });
+    this.save();
+    return true;
+  }
+
+  hardDelete(collection, id, password) {
+    if (String(password).trim() !== this.getAdminPassword()) {
+      return { success: false, message: 'Senha de administrador incorreta.' };
+    }
+    if (!this.data[collection]) return { success: false, message: 'Coleção não encontrada' };
+    const item = this.data[collection].find(x => x.id == id);
+    if (!item) return { success: false, message: 'Registro não encontrado' };
+    
+    this.data[collection] = this.data[collection].filter(x => x.id != id);
+    this.logAudit({
+      acao: 'EXCLUSAO_DEFINITIVA',
+      modulo: collection,
+      registro_id: id,
+      diff: { antes: item }
+    });
+    this.save();
+    return { success: true };
+  }
+
+  getLixeiraItems() {
+    const collections = [
+      { name: 'ocorrencias_devolucao', label: 'Devolução SAC' },
+      { name: 'controle_viagens', label: 'Controle de Viagens' },
+      { name: 'ocorrencias_rota', label: 'Chamados em Rota' },
+      { name: 'ocorrencias_viagens', label: 'Ocorrências Operacionais' },
+      { name: 'retencoes_frota', label: 'Retenção de Frota' },
+      { name: 'reentregas', label: 'Reentregas de Rota' },
+      { name: 'produtos', label: 'Produtos' },
+      { name: 'motoristas', label: 'Motoristas' },
+      { name: 'ajudantes', label: 'Ajudantes' },
+      { name: 'colaboradores_cd', label: 'Colaboradores CD' },
+      { name: 'veiculos', label: 'Veículos' },
+      { name: 'clientes', label: 'Clientes' }
+    ];
+    let items = [];
+    collections.forEach(col => {
+      if (Array.isArray(this.data[col.name])) {
+        this.data[col.name].filter(x => x.is_deleted).forEach(item => {
+          items.push({
+            collection: col.name,
+            collectionLabel: col.label,
+            id: item.id,
+            descricao: item.numero_protocolo || item.numero_retencao || item.carga_numero || item.carga || item.placa || item.nome || item.descricao || `ID #${item.id}`,
+            deleted_at: item.deleted_at,
+            deleted_by: item.deleted_by ? item.deleted_by.nome : (item.deleted_by_nome || 'N/A'),
+            itemData: item
+          });
+        });
+      }
+    });
+    return items.sort((a, b) => new Date(b.deleted_at || 0) - new Date(a.deleted_at || 0));
+  }
+
+  logAudit({ acao, modulo, registro_id, diff }) {
+    if (!this.data.audit_logs) this.data.audit_logs = [];
+    const entry = {
+      id: Date.now() + Math.random(),
+      usuario_id: this.currentUser ? this.currentUser.id : 0,
+      usuario_nome: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      data_hora: new Date().toISOString(),
+      acao,
+      modulo,
+      registro_id,
+      diff: diff || null,
+      user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Node/Browser'
+    };
+    this.data.audit_logs.unshift(entry);
+    // Limita o histórico de auditoria a 1000 registros para otimização
+    if (this.data.audit_logs.length > 1000) {
+      this.data.audit_logs = this.data.audit_logs.slice(0, 1000);
+    }
+  }
+
+  saveVersion(collection, record) {
+    if (!this.data.registro_versoes) this.data.registro_versoes = [];
+    const versions = this.data.registro_versoes.filter(v => v.collection === collection && v.registro_id == record.id);
+    const versaoNum = versions.length + 1;
+    this.data.registro_versoes.unshift({
+      id: Date.now(),
+      collection,
+      registro_id: record.id,
+      versao: versaoNum,
+      dados_json: JSON.parse(JSON.stringify(record)),
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString()
+    });
+  }
+
+  rollbackVersion(collection, recordId, versionId, password) {
+    if (String(password).trim() !== this.getAdminPassword()) {
+      return { success: false, message: 'Senha de administrador incorreta' };
+    }
+    const versionObj = (this.data.registro_versoes || []).find(v => v.id == versionId);
+    if (!versionObj) return { success: false, message: 'Versão não encontrada' };
+    
+    const list = this.data[collection];
+    if (!list) return { success: false, message: 'Coleção não encontrada' };
+    
+    const idx = list.findIndex(x => x.id == recordId);
+    if (idx < 0) return { success: false, message: 'Registro atual não encontrado' };
+
+    list[idx] = JSON.parse(JSON.stringify(versionObj.dados_json));
+    this.logAudit({ acao: 'ROLLBACK_VERSAO', modulo: collection, registro_id: recordId, diff: { versao_restaurada: versionObj.versao } });
+    this.save();
+    return { success: true };
+  }
+
+  // ===== GESTÃO DE MOTIVOS DE DEVOLUÇÃO (GERENCIADOR DE CADASTROS) =====
+  addMotivoDevolucao(nome) {
+    if (!this.data.motivos_devolucao) this.data.motivos_devolucao = [];
+    const fmt = String(nome).trim();
+    if (!fmt) return null;
+    if (!this.data.motivos_devolucao.includes(fmt)) {
+      this.data.motivos_devolucao.push(fmt);
+      this.save();
+    }
+    return fmt;
+  }
+
+  deleteMotivoDevolucao(nome) {
+    if (this.data.motivos_devolucao) {
+      this.data.motivos_devolucao = this.data.motivos_devolucao.filter(m => m !== nome);
+      this.save();
+    }
+  }
+
+  getClientes() {
+    return (this.data.clientes || []).filter(x => !x.is_deleted).map(c => {
+      const cleanCod = String(c.codigo || c.codigo_cliente || c.id || '').replace(/^CLI-/i, '').trim();
+      const cleanNome = String(c.nome || c.razao_social || 'CLIENTE SEM NOME').trim().toUpperCase();
+      return {
+        id: String(c.id || cleanCod),
+        codigo: cleanCod,
+        codigo_cliente: cleanCod,
+        nome: cleanNome,
+        razao_social: cleanNome,
+        cidade: c.cidade || 'Araguaína',
+        uf: c.uf || 'TO'
+      };
+    });
+  }
+
+  getProdutos() {
+    return (this.data.produtos || []).filter(x => !x.is_deleted).map(p => ({
+      id: String(p.id || p.codigo_produto),
+      codigo_produto: String(p.codigo_produto || p.id),
+      descricao: String(p.descricao || '').toUpperCase(),
+      categoria: p.categoria || 'Frios/Carnes',
+      valor_unitario_padrao: p.valor_unitario_padrao || 0
+    }));
+  }
+
+  // ===== RESET GLOBAL DE TREINAMENTO =====
+  resetGlobalTreinamento(password) {
+    if (String(password).trim() !== this.getAdminPassword()) {
+      return { success: false, message: 'Senha de administrador incorreta.' };
+    }
+    // Mantém cadastros mestre, limpa dados operacionais e de treinamento
+    this.data.ocorrencias_devolucao = [];
+    this.data.itens_devolucao = [];
+    this.data.cargas = [];
+    this.data.controle_viagens = [];
+    this.data.ocorrencias_viagens = [];
+    this.data.ocorrencias_rota = [];
+    this.data.resumo_diario_cd = [];
+    this.data.relatorios_divergencia = [];
+    this.data.auditoria_produtividade = [];
+    this.data.trocas_veiculos = [];
+    this.data.retencoes_frota = [];
+    this.data.reentregas = [];
+    this.data.audit_logs = [];
+    this.data.registro_versoes = [];
+
+    this.save();
+    return { success: true, message: 'Reset executado com sucesso! Dados zerados para início da operação oficial.' };
   }
 
   // ===== GERADOR DE EXTRAÇÃO SQL PARA BANCO / POWER BI =====
@@ -986,12 +1421,266 @@ class Store {
 
     return sql;
   }
+
+  // =============================================================================
+  // MÓDULO: GESTÃO DE RETENÇÃO DE FROTA (v6.1.0)
+  // =============================================================================
+
+  /**
+   * Retorna lista de retenções (não deletadas), enriquecida com dados do
+   * veículo cadastrado via veiculo_id (FK para db.data.veiculos).
+   */
+  getRetencoesFrota() {
+    const retencoes = Array.isArray(this.data.retencoes_frota)
+      ? this.data.retencoes_frota
+      : [];
+    return retencoes
+      .filter(r => !r.is_deleted)
+      .map(r => {
+        const veiculo = (this.data.veiculos || []).find(v => v.id == r.veiculo_id) || {};
+        return {
+          ...r,
+          veiculo_modelo: veiculo.modelo || veiculo.tipo || '',
+          veiculo_tipo: veiculo.tipo || r.tipo_veiculo || '',
+          veiculo_capacidade: veiculo.capacidade_kg || null
+        };
+      })
+      .sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em));
+  }
+
+  /**
+   * Cria novo registro de retenção com ID auto e número de protocolo sequencial.
+   * @param {Object} dados - { veiculo_id, placa, tipo_veiculo, data_parada, motivo, tipo_os, local, data_previsao }
+   * @returns {{ success: boolean, retencao: Object }}
+   */
+  addRetencaoFrota({ veiculo_id, placa, tipo_veiculo, data_parada, motivo, tipo_os, local, data_previsao, numero_os }) {
+    if (!Array.isArray(this.data.retencoes_frota)) {
+      this.data.retencoes_frota = [];
+    }
+    const ano = new Date().getFullYear();
+    const numero_retencao = this.getNextSequenceNumber(
+      'retencoes_frota',
+      'numero_retencao',
+      `RET-${ano}-`,
+      3
+    );
+    const retencao = {
+      id: Date.now(),
+      numero_retencao,
+      veiculo_id: parseInt(veiculo_id) || null,
+      placa: (placa || '').toUpperCase().trim(),
+      tipo_veiculo: (tipo_veiculo || '').toUpperCase().trim(),
+      data_parada: data_parada || new Date().toISOString().split('T')[0],
+      motivo: motivo || '',
+      tipo_os: tipo_os || 'CORRETIVA',
+      local: local || '',
+      data_previsao: data_previsao || null,
+      numero_os: (numero_os || '').toUpperCase().trim() || null,
+      data_liberacao: null,
+      status: 'RETIDO',
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString(),
+      is_deleted: false
+    };
+    this.data.retencoes_frota.push(retencao);
+    this.save();
+    return { success: true, retencao };
+  }
+
+  /**
+   * Altera status do registro para LIBERADO e registra a data de liberação.
+   * @param {number|string} id - ID da retenção
+   * @param {string} dataLiberacao - Data de liberação (YYYY-MM-DD)
+   * @returns {{ success: boolean, retencao?: Object, message?: string }}
+   */
+  liberarVeiculo(id, dataLiberacao) {
+    const retencao = (this.data.retencoes_frota || []).find(r => r.id == id && !r.is_deleted);
+    if (!retencao) {
+      return { success: false, message: `Retenção ID ${id} não encontrada.` };
+    }
+    retencao.status = 'LIBERADO';
+    retencao.data_liberacao = dataLiberacao || new Date().toISOString().split('T')[0];
+    this.save();
+    return { success: true, retencao };
+  }
+
+  /**
+   * Soft delete de um registro de retenção.
+   * @param {number|string} id - ID da retenção
+   * @returns {{ success: boolean, message?: string }}
+   */
+  deleteRetencaoFrota(id) {
+    const retencao = (this.data.retencoes_frota || []).find(r => r.id == id);
+    if (!retencao) {
+      return { success: false, message: `Retenção ID ${id} não encontrada.` };
+    }
+    retencao.is_deleted = true;
+    retencao.deleted_at = new Date().toISOString();
+    retencao.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    this.save();
+    return { success: true };
+  }
+
+  /**
+   * Edita campos de um registro de retenção existente (retido ou liberado).
+   * @param {number|string} id
+   * @param {Object} dados - campos que podem ser alterados
+   * @returns {{ success: boolean, retencao?: Object, message?: string }}
+   */
+  updateRetencaoFrota(id, dados) {
+    const retencao = (this.data.retencoes_frota || []).find(r => r.id == id && !r.is_deleted);
+    if (!retencao) {
+      return { success: false, message: `Retenção ID ${id} não encontrada.` };
+    }
+    const campos = ['placa', 'data_parada', 'motivo', 'tipo_os', 'numero_os', 'local', 'data_previsao', 'data_liberacao', 'status'];
+    campos.forEach(c => {
+      if (Object.prototype.hasOwnProperty.call(dados, c)) {
+        retencao[c] = dados[c];
+      }
+    });
+    retencao.atualizado_em = new Date().toISOString();
+    this.save();
+    return { success: true, retencao };
+  }
+
+  // =============================================================================
+  // MÓDULO: CONTROLE DE REENTREGAS DE ROTA
+  // =============================================================================
+
+  /**
+   * Retorna lista de reentregas ativas (!is_deleted).
+   */
+  getReentregas() {
+    const list = Array.isArray(this.data.reentregas) ? this.data.reentregas : [];
+    return list
+      .filter(x => !x.is_deleted)
+      .sort((a, b) => new Date(b.data || b.criado_em) - new Date(a.data || a.criado_em));
+  }
+
+  /**
+   * Cria novo registro de reentrega com ID, autor, data e auditoria.
+   * @param {Object} item - { data, carga_numero, rota_nome, motorista_nome, entregas_saiu, entregas_feitas, entregas_reentrega, motivo, placa, novo_motorista, status }
+   * @returns {{ success: boolean, reentrega: Object }}
+   */
+  addReentrega(item) {
+    if (!Array.isArray(this.data.reentregas)) {
+      this.data.reentregas = [];
+    }
+    const novaReentrega = {
+      id: Date.now(),
+      data: item.data || new Date().toISOString().split('T')[0],
+      carga_numero: String(item.carga_numero || '').trim().toUpperCase(),
+      rota_nome: String(item.rota_nome || '').trim().toUpperCase(),
+      motorista_nome: String(item.motorista_nome || '').trim().toUpperCase(),
+      entregas_saiu: parseInt(item.entregas_saiu) || 0,
+      entregas_feitas: parseInt(item.entregas_feitas) || 0,
+      entregas_reentrega: parseInt(item.entregas_reentrega) || 0,
+      motivo: String(item.motivo || '').trim(),
+      placa: String(item.placa || '').trim().toUpperCase(),
+      novo_motorista: item.novo_motorista ? String(item.novo_motorista).trim().toUpperCase() : null,
+      status: item.status || 'PENDENTE',
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString(),
+      is_deleted: false,
+      deleted_at: null,
+      deleted_by_nome: null
+    };
+    this.data.reentregas.unshift(novaReentrega);
+    this.logAudit({
+      acao: 'CRIACAO',
+      modulo: 'reentregas',
+      registro_id: novaReentrega.id,
+      diff: { depois: novaReentrega }
+    });
+    this.save();
+    return { success: true, reentrega: novaReentrega };
+  }
+
+  /**
+   * Atualiza campos de uma reentrega existente.
+   * @param {number|string} id
+   * @param {Object} updates
+   * @returns {{ success: boolean, reentrega?: Object, message?: string }}
+   */
+  updateReentrega(id, updates) {
+    if (!Array.isArray(this.data.reentregas)) this.data.reentregas = [];
+    const item = this.data.reentregas.find(x => x.id == id && !x.is_deleted);
+    if (!item) {
+      return { success: false, message: `Reentrega ID ${id} não encontrada.` };
+    }
+    const antes = JSON.parse(JSON.stringify(item));
+    const camposPermitidos = [
+      'data', 'carga_numero', 'rota_nome', 'motorista_nome',
+      'entregas_saiu', 'entregas_feitas', 'entregas_reentrega',
+      'motivo', 'placa', 'novo_motorista', 'status'
+    ];
+    camposPermitidos.forEach(campo => {
+      if (Object.prototype.hasOwnProperty.call(updates, campo)) {
+        if (typeof updates[campo] === 'string' && ['carga_numero', 'rota_nome', 'motorista_nome', 'placa', 'novo_motorista'].includes(campo)) {
+          item[campo] = updates[campo].trim().toUpperCase();
+        } else if (['entregas_saiu', 'entregas_feitas', 'entregas_reentrega'].includes(campo)) {
+          item[campo] = parseInt(updates[campo]) || 0;
+        } else {
+          item[campo] = updates[campo];
+        }
+      }
+    });
+    item.atualizado_em = new Date().toISOString();
+    item.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+
+    this.logAudit({
+      acao: 'EDICAO',
+      modulo: 'reentregas',
+      registro_id: id,
+      diff: { antes, depois: item }
+    });
+    this.save();
+    return { success: true, reentrega: item };
+  }
+
+  /**
+   * Soft-delete auditado de uma reentrega.
+   * @param {number|string} id
+   * @returns {{ success: boolean, message?: string }}
+   */
+  deleteReentrega(id) {
+    if (!Array.isArray(this.data.reentregas)) return { success: false, message: 'Coleção vazia.' };
+    const item = this.data.reentregas.find(x => x.id == id && !x.is_deleted);
+    if (!item) {
+      return { success: false, message: `Reentrega ID ${id} não encontrada.` };
+    }
+    item.is_deleted = true;
+    item.deleted_at = new Date().toISOString();
+    item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    item.deleted_by = this.currentUser ? { id: this.currentUser.id, nome: this.currentUser.nome } : { id: 0, nome: 'SISTEMA' };
+
+    this.logAudit({
+      acao: 'EXCLUSAO_LOGICA',
+      modulo: 'reentregas',
+      registro_id: id,
+      diff: { antes: item }
+    });
+    this.save();
+    return { success: true };
+  }
 }
 
-let db;
+var db;
 try {
   db = new Store();
+  if (typeof window !== 'undefined') window.db = db;
 } catch(errDb) {
   console.error("Falha ao instanciar Store, criando fallback:", errDb);
-  db = { data: JSON.parse(JSON.stringify(INITIAL_DATA)), currentUser: null };
+  var fallbackData = typeof INITIAL_DATA !== 'undefined' ? JSON.parse(JSON.stringify(INITIAL_DATA)) : { usuarios: [], roles_disponiveis: [] };
+  db = {
+    data: fallbackData,
+    currentUser: null,
+    getDevolucoes: function() { return (this.data && this.data.ocorrencias_devolucao) || []; },
+    getOcorrenciasRota: function() { return (this.data && this.data.ocorrencias_rota) || []; },
+    getControleViagens: function() { return (this.data && this.data.controle_viagens) || []; },
+    getUsuarios: function() { return (this.data && this.data.usuarios) || []; },
+    getLixeiraItems: function() { return []; },
+    init: function() {}
+  };
+  if (typeof window !== 'undefined') window.db = db;
 }

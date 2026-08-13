@@ -1,0 +1,8 @@
+Banco de dados
+
+
+URL Supabase:
+https://qxipgnkdbzxtfvuyupow.supabase.co
+
+Anon key - Chave Pública:
+sb_publishable_oX9VhXUCTJYqGJ-9MgusuQ_eKF-B0KN

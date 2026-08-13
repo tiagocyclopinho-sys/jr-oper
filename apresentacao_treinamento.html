@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JR Oper - Treinamento de Capacitação de Equipes</title>
+  <!-- Google Fonts para tipografia premium -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <style>
+    /* Sistema de Design e Variáveis */
+    :root {
+      --primary: #2e7d32;      /* Verde Institucional JR */
+      --primary-dark: #1b5e20; /* Verde Escuro */
+      --primary-light: #e8f5e9;/* Verde Claro */
+      --dark: #121212;         /* Cinza Escuro Premium */
+      --dark-card: #1e1e1e;    /* Fundo dos Cards Dark */
+      --light: #f8f9fa;        /* Fundo Light */
+      --accent: #ffd600;       /* Amarelo de Destaque */
+      --danger: #d32f2f;       /* Vermelho de Alerta */
+      --danger-light: #ffebee;
+      --text-dark: #212529;
+      --text-light: #f8f9fa;
+      --text-muted: #868e96;
+      --border-radius: 16px;
+      --transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--dark);
+      color: var(--text-light);
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    /* Container de Slides */
+    .presentation-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* Cabeçalho da Apresentação */
+    .header {
+      padding: 20px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 10;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(18, 18, 18, 0.8);
+      backdrop-filter: blur(10px);
+    }
+
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-badge {
+      background: var(--primary);
+      color: white;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 1.2rem;
+      padding: 6px 14px;
+      border-radius: 8px;
+      letter-spacing: 1px;
+      box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
+    }
+
+    .logo-text {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 600;
+      font-size: 1.1rem;
+      color: var(--text-light);
+    }
+
+    .presentation-title {
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* Área dos Slides */
+    .slides-wrapper {
+      flex: 1;
+      position: relative;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px 40px;
+    }
+
+    .slide {
+      position: absolute;
+      width: 100%;
+      max-width: 1200px;
+      height: 100%;
+      max-height: 650px;
+      opacity: 0;
+      transform: scale(0.95) translateY(20px);
+      pointer-events: none;
+      transition: var(--transition);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .slide.active {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+      pointer-events: auto;
+    }
+
+    /* Estilos de Conteúdo do Slide */
+    .slide-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 3rem;
+      font-weight: 800;
+      margin-bottom: 24px;
+      line-height: 1.15;
+      background: linear-gradient(135deg, #ffffff 30%, #a5d6a7 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .slide-subtitle {
+      font-size: 1.2rem;
+      color: var(--text-muted);
+      margin-bottom: 30px;
+      max-width: 800px;
+      line-height: 1.6;
+    }
+
+    /* Grid e Cards de Layout */
+    .slide-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      align-items: center;
+    }
+
+    .slide-grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 24px;
+    }
+
+    .card {
+      background: var(--dark-card);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: var(--border-radius);
+      padding: 24px;
+      transition: var(--transition);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+
+    .card:hover {
+      transform: translateY(-5px);
+      border-color: rgba(46, 125, 50, 0.3);
+      box-shadow: 0 15px 35px rgba(46, 125, 50, 0.1);
+    }
+
+    .card-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: var(--text-light);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-text {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .step-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 10px;
+    }
+
+    .step-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .step-number {
+      background: var(--primary);
+      color: white;
+      font-weight: 800;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-primary { background: rgba(46, 125, 50, 0.15); color: #81c784; border: 1px solid rgba(46, 125, 50, 0.3); }
+    .badge-warning { background: rgba(251, 192, 45, 0.15); color: #fff176; border: 1px solid rgba(251, 192, 45, 0.3); }
+    .badge-danger { background: rgba(211, 47, 47, 0.15); color: #e57373; border: 1px solid rgba(211, 47, 47, 0.3); }
+
+    /* Estilo Especial Slide de Capa */
+    .slide-cover {
+      text-align: center;
+      align-items: center;
+    }
+
+    .slide-cover .slide-title {
+      font-size: 4.5rem;
+      font-weight: 800;
+      margin-bottom: 10px;
+      background: linear-gradient(135deg, #ffffff 40%, var(--primary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .slide-cover .subtitle-main {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.8rem;
+      font-weight: 500;
+      color: #a5d6a7;
+      margin-bottom: 24px;
+      letter-spacing: 0.5px;
+    }
+
+    .slide-cover .desc {
+      font-size: 1.1rem;
+      color: var(--text-muted);
+      max-width: 600px;
+      line-height: 1.6;
+      margin-bottom: 40px;
+    }
+
+    /* Rodapé com Navegação */
+    .footer {
+      padding: 20px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(18, 18, 18, 0.9);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      z-index: 10;
+    }
+
+    .progress-bar-container {
+      flex: 1;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      margin-right: 40px;
+      border-radius: 2px;
+      position: relative;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      width: 0%;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    .controls-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .slide-counter {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      min-width: 60px;
+      text-align: center;
+    }
+
+    .control-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-light);
+      padding: 10px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: var(--transition);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .control-btn:hover {
+      background: var(--primary);
+      border-color: var(--primary);
+      box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
+    }
+
+    .control-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+      background: rgba(255, 255, 255, 0.02);
+      border-color: rgba(255, 255, 255, 0.05);
+    }
+
+    /* Notas do Apresentador */
+    .notes-toggle {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted);
+      padding: 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+
+    .notes-toggle:hover, .notes-toggle.active {
+      color: var(--text-light);
+      background: rgba(46, 125, 50, 0.2);
+      border-color: var(--primary);
+    }
+
+    .notes-panel {
+      position: absolute;
+      bottom: 80px;
+      left: 40px;
+      right: 40px;
+      background: rgba(33, 33, 33, 0.95);
+      border: 1px solid var(--primary);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      display: none;
+      z-index: 100;
+      backdrop-filter: blur(10px);
+      transform: translateY(10px);
+      transition: var(--transition);
+    }
+
+    .notes-panel.active {
+      display: block;
+      transform: translateY(0);
+    }
+
+    .notes-header {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      font-size: 1rem;
+      color: #81c784;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .notes-content {
+      font-size: 0.95rem;
+      color: #e0e0e0;
+      line-height: 1.5;
+    }
+
+    /* Fluxograma do Slide 2 */
+    .flow-container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 20px;
+    }
+
+    .flow-step {
+      width: 22%;
+      background: var(--dark-card);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 12px;
+      text-align: center;
+    }
+
+    .flow-arrow {
+      flex: 1;
+      height: 2px;
+      background: rgba(255, 255, 255, 0.1);
+      position: relative;
+    }
+
+    .flow-arrow::after {
+      content: '➔';
+      position: absolute;
+      right: 0;
+      top: -9px;
+      color: rgba(255, 255, 255, 0.3);
+      font-size: 0.8rem;
+    }
+
+    .flow-icon {
+      font-size: 1.5rem;
+      margin-bottom: 5px;
+    }
+
+    .flow-title {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
+    /* Simulação de Telas */
+    .screen-mockup {
+      background: #2d2d2d;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 10px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      color: #a5d6a7;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="presentation-container">
+    
+    <!-- Cabeçalho Fixo -->
+    <header class="header">
+      <div class="logo-container">
+        <div class="logo-badge">JR</div>
+        <div class="logo-text">Oper</div>
+      </div>
+      <div class="presentation-title">Treinamento de Capacitação das Equipes</div>
+    </header>
+
+    <!-- Área de Exibição dos Slides -->
+    <main class="slides-wrapper">
+
+      <!-- SLIDE 1: CAPA -->
+      <section class="slide slide-cover active" data-notes="Bem-vindos ao treinamento do JR Oper. Hoje vamos aprender como cada um de nós vai utilizar a nova plataforma no dia a dia. Este sistema unifica a nossa comunicação e elimina os papéis e planilhas paralelas, agilizando nosso trabalho do SAC, do Galpão de CD, do Financeiro e da Manutenção de Frota.">
+        <div class="badge badge-warning" style="margin-bottom: 20px;">Treinamento Operacional</div>
+        <h1 class="slide-title">Capacitação JR Oper</h1>
+        <p class="subtitle-main">Como utilizar o novo sistema integrado</p>
+        <p class="desc">Aprenda o passo a passo prático para operar a nova plataforma, entender o fluxo de informações do seu setor e como suas ações alimentam o painel de produtividade.</p>
+        
+        <div style="display: flex; gap: 20px;">
+          <div class="card" style="padding: 12px 24px; background: rgba(46, 125, 50, 0.1);">
+            <span style="font-size: 0.85rem; font-weight: 600;">🟢 SAC</span>
+          </div>
+          <div class="card" style="padding: 12px 24px; background: rgba(251, 192, 45, 0.1);">
+            <span style="font-size: 0.85rem; font-weight: 600;">🟠 Galpão CD</span>
+          </div>
+          <div class="card" style="padding: 12px 24px; background: rgba(33, 150, 243, 0.1);">
+            <span style="font-size: 0.85rem; font-weight: 600;">🔵 Financeiro</span>
+          </div>
+          <div class="card" style="padding: 12px 24px; background: rgba(211, 47, 47, 0.1);">
+            <span style="font-size: 0.85rem; font-weight: 600;">🔴 Frota</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 2: FLUXO DE PROCESSO INTEGRADO -->
+      <section class="slide" data-notes="Neste slide explicamos a interdependência. O SAC abre a ocorrência de devolução. Imediatamente, o Centro de Distribuição (CD) visualiza na tela de Recebimento Físico que há uma carga em trânsito. Assim que a carga chega, o CD confere fisicamente a mercadoria e define se vai para estoque ou avaria. Essa ação avisa o Financeiro instantaneamente para realizar o acerto fiscal e de boleto com o cliente. Paralelamente, o time de Frota atua nos chamados mecânicos.">
+        <h2 class="slide-title">Fluxo Logístico Unificado</h2>
+        <p class="slide-subtitle">Cada ação no sistema é o gatilho para o trabalho do próximo setor. Entenda a linha de produção:</p>
+        
+        <div class="flow-container">
+          <div class="flow-step">
+            <div class="flow-icon">🟢</div>
+            <div class="flow-title">1. Registro</div>
+            <div class="card-text" style="font-size: 0.75rem; margin-top: 5px;"><strong>SAC</strong> cria a ocorrência no app com itens e motivos.</div>
+          </div>
+          <div class="flow-arrow"></div>
+          <div class="flow-step">
+            <div class="flow-icon">🟠</div>
+            <div class="flow-title">2. Conferência</div>
+            <div class="card-text" style="font-size: 0.75rem; margin-top: 5px;"><strong>Galpão CD</strong> valida a chegada física e destina o item.</div>
+          </div>
+          <div class="flow-arrow"></div>
+          <div class="flow-step">
+            <div class="flow-icon">🔵</div>
+            <div class="flow-title">3. Liberação</div>
+            <div class="card-text" style="font-size: 0.75rem; margin-top: 5px;"><strong>Financeiro</strong> emite a nota de devolução e ajusta boleto.</div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 30px; display: flex; align-items: center; gap: 15px; border-left: 5px solid var(--danger);">
+          <div style="font-size: 1.5rem;">🔴</div>
+          <div>
+            <h4 style="font-family: 'Outfit', sans-serif; font-weight: 700;">Frota & Manutenção (Paralelo)</h4>
+            <p class="card-text" style="font-size: 0.85rem;">Ocorrências em rota de veículos geram um <strong>Alerta Vermelho</strong> imediato para a oficina mecânica.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 3: OPERAÇÃO DO SAC -->
+      <section class="slide" data-notes="Para quem trabalha no SAC e na Operação: a principal tarefa é abrir a ocorrência de devolução. No JR Oper, a busca por carga, Nota Fiscal ou Cliente é automática. Você seleciona o cliente, o sistema puxa as mercadorias, e você apenas marca os produtos que estão retornando e o motivo alegado pelo cliente. É fundamental escolher o motivo correto para que a causa raiz possa ser apurada depois.">
+        <h2 class="slide-title">Módulo SAC: Registro de Devoluções</h2>
+        <p class="slide-subtitle">Como registrar corretamente as ocorrências de devoluções no sistema:</p>
+        
+        <div class="slide-grid-2">
+          <div class="card">
+            <h3 class="card-title">📖 Guia de Operação Passo a Passo</h3>
+            <div class="step-list">
+              <div class="step-item">
+                <span class="step-number">1</span>
+                <span class="card-text">Selecione o perfil <strong>SAC/Operação</strong> na tela de login rápida.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">2</span>
+                <span class="card-text">Clique em <strong>"Nova Ocorrência de Devolução"</strong>.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">3</span>
+                <span class="card-text">Busque a carga pela Nota Fiscal ou código do cliente. Os itens serão listados automaticamente.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">4</span>
+                <span class="card-text">Adicione os produtos informando a quantidade devolvida e o motivo alegado. Salve.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title" style="color: #81c784;">💡 Regra de Negócio Crucial</h3>
+            <p class="card-text" style="margin-bottom: 15px;">Ao cadastrar múltiplos produtos em uma única nota, utilize o recurso de <strong>Adicionar Item Dinâmico</strong>. O sistema permite criar uma lista de itens sem precisar reabrir vários chamados para a mesma nota!</p>
+            <div class="screen-mockup">
+              [+] Nota Fiscal: 10452<br>
+              [-] Item: Coca-Cola 2L - Qtd: 10 - Motivo: Avaria<br>
+              [-] Item: Fanta Uva 2L - Qtd: 5 - Motivo: Erro Comercial
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 4: OPERAÇÃO DO CD -->
+      <section class="slide" data-notes="Para o pessoal do CD (Galpão): a tela inicial do seu perfil mostra as ocorrências pendentes de retorno físico. Quando o motorista chega com os produtos físicos, você deve conferir se o produto e a quantidade são exatamente os descritos no app. Caso o produto venha danificado, você deve classificar o destino como 'Avaria'. Se estiver em perfeito estado, marque como 'Retorno ao Estoque'.">
+        <h2 class="slide-title">Módulo CD: Recebimento & Destinação</h2>
+        <p class="slide-subtitle">Como auditar a chegada física e indicar a destinação correta da mercadoria no galpão:</p>
+        
+        <div class="slide-grid-2">
+          <div class="card">
+            <h3 class="card-title">📦 Fluxo no Galpão</h3>
+            <div class="step-list">
+              <div class="step-item">
+                <span class="step-number">1</span>
+                <span class="card-text">Monitore a aba <strong>"Retornos Pendentes"</strong> na tela do Centro de Distribuição.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">2</span>
+                <span class="card-text">Ao descarregar, clique em <strong>"Conferir Mercadoria"</strong>.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">3</span>
+                <span class="card-text">Marque se os itens bateram com o físico e atribua o destino.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">⚠️ Opções de Destinação no Galpão</h3>
+            <p class="card-text" style="margin-bottom: 10px;">Você DEVE classificar o destino dos itens recebidos em um dos 4 pilares:</p>
+            <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 0.85rem;">
+              <li>🟢 <strong>Estoque:</strong> Itens bons prontos para nova venda.</li>
+              <li>🔴 <strong>Avaria:</strong> Itens quebrados, vencidos ou danificados.</li>
+              <li>🟡 <strong>Devolução Fornecedor:</strong> Produtos para troca com fabricante.</li>
+              <li>🔵 <strong>Retrabalho:</strong> Reembalagem ou reetiquetagem necessária.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 5: OPERAÇÃO DO FINANCEIRO -->
+      <section class="slide" data-notes="Para o Financeiro e Comercial: a tela mostra as devoluções já confirmadas fisicamente pelo CD. Não há mais risco de liberar crédito de mercadoria que não chegou! Você deve verificar a nota fiscal de devolução e escolher como será feito o acerto com o cliente. O sistema suporta abatimento no boleto ou pagamento da diferença, registrando a data e o responsável pela ação.">
+        <h2 class="slide-title">Módulo Financeiro: Acerto Comercial</h2>
+        <p class="slide-subtitle">Como liberar os créditos e as notas fiscais com segurança e rapidez:</p>
+        
+        <div class="slide-grid-2">
+          <div class="card">
+            <h3 class="card-title">💳 Processo de Acerto</h3>
+            <div class="step-list">
+              <div class="step-item">
+                <span class="step-number">1</span>
+                <span class="card-text">Acesse o perfil <strong>Financeiro & Comercial</strong>.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">2</span>
+                <span class="card-text">Verifique a lista de devoluções validadas pelo galpão do CD.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">3</span>
+                <span class="card-text">Insira a chave da Nota Fiscal de Devolução emitida.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">4</span>
+                <span class="card-text">Selecione a forma de acerto e liquide a ocorrência.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">💼 Formas de Acerto Disponíveis</h3>
+            <p class="card-text" style="margin-bottom: 12px;">Defina como a JR Distribuidora ajustará o saldo financeiro do cliente:</p>
+            <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 0.85rem;">
+              <li>💰 <strong>Abatimento no Boleto:</strong> Desconto direto no boleto em aberto do cliente.</li>
+              <li>💸 <strong>JR Paga Diferença:</strong> Emissão de reembolso financeiro direto na conta do cliente.</li>
+              <li>🔄 <strong>Geração de Crédito:</strong> Cupom de crédito para próximas compras.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 6: VEÍCULOS PARADOS (FROTA) -->
+      <section class="slide" data-notes="Para o time de Frota e Manutenção: criamos uma regra crítica. Sempre que um motorista em rota relatar que o veículo quebrou ou parou, o perfil da manutenção exibe um painel piscando em vermelho com o aviso 'Veículo Parado'. Esse aviso crítico continuará ativo nas telas até que o mecânico informe o custo do socorro mecânico e altere o status para 'Veículo Liberado'. Isso garante que nenhuma quebra passe despercebida.">
+        <h2 class="slide-title">Módulo Frota: Veículo Parado em Rota</h2>
+        <p class="slide-subtitle">A regra operacional e o controle crítico de incidentes mecânicos em rota:</p>
+        
+        <div class="slide-grid-2">
+          <div class="card">
+            <h3 class="card-title" style="color: var(--danger);">🚨 O Alerta Crítico Vermelho</h3>
+            <p class="card-text" style="margin-bottom: 12px;">Sempre que um veículo for marcado como <strong>"Veículo Parado"</strong>, a tela do painel ficará em alerta visual vermelho.</p>
+            <div class="screen-mockup" style="border: 2px solid var(--danger); background: rgba(211, 47, 47, 0.1); color: #ff8a80;">
+              ⚠️ ATENÇÃO: Placa AAA-9999 está parada!<br>
+              Motivo: Falha elétrica no alternador.<br>
+              [AGUARDANDO AÇÃO DA MANUTENÇÃO]
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">🛠️ Como Liberar o Alerta</h3>
+            <div class="step-list">
+              <div class="step-item">
+                <span class="step-number">1</span>
+                <span class="card-text">O mecânico deve realizar o socorro ou a troca do veículo.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">2</span>
+                <span class="card-text">No JR Oper, preencha o <strong>Custo do Socorro</strong> e do serviço realizado.</span>
+              </div>
+              <div class="step-item">
+                <span class="step-number">3</span>
+                <span class="card-text">Altere o status para <strong>"Liberado"</strong>. O alerta vermelho apaga na hora.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 7: AUDITORIA & PRODUTIVIDADE -->
+      <section class="slide" data-notes="Um ponto muito importante: o JR Oper audita erros de separação e conferência. Se um cliente devolve um produto porque foi enviado errado, e o CD constatar que o separador João separou a quantidade errada ou o conferente Maria deixou passar, o sistema permite vincular essa falha a eles. O Power BI desconta pontos desse profissional na Central de Produtividade, criando um ranking de erros que apoia as políticas de bonificação da empresa.">
+        <h2 class="slide-title">Auditoria de Produtividade do CD</h2>
+        <p class="slide-subtitle">Como o sistema mapeia a responsabilidade operacional e desconta erros na separação e conferência:</p>
+        
+        <div class="slide-grid-2">
+          <div class="card">
+            <h3 class="card-title">📝 Cadastro da Ocorrência</h3>
+            <p class="card-text">No momento em que o CD confere o produto de devolução, se o motivo for erro de separação, o sistema solicita:</p>
+            <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px; margin-top: 10px; font-size: 0.85rem;">
+              <li>👤 Nome do <strong>Separador</strong> responsável.</li>
+              <li>👤 Nome do <strong>Conferente</strong> responsável.</li>
+              <li>❌ Gravidade do erro (Falta de item, produto trocado ou avaria interna).</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title" style="color: var(--accent);">📊 Impacto no Power BI</h3>
+            <p class="card-text" style="margin-bottom: 12px;">Os dados alimentam a View <code>vw_bi_produtividade_equipe</code>.</p>
+            <div style="background: rgba(255,255,255,0.02); padding: 10px; border-radius: 8px; font-size: 0.8rem;">
+              <strong>Ranking de Desempenho Operacional:</strong><br>
+              1. Separador Carlos - Nota: 100 (0 erros)<br>
+              2. Separadora Ana - Nota: 95 (1 erro leve)<br>
+              <span style="color: #ff8a80;">3. Separador João - Nota: 70 (3 erros graves)</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 8: COMO ACESSAR E INSTALAR -->
+      <section class="slide" data-notes="Para acessar o JR Oper é muito fácil. No computador, basta dar dois cliques no index.html e o sistema abre. Se quiser instalar no celular como um aplicativo normal, basta acessar o link do app no navegador do celular e clicar no botão amarelo 'Instalar PWA/APK' no topo da tela. Ele vai criar um ícone na tela inicial e funcionará offline, mesmo sem internet! Qualquer dúvida, entrem em contato. Bons lançamentos a todos.">
+        <h2 class="slide-title">Como Acessar o JR Oper</h2>
+        <p class="slide-subtitle">Siga as instruções abaixo para acessar no computador ou celular:</p>
+        
+        <div class="slide-grid-3">
+          <div class="card">
+            <div class="flow-icon">💻</div>
+            <h3 class="card-title">No Computador</h3>
+            <p class="card-text">Navegue até a pasta na rede: <code>s:\Logistica\02 - ANALISTA DE LOGÍSTICA\...</code> e dê dois cliques em <code>index.html</code>.</p>
+          </div>
+          
+          <div class="card">
+            <div class="flow-icon">📱</div>
+            <h3 class="card-title">No Smartphone (PWA)</h3>
+            <p class="card-text">Abra o link gerado pelo gestor no navegador do celular, clique no botão amarelo <strong>"📱 Instalar PWA / APK"</strong> no topo da página.</p>
+          </div>
+
+          <div class="card">
+            <div class="flow-icon">🔑</div>
+            <h3 class="card-title">Contas de Teste</h3>
+            <p class="card-text">Na tela de login, utilize os botões rápidos de perfis (SAC, CD, Financeiro, Manutenção) para acessar sua tela correspondente.</p>
+          </div>
+        </div>
+
+        <div style="margin-top: 40px; text-align: center;">
+          <h3 style="font-family: 'Outfit', sans-serif; font-weight: 700; color: var(--primary-light);">O treinamento está concluído. Boas operações a todos!</h3>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Notas do Apresentador Flutuante -->
+    <div id="notesPanel" class="notes-panel">
+      <div class="notes-header">Notas do Apresentador (Pressione "N" para ocultar)</div>
+      <div id="notesContent" class="notes-content">Notas do slide...</div>
+    </div>
+
+    <!-- Rodapé Fixo de Navegação -->
+    <footer class="footer">
+      <div class="progress-bar-container">
+        <div id="progressBar" class="progress-bar"></div>
+      </div>
+      
+      <div class="controls-wrapper">
+        <button id="notesToggleBtn" class="notes-toggle" title="Mostrar/Ocultar Notas (Teclado: N)">
+          <span>📋 Notas</span>
+        </button>
+        <div id="slideCounter" class="slide-counter">1 / 8</div>
+        <button id="prevBtn" class="control-btn" disabled>
+          <span>◀ Anterior</span>
+        </button>
+        <button id="nextBtn" class="control-btn">
+          <span>Próximo ▶</span>
+        </button>
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    // Lógica da Apresentação de Slides
+    const slides = document.querySelectorAll('.slide');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const slideCounter = document.getElementById('slideCounter');
+    const progressBar = document.getElementById('progressBar');
+    const notesToggleBtn = document.getElementById('notesToggleBtn');
+    const notesPanel = document.getElementById('notesPanel');
+    const notesContent = document.getElementById('notesContent');
+    
+    let currentSlideIndex = 0;
+    let showNotes = false;
+
+    function updatePresentation() {
+      // Atualizar exibição de slides
+      slides.forEach((slide, index) => {
+        if (index === currentSlideIndex) {
+          slide.classList.add('active');
+          // Atualizar notas do apresentador
+          notesContent.innerText = slide.getAttribute('data-notes') || 'Sem notas para este slide.';
+        } else {
+          slide.classList.remove('active');
+        }
+      });
+
+      // Atualizar botões
+      prevBtn.disabled = currentSlideIndex === 0;
+      nextBtn.disabled = currentSlideIndex === slides.length - 1;
+
+      // Atualizar contador e barra de progresso
+      slideCounter.innerText = `${currentSlideIndex + 1} / ${slides.length}`;
+      const progressPercent = ((currentSlideIndex) / (slides.length - 1)) * 100;
+      progressBar.style.width = `${progressPercent}%`;
+    }
+
+    // Navegação
+    function nextSlide() {
+      if (currentSlideIndex < slides.length - 1) {
+        currentSlideIndex++;
+        updatePresentation();
+      }
+    }
+
+    function prevSlide() {
+      if (currentSlideIndex > 0) {
+        currentSlideIndex--;
+        updatePresentation();
+      }
+    }
+
+    function toggleNotes() {
+      showNotes = !showNotes;
+      if (showNotes) {
+        notesPanel.classList.add('active');
+        notesToggleBtn.classList.add('active');
+      } else {
+        notesPanel.classList.remove('active');
+        notesToggleBtn.classList.remove('active');
+      }
+    }
+
+    // Listeners
+    nextBtn.addEventListener('click', nextSlide);
+    prevBtn.addEventListener('click', prevSlide);
+    notesToggleBtn.addEventListener('click', toggleNotes);
+
+    // Controles por Teclado
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        nextSlide();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        prevSlide();
+      } else if (e.key === 'n' || e.key === 'N') {
+        toggleNotes();
+      }
+    });
+
+    // Inicialização
+    updatePresentation();
+  </script>
+</body>
+</html>
