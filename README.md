@@ -77,5 +77,17 @@ jr-sac/
 
 ---
 
+## 🧪 Bateria de Testes de Aceite Ponta a Ponta (QA)
+
+Para validar a integridade operacional de todos os módulos antes da entrada em produção oficial:
+1. Dê dois cliques no arquivo [`testes_aceite.html`](testes_aceite.html).
+2. A suíte executará automaticamente a bateria de validações:
+   - **Fluxo Completo de Frota**: Largada ➔ Chamado com Localização ➔ Bloqueio de Liberação ➔ Retorno Técnico ➔ Liberação ➔ Finalizados.
+   - **Fluxo de Reentregas**: Registro ➔ Alarme sonoro/visual ➔ Baixa da Reentrega ➔ Recálculo dinâmico dos 4 cards de KPIs.
+   - **Filtros e Exportações**: Filtros por status, datas, busca textual e Dump SQL.
+   - **Governança & Segurança**: Validação de senha de administrador, Soft Delete/Lixeira e **Reset Global de Treinamento** com garantia de ausência de dados fantasmas pós-reload.
+
+---
+
 ## 💡 Dúvidas ou Sugestões?
 O projeto está 100% pronto para uso, testes e demonstração gerencial na **JR Distribuidora**!

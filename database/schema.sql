@@ -195,17 +195,21 @@ CREATE TABLE IF NOT EXISTS ocorrencias_rota (
     veiculo_id INT NOT NULL REFERENCES veiculos(id),
     motorista_id INT NOT NULL REFERENCES motoristas(id),
     tipo_ocorrencia VARCHAR(50) NOT NULL CHECK (tipo_ocorrencia IN ('MECANICA', 'OPERACIONAL', 'CONDUTA_INADEQUADA', 'ACIDENTE')),
+    localizacao TEXT,
     descricao TEXT NOT NULL,
     midia_fotos TEXT,
     midia_videos TEXT,
-    transcricao_audio_wa TEXT,
     status VARCHAR(30) NOT NULL DEFAULT 'ABERTO' CHECK (status IN ('ABERTO', 'EM_ATENDIMENTO', 'RESOLVIDO')),
+    status_chamado VARCHAR(30) NOT NULL DEFAULT 'pendente' CHECK (status_chamado IN ('pendente', 'finalizado')),
     veiculo_parado BOOLEAN DEFAULT TRUE,
     mecanico_responsavel_id INT REFERENCES usuarios(id),
     acao_mecanico TEXT,
     pecas_trocadas TEXT,
     guincho_acionado BOOLEAN DEFAULT FALSE,
     custo_socorro DECIMAL(10,2) DEFAULT 0.00,
+    retorno_manutencao_descricao TEXT,
+    retorno_manutencao_data TIMESTAMP,
+    retorno_manutencao_responsavel VARCHAR(120),
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     resolvido_em TIMESTAMP
 );
@@ -305,6 +309,15 @@ ALTER TABLE trocas_veiculos ADD COLUMN IF NOT EXISTS deleted_by_nome VARCHAR(120
 -- 10.1b Campos usados por updateInvestigacao() (PRIORIDADE 1) que ainda não
 -- existiam no schema remoto
 ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS responsavel_analise VARCHAR(120) NULL;
+
+-- 10.1c Migração e Novos Campos: Ocorrências de Frota em Rota (Etapa 1)
+ALTER TABLE ocorrencias_rota DROP COLUMN IF EXISTS transcricao_audio_wa;
+ALTER TABLE ocorrencias_rota DROP COLUMN IF EXISTS transcricao_audio_whatsapp;
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS localizacao TEXT;
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS status_chamado VARCHAR(30) DEFAULT 'pendente';
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS retorno_manutencao_descricao TEXT;
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS retorno_manutencao_data TIMESTAMP;
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS retorno_manutencao_responsavel VARCHAR(120);
 
 -- 10.2 Trilha de auditoria — espelha this.data.audit_logs do store.js local
 CREATE TABLE IF NOT EXISTS audit_logs (
@@ -419,6 +432,7 @@ CREATE POLICY "acesso_total_anon" ON registro_versoes FOR ALL TO anon USING (tru
 -- =============================================================================
 
 -- VIEW 1: PRODUTIVIDADE DA EQUIPE
+DROP VIEW IF EXISTS vw_bi_produtividade_equipe CASCADE;
 CREATE OR REPLACE VIEW vw_bi_produtividade_equipe AS
 SELECT 
     u.id AS usuario_id,
@@ -438,6 +452,7 @@ LEFT JOIN auditoria_produtividade ap ON u.id = ap.usuario_id
 GROUP BY u.id, u.nome, u.cargo, s.nome;
 
 -- VIEW 2: ANÁLISE DE CAUSA RAIZ
+DROP VIEW IF EXISTS vw_bi_devolucoes_causa_raiz CASCADE;
 CREATE OR REPLACE VIEW vw_bi_devolucoes_causa_raiz AS
 SELECT 
     od.motivo_reclamado AS motivo_inicial_cliente,
@@ -453,6 +468,7 @@ LEFT JOIN setores s ON od.setor_encaminhado_id = s.id
 GROUP BY od.motivo_reclamado, od.motivo_real_causa_raiz, s.nome;
 
 -- VIEW 3: FROTA & VEÍCULOS PARADOS
+DROP VIEW IF EXISTS vw_bi_frota_veiculos_parados CASCADE;
 CREATE OR REPLACE VIEW vw_bi_frota_veiculos_parados AS
 SELECT 
     v.placa,
@@ -461,9 +477,14 @@ SELECT
     c.numero_carga,
     c.rota,
     o.tipo_ocorrencia,
+    o.localizacao,
     o.descricao,
     o.veiculo_parado,
     o.status AS status_manutencao,
+    o.status_chamado,
+    o.retorno_manutencao_descricao,
+    o.retorno_manutencao_data,
+    o.retorno_manutencao_responsavel,
     o.guincho_acionado,
     COALESCE(o.custo_socorro, 0.00) AS custo_socorro_r$,
     o.criado_em AS data_abertura,
@@ -475,6 +496,7 @@ JOIN motoristas m ON o.motorista_id = m.id
 JOIN cargas c ON o.carga_id = c.id;
 
 -- VIEW 4: CONTROLE CD - PENDÊNCIAS
+DROP VIEW IF EXISTS vw_bi_controle_cd_pendencias CASCADE;
 CREATE OR REPLACE VIEW vw_bi_controle_cd_pendencias AS
 SELECT 
     od.numero_protocolo,
@@ -496,6 +518,7 @@ JOIN produtos p ON id.produto_id = p.id
 WHERE od.status_fechamento = 'PENDENTE_FISICO';
 
 -- VIEW 5: TROCAS DE VEÍCULOS
+DROP VIEW IF EXISTS vw_bi_trocas_veiculos CASCADE;
 CREATE OR REPLACE VIEW vw_bi_trocas_veiculos AS
 SELECT 
     id, data, veiculo_escalado, veiculo_trocado, motivo_resumido,
@@ -551,6 +574,7 @@ CREATE POLICY "acesso_total_anon" ON retencoes_frota
 -- Cruza veículos cadastrados × retenções ativas para calcular status atual,
 -- dias parado e dias de atraso em relação à previsão.
 -- =============================================================================
+DROP VIEW IF EXISTS vw_bi_disponibilidade_frota CASCADE;
 CREATE OR REPLACE VIEW vw_bi_disponibilidade_frota AS
 SELECT
     v.id                                          AS veiculo_id,

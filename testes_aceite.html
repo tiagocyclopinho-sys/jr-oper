@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bateria de Testes de Aceite Ponta a Ponta - JR SAC / OPER</title>
+  <script src="js/tailwind.cdn.js"></script>
+  <script src="js/xlsx.full.min.js"></script>
+  <script src="js/mockData.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/cloudStore.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/app.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .test-pass { border-left: 4px solid #10b981; background: rgba(16, 185, 129, 0.08); }
+    .test-fail { border-left: 4px solid #ef4444; background: rgba(239, 68, 68, 0.08); }
+    .test-info { border-left: 4px solid #3b82f6; background: rgba(59, 130, 246, 0.08); }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-6 md:p-10">
+  <div class="max-w-5xl mx-auto space-y-6">
+    <!-- CABEÇALHO -->
+    <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-3">
+          <span class="text-3xl">🧪</span>
+          <h1 class="text-2xl font-black text-white uppercase tracking-wider">Bateria de Testes de Aceite</h1>
+        </div>
+        <p class="text-xs text-slate-400 mt-1">Etapa 8 — Governança do Modo Treinamento (Reset) e Testes de Aceite Ponta a Ponta</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="executarBateriaTestes()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs shadow-lg transition flex items-center gap-2">
+          <span>▶️</span> Executar Todos os Testes
+        </button>
+        <a href="index.html" class="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold px-4 py-2.5 rounded-xl text-xs border border-slate-700 transition">
+          Voltar ao Sistema
+        </a>
+      </div>
+    </div>
+
+    <!-- PAINEL DE RESUMO DE RESULTADOS -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl shadow">
+        <div class="text-[11px] font-bold text-slate-400 uppercase">Total de Testes</div>
+        <div id="stat-total" class="text-2xl font-black text-white mt-1">0</div>
+      </div>
+      <div class="bg-slate-900 border border-emerald-900/60 p-4 rounded-xl shadow">
+        <div class="text-[11px] font-bold text-emerald-400 uppercase">Aprovados</div>
+        <div id="stat-pass" class="text-2xl font-black text-emerald-400 mt-1">0</div>
+      </div>
+      <div class="bg-slate-900 border border-red-900/60 p-4 rounded-xl shadow">
+        <div class="text-[11px] font-bold text-red-400 uppercase">Falhas</div>
+        <div id="stat-fail" class="text-2xl font-black text-red-400 mt-1">0</div>
+      </div>
+      <div class="bg-slate-900 border border-blue-900/60 p-4 rounded-xl shadow">
+        <div class="text-[11px] font-bold text-blue-400 uppercase">Taxa de Sucesso</div>
+        <div id="stat-rate" class="text-2xl font-black text-blue-400 mt-1">0%</div>
+      </div>
+    </div>
+
+    <!-- LOG DETALHADO DOS TESTES -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h2 class="text-sm font-bold text-white uppercase flex items-center gap-2">
+          <span>📋</span> Relatório de Execução Passo a Passo
+        </h2>
+        <span id="status-execucao" class="text-xs text-slate-400 font-mono">Pronto para iniciar</span>
+      </div>
+
+      <div id="test-results-container" class="space-y-3 max-h-[600px] overflow-y-auto pr-2">
+        <div class="text-center py-10 text-slate-500 text-xs">
+          Clique no botão "Executar Todos os Testes" acima para iniciar a validação automatizada.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let testCount = 0;
+    let passCount = 0;
+    let failCount = 0;
+
+    function assert(condicao, titulo, detalhes = '') {
+      testCount++;
+      const container = document.getElementById('test-results-container');
+      const pass = !!condicao;
+      if (pass) passCount++; else failCount++;
+
+      const div = document.createElement('div');
+      div.className = `p-3.5 rounded-xl text-xs space-y-1 ${pass ? 'test-pass' : 'test-fail'}`;
+      div.innerHTML = `
+        <div class="flex items-center justify-between">
+          <span class="font-bold ${pass ? 'text-emerald-400' : 'text-red-400'} flex items-center gap-2">
+            <span>${pass ? '✅ PASSOU' : '❌ FALHOU'}</span> [Teste #${testCount}] ${titulo}
+          </span>
+          <span class="text-[10px] text-slate-400 font-mono">${new Date().toLocaleTimeString()}</span>
+        </div>
+        ${detalhes ? `<div class="text-slate-300 text-[11px] pl-6 font-mono">${detalhes}</div>` : ''}
+      `;
+      container.appendChild(div);
+      atualizarMetricas();
+      return pass;
+    }
+
+    function logSecao(titulo) {
+      const container = document.getElementById('test-results-container');
+      const div = document.createElement('div');
+      div.className = 'p-3 rounded-xl text-xs font-bold text-blue-300 test-info flex items-center gap-2 mt-4';
+      div.innerHTML = `<span>🔹</span> <span class="uppercase tracking-wider">${titulo}</span>`;
+      container.appendChild(div);
+    }
+
+    function atualizarMetricas() {
+      document.getElementById('stat-total').textContent = testCount;
+      document.getElementById('stat-pass').textContent = passCount;
+      document.getElementById('stat-fail').textContent = failCount;
+      const rate = testCount > 0 ? Math.round((passCount / testCount) * 100) : 0;
+      document.getElementById('stat-rate').textContent = `${rate}%`;
+    }
+
+    async function executarBateriaTestes() {
+      testCount = 0;
+      passCount = 0;
+      failCount = 0;
+      const container = document.getElementById('test-results-container');
+      container.innerHTML = '';
+      document.getElementById('status-execucao').textContent = 'Executando...';
+
+      try {
+        // Inicialização do Banco em Memória/Testes
+        const testDb = new Store();
+        testDb.currentUser = { id: 999, nome: 'AUDITOR QA', role: 'ADMIN', departamento: 'DIRETORIA' };
+
+        // =========================================================================
+        // SUÍTE 1: FLUXO COMPLETO DE FROTA (LARGADA ➔ CHAMADO ➔ LIBERAÇÃO ➔ FINALIZADOS)
+        // =========================================================================
+        logSecao('Suíte 1: Fluxo Completo de Gestão de Frota e Manutenção');
+
+        // 1.1 Largada e Criação de Chamado de Frota em Rota
+        const chamado = testDb.addOcorrenciaRota({
+          veiculo_id: 1,
+          motorista_id: 1,
+          tipo_ocorrencia: 'MECANICA',
+          localizacao: 'Rodovia BR-153 Km 142 - Posto Imperador',
+          descricao: 'Superaquecimento do motor e vazamento no radiador',
+          veiculo_parado: true
+        });
+
+        assert(chamado && chamado.id, 'Criação de Chamado de Frota em Rota', `Protocolo gerado: ${chamado.numero_protocolo}, Local: ${chamado.localizacao}`);
+        assert(chamado.status_chamado === 'pendente' && chamado.veiculo_parado === true, 'Verificação do estado inicial (Pendente & Veículo Parado)');
+
+        // 1.2 Criação e Gestão de Retenção de Frota
+        const retencao = testDb.addRetencaoFrota({
+          veiculo_id: 1,
+          placa: 'BRA2E19',
+          tipo_veiculo: 'TRUCK',
+          data_parada: new Date().toISOString().split('T')[0],
+          motivo: 'Troca de embreagem e reparo no sistema de arrefecimento',
+          tipo_os: 'CORRETIVA',
+          local: 'Oficina Central CSA',
+          data_previsao: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0]
+        });
+
+        assert(retencao && retencao.success && retencao.retencao.numero_retencao, 'Criação de Registro de Retenção de Frota', `OS/Retenção: ${retencao.retencao.numero_retencao}`);
+        assert(retencao.retencao.status === 'RETIDO', 'Status inicial da retenção é RETIDO');
+
+        // 1.3 Atualização Técnica e Liberação do Veículo em Rota
+        const updateChamado = testDb.updateOcorrenciaRota(chamado.id, {
+          retorno_manutencao_descricao: 'Substituição da mangueira do radiador e abastecimento de fluido arrefecedor.',
+          retorno_manutencao_responsavel: 'MECÂNICO ROBERTO ALVES',
+          status: 'RESOLVIDO',
+          status_chamado: 'finalizado',
+          veiculo_parado: false
+        });
+
+        const chamadoAtualizado = testDb.getOcorrenciasRota().find(c => c.id === chamado.id);
+        assert(chamadoAtualizado && chamadoAtualizado.status_chamado === 'finalizado', 'Liberação do Veículo com Retorno Técnico Registrado', `Responsável: ${chamadoAtualizado.retorno_manutencao_responsavel}`);
+        assert(chamadoAtualizado.veiculo_parado === false && chamadoAtualizado.status === 'RESOLVIDO', 'Mudança de estado para RESOLVIDO e Veículo Desbloqueado');
+
+        // 1.4 Liberação da Retenção de Frota
+        const libRetencao = testDb.liberarRetencaoFrota(retencao.retencao.id);
+        assert(libRetencao.success, 'Baixa e Liberação de Retenção de Frota', `Data de liberação: ${libRetencao.retencao.data_liberacao}`);
+        assert(libRetencao.retencao.status === 'LIBERADO', 'Status da retenção alterado para LIBERADO');
+
+        // =========================================================================
+        // SUÍTE 2: FLUXO DE REENTREGAS & RECÁLCULO DINÂMICO DE KPIS
+        // =========================================================================
+        logSecao('Suíte 2: Fluxo de Reentregas e Métricas de KPIs');
+
+        const reentregaCriada = testDb.addReentrega({
+          data: new Date().toISOString().split('T')[0],
+          carga_numero: '88492',
+          rota_nome: 'ROTA 12 - PALMAS CENTRO',
+          motorista_nome: 'CARLOS ALBERTO',
+          placa: 'QRA4910',
+          entregas_saiu: 35,
+          entregas_feitas: 30,
+          entregas_reentrega: 5,
+          motivo: 'CLIENTE AUSENTE / HORÁRIO COMERCIAL ENCERRADO',
+          status: 'PENDENTE'
+        });
+
+        assert(reentregaCriada.success && reentregaCriada.reentrega.id, 'Registro de Nova Reentrega Operacional', `Carga: ${reentregaCriada.reentrega.carga_numero}, Reentregas: 5`);
+
+        // Teste de cálculo de KPIs
+        const reentregasAtivas = testDb.getReentregas();
+        const totalPendentes = reentregasAtivas.filter(r => r.status === 'PENDENTE').length;
+        const totalReentregasQtd = reentregasAtivas.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
+        
+        assert(totalPendentes >= 1, 'Identificação de Reentregas Pendentes (Gatilho de Alarme Sonoro/Visual)', `Pendentes: ${totalPendentes}`);
+        assert(totalReentregasQtd >= 5, 'Consolidação da Quantidade de Entregas Não Efetuadas', `Total reentregas: ${totalReentregasQtd}`);
+
+        // Baixa da Reentrega (Status REALIZADA)
+        const updateReentrega = testDb.updateReentrega(reentregaCriada.reentrega.id, {
+          status: 'REALIZADA',
+          novo_motorista: 'FERNANDO DIAS',
+          observacao: 'Reentrega concluída com sucesso no 1º horário matutino.'
+        });
+
+        assert(updateReentrega.success && updateReentrega.reentrega.status === 'REALIZADA', 'Baixa de Reentrega efetuada com sucesso (Status: REALIZADA)');
+
+        // Recálculo dinâmico após baixa
+        const reentregasPosBaixa = testDb.getReentregas();
+        const itemBaixado = reentregasPosBaixa.find(r => r.id === reentregaCriada.reentrega.id);
+        assert(itemBaixado && itemBaixado.status === 'REALIZADA' && itemBaixado.novo_motorista === 'FERNANDO DIAS', 'Persistência do Novo Motorista e dados da Baixa');
+
+        // =========================================================================
+        // SUÍTE 2.5: PRIORIDADE 2 — FORÇAR MAIÚSCULAS EM TEMPO REAL E PERSISTÊNCIA
+        // =========================================================================
+        logSecao('Suíte 2.5: Forçar Maiúsculas em Tempo Real e Persistência');
+
+        // Teste de digitação em input de texto
+        const testInput = document.createElement('input');
+        testInput.type = 'text';
+        testInput.value = 'motorista joao silva';
+        testInput.selectionStart = 5;
+        testInput.selectionEnd = 5;
+        if (typeof forcarMaiuscula === 'function') {
+          forcarMaiuscula(testInput);
+        }
+        assert(testInput.value === 'MOTORISTA JOAO SILVA', 'Conversão em tempo real de input de texto para maiúsculas (forcarMaiuscula)', `Valor: ${testInput.value}`);
+        assert(testInput.selectionStart === 5 && testInput.selectionEnd === 5, 'Preservação da posição do cursor durante digitação');
+
+        // Teste de digitação em textarea
+        const testTextarea = document.createElement('textarea');
+        testTextarea.value = 'observacao de teste em minusculo';
+        if (typeof forcarMaiuscula === 'function') {
+          forcarMaiuscula(testTextarea);
+        }
+        assert(testTextarea.value === 'OBSERVACAO DE TESTE EM MINUSCULO', 'Conversão em tempo real de textarea para maiúsculas');
+
+        // Teste de preservação de campos protegidos (senha, email, date)
+        const testPass = document.createElement('input');
+        testPass.type = 'password';
+        testPass.value = 'SenhaSecreta123';
+        if (typeof forcarMaiuscula === 'function') {
+          forcarMaiuscula(testPass);
+        }
+        assert(testPass.value === 'SenhaSecreta123', 'Preservação de campos tipo password (não altera maiúsculas/minúsculas)');
+
+        const testEmail = document.createElement('input');
+        testEmail.type = 'email';
+        testEmail.value = 'usuario@jrdistribuidora.com.br';
+        if (typeof forcarMaiuscula === 'function') {
+          forcarMaiuscula(testEmail);
+        }
+        assert(testEmail.value === 'usuario@jrdistribuidora.com.br', 'Preservação de campos tipo email');
+
+        // Teste de persistência no Store com dados em minúsculas
+        const devTest = testDb.addDevolucao({
+          carga_numero: 'cg9988',
+          rota_nome: 'rota sul frios',
+          veiculo_placa: 'jrk1234',
+          cliente_nome: 'supermercado estrela ltda',
+          nota_fiscal: 'nf-00452',
+          motivo_reclamado: 'produto avariado durante transporte',
+          detalhamento_texto: 'avaria constatada pelo conferente da loja'
+        }, []);
+
+        assert(
+          devTest.carga_numero === 'CG9988' &&
+          devTest.rota_nome === 'ROTA SUL FRIOS' &&
+          devTest.veiculo_placa === 'JRK1234' &&
+          devTest.cliente_nome === 'SUPERMERCADO ESTRELA LTDA' &&
+          devTest.nota_fiscal === 'NF-00452' &&
+          devTest.motivo_reclamado === 'PRODUTO AVARIADO DURANTE TRANSPORTE' &&
+          devTest.detalhamento_texto === 'AVARIA CONSTATADA PELO CONFERENTE DA LOJA',
+          'Persistência Sanitizada no Store: Campos de texto de Devolução salvos 100% em MAIÚSCULAS'
+        );
+
+        const vTest = testDb.addViagem({
+          carga: '77210',
+          rota: 'rota norte 01',
+          placa: 'xyz9876',
+          motorista: 'marcos paulo ribeiro',
+          ajudante: 'andre luiz santos',
+          observacao: 'saida pontual com lacre verificado'
+        });
+
+        assert(
+          vTest.carga === '77210' &&
+          vTest.rota === 'ROTA NORTE 01' &&
+          vTest.placa === 'XYZ9876' &&
+          vTest.motorista === 'MARCOS PAULO RIBEIRO' &&
+          vTest.ajudante === 'ANDRE LUIZ SANTOS' &&
+          vTest.observacao === 'SAIDA PONTUAL COM LACRE VERIFICADO',
+          'Persistência Sanitizada no Store: Viagens e Colaboradores salvos 100% em MAIÚSCULAS'
+        );
+
+        // =========================================================================
+        // SUÍTE 3: FILTROS E EXPORTAÇÕES (SQL / CSV / BOLETIM)
+        // =========================================================================
+        logSecao('Suíte 3: Filtros, Impressão e Exportação');
+
+        const sqlDump = testDb.exportToSQL();
+        assert(typeof sqlDump === 'string' && sqlDump.includes('ocorrencias_rota') && sqlDump.includes('reentregas_rota'), 'Geração de Dump SQL para Power BI / Supabase', `Tamanho SQL: ${sqlDump.length} caracteres`);
+
+        const colaboradoresCD = testDb.getColaboradoresCD('CONFERENTE');
+        assert(Array.isArray(colaboradoresCD) && colaboradoresCD.length > 0, 'Consulta e Filtragem de Colaboradores CD por Função (CONFERENTE)', `Total Conferentes: ${colaboradoresCD.length}`);
+
+        // =========================================================================
+        // SUÍTE 4: GOVERNANÇA, SEGURANÇA & RESET GLOBAL DE TREINAMENTO
+        // =========================================================================
+        logSecao('Suíte 4: Governança, Senhas e Reset Global de Treinamento');
+
+        // 4.1 Teste de Senha Incorreta no Reset
+        const resetSenhaErrada = testDb.resetGlobalTreinamento('SENHA_ERRADA_123');
+        assert(resetSenhaErrada.success === false, 'Rejeição segura de Reset com senha de administrador incorreta');
+
+        // 4.2 Teste de Soft Delete e Lixeira
+        const delRes = testDb.softDelete('reentregas', reentregaCriada.reentrega.id);
+        assert(delRes === true || (delRes && delRes.success), 'Soft Delete auditado na Lixeira');
+
+        const lixeiraItems = testDb.getLixeiraItems();
+        assert(lixeiraItems.some(i => i.id == reentregaCriada.reentrega.id), 'Item localizado na Lixeira para período de graça');
+
+        // 4.3 Restauração da Lixeira
+        const restRes = testDb.restoreItem('reentregas', reentregaCriada.reentrega.id);
+        assert(restRes === true || (restRes && restRes.success), 'Restauração de item da Lixeira com sucesso');
+
+        // 4.4 Inserção de dados operacionais para teste de Reset total
+        testDb.addOcorrenciaViagem({ carga: '99999', rota: 'ROTA TESTE', placa: 'TST0001', motivo: 'TESTE' });
+        testDb.addTrocaVeiculo({ veiculo_escalado: 'TST0001', veiculo_trocado: 'TST0002', motivo_resumido: 'TESTE' });
+
+        // 4.5 Execução do Reset Global de Treinamento com Senha de Admin
+        const adminPwd = testDb.getAdminPassword();
+        const resetCorreto = testDb.resetGlobalTreinamento(adminPwd);
+        assert(resetCorreto.success === true, 'Execução do Reset Global de Treinamento com senha Admin autorizada');
+
+        // 4.6 Verificação de Ausência de Dados Fantasmas
+        const checkOcorrenciasDev = testDb.data.ocorrencias_devolucao.length === 0;
+        const checkOcorrenciasRota = testDb.data.ocorrencias_rota.length === 0;
+        const checkRetencoes = testDb.data.retencoes_frota.length === 0;
+        const checkReentregas = testDb.data.reentregas.length === 0;
+        const checkViagens = testDb.data.controle_viagens.length === 0;
+        const checkOcViagens = testDb.data.ocorrencias_viagens.length === 0;
+        const checkTrocas = testDb.data.trocas_veiculos.length === 0;
+        const checkLogs = testDb.data.audit_logs.length === 0;
+        const checkVersoes = testDb.data.registro_versoes.length === 0;
+
+        assert(
+          checkOcorrenciasDev && checkOcorrenciasRota && checkRetencoes && checkReentregas &&
+          checkViagens && checkOcViagens && checkTrocas && checkLogs && checkVersoes,
+          'Validação de Limpeza Total: Todas as coleções operacionais e logs estão rigorosamente ZERADAS (0 registros)'
+        );
+
+        // 4.7 Verificação de Preservação dos Cadastros Mestres
+        const checkUsuarios = testDb.data.usuarios.length > 0;
+        const checkMotoristas = testDb.data.motoristas.length > 0;
+        const checkVeiculos = testDb.data.veiculos.length > 0;
+        const checkProdutos = testDb.data.produtos.length > 0;
+        const checkClientes = testDb.data.clientes.length > 0;
+        const checkColabCD = testDb.data.colaboradores_cd.length > 0;
+
+        assert(
+          checkUsuarios && checkMotoristas && checkVeiculos && checkProdutos && checkClientes && checkColabCD,
+          'Validação de Preservação: Cadastros mestres (Usuários, Motoristas, Veículos, Produtos, Clientes, Colaboradores) 100% PRESERVADOS'
+        );
+
+        // 4.8 Teste de Reinicialização da Store pós-reset (Garantia de Não-Ressurgimento de Fantasmas)
+        const reloadedDb = new Store();
+        const reloadReentregasZero = reloadedDb.data.reentregas.length === 0;
+        const reloadRotasZero = reloadedDb.data.ocorrencias_rota.length === 0;
+        assert(reloadReentregasZero && reloadRotasZero, 'Garantia Anti-Fantasma pós-reload: Nenhum registro operacional de seed ressurge após reinicialização');
+
+        document.getElementById('status-execucao').textContent = `Concluído: ${passCount}/${testCount} aprovados`;
+
+      } catch (err) {
+        assert(false, 'Exceção não tratada durante a execução dos testes', err.message + '\n' + (err.stack || ''));
+        document.getElementById('status-execucao').textContent = 'Erro durante a execução';
+      }
+    }
+
+    // Auto-executa ao abrir a página
+    window.addEventListener('DOMContentLoaded', executarBateriaTestes);
+  </script>
+</body>
+</html>

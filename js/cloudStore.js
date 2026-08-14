@@ -72,6 +72,10 @@ class CloudStore {
       'ocorrencias_viagens',
       'resumo_diario_cd',
       'trocas_veiculos',
+      'retencoes_frota',
+      'reentregas',
+      'audit_logs',
+      'registro_versoes',
       'cargas'
     ];
 
@@ -206,32 +210,46 @@ class CloudStore {
   async syncLocalToCloud() {
     if (!this.isConfigured()) return;
 
-    // Mapeamento: chave do localStorage → tabela no Supabase
-    const tableMap = {
-      'jr_ocorrencias':         'ocorrencias_devolucao',
-      'jr_ocorrencias_rota':    'ocorrencias_rota',
-      'jr_motoristas':          'motoristas',
-      'jr_ajudantes':           'ajudantes',
-      'jr_veiculos':            'veiculos',
-      'jr_cargas':              'cargas',
-      'jr_clientes':            'clientes',
-      'jr_trocas_veiculos':     'trocas_veiculos',
-      'jr_usuarios':            'usuarios',
-    };
+    // Mapeamento: chave no jr_sac_db / localStorage → tabela no Supabase
+    const mappings = [
+      { dbKey: 'ocorrencias_devolucao', localKey: 'jr_ocorrencias',       tableName: 'ocorrencias_devolucao' },
+      { dbKey: 'ocorrencias_rota',      localKey: 'jr_ocorrencias_rota',  tableName: 'ocorrencias_rota' },
+      { dbKey: 'retencoes_frota',       localKey: 'jr_retencoes_frota',   tableName: 'retencoes_frota' },
+      { dbKey: 'reentregas',            localKey: 'jr_reentregas',        tableName: 'reentregas_rota' },
+      { dbKey: 'trocas_veiculos',       localKey: 'jr_trocas_veiculos',   tableName: 'trocas_veiculos' },
+      { dbKey: 'motoristas',            localKey: 'jr_motoristas',        tableName: 'motoristas' },
+      { dbKey: 'ajudantes',             localKey: 'jr_ajudantes',         tableName: 'ajudantes' },
+      { dbKey: 'veiculos',              localKey: 'jr_veiculos',          tableName: 'veiculos' },
+      { dbKey: 'cargas',                localKey: 'jr_cargas',            tableName: 'cargas' },
+      { dbKey: 'clientes',              localKey: 'jr_clientes',          tableName: 'clientes' },
+      { dbKey: 'usuarios',              localKey: 'jr_usuarios',          tableName: 'usuarios' },
+      { dbKey: 'audit_logs',            localKey: 'jr_audit_logs',        tableName: 'audit_logs' },
+      { dbKey: 'registro_versoes',      localKey: 'jr_registro_versoes',  tableName: 'registro_versoes' }
+    ];
 
-    for (const [localKey, tableName] of Object.entries(tableMap)) {
+    let fullDb = null;
+    try {
+      const rawFull = localStorage.getItem('jr_sac_db');
+      if (rawFull) fullDb = JSON.parse(rawFull);
+    } catch(e) {}
+
+    for (const m of mappings) {
       try {
-        const raw = localStorage.getItem(localKey);
-        if (!raw) continue;
-        const data = JSON.parse(raw);
-        if (!data || (Array.isArray(data) && data.length === 0)) continue;
-        
-        const records = Array.isArray(data) ? data : Object.values(data);
-        if (records.length > 0) {
-          await this.upsert(tableName, records);
+        let records = [];
+        if (fullDb && Array.isArray(fullDb[m.dbKey])) {
+          records = fullDb[m.dbKey];
+        } else {
+          const raw = localStorage.getItem(m.localKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            records = Array.isArray(parsed) ? parsed : Object.values(parsed);
+          }
+        }
+        if (records && records.length > 0) {
+          await this.upsert(m.tableName, records);
         }
       } catch(e) {
-        console.warn(`[CloudStore] Erro ao sincronizar ${localKey}:`, e);
+        console.warn(`[CloudStore] Erro ao sincronizar ${m.tableName}:`, e);
       }
     }
     
@@ -246,34 +264,56 @@ class CloudStore {
   async syncCloudToLocal() {
     if (!this.isConfigured()) return false;
 
-    const tableMap = {
-      'ocorrencias_devolucao': 'jr_ocorrencias',
-      'ocorrencias_rota':      'jr_ocorrencias_rota',
-      'motoristas':            'jr_motoristas',
-      'ajudantes':             'jr_ajudantes',
-      'veiculos':              'jr_veiculos',
-      'cargas':                'jr_cargas',
-      'clientes':              'jr_clientes',
-      'trocas_veiculos':       'jr_trocas_veiculos',
-      'usuarios':              'jr_usuarios',
-    };
+    const mappings = [
+      { tableName: 'ocorrencias_devolucao', localKey: 'jr_ocorrencias',       dbKey: 'ocorrencias_devolucao' },
+      { tableName: 'ocorrencias_rota',      localKey: 'jr_ocorrencias_rota',  dbKey: 'ocorrencias_rota' },
+      { tableName: 'retencoes_frota',       localKey: 'jr_retencoes_frota',   dbKey: 'retencoes_frota' },
+      { tableName: 'reentregas_rota',       localKey: 'jr_reentregas',        dbKey: 'reentregas' },
+      { tableName: 'trocas_veiculos',       localKey: 'jr_trocas_veiculos',   dbKey: 'trocas_veiculos' },
+      { tableName: 'motoristas',            localKey: 'jr_motoristas',        dbKey: 'motoristas' },
+      { tableName: 'ajudantes',             localKey: 'jr_ajudantes',         dbKey: 'ajudantes' },
+      { tableName: 'veiculos',              localKey: 'jr_veiculos',          dbKey: 'veiculos' },
+      { tableName: 'cargas',                localKey: 'jr_cargas',            dbKey: 'cargas' },
+      { tableName: 'clientes',              localKey: 'jr_clientes',          dbKey: 'clientes' },
+      { tableName: 'usuarios',              localKey: 'jr_usuarios',          dbKey: 'usuarios' },
+      { tableName: 'audit_logs',            localKey: 'jr_audit_logs',        dbKey: 'audit_logs' },
+      { tableName: 'registro_versoes',      localKey: 'jr_registro_versoes',  dbKey: 'registro_versoes' }
+    ];
 
     let anyChange = false;
-    for (const [tableName, localKey] of Object.entries(tableMap)) {
+    let fullDb = null;
+    try {
+      const rawFull = localStorage.getItem('jr_sac_db');
+      if (rawFull) fullDb = JSON.parse(rawFull);
+    } catch(e) {}
+
+    for (const m of mappings) {
       try {
-        const cloudData = await this.getAll(tableName);
+        const cloudData = await this.getAll(m.tableName);
         if (!cloudData) continue;
         
-        const localRaw = localStorage.getItem(localKey);
+        const localRaw = localStorage.getItem(m.localKey);
         const localStr = JSON.stringify(cloudData);
         
         if (localRaw !== localStr) {
-          localStorage.setItem(localKey, localStr);
+          localStorage.setItem(m.localKey, localStr);
+          if (fullDb) {
+            fullDb[m.dbKey] = cloudData;
+          }
           anyChange = true;
         }
       } catch(e) {
-        console.warn(`[CloudStore] Erro ao baixar ${tableName}:`, e);
+        console.warn(`[CloudStore] Erro ao baixar ${m.tableName}:`, e);
       }
+    }
+
+    if (fullDb && anyChange) {
+      try {
+        localStorage.setItem('jr_sac_db', JSON.stringify(fullDb));
+        if (window.db && window.db.data) {
+          window.db.data = fullDb;
+        }
+      } catch(e) {}
     }
 
     if (anyChange) {

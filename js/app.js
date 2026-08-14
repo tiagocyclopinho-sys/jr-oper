@@ -6,6 +6,50 @@ if (typeof window !== 'undefined') {
   window.LOGO_JR_VERDE_BASE64 = LOGO_JR_VERDE_BASE64;
 }
 
+// =============================================================================
+// UTILITÃRIOS GLOBAIS (PRIORIDADE 2 - FORÃ‡AR MAIÃšSCULA EM TEMPO REAL)
+// =============================================================================
+function forcarMaiuscula(el) {
+  if (!el) return;
+  const type = (el.type || '').toLowerCase();
+  if (type === 'password' || type === 'email' || type === 'number' || type === 'date' || type === 'time' || type === 'datetime-local' || type === 'file' || type === 'checkbox' || type === 'radio' || type === 'hidden') {
+    return;
+  }
+  const posInicio = el.selectionStart;
+  const posFim = el.selectionEnd;
+  if (typeof el.value === 'string') {
+    const valUpper = el.value.toUpperCase();
+    if (el.value !== valUpper) {
+      el.value = valUpper;
+      // Restaura a posiÃ§Ã£o do cursor para nÃ£o atrapalhar a digitaÃ§Ã£o
+      if (typeof posInicio === 'number') {
+        try { el.setSelectionRange(posInicio, posFim); } catch (e) {}
+      }
+    }
+  }
+}
+if (typeof window !== 'undefined') {
+  window.forcarMaiuscula = forcarMaiuscula;
+}
+
+// Ouvinte global para delegaÃ§Ã£o em tempo real como camada de seguranÃ§a
+if (typeof document !== 'undefined') {
+  document.addEventListener('input', function(e) {
+    if (!e.target) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {
+      const type = (e.target.type || '').toLowerCase();
+      if (type === 'password' || type === 'email' || type === 'number' || type === 'date' || type === 'time' || type === 'datetime-local' || type === 'file' || type === 'checkbox' || type === 'radio' || type === 'hidden') {
+        return;
+      }
+      if (e.target.dataset && e.target.dataset.noUppercase === 'true') {
+        return;
+      }
+      forcarMaiuscula(e.target);
+    }
+  }, true);
+}
+
 let activeTab = 'dashboard';
 let activeCadSubTab = 'motoristas';
 let activeResumoSubTab = 'resumo';
@@ -32,6 +76,99 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 }
 window.addEventListener('load', runInitSafely);
 setTimeout(runInitSafely, 100);
+
+// ===== UTILITÁRIOS GLOBAIS DE FORMATAÇÃO E NORMALIZAÇÃO DE DATA (DD/MM/AAAA) =====
+function formatarData(val, fallback = '—') {
+  if (val === null || val === undefined || val === '') return fallback;
+  
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return fallback;
+    const d = String(val.getDate()).padStart(2, '0');
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const y = val.getFullYear();
+    return `${d}/${m}/${y}`;
+  }
+
+  // Serial Excel (número ex: 45518)
+  if (typeof val === 'number' || (typeof val === 'string' && /^\d{5}(\.\d+)?$/.test(val.trim()))) {
+    const num = Number(val);
+    if (num > 20000 && num < 60000) {
+      const date = new Date(Math.round((num - 25569) * 86400 * 1000));
+      if (!isNaN(date.getTime())) {
+        const d = String(date.getUTCDate()).padStart(2, '0');
+        const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const y = date.getUTCFullYear();
+        return `${d}/${m}/${y}`;
+      }
+    }
+  }
+
+  let s = String(val).trim();
+  if (!s || s === '-' || s === '—' || s === 'null' || s === 'undefined' || s === 'NaN') return fallback;
+
+  // Se já estiver no formato DD/MM/AAAA ou DD/MM/AAAA HH:mm...
+  const matchBr = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+  if (matchBr && (Number(matchBr[1]) > 12 || matchBr[0].includes('/'))) {
+    const d = matchBr[1].padStart(2, '0');
+    const m = matchBr[2].padStart(2, '0');
+    let y = matchBr[3];
+    if (y.length === 2) y = '20' + y;
+    return `${d}/${m}/${y}`;
+  }
+
+  // Se estiver no formato YYYY-MM-DD ou YYYY-MM-DDTHH:mm:ss... ou YYYY/MM/DD
+  const matchIso = s.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
+  if (matchIso) {
+    const y = matchIso[1];
+    const m = matchIso[2].padStart(2, '0');
+    const d = matchIso[3].padStart(2, '0');
+    return `${d}/${m}/${y}`;
+  }
+
+  // Qualquer outro formato que Date.parse reconheça
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    const d = String(parsed.getDate()).padStart(2, '0');
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const y = parsed.getFullYear();
+    return `${d}/${m}/${y}`;
+  }
+
+  return s;
+}
+
+function formatarDataHora(val, fallback = '—') {
+  if (val === null || val === undefined || val === '') return fallback;
+  const dataFmt = formatarData(val, '');
+  if (!dataFmt) return fallback;
+  
+  let horaFmt = '';
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    horaFmt = val.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  } else {
+    const s = String(val).trim();
+    if (s.includes('T') || s.includes(':')) {
+      const parsed = new Date(s);
+      if (!isNaN(parsed.getTime())) {
+        horaFmt = parsed.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      }
+    }
+  }
+  return horaFmt ? `${dataFmt} ${horaFmt}` : dataFmt;
+}
+
+function normalizarDataImportacao(val, fallbackData = '') {
+  if (val === null || val === undefined || val === '') {
+    return fallbackData ? formatarData(fallbackData, '') : '';
+  }
+  const fmt = formatarData(val, '');
+  if (fmt && fmt !== '—' && fmt !== '-') return fmt;
+  return fallbackData ? formatarData(fallbackData, '') : String(val).trim();
+}
+
+window.formatarData = formatarData;
+window.formatarDataHora = formatarDataHora;
+window.normalizarDataImportacao = normalizarDataImportacao;
 
 function initApp() {
   try {
@@ -162,6 +299,245 @@ function updateUserHeader() {
   }
 }
 
+// ===== FORMATADOR DE DURAÇÃO HH:MM:SS =====
+function formatarDuracaoHHMMSS(valor, unidade = 'ms') {
+  if (valor === null || valor === undefined) return '00:00:00';
+  let totalSegundos = 0;
+  if (typeof valor === 'string') {
+    valor = parseFloat(valor) || 0;
+  }
+  if (typeof valor !== 'number' || isNaN(valor) || valor <= 0) return '00:00:00';
+
+  if (unidade === 'ms') {
+    totalSegundos = Math.floor(valor / 1000);
+  } else if (unidade === 'horas') {
+    totalSegundos = Math.floor(valor * 3600);
+  } else if (unidade === 'minutos') {
+    totalSegundos = Math.floor(valor * 60);
+  } else {
+    totalSegundos = Math.floor(valor);
+  }
+
+  const horas = Math.floor(totalSegundos / 3600);
+  const minutos = Math.floor((totalSegundos % 3600) / 60);
+  const segundos = totalSegundos % 60;
+
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${horas < 10 ? pad(horas) : horas}:${pad(minutos)}:${pad(segundos)}`;
+}
+
+// ===== CÁLCULO DE SLA DE MANUTENÇÃO & RETENÇÃO DE FROTA =====
+function calcularSlaManutencao(retencao) {
+  if (!retencao) return { diffMs: 0, diffHoras: 0, hhmmss: '00:00:00', nivel: 'NORMAL', badgeHtml: '' };
+
+  let dtInicio = null;
+  if (retencao.criado_em) {
+    dtInicio = new Date(retencao.criado_em);
+  } else if (retencao.data_parada) {
+    dtInicio = new Date(retencao.data_parada + 'T08:00:00');
+  } else {
+    dtInicio = new Date();
+  }
+
+  let dtFim = new Date();
+  if (retencao.status === 'LIBERADO') {
+    if (retencao.data_liberacao) {
+      dtFim = new Date(retencao.data_liberacao.includes('T') ? retencao.data_liberacao : retencao.data_liberacao + 'T18:00:00');
+    }
+  }
+
+  const diffMs = Math.max(0, dtFim.getTime() - dtInicio.getTime());
+  const diffHoras = diffMs / (1000 * 60 * 60);
+  const hhmmss = formatarDuracaoHHMMSS(diffMs, 'ms');
+
+  let nivel = 'NORMAL'; // < 4h
+  let badgeHtml = `<span class="bg-emerald-950/80 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟢 ${hhmmss} (&lt;4h)</span>`;
+
+  if (diffHoras >= 8) {
+    nivel = 'CRITICO_8H';
+    badgeHtml = `<span class="bg-red-950 text-red-300 border border-red-600 px-2 py-0.5 rounded text-[10px] font-black inline-flex items-center gap-1 animate-pulse shadow">🔴 SLA &gt;8h (${hhmmss})</span>`;
+  } else if (diffHoras >= 4) {
+    nivel = 'ALERTA_4H';
+    badgeHtml = `<span class="bg-amber-950 text-amber-300 border border-amber-600 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟡 SLA &gt;4h (${hhmmss})</span>`;
+  }
+
+  return { diffMs, diffHoras, hhmmss, nivel, badgeHtml };
+}
+
+// ===== SISTEMA GLOBAL DE NOTIFICAÇÕES VISUAIS (SINO DE NOTIFICAÇÕES) =====
+function atualizarSinoNotificacoes() {
+  const badgeEl = document.getElementById('notif-badge-count');
+  const dropEl = document.getElementById('dropdown-notificacoes');
+  if (!badgeEl || typeof db === 'undefined' || !db.data) return;
+
+  const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
+  const reentregasPendentes = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
+
+  const retencoes = typeof db.getRetencoesFrota === 'function' ? db.getRetencoesFrota() : [];
+  const retidos = retencoes.filter(r => r.status === 'RETIDO');
+
+  const retidosSlaCritico = retidos.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO_8H');
+  const retidosSlaAlerta = retidos.filter(r => calcularSlaManutencao(r).nivel === 'ALERTA_4H');
+
+  const ocorrenciasRota = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
+  const veicParadosRota = ocorrenciasRota.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO');
+
+  const devolucoes = typeof db.getDevolucoes === 'function' ? db.getDevolucoes() : [];
+  const pendCd = devolucoes.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
+
+  const totalAlertas = reentregasPendentes.length + retidosSlaCritico.length + retidosSlaAlerta.length + veicParadosRota.length + pendCd.length;
+
+  if (totalAlertas > 0) {
+    badgeEl.textContent = totalAlertas > 99 ? '99+' : totalAlertas;
+    badgeEl.classList.remove('hidden');
+    if (retidosSlaCritico.length > 0 || veicParadosRota.length > 0 || reentregasPendentes.length > 0) {
+      badgeEl.classList.add('animate-pulse');
+    } else {
+      badgeEl.classList.remove('animate-pulse');
+    }
+  } else {
+    badgeEl.classList.add('hidden');
+    badgeEl.classList.remove('animate-pulse');
+  }
+
+  if (dropEl) {
+    dropEl.innerHTML = `
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
+        <div class="flex items-center gap-2">
+          <span class="text-amber-400 font-black text-xs uppercase tracking-wider flex items-center gap-1.5">
+            <span>🔔</span> Central de Notificações
+          </span>
+          <span class="bg-slate-800 text-slate-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full border border-slate-700">${totalAlertas} alerta(s)</span>
+        </div>
+        <button onclick="fecharDropdownNotificacoes()" class="text-slate-400 hover:text-white text-xs font-bold px-1.5 py-0.5 rounded transition">✕</button>
+      </div>
+
+      <div class="max-h-80 overflow-y-auto space-y-2.5 pr-1">
+        ${totalAlertas === 0 ? `
+          <div class="text-center py-6 text-slate-500 space-y-1">
+            <div class="text-2xl">✅</div>
+            <div class="text-xs font-bold text-slate-400">Nenhum alerta crítico ativo</div>
+            <div class="text-[10px] text-slate-500">Toda a operação está em conformidade.</div>
+          </div>
+        ` : `
+          <!-- ALERTA DE REENTREGAS PENDENTES -->
+          ${reentregasPendentes.length > 0 ? `
+            <div class="bg-slate-950 border border-purple-900/70 p-2.5 rounded-xl shadow space-y-1.5 hover:border-purple-600 transition">
+              <div class="flex items-center justify-between">
+                <div class="text-xs font-black text-purple-300 flex items-center gap-1.5">
+                  <span>🚨</span> Reentregas Pendentes (${reentregasPendentes.length})
+                </div>
+                <span class="bg-purple-950 text-purple-300 border border-purple-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Atraso em Rota</span>
+              </div>
+              <p class="text-[10px] text-slate-400 leading-snug">Existem devoluções de rota aguardando nova tentativa ou reencaminhamento imediato.</p>
+              <button onclick="fecharDropdownNotificacoes(); switchTab('controle_viagens'); switchViagensSubTab('reentregas');" class="w-full bg-purple-900/50 hover:bg-purple-800 text-purple-200 border border-purple-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
+                Ver Painel de Reentregas →
+              </button>
+            </div>
+          ` : ''}
+
+          <!-- ALERTA DE SLA CRÍTICO >8H -->
+          ${retidosSlaCritico.length > 0 ? `
+            <div class="bg-slate-950 border border-red-800 p-2.5 rounded-xl shadow space-y-1.5 animate-pulse">
+              <div class="flex items-center justify-between">
+                <div class="text-xs font-black text-red-400 flex items-center gap-1.5">
+                  <span>🔴</span> SLA Crítico de Manutenção &gt;8h (${retidosSlaCritico.length})
+                </div>
+                <span class="bg-red-950 text-red-300 border border-red-700 text-[10px] px-1.5 py-0.5 rounded font-black">URGENTE</span>
+              </div>
+              <p class="text-[10px] text-slate-400 leading-snug">Veículo(s) parados na oficina há mais de 8 horas sem liberação registrada.</p>
+              <button onclick="fecharDropdownNotificacoes(); activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="w-full bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-600 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
+                Ver Veículos Retidos →
+              </button>
+            </div>
+          ` : ''}
+
+          <!-- ALERTA DE SLA ATENÇÃO >4H -->
+          ${retidosSlaAlerta.length > 0 ? `
+            <div class="bg-slate-950 border border-amber-800/70 p-2.5 rounded-xl shadow space-y-1.5">
+              <div class="flex items-center justify-between">
+                <div class="text-xs font-black text-amber-400 flex items-center gap-1.5">
+                  <span>🟡</span> SLA em Atenção &gt;4h (${retidosSlaAlerta.length})
+                </div>
+                <span class="bg-amber-950 text-amber-300 border border-amber-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Oficina</span>
+              </div>
+              <p class="text-[10px] text-slate-400 leading-snug">Veículo(s) imobilizados entre 4h e 8h requerem acompanhamento da oficina.</p>
+              <button onclick="fecharDropdownNotificacoes(); activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="w-full bg-amber-900/50 hover:bg-amber-800 text-amber-200 border border-amber-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
+                Acompanhar Manutenção →
+              </button>
+            </div>
+          ` : ''}
+
+          <!-- ALERTA DE VEÍCULOS PARADOS EM ROTA -->
+          ${veicParadosRota.length > 0 ? `
+            <div class="bg-slate-950 border border-red-900/70 p-2.5 rounded-xl shadow space-y-1.5">
+              <div class="flex items-center justify-between">
+                <div class="text-xs font-black text-red-300 flex items-center gap-1.5">
+                  <span>🚨</span> Veículos Parados em Rota (${veicParadosRota.length})
+                </div>
+                <span class="bg-red-950 text-red-300 border border-red-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Socorro</span>
+              </div>
+              <p class="text-[10px] text-slate-400 leading-snug">Chamados operacionais de socorro mecânico ou quebra pendentes de solução.</p>
+              <button onclick="fecharDropdownNotificacoes(); switchTab('rota_ocorrencias');" class="w-full bg-red-900/50 hover:bg-red-800 text-red-200 border border-red-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
+                Ver Ocorrências em Rota →
+              </button>
+            </div>
+          ` : ''}
+
+          <!-- ALERTA DE RETORNOS PENDENTES CD -->
+          ${pendCd.length > 0 ? `
+            <div class="bg-slate-950 border border-amber-900/70 p-2.5 rounded-xl shadow space-y-1.5">
+              <div class="flex items-center justify-between">
+                <div class="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                  <span>📦</span> Retornos Físicos Pendentes CD (${pendCd.length})
+                </div>
+                <span class="bg-amber-950 text-amber-300 border border-amber-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Armazém</span>
+              </div>
+              <p class="text-[10px] text-slate-400 leading-snug">Mercadorias devolvidas aguardando conferência e entrada física no estoque.</p>
+              <button onclick="fecharDropdownNotificacoes(); switchTab('cd_recepcao');" class="w-full bg-amber-900/50 hover:bg-amber-800 text-amber-200 border border-amber-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
+                Conferir Devoluções CD →
+              </button>
+            </div>
+          ` : ''}
+        `}
+      </div>
+
+      <div class="pt-2 border-t border-slate-800 flex justify-between items-center text-[10px] text-slate-500 font-bold">
+        <span>JR Oper • Monitoramento em Tempo Real</span>
+        <button onclick="renderApp();" class="text-emerald-400 hover:underline">Atualizar 🔄</button>
+      </div>
+    `;
+  }
+}
+
+function toggleDropdownNotificacoes() {
+  const dropEl = document.getElementById('dropdown-notificacoes');
+  if (!dropEl) return;
+  const isHidden = dropEl.classList.contains('hidden');
+  if (isHidden) {
+    atualizarSinoNotificacoes();
+    dropEl.classList.remove('hidden');
+  } else {
+    dropEl.classList.add('hidden');
+  }
+}
+
+function fecharDropdownNotificacoes() {
+  const dropEl = document.getElementById('dropdown-notificacoes');
+  if (dropEl) dropEl.classList.add('hidden');
+}
+
+// Fechar dropdown de notificações ao clicar fora
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', function(event) {
+    const container = document.getElementById('sino-notificacoes-container');
+    const dropEl = document.getElementById('dropdown-notificacoes');
+    if (container && dropEl && !container.contains(event.target)) {
+      dropEl.classList.add('hidden');
+    }
+  });
+}
+
 // ===== TOAST NOTIFICATION HELPER =====
 function showToast(message, type = 'success') {
   const existing = document.getElementById('jr-toast-notification');
@@ -199,27 +575,40 @@ function renderLixeiraView() {
           <div class="p-3 bg-red-950/80 border border-red-800/80 rounded-xl text-2xl text-red-400">🛡️</div>
           <div>
             <h1 class="text-xl font-black text-white uppercase tracking-wider flex items-center gap-2">
-              Governança, Lixeira & Auditoria de Dados
+              🛡️ Governança & Lixeira
             </h1>
-            <p class="text-xs text-slate-400">Soft Delete • Janela de Retenção 30-90 dias • Trilha Imutável de Auditoria • Rollback com Senha de Admin</p>
+            <p class="text-xs text-slate-400">Retenção de dados, trilha de auditoria e restauração</p>
           </div>
         </div>
 
         <!-- SELETOR DE SUB-ABAS -->
         <div class="flex gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800 shrink-0">
-          <button onclick="window._activeLixeiraSubTab='lixeira'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='lixeira'?'bg-red-700 text-white shadow':'text-slate-400 hover:text-white'}">
+          <button onclick="switchLixeiraSubTab('lixeira')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='lixeira'?'bg-red-700 text-white shadow':'text-slate-400 hover:text-white'}">
             🗑️ Lixeira (${items.length})
           </button>
-          <button onclick="window._activeLixeiraSubTab='auditoria'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='auditoria'?'bg-blue-700 text-white shadow':'text-slate-400 hover:text-white'}">
+          <button onclick="switchLixeiraSubTab('auditoria')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='auditoria'?'bg-blue-700 text-white shadow':'text-slate-400 hover:text-white'}">
             📜 Trilha de Auditoria (${logs.length})
           </button>
-          <button onclick="window._activeLixeiraSubTab='versoes'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='versoes'?'bg-purple-700 text-white shadow':'text-slate-400 hover:text-white'}">
+          <button onclick="switchLixeiraSubTab('versoes')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='versoes'?'bg-purple-700 text-white shadow':'text-slate-400 hover:text-white'}">
             🔄 Versões & Rollback (${versoes.length})
           </button>
         </div>
       </div>
 
       ${activeSub === 'lixeira' ? renderLixeiraItemsContent(items) : (activeSub === 'auditoria' ? renderAuditLogsContent(logs) : renderVersoesContent(versoes))}
+
+      <!-- PAINEL DE MANUTENÇÃO & RESET GLOBAL DE TREINAMENTO -->
+      <div class="bg-red-950/30 border border-red-900/60 p-5 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-xs shadow-2xl">
+        <div class="space-y-1">
+          <div class="font-bold text-red-400 text-sm flex items-center gap-2">
+            <span>🛡️</span> Reset Global de Treinamento (Início Oficial de Produção)
+          </div>
+          <p class="text-slate-400 text-xs leading-relaxed">Limpa todos os dados operacionais de testes e treinamento (Devoluções SAC, Rota, Frota, Reentregas, Viagens, Logs e Versões). Cadastros mestres são 100% preservados. Exige a senha Admin e confirmação "RESETAR".</p>
+        </div>
+        <button onclick="executarResetGlobalTreinamento()" class="bg-red-700 hover:bg-red-600 border border-red-500 text-white font-bold px-4 py-2.5 rounded-xl text-xs shrink-0 shadow flex items-center gap-2 transition-all">
+          🧹 Executar Reset Global
+        </button>
+      </div>
     </div>`;
 }
 
@@ -400,6 +789,40 @@ function expurgarDefinitivoLixeira(collection, id) {
   });
 }
 
+// ===== EXECUÇÃO SEGURA DE RESET GLOBAL DE TREINAMENTO =====
+function executarResetGlobalTreinamento() {
+  abrirModalConfirmacaoAdmin({
+    titulo: 'Reset Global de Treinamento',
+    mensagem: 'ATENÇÃO: Todos os dados operacionais (Devoluções SAC, Ocorrências em Rota, Retenções de Frota, Reentregas, Diário do CD, Viagens, Trocas de Veículos, Logs de Auditoria e Versões) serão ZERADOS permanentemente. Os cadastros mestres serão preservados.',
+    palavraConfirmacao: 'RESETAR',
+    onConfirm: (pwd) => {
+      const res = db.resetGlobalTreinamento(pwd);
+      if (res && res.success) {
+        window._biFiltroDe = '';
+        window._biFiltroAte = '';
+        window._rotaFiltroStatus = 'pendente';
+        window._reentregaFiltroStatus = 'todos';
+        window._reentregaFiltroBusca = '';
+        window._reentregaFiltroData = '';
+        window._retencaoFiltroStatus = 'todos';
+
+        if (typeof pararAlarmeReentregas === 'function') {
+          pararAlarmeReentregas();
+        }
+        if (typeof atualizarSinoNotificacoes === 'function') {
+          atualizarSinoNotificacoes();
+        }
+
+        showToast('🧹 Reset Global executado com sucesso! Dados operacionais zerados.');
+        renderApp();
+      } else {
+        alert(res ? res.message : 'Falha ao executar reset.');
+      }
+    }
+  });
+}
+window.executarResetGlobalTreinamento = executarResetGlobalTreinamento;
+
 function renderNavMenu() {
   const menuEl = document.getElementById('nav-menu');
   if (!menuEl) return;
@@ -409,35 +832,46 @@ function renderNavMenu() {
     return;
   }
 
+  const wasOpen = document.getElementById('mobile-menu-dropdown')?.classList.contains('open');
+
   const items = [
     { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo' },
     { tab: 'sac_abertura', icon: '📝', label: 'Devolução SAC' },
-    { tab: 'sac_investigacao', icon: '🔍', label: 'Análise e Monitoramento' },
-    { tab: 'gestao_gestor', icon: '👔', label: 'Gestão de Tratativas' },
-    { tab: 'cd_recepcao', icon: '🏭', label: 'Recepção CD' },
+    { tab: 'sac_investigacao', icon: '🔍', label: 'Análise & Causa Raiz' },
+    { tab: 'gestao_gestor', icon: '👔', label: 'Tratativas do Gestor' },
+    { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico CD' },
     { tab: 'controle_viagens', icon: '🚍', label: 'Controle de Viagens' },
     { tab: 'disponibilidade_frota', icon: '🚛', label: 'Disponibilidade da Frota' },
-    { tab: 'resumo_diario_cd', icon: '📋', label: 'Diário do CD' },
-    { tab: 'boletim_gerencial', icon: '📈', label: 'Boletim Gerencial' },
-    { tab: 'cadastros_dados', icon: '⚙️', label: 'Cadastros Gerais' },
+    { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário CD' },
+    { tab: 'boletim_gerencial', icon: '📄', label: 'Boletim Gerencial' },
+    { tab: 'cadastros_dados', icon: '⚙️', label: 'Cadastros Mestres' },
     { tab: 'lixeira', icon: '🛡️', label: 'Governança & Lixeira' },
-    { tab: 'power_bi', icon: '📊', label: 'Power BI' }
+    { tab: 'power_bi', icon: '🔌', label: 'Conector Power BI' }
   ];
 
   menuEl.innerHTML = `
-    <div id="mobile-menu-dropdown" class="hidden bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-2 w-64 space-y-1 mt-1 z-50">
-      <div class="px-3 py-2 border-b border-slate-800 flex items-center justify-between">
-        <div>
-          <div class="text-xs font-bold text-white">${user.nome}</div>
-          <div class="text-[10px] text-emerald-400 font-semibold uppercase">${user.departamento || user.role}</div>
+    <div id="nav-menu-overlay" class="${wasOpen ? 'open' : ''}" onclick="toggleMobileMenu(false)"></div>
+    <div id="mobile-menu-dropdown" class="bg-slate-900 border-r border-slate-800 shadow-2xl p-3.5 space-y-3 ${wasOpen ? 'open' : ''}">
+      <div class="px-2 py-2 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-emerald-800 flex items-center justify-center text-white font-extrabold text-sm shadow">JR</div>
+          <div>
+            <div class="text-xs font-bold text-white">${user.nome}</div>
+            <div class="text-[10px] text-emerald-400 font-semibold uppercase">${user.departamento || user.role}</div>
+          </div>
         </div>
+        <button onclick="toggleMobileMenu(false)" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition text-sm font-bold" title="Fechar Menu">✕</button>
       </div>
-      <div class="py-1 space-y-0.5">
+      <div class="py-1 space-y-1 overflow-y-auto flex-grow">
         ${items.map(i => `
-          <button onclick="switchTab('${i.tab}')" class="w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2.5 ${activeTab === i.tab ? 'bg-emerald-800 text-white shadow' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}">
-            <span>${i.icon}</span> ${i.label}
+          <button onclick="switchTab('${i.tab}')" class="w-full text-left px-3 py-2.5 rounded-lg text-xs font-bold transition flex items-center gap-2.5 ${activeTab === i.tab ? 'bg-emerald-800 text-white shadow' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}">
+            <span class="text-base">${i.icon}</span> ${i.label}
           </button>
         `).join('')}
+      </div>
+      <div class="pt-2.5 border-t border-slate-800 text-[10px] text-slate-500 font-medium px-2 flex justify-between items-center">
+        <span>JR Oper v2.0</span>
+        <button onclick="handleLogout()" class="text-red-400 hover:underline font-bold">Sair</button>
       </div>
     </div>`;
 }
@@ -541,6 +975,7 @@ function renderApp() {
   container.innerHTML = html;
   updateUserHeader();
   renderNavMenu();
+  atualizarSinoNotificacoes();
 
   if (activeElId) {
     const el = document.getElementById(activeElId);
@@ -599,29 +1034,105 @@ function toggleItemDivergenciaInputs(idx) {
   }
 }
 
-function toggleMobileMenu() {
+function toggleMobileMenu(forceState) {
   const menu = document.getElementById('mobile-menu-dropdown');
-  if (menu) menu.classList.toggle('hidden');
+  const overlay = document.getElementById('nav-menu-overlay');
+  if (!menu) return;
+
+  const willOpen = typeof forceState === 'boolean' ? forceState : !menu.classList.contains('open');
+  if (willOpen) {
+    menu.classList.add('open');
+    if (overlay) overlay.classList.add('open');
+  } else {
+    menu.classList.remove('open');
+    if (overlay) overlay.classList.remove('open');
+  }
 }
 
-// Fechar menu ao clicar fora
+// Fechar menu ao clicar fora ou no overlay
 document.addEventListener('click', (e) => {
   const menu = document.getElementById('mobile-menu-dropdown');
   const btn = document.getElementById('hamburger-btn');
-  if (menu && !menu.contains(e.target) && btn && !btn.contains(e.target)) {
-    menu.classList.add('hidden');
+  const overlay = document.getElementById('nav-menu-overlay');
+  if (menu && menu.classList.contains('open')) {
+    if ((!menu.contains(e.target) && btn && !btn.contains(e.target)) || (overlay && e.target === overlay)) {
+      toggleMobileMenu(false);
+    }
   }
 });
+
+function scrollToTop(smooth = true) {
+  try {
+    window.scrollTo({ top: 0, left: 0, behavior: smooth ? 'smooth' : 'auto' });
+  } catch (e) {
+    window.scrollTo(0, 0);
+  }
+  if (document.documentElement) document.documentElement.scrollTop = 0;
+  if (document.body) document.body.scrollTop = 0;
+  const main = document.getElementById('main-content');
+  if (main) main.scrollTop = 0;
+}
+window.scrollToTop = scrollToTop;
 
 function changeRole(newRole) { db.switchRole(newRole); updateUserHeader(); renderApp(); }
 function handleLogout() { db.logout(); updateUserHeader(); renderApp(); }
 
 function switchTab(tab) {
   activeTab = tab;
-  const menu = document.getElementById('mobile-menu-dropdown');
-  if (menu) menu.classList.add('hidden');
+  toggleMobileMenu(false);
   renderApp();
+  scrollToTop();
 }
+window.switchTab = switchTab;
+
+function switchInvestigacaoSubTab(sub) {
+  activeInvestigacaoSubTab = sub;
+  renderApp();
+  scrollToTop();
+}
+window.switchInvestigacaoSubTab = switchInvestigacaoSubTab;
+
+function switchGestorSubTab(sub) {
+  window._activeGestorSubTab = sub;
+  renderApp();
+  scrollToTop();
+}
+window.switchGestorSubTab = switchGestorSubTab;
+
+function switchCdSubTab(sub) {
+  window._activeCdSubTab = sub;
+  renderApp();
+  scrollToTop();
+}
+window.switchCdSubTab = switchCdSubTab;
+
+function switchResumoSubTab(sub) {
+  activeResumoSubTab = sub;
+  renderApp();
+  scrollToTop();
+}
+window.switchResumoSubTab = switchResumoSubTab;
+
+function switchBolSubTab(sub) {
+  window._activeBolSubTab = sub;
+  renderApp();
+  scrollToTop();
+}
+window.switchBolSubTab = switchBolSubTab;
+
+function switchLixeiraSubTab(sub) {
+  window._activeLixeiraSubTab = sub;
+  renderApp();
+  scrollToTop();
+}
+window.switchLixeiraSubTab = switchLixeiraSubTab;
+
+function switchDashRecorrenciaTab(sub) {
+  window._dashRecorrenciaTab = sub;
+  renderApp();
+  scrollToTop();
+}
+window.switchDashRecorrenciaTab = switchDashRecorrenciaTab;
 
 // ===== LOGIN & CADASTRO =====
 const DEPARTAMENTOS_PADRAO = [
@@ -700,30 +1211,17 @@ function renderLoginView() {
           <div id="login-msg-error" class="hidden p-2.5 bg-red-950/80 border border-red-800 text-red-300 text-xs rounded-lg font-bold text-center"></div>
           <div>
             <label class="block text-xs font-semibold text-slate-300 mb-1">Login (Nome Completo ou E-mail)</label>
-            <input type="text" id="login-user-input" required placeholder="Digite seu nome completo ou e-mail" value="sac@jrdistribuidora.com.br" oninput="updateLoginDeptPreview()"
+            <input type="text" id="login-user-input" required placeholder="Digite seu nome completo ou e-mail" value="" oninput="forcarMaiuscula(this); updateLoginDeptPreview()"
               class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none">
             <div id="login-dept-preview"></div>
           </div>
           <div>
             <label class="block text-xs font-semibold text-slate-300 mb-1">Senha</label>
-            <input type="password" id="login-senha" required value="123456"
+            <input type="password" id="login-senha" required value=""
               class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none">
           </div>
           <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-lg text-sm shadow-lg transition">Acessar Sistema</button>
         </form>
-
-        <!-- Acesso rápido -->
-        <div class="mt-5 pt-4 border-t border-slate-800">
-          <div class="text-xs text-slate-400 font-semibold mb-2 text-center">Acesso Rápido (Demo):</div>
-          <div class="grid grid-cols-3 gap-1.5">
-            <button onclick="quickLogin('sac@jrdistribuidora.com.br')" class="bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-900/60 p-1.5 rounded text-[10px] font-bold">🟢 SAC</button>
-            <button onclick="quickLogin('cd@jrdistribuidora.com.br')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-900/60 p-1.5 rounded text-[10px] font-bold">🟠 CD</button>
-            <button onclick="quickLogin('gerente@jrdistribuidora.com.br')" class="bg-slate-800 hover:bg-slate-700 text-purple-300 border border-purple-900/60 p-1.5 rounded text-[10px] font-bold">🟣 Gestor</button>
-            <button onclick="quickLogin('financeiro@jrdistribuidora.com.br')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 border border-blue-900/60 p-1.5 rounded text-[10px] font-bold">🔵 Financeiro</button>
-            <button onclick="quickLogin('manutencao@jrdistribuidora.com.br')" class="bg-slate-800 hover:bg-slate-700 text-red-300 border border-red-900/60 p-1.5 rounded text-[10px] font-bold">🔴 Manutenção</button>
-            <button onclick="quickLogin('admin@jrdistribuidora.com.br')" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 p-1.5 rounded text-[10px] font-bold">⚪ Admin</button>
-          </div>
-        </div>
       </div>
 
       <!-- PAINEL CADASTRO DE USUÁRIO -->
@@ -731,7 +1229,7 @@ function renderLoginView() {
         <form onsubmit="handleCadastroUsuarioSubmit(event)" class="space-y-4">
           <div>
             <label class="block text-xs font-semibold text-slate-300 mb-1">Login (Nome Completo) *</label>
-            <input type="text" id="cad-usr-nome" required placeholder="Digite seu Nome Completo" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none uppercase">
+            <input type="text" id="cad-usr-nome" required placeholder="Digite seu Nome Completo" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2.5 text-sm focus:border-emerald-500 focus:outline-none uppercase" oninput="forcarMaiuscula(this)">
           </div>
 
           <div class="grid grid-cols-2 gap-3">
@@ -752,7 +1250,7 @@ function renderLoginView() {
               ${DEPARTAMENTOS_PADRAO.map(d => `<option value="${d}">${d}</option>`).join('')}
               <option value="OUTRO">OUTRO (DIGITAR...)</option>
             </select>
-            <input type="text" id="cad-usr-depart-custom" placeholder="Digite o departamento..." class="hidden mt-2 w-full bg-slate-800 border border-emerald-600 text-emerald-300 font-bold rounded-lg p-2.5 text-sm focus:outline-none uppercase">
+            <input type="text" id="cad-usr-depart-custom" placeholder="Digite o departamento..." class="hidden mt-2 w-full bg-slate-800 border border-emerald-600 text-emerald-300 font-bold rounded-lg p-2.5 text-sm focus:outline-none uppercase" oninput="forcarMaiuscula(this)">
           </div>
 
           <div class="pt-2">
@@ -841,15 +1339,6 @@ function handleCadastroUsuarioSubmit(e) {
   } else {
     alert(`❌ ${res.message}`);
   }
-}
-
-function quickLogin(email) {
-  let senha = '123456';
-  if (email.includes('admin')) senha = 'admin123';
-  else if (email.includes('gerente')) senha = 'gerente123';
-  const res = db.login(email, senha);
-  if (res.success) { updateUserHeader(); switchTab('dashboard'); }
-  else alert(res.message);
 }
 
 function handleLoginSubmit(e) {
@@ -968,9 +1457,8 @@ function renderDashboardView() {
   const totalValor = devs.reduce((a, d) => a + (parseFloat(d.valor_reclamado)||0), 0);
   const pendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
   const veicParados = rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO').length;
-  const retencoes = typeof db.getRetencoesFrota === 'function'
-    ? db.getRetencoesFrota().filter(r => r.status === 'RETIDO')
-    : [];
+  const allRetencoes = typeof db.getRetencoesFrota === 'function' ? db.getRetencoesFrota() : [];
+  const retencoes = allRetencoes.filter(r => r.status === 'RETIDO');
   const veicRetidos = retencoes.length;
   const abertasCausaRaiz = devs.filter(d => !d.motivo_real_causa_raiz || !d.acao_tomada);
   const totDescontosGestor = devs.filter(d => d.desconto_produtividade_gestor).length;
@@ -979,23 +1467,81 @@ function renderDashboardView() {
   const viagensIniciadas = viagens.length;
   const chkNaoRealizado = viagens.filter(v => v.status_saida === 'PENDENTE' || v.checklist_status === 'PENDENTE' || v.status === 'PENDENTE').length;
 
+  // ===== REENTREGAS NO PERÍODO =====
+  const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
+  const reentregasPeriodo = todasReentregas.filter(r => dataNoPeriodo(r.data || r.criado_em, fDe, fAte));
+  const reentregasPendentes = reentregasPeriodo.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
+  const totalQtdReentregas = reentregasPeriodo.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
+  const indiceReentregaViagemPct = viagensIniciadas > 0 ? ((reentregasPeriodo.length / viagensIniciadas) * 100).toFixed(1) : '0.0';
+
+  // ===== NOVOS KPIs: TRANSPORTE =====
+  const ocOperacionais = (Array.isArray(db.data.transporte_oc_operacionais) ? db.data.transporte_oc_operacionais : []).filter(o => dataNoPeriodo(o.data || o.criado_em, fDe, fAte));
+  const totOcOperacionais = ocOperacionais.length;
+  const totOcOperacionaisPend = ocOperacionais.filter(o => o.status !== 'FINALIZADA').length;
+  const totFusionIniciado = viagens.filter(v => (v.fusion || '').toUpperCase() === 'INICIADO').length;
+  const pctFusionIniciado = viagensIniciadas > 0 ? Math.round((totFusionIniciado / viagensIniciadas) * 100) : 0;
+
+  // ===== NOVOS KPIs: CD =====
+  const totFaltasColab = faltasColabList.length;
+
+  // ===== SLA CRÍTICO DE MANUTENÇÃO (4H / 8H) =====
+  const retidosCriticos8h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO_8H');
+  const retidosAlerta4h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'ALERTA_4H');
+
   // ===== CÁLCULOS DOS NOVOS KPIS =====
-  // 1. Lead Time de Abertura (Média de horas entre a criação do chamado e a ação/parecer do gestor)
-  let totalLeadTimeHoras = 0;
+  // 1. Lead Time de Abertura (Formato hh:mm:ss — Tempo médio entre criação da ocorrência e parecer/ação do gestor)
+  let totalLeadTimeMs = 0;
   let countLeadTime = 0;
   devs.forEach(d => {
     const dtCriado = d.criado_em || d.data_abertura;
     if (dtCriado) {
-      const inicio = new Date(dtCriado);
-      const fim = d.data_acao_gestor ? new Date(d.data_acao_gestor) : new Date();
-      const diffHoras = Math.max(0, (fim - inicio) / (1000 * 60 * 60));
-      totalLeadTimeHoras += diffHoras;
-      countLeadTime++;
+      const inicio = new Date(dtCriado.includes('T') ? dtCriado : dtCriado + 'T08:00:00');
+      const fim = d.data_acao_gestor ? new Date(d.data_acao_gestor.includes('T') ? d.data_acao_gestor : d.data_acao_gestor + 'T18:00:00') : new Date();
+      if (!isNaN(inicio.getTime()) && !isNaN(fim.getTime())) {
+        const diffMs = Math.max(0, fim.getTime() - inicio.getTime());
+        totalLeadTimeMs += diffMs;
+        countLeadTime++;
+      }
     }
   });
-  const leadTimeMedioHoras = countLeadTime > 0 ? (totalLeadTimeHoras / countLeadTime).toFixed(1) : '0.0';
+  const leadTimeMedioMs = countLeadTime > 0 ? (totalLeadTimeMs / countLeadTime) : 0;
+  const leadTimeMedioHhmmss = formatarDuracaoHHMMSS(leadTimeMedioMs, 'ms');
 
-  // 2. Taxa de Completude de Registro (% de ocorrências com TODOS OS CAMPOS preenchidos + pelo menos 1 foto ou 1 vídeo)
+  // 2. MTTR Operacional / Tempo Médio de Imobilização (Formato hh:mm:ss — Tempo médio entre parada e liberação)
+  let totalMttrMs = 0;
+  let countMttr = 0;
+  const retencoesPeriodo = allRetencoes.filter(r => dataNoPeriodo(r.data_parada || r.criado_em, fDe, fAte));
+  retencoesPeriodo.forEach(r => {
+    const dtInicio = r.criado_em ? new Date(r.criado_em) : (r.data_parada ? new Date(r.data_parada + 'T08:00:00') : null);
+    if (dtInicio && !isNaN(dtInicio.getTime())) {
+      let dtFim = null;
+      if (r.status === 'LIBERADO' && r.data_liberacao) {
+        dtFim = new Date(r.data_liberacao.includes('T') ? r.data_liberacao : r.data_liberacao + 'T18:00:00');
+      } else if (r.status === 'RETIDO') {
+        dtFim = new Date();
+      }
+      if (dtFim && !isNaN(dtFim.getTime())) {
+        totalMttrMs += Math.max(0, dtFim.getTime() - dtInicio.getTime());
+        countMttr++;
+      }
+    }
+  });
+  rotas.forEach(r => {
+    if (r.veiculo_parado || r.status_chamado === 'finalizado' || r.status === 'RESOLVIDO') {
+      const dtInicio = r.criado_em ? new Date(r.criado_em) : (r.data_chamado ? new Date(r.data_chamado + 'T08:00:00') : null);
+      if (dtInicio && !isNaN(dtInicio.getTime())) {
+        const dtFim = (r.status === 'RESOLVIDO' || r.status_chamado === 'finalizado') && r.resolvido_em ? new Date(r.resolvido_em) : new Date();
+        if (!isNaN(dtFim.getTime())) {
+          totalMttrMs += Math.max(0, dtFim.getTime() - dtInicio.getTime());
+          countMttr++;
+        }
+      }
+    }
+  });
+  const mttrMedioMs = countMttr > 0 ? (totalMttrMs / countMttr) : 0;
+  const mttrMedioHhmmss = formatarDuracaoHHMMSS(mttrMedioMs, 'ms');
+
+  // 3. Taxa de Completude de Registro (% de ocorrências com TODOS OS CAMPOS preenchidos + pelo menos 1 foto ou 1 vídeo)
   let countCompletas = 0;
   devs.forEach(d => {
     const temCliente = !!(d.cliente_id || d.cliente_nome);
@@ -1034,7 +1580,7 @@ function renderDashboardView() {
   });
   const taxaCompletude = devs.length > 0 ? Math.round((countCompletas / devs.length) * 100) : 0;
 
-  // 3. Taxa de Responsabilização ao Monitoramento (% identificados vs % não identificados)
+  // 4. Taxa de Responsabilização ao Monitoramento (% identificados vs % não identificados)
   let countIdentificados = 0;
   let countNaoIdentificados = 0;
   devs.forEach(d => {
@@ -1108,13 +1654,15 @@ function renderDashboardView() {
 
   const recList = Object.values(recDataMap).sort((a,b) => b.qtd - a.qtd);
 
+  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParados > 0 || veicRetidos > 0 || pendCd > 0 || abertasCausaRaiz.length > 0);
+
   return `
     <div class="space-y-6">
       <!-- TOPO -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 class="text-xl sm:text-2xl font-black text-white tracking-tight">📊 Painel Principal — Dashboard Geral</h1>
-          <p class="text-xs text-slate-400">Consolidação executiva completa dividida por Transporte, Operação e Gestão</p>
+          <h1 class="text-xl sm:text-2xl font-black text-white tracking-tight">📊 Dashboard Executivo</h1>
+          <p class="text-xs text-slate-400">Visão consolidada: Transporte, Operação e Gestão</p>
         </div>
         <div class="flex gap-2 flex-wrap">
           <button onclick="switchTab('sac_abertura')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2 rounded-lg shadow flex items-center gap-1.5">+ Nova Devolução</button>
@@ -1153,15 +1701,56 @@ function renderDashboardView() {
       </div>
 
       <!-- PAINEL DE ALERTAS CRÍTICOS EM TEMPO REAL -->
-      ${(veicParados > 0 || veicRetidos > 0 || pendCd > 0 || abertasCausaRaiz.length > 0) ? `
+      ${temAlertasCriticos ? `
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-lg space-y-3">
           <div class="flex items-center justify-between border-b border-slate-800 pb-2">
             <span class="text-xs font-bold text-amber-400 uppercase flex items-center gap-1.5">
-              <span>🔔</span> Alertas & Pendências Críticas em Tempo Real
+              <span class="animate-pulse">🔔</span> Alertas & Pendências Críticas em Tempo Real
             </span>
-            <span class="text-[10px] text-slate-500">Ação imediata requerida</span>
+            <span class="text-[10px] text-slate-400 font-bold">Ação visual imediata requerida</span>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            
+            <!-- ALERTA DE REENTREGAS PENDENTES -->
+            ${reentregasPendentes.length > 0 ? `
+              <div class="bg-slate-950 border border-purple-800/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
+                <div class="flex items-center gap-3 overflow-hidden">
+                  <div class="w-9 h-9 rounded-lg bg-purple-950 border border-purple-700 text-purple-300 flex items-center justify-center shrink-0 text-base font-bold">🚨</div>
+                  <div class="truncate">
+                    <div class="text-xs font-black text-purple-300 truncate">${reentregasPendentes.length} Reentrega(s) Pendente(s)</div>
+                    <div class="text-[10px] text-slate-400 truncate">Atrasos & devoluções de rota</div>
+                  </div>
+                </div>
+                <button onclick="switchTab('controle_viagens'); switchViagensSubTab('reentregas');" class="bg-purple-900/50 hover:bg-purple-800 border border-purple-600 text-purple-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver</button>
+              </div>` : ''}
+
+            <!-- ALERTA DE SLA CRÍTICO >8H -->
+            ${retidosCriticos8h.length > 0 ? `
+              <div class="bg-slate-950 border border-red-700 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md animate-pulse">
+                <div class="flex items-center gap-3 overflow-hidden">
+                  <div class="w-9 h-9 rounded-lg bg-red-950 border border-red-600 text-red-400 flex items-center justify-center shrink-0 text-base font-bold">🔴</div>
+                  <div class="truncate">
+                    <div class="text-xs font-black text-red-300 truncate">${retidosCriticos8h.length} Veículo(s) SLA &gt;8h</div>
+                    <div class="text-[10px] text-red-400 font-bold truncate">Imobilização crítica estourada</div>
+                  </div>
+                </div>
+                <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-red-900/60 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
+              </div>` : ''}
+
+            <!-- ALERTA DE SLA EM ATENÇÃO >4H -->
+            ${retidosAlerta4h.length > 0 ? `
+              <div class="bg-slate-950 border border-amber-600/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
+                <div class="flex items-center gap-3 overflow-hidden">
+                  <div class="w-9 h-9 rounded-lg bg-amber-950 border border-amber-600 text-amber-300 flex items-center justify-center shrink-0 text-base font-bold">🟡</div>
+                  <div class="truncate">
+                    <div class="text-xs font-black text-amber-300 truncate">${retidosAlerta4h.length} Veículo(s) SLA &gt;4h</div>
+                    <div class="text-[10px] text-slate-400 truncate">Atenção tempo na oficina</div>
+                  </div>
+                </div>
+                <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
+              </div>` : ''}
+
+            <!-- ALERTA VEÍCULOS PARADOS EM ROTA -->
             ${veicParados > 0 ? `
               <div class="bg-slate-950 border border-red-900/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
@@ -1174,18 +1763,20 @@ function renderDashboardView() {
                 <button onclick="switchTab('rota_ocorrencias')" class="bg-red-900/40 hover:bg-red-900/80 border border-red-700 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver Rota</button>
               </div>` : ''}
 
-            ${veicRetidos > 0 ? `
+            <!-- ALERTA VEÍCULOS RETIDOS MANUTENÇÃO -->
+            ${veicRetidos > 0 && retidosCriticos8h.length === 0 && retidosAlerta4h.length === 0 ? `
               <div class="bg-slate-950 border border-amber-600/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
                   <div class="w-9 h-9 rounded-lg bg-amber-950/80 border border-amber-600/70 text-amber-400 flex items-center justify-center shrink-0 text-base font-bold">🔧</div>
                   <div class="truncate">
-                    <div class="text-xs font-black text-amber-300 truncate">${veicRetidos} Veículo(s) Retido(s) na Manutenção</div>
-                    <div class="text-[10px] text-slate-400 truncate">Disponibilidade reduzida da frota</div>
+                    <div class="text-xs font-black text-amber-300 truncate">${veicRetidos} Veículo(s) Retido(s)</div>
+                    <div class="text-[10px] text-slate-400 truncate">Oficina / Manutenção</div>
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota')" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver Frota</button>
               </div>` : ''}
 
+            <!-- ALERTA RETORNOS PENDENTES CD -->
             ${pendCd > 0 ? `
               <div class="bg-slate-950 border border-amber-900/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
@@ -1198,6 +1789,7 @@ function renderDashboardView() {
                 <button onclick="switchTab('cd_recepcao')" class="bg-amber-900/40 hover:bg-amber-900/80 border border-amber-700 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver CD</button>
               </div>` : ''}
 
+            <!-- ALERTA ANÁLISES PENDENTES -->
             ${abertasCausaRaiz.length > 0 ? `
               <div class="bg-slate-950 border border-orange-900/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
@@ -1216,36 +1808,70 @@ function renderDashboardView() {
       <div class="bg-slate-900 border border-blue-900/60 rounded-2xl p-5 shadow-2xl space-y-4">
         <div class="flex items-center justify-between border-b border-blue-800/60 pb-3">
           <h2 class="text-sm font-black text-blue-400 uppercase tracking-wider flex items-center gap-2">
-            <span>🚍</span> KPIS DO DEPARTAMENTO DE TRANSPORTE
+            <span>🚍</span> Transporte
           </h2>
-          <span class="text-xs text-slate-400 font-bold">Gestão de Frota, Viagens e Socorro</span>
+          <span class="text-xs text-slate-400 font-bold">Viagens, reentregas e manutenção</span>
         </div>
 
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3">
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Viagens Iniciadas</div>
             <div class="text-xl font-black text-blue-400 mt-1">${viagensIniciadas}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Escala ativa de entregas</div>
           </div>
+          
+          <!-- ÍNDICE DE REENTREGA POR VIAGEM (%) -->
+          <div class="bg-slate-950 border border-purple-900/60 p-3 rounded-xl">
+            <div class="text-[10px] text-purple-400 font-bold uppercase flex items-center gap-1">
+              <span>🔄</span> Reentrega / Viagem
+            </div>
+            <div class="text-xl font-black text-purple-300 mt-1">${indiceReentregaViagemPct}%</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">${reentregasPeriodo.length} reg. (${totalQtdReentregas} vol.)</div>
+          </div>
+
+          <!-- MTTR OPERACIONAL (HH:MM:SS) -->
+          <div class="bg-slate-950 border border-amber-900/60 p-3 rounded-xl">
+            <div class="text-[10px] text-amber-400 font-bold uppercase flex items-center gap-1">
+              <span>⏱️</span> MTTR Imobilização
+            </div>
+            <div class="text-lg font-black text-amber-300 mt-1 font-mono">${mttrMedioHhmmss}</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">Média oficina (hh:mm:ss)</div>
+          </div>
+
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Veículos Parados em Rota</div>
             <div class="text-xl font-black ${veicParados > 0 ? 'text-red-400 animate-pulse' : 'text-slate-300'} mt-1">${veicParados}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Socorro mecânico</div>
           </div>
+
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Trocas de Veículos</div>
             <div class="text-xl font-black text-purple-400 mt-1">${trocas.length}</div>
-            <div class="text-[10px] text-slate-500 mt-0.5">Substituições na rota</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Antes do carregamento</div>
           </div>
+
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Checklist Pendente</div>
             <div class="text-xl font-black ${chkNaoRealizado > 0 ? 'text-red-400' : 'text-slate-300'} mt-1">${chkNaoRealizado}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Saída não iniciada</div>
           </div>
-          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
-            <div class="text-[10px] text-slate-400 font-bold uppercase">Custo Socorro Mecânico</div>
-            <div class="text-lg font-black text-red-400 mt-1">R$ ${totalCustoSocorro.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-            <div class="text-[10px] text-slate-500 mt-0.5">Despesa de frota</div>
+
+          <!-- NOVO: OC OPERACIONAIS -->
+          <div class="bg-slate-950 border border-red-900/60 p-3 rounded-xl">
+            <div class="text-[10px] text-red-400 font-bold uppercase flex items-center gap-1">
+              <span>⚠️</span> Oc. Operacionais
+            </div>
+            <div class="text-xl font-black ${totOcOperacionais > 0 ? 'text-red-400' : 'text-slate-300'} mt-1">${totOcOperacionais}</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">${totOcOperacionaisPend} pendente(s)</div>
+          </div>
+
+          <!-- NOVO: FUSION INICIADO (%) -->
+          <div class="bg-slate-950 border border-emerald-900/60 p-3 rounded-xl">
+            <div class="text-[10px] text-emerald-400 font-bold uppercase flex items-center gap-1">
+              <span>🔗</span> Fusion Iniciado
+            </div>
+            <div class="text-xl font-black text-emerald-300 mt-1">${pctFusionIniciado}%</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">${totFusionIniciado} de ${viagensIniciadas} viagens</div>
           </div>
         </div>
       </div>
@@ -1254,12 +1880,12 @@ function renderDashboardView() {
       <div class="bg-slate-900 border border-emerald-900/60 rounded-2xl p-5 shadow-2xl space-y-4">
         <div class="flex items-center justify-between border-b border-emerald-800/60 pb-3">
           <h2 class="text-sm font-black text-emerald-400 uppercase tracking-wider flex items-center gap-2">
-            <span>🏭</span> KPIS DO DEPARTAMENTO DE OPERAÇÃO (CD & ARMAZÉM)
+            <span>🏭</span> Operação CD
           </h2>
-          <span class="text-xs text-slate-400 font-bold">Gestão Física e Movimentação</span>
+          <span class="text-xs text-slate-400 font-bold">Movimentação física, cortes e ocorrências</span>
         </div>
 
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Retornos Pendentes CD</div>
             <div class="text-xl font-black text-amber-400 mt-1">${pendCd}</div>
@@ -1285,6 +1911,14 @@ function renderDashboardView() {
             <div class="text-xl font-black text-orange-400 mt-1">${ocorrenciasCdList.length + faltasColabList.length}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Apontamentos internos</div>
           </div>
+          <!-- NOVO: FALTAS COLABORADORES -->
+          <div class="bg-slate-950 border border-red-900/60 p-3 rounded-xl">
+            <div class="text-[10px] text-red-400 font-bold uppercase flex items-center gap-1">
+              <span>🙍</span> Faltas Colaboradores
+            </div>
+            <div class="text-xl font-black ${totFaltasColab > 0 ? 'text-red-400' : 'text-slate-300'} mt-1">${totFaltasColab}</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Ausências registradas no CD</div>
+          </div>
         </div>
       </div>
 
@@ -1292,9 +1926,9 @@ function renderDashboardView() {
       <div class="bg-slate-900 border border-purple-900/60 rounded-2xl p-5 shadow-2xl space-y-4">
         <div class="flex items-center justify-between border-b border-purple-800/60 pb-3">
           <h2 class="text-sm font-black text-purple-400 uppercase tracking-wider flex items-center gap-2">
-            <span>👔</span> KPIS DO DEPARTAMENTO DE GESTÃO & MONITORAMENTO
+            <span>👔</span> Gestão & SAC
           </h2>
-          <span class="text-xs text-slate-400 font-bold">Desempenho, Lead Time e Apuração</span>
+          <span class="text-xs text-slate-400 font-bold">Lead time, causas raiz e auditoria</span>
         </div>
 
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -1304,23 +1938,26 @@ function renderDashboardView() {
             <div class="text-lg font-black text-emerald-400 mt-1">R$ ${totalValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">${devs.length} devolução(ões)</div>
           </div>
-          <!-- CARD LEAD TIME DE ABERTURA (NOVO) -->
+          
+          <!-- CARD LEAD TIME DE ABERTURA (HH:MM:SS) -->
           <div class="bg-slate-950 border border-amber-900/60 p-3 rounded-xl">
             <div class="text-[10px] text-amber-400 font-bold uppercase flex items-center gap-1">
               <span>⏱️</span> Lead Time Abertura
             </div>
-            <div class="text-xl font-black text-amber-300 mt-1">${leadTimeMedioHoras} h</div>
-            <div class="text-[10px] text-slate-400 mt-0.5">Até ação do gestor</div>
+            <div class="text-lg font-black text-amber-300 mt-1 font-mono">${leadTimeMedioHhmmss}</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">Até ação gestor (hh:mm:ss)</div>
           </div>
-          <!-- CARD TAXA DE COMPLETUDE DE REGISTRO (NOVO) -->
-          <div class="bg-slate-950 border border-blue-900/60 p-3 rounded-xl">
+
+          <!-- CARD TAXA DE COMPLETUDE DE REGISTRO -->
+          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-blue-400 font-bold uppercase flex items-center gap-1">
               <span>✅</span> Taxa de Completude
             </div>
             <div class="text-xl font-black text-blue-300 mt-1">${taxaCompletude}%</div>
-            <div class="text-[10px] text-slate-400 mt-0.5">100% dos Campos + Foto/Vídeo</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">100% Campos + Foto/Vídeo</div>
           </div>
-          <!-- CARD TAXA DE RESPONSABILIZAÇÃO MONITORAMENTO (NOVO) -->
+
+          <!-- CARD TAXA DE RESPONSABILIZAÇÃO MONITORAMENTO -->
           <div class="bg-slate-950 border border-emerald-900/60 p-3 rounded-xl">
             <div class="text-[10px] text-emerald-400 font-bold uppercase flex items-center gap-1">
               <span>🔍</span> Responsabilização
@@ -1328,12 +1965,14 @@ function renderDashboardView() {
             <div class="text-lg font-black text-emerald-300 mt-1">${pctIdentificados}% Identif.</div>
             <div class="text-[10px] text-red-400 mt-0.5">${pctNaoIdentificados}% Não Identif.</div>
           </div>
+
           <!-- CARD DESCONTOS GESTOR -->
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Descontos Gerados</div>
             <div class="text-xl font-black text-purple-300 mt-1">${totDescontosGestor}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Produtividade</div>
           </div>
+
           <!-- CARD CAUSA RAIZ PENDENTE -->
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Análises Pendentes</div>
@@ -1348,17 +1987,17 @@ function renderDashboardView() {
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-800/60 pb-3">
           <div>
             <h2 class="text-sm font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
-              <span>⚠️</span> PAINEL DE RECORRÊNCIAS E REINCIDÊNCIAS INTEGRADAS
+              <span>⚠️</span> Recorrências
             </h2>
-            <p class="text-xs text-slate-400">Mapeamento automatizado de falhas repetidas por Veículo, Rota, Colaborador e Prestador</p>
+            <p class="text-xs text-slate-400">Mapeamento por veículo, rota e colaboradores</p>
           </div>
 
           <!-- BOTÕES DE SUBABAS DE RECORRÊNCIA -->
           <div class="flex gap-1 bg-slate-950 p-1.5 rounded-xl border border-slate-800 shrink-0">
-            <button onclick="window._dashRecorrenciaTab='veiculo'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'veiculo' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">🚛 Veículo</button>
-            <button onclick="window._dashRecorrenciaTab='rota'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'rota' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">📍 Rota</button>
-            <button onclick="window._dashRecorrenciaTab='colaborador'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'colaborador' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">🏭 Colaborador (CD)</button>
-            <button onclick="window._dashRecorrenciaTab='prestador'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'prestador' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">👤 Prestador (Rota)</button>
+            <button onclick="switchDashRecorrenciaTab('veiculo')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'veiculo' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">🚛 Veículo</button>
+            <button onclick="switchDashRecorrenciaTab('rota')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'rota' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">📍 Rota</button>
+            <button onclick="switchDashRecorrenciaTab('colaborador')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'colaborador' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">🏭 Colaborador (CD)</button>
+            <button onclick="switchDashRecorrenciaTab('prestador')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'prestador' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">👤 Prestador (Rota)</button>
           </div>
         </div>
 
@@ -1432,14 +2071,14 @@ function renderSacAberturaView() {
     <div class="max-w-4xl mx-auto space-y-5">
       <div>
         <h1 class="text-xl font-black text-white flex items-center gap-2"><span>📝</span> Devolução SAC</h1>
-        <p class="text-xs text-slate-400">Número de protocolo gerado automaticamente • Seleção direta das cargas da Largada</p>
+        <p class="text-xs text-slate-400">Abertura de protocolo e registro de ocorrência</p>
       </div>
 
       <form onsubmit="handleSacAberturaSubmit(event)" class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-xl space-y-6">
 
         <!-- SEÇÃO 1: CABEÇALHO -->
         <div class="space-y-3">
-          <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider border-b border-slate-800 pb-2">1. Cabeçalho da Devolução</h3>
+          <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider border-b border-slate-800 pb-2">1. Carga</h3>
 
           <div class="bg-emerald-950/30 border border-emerald-800/50 rounded-lg p-3 flex items-center gap-3">
             <div class="text-emerald-400 text-xl">🔖</div>
@@ -1453,7 +2092,7 @@ function renderSacAberturaView() {
             <div>
               <label class="block text-xs font-semibold text-slate-300 mb-1">Número da Carga (Validação da Largada) *</label>
               <input type="text" id="sac-carga-numero" list="cargas-list" required placeholder="Digite ou selecione o Nº da Carga (Ex: 43111)" 
-                oninput="onSacCargaSelect(this.value)" onchange="onSacCargaSelect(this.value)"
+                oninput="forcarMaiuscula(this); onSacCargaSelect(this.value)" onchange="onSacCargaSelect(this.value)"
                 class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded-lg p-2 text-xs focus:border-emerald-500 focus:outline-none">
               <datalist id="cargas-list">
                 ${listaCargasValidadas.map(c => `<option value="${c.carga}">Carga Nº ${c.carga} | Rota: ${c.rota || 'Sem Rota'}${c.placa ? ` | ${c.placa}` : ''}</option>`).join('')}
@@ -1496,7 +2135,7 @@ function renderSacAberturaView() {
 
         <!-- SEÇÃO 2: IDENTIFICAÇÃO -->
         <div class="space-y-3">
-          <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider border-b border-slate-800 pb-2">2. Identificação da Ocorrência</h3>
+          <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider border-b border-slate-800 pb-2">2. Ocorrência & Cliente</h3>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label class="block text-xs font-semibold text-slate-300 mb-1">Motivo Reclamado *</label>
@@ -1507,7 +2146,7 @@ function renderSacAberturaView() {
             </div>
             <div>
               <label class="block text-xs font-semibold text-slate-300 mb-1">Nota Fiscal (NF)</label>
-              <input type="text" id="sac-nf" placeholder="Ex: NF-99412 (opcional)" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+              <input type="text" id="sac-nf" placeholder="Ex: NF-99412 (opcional)" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs" oninput="forcarMaiuscula(this)">
             </div>
           </div>
 
@@ -1515,7 +2154,7 @@ function renderSacAberturaView() {
           <div class="relative">
             <label class="block text-xs font-semibold text-slate-300 mb-1">Cliente * (busque por código ou nome)</label>
             <input type="text" id="sac-cliente-busca" placeholder="Digite código ou nome do cliente (Ex: 19, Baratao, Campelo)..." 
-              onfocus="filtrarClientes(this.value)" oninput="filtrarClientes(this.value)" autocomplete="off"
+              onfocus="filtrarClientes(this.value)" oninput="forcarMaiuscula(this); filtrarClientes(this.value)" autocomplete="off"
               class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs focus:border-emerald-500 focus:outline-none">
             <input type="hidden" id="sac-cliente-id">
             <div id="sac-cliente-selecionado" class="hidden mt-1.5 bg-emerald-950/40 border border-emerald-800/60 rounded-lg px-3 py-2 text-xs flex items-center justify-between">
@@ -1553,7 +2192,7 @@ function renderSacAberturaView() {
         <!-- SEÇÃO 3: PRODUTOS -->
         <div class="space-y-3">
           <div class="flex items-center justify-between border-b border-slate-800 pb-2">
-            <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">3. Produtos Devolvidos</h3>
+            <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider">3. Itens & Produtos</h3>
             <div class="flex gap-2 items-center">
               <label class="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer">
                 <input type="checkbox" id="chk-sem-itens" onchange="toggleSemItens(this.checked)" class="rounded bg-slate-800">
@@ -1569,7 +2208,7 @@ function renderSacAberturaView() {
 
           <div id="sem-itens-box" class="hidden bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 text-xs">
             <div class="font-bold text-amber-300 mb-2">⚠️ Informe o motivo de não ter produtos:</div>
-            <textarea id="obs-sem-itens" rows="2" placeholder="Ex: Devolução apenas fiscal, item reentregue, etc." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs"></textarea>
+            <textarea id="obs-sem-itens" rows="2" placeholder="Ex: Devolução apenas fiscal, item reentregue, etc." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
           </div>
 
           <div id="items-table-container" class="overflow-x-auto -mx-1">
@@ -1590,7 +2229,7 @@ function renderSacAberturaView() {
 
         <!-- SEÇÃO 4: VALOR, FOTO E VÍDEO -->
         <div class="space-y-3">
-          <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider border-b border-slate-800 pb-2">4. Valor, Foto & Vídeo da Avaria</h3>
+          <h3 class="text-xs font-bold text-emerald-400 uppercase tracking-wider border-b border-slate-800 pb-2">4. Valores & Mídias</h3>
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block text-xs font-semibold text-slate-300 mb-1">Valor Total Reclamado (R$) *</label>
@@ -1611,7 +2250,7 @@ function renderSacAberturaView() {
           </div>
           <div>
             <label class="block text-xs font-semibold text-slate-300 mb-1">Detalhamento da Ocorrência *</label>
-            <textarea id="sac-detalhamento" rows="3" required placeholder="Descreva os detalhes passados pelo cliente ou motorista..." class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs focus:border-emerald-500 focus:outline-none"></textarea>
+            <textarea id="sac-detalhamento" rows="3" required placeholder="Descreva os detalhes passados pelo cliente ou motorista..." class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs focus:border-emerald-500 focus:outline-none" oninput="forcarMaiuscula(this)"></textarea>
           </div>
         </div>
 
@@ -1960,23 +2599,89 @@ function toggleSemItens(checked) {
 }
 
 // ===== PRIORIDADE 2: COMPONENTE CENTRAL DE REAPROVEITAMENTO DE CARGA =====
+// ===== COMPONENTE CENTRAL DE REAPROVEITAMENTO DE CARGA (INTEGRAÇÃO TOTAL) =====
 // Consolida cargas vindas da Largada (Controle de Viagens) + Cadastro Mestre
-// de Cargas, para uso em qualquer formulário que precise sugerir/validar
-// um número de carga (Devolução SAC, Chamados em Rota, Oc. Operacionais).
+// de Cargas Lançadas + Ocorrências Operacionais, com resolução automática de IDs (Motorista, Ajudante, Placa).
 function getListaCargasValidadas() {
-  const cargasViagens = (db.getControleViagens && db.getControleViagens()) || [];
+  const viagens = (db.getControleViagens && db.getControleViagens()) || [];
   const cargasMaster = (db.data && db.data.cargas) || [];
+  const motoristas = (db.data && db.data.motoristas) || [];
+  const ajudantes = (db.data && db.data.ajudantes) || [];
+  const veiculos = (db.data && db.data.veiculos) || [];
+  const ocRota = (db.getOcorrenciasRota && db.getOcorrenciasRota()) || (db.data && db.data.ocorrencias_rota) || [];
+  const ocDev = (db.getDevolucoes && db.getDevolucoes()) || (db.data && db.data.ocorrencias_devolucao) || [];
+  const reent = (db.getReentregas && db.getReentregas()) || (db.data && db.data.reentregas) || [];
+  const trocas = (db.getTrocasVeiculos && db.getTrocasVeiculos()) || (db.data && db.data.trocas_veiculos) || [];
+
   const lista = [];
-  cargasViagens.forEach(v => {
-    if (v.carga && !lista.find(x => String(x.carga) === String(v.carga))) {
-      lista.push({ carga: String(v.carga), rota: v.rota, placa: v.placa, motorista: v.motorista, ajudante: v.ajudante });
+  const addIfNew = (item) => {
+    const cNum = String(item.carga || '').trim();
+    if (!cNum) return;
+    const existing = lista.find(x => String(x.carga).toUpperCase() === cNum.toUpperCase());
+    if (!existing) {
+      lista.push({
+        carga: cNum,
+        rota: item.rota || '',
+        placa: item.placa || '',
+        motorista: item.motorista || '',
+        ajudante: item.ajudante || ''
+      });
+    } else {
+      if (!existing.rota && item.rota) existing.rota = item.rota;
+      if (!existing.placa && item.placa) existing.placa = item.placa;
+      if (!existing.motorista && item.motorista) existing.motorista = item.motorista;
+      if (!existing.ajudante && item.ajudante) existing.ajudante = item.ajudante;
     }
-  });
+  };
+
+  // 1. Cargas Lançadas no Cadastro Mestre (com resolução de IDs)
   cargasMaster.forEach(c => {
-    if (c.numero_carga && !lista.find(x => String(x.carga) === String(c.numero_carga))) {
-      lista.push({ carga: String(c.numero_carga), rota: c.rota_nome || c.rota || '', placa: '', motorista: '', ajudante: '' });
+    let motNome = c.motorista_nome || c.motorista || '';
+    if (!motNome && c.motorista_id) {
+      const m = motoristas.find(mot => String(mot.id) === String(c.motorista_id));
+      if (m) motNome = m.nome || m;
     }
+    let ajuNome = c.ajudante_nome || c.ajudante || '';
+    if (!ajuNome && c.ajudante_id) {
+      const a = ajudantes.find(aju => String(aju.id) === String(c.ajudante_id));
+      if (a) ajuNome = a.nome || a;
+    }
+    let placa = c.placa || '';
+    if (!placa && c.veiculo_id) {
+      const ve = veiculos.find(v => String(v.id) === String(c.veiculo_id));
+      if (ve) placa = ve.placa || ve;
+    }
+    addIfNew({
+      carga: c.numero_carga || c.carga || '',
+      rota: c.rota_nome || c.rota || '',
+      placa: placa,
+      motorista: motNome,
+      ajudante: ajuNome
+    });
   });
+
+  // 2. Cargas do Controle de Viagens (Largada)
+  viagens.forEach(v => {
+    addIfNew({
+      carga: v.carga || v.carga_numero || '',
+      rota: v.rota || v.rota_nome || '',
+      placa: v.placa || '',
+      motorista: v.motorista || v.motorista_nome || '',
+      ajudante: v.ajudante || v.ajudante_nome || ''
+    });
+  });
+
+  // 3. Outros módulos operacionais (Devolução, Rota, Reentregas, Trocas)
+  [...ocDev, ...ocRota, ...reent, ...trocas].forEach(o => {
+    addIfNew({
+      carga: o.carga_numero || o.carga || '',
+      rota: o.rota_nome || o.carga_rota || o.rota || '',
+      placa: o.veiculo_placa || o.placa || '',
+      motorista: o.motorista_nome || o.motorista || '',
+      ajudante: o.ajudante_nome || o.ajudante || ''
+    });
+  });
+
   return lista;
 }
 
@@ -1984,25 +2689,87 @@ function getListaCargasValidadas() {
 function renderDatalistCargas(datalistId) {
   const lista = getListaCargasValidadas();
   return `<datalist id="${datalistId}">
-    ${lista.map(c => `<option value="${c.carga}">Carga Nº ${c.carga} | Rota: ${c.rota || 'Sem Rota'}${c.placa ? ` | ${c.placa}` : ''}</option>`).join('')}
+    ${lista.map(c => `<option value="${c.carga}">Carga Nº ${c.carga} | Rota: ${c.rota || 'Sem Rota'}${c.placa ? ` | ${c.placa}` : ''}${c.motorista ? ` | ${c.motorista}` : ''}</option>`).join('')}
   </datalist>`;
 }
 
 // Busca os dados derivados (rota/placa/motorista/ajudante) de uma carga,
-// cruzando Controle de Viagens (Largada) e o Cadastro Mestre de Cargas.
+// cruzando Cargas Lançadas, Controle de Viagens (Largada) e Ocorrências.
 function buscarCargaInfo(cargaNum) {
   const cNum = String(cargaNum || '').trim();
-  if (!cNum) return { found: false, rotaName: '', placa: '', motoristaName: '', ajudanteName: '' };
+  if (!cNum) return { found: false, rotaName: '', placa: '', motoristaName: '', ajudanteName: '', data: '' };
+
   const viagens = (db.getControleViagens && db.getControleViagens()) || [];
   const cargas = (db.data && db.data.cargas) || [];
-  const v = viagens.find(x => String(x.carga).trim() === cNum);
-  const c = cargas.find(x => String(x.numero_carga).trim() === cNum);
+  const motoristas = (db.data && db.data.motoristas) || [];
+  const ajudantes = (db.data && db.data.ajudantes) || [];
+  const veiculos = (db.data && db.data.veiculos) || [];
+
+  const cUpper = cNum.toUpperCase();
+
+  // 1. Busca no Cadastro de Cargas Lançadas
+  const c = cargas.find(x => String(x.numero_carga || x.carga || '').trim().toUpperCase() === cUpper);
+  let cMotoristaNome = '';
+  let cAjudanteNome = '';
+  let cPlaca = '';
+  let cRotaNome = '';
+  let cData = '';
+
+  if (c) {
+    cRotaNome = c.rota_nome || c.rota || '';
+    cData = c.data_saida || c.data || '';
+    if (c.motorista_nome || c.motorista) {
+      cMotoristaNome = c.motorista_nome || c.motorista;
+    } else if (c.motorista_id) {
+      const mot = motoristas.find(m => String(m.id) === String(c.motorista_id));
+      if (mot) cMotoristaNome = mot.nome || mot;
+    }
+
+    if (c.ajudante_nome || c.ajudante) {
+      cAjudanteNome = c.ajudante_nome || c.ajudante;
+    } else if (c.ajudante_id) {
+      const aju = ajudantes.find(a => String(a.id) === String(c.ajudante_id));
+      if (aju) cAjudanteNome = aju.nome || aju;
+    }
+
+    if (c.placa) {
+      cPlaca = c.placa;
+    } else if (c.veiculo_id) {
+      const veic = veiculos.find(ve => String(ve.id) === String(c.veiculo_id));
+      if (veic) cPlaca = veic.placa || veic;
+    }
+  }
+
+  // 2. Busca no Controle de Viagens (Largada)
+  const v = viagens.find(x => String(x.carga || x.carga_numero || '').trim().toUpperCase() === cUpper);
+
+  // 3. Busca nas demais tabelas operacionais
+  const ocRota = (db.getOcorrenciasRota && db.getOcorrenciasRota()) || (db.data && db.data.ocorrencias_rota) || [];
+  const ocDev = (db.getDevolucoes && db.getDevolucoes()) || (db.data && db.data.ocorrencias_devolucao) || [];
+  const reent = (db.getReentregas && db.getReentregas()) || (db.data && db.data.reentregas) || [];
+  const trocas = (db.getTrocasVeiculos && db.getTrocasVeiculos()) || (db.data && db.data.trocas_veiculos) || [];
+
+  const foundDev = ocDev.find(x => String(x.carga_numero || x.carga || '').trim().toUpperCase() === cUpper);
+  const foundRota = ocRota.find(x => String(x.carga_numero || x.carga || '').trim().toUpperCase() === cUpper);
+  const foundRe = reent.find(x => String(x.carga_numero || x.carga || '').trim().toUpperCase() === cUpper);
+  const foundTroca = trocas.find(x => String(x.carga_numero || x.carga || '').trim().toUpperCase() === cUpper);
+  const itemOp = foundDev || foundRota || foundRe || foundTroca;
+
+  const rotaName = (v ? (v.rota || v.rota_nome) : '') || cRotaNome || (itemOp ? (itemOp.rota_nome || itemOp.carga_rota || itemOp.rota) : '') || '';
+  const placa = (v ? v.placa : '') || cPlaca || (itemOp ? (itemOp.veiculo_placa || itemOp.placa) : '') || '';
+  const motoristaName = (v ? (v.motorista || v.motorista_nome) : '') || cMotoristaNome || (itemOp ? (itemOp.motorista_nome || itemOp.motorista) : '') || '';
+  const ajudanteName = (v ? (v.ajudante || v.ajudante_nome) : '') || cAjudanteNome || (itemOp ? (itemOp.ajudante_nome || itemOp.ajudante) : '') || '';
+  const dataVal = (v ? (v.data_saida || v.data) : '') || cData || (itemOp ? (itemOp.data_saida || itemOp.data || itemOp.data_ocorrencia) : '') || '';
+
+  const found = !!(v || c || itemOp || rotaName || placa || motoristaName);
+
   return {
-    found: !!(v || c),
-    rotaName: (v ? v.rota : (c ? c.rota_nome : '')) || '',
-    placa: (v ? v.placa : '') || '',
-    motoristaName: (v ? v.motorista : (c ? (c.motorista_nome || c.motorista) : '')) || '',
-    ajudanteName: (v ? v.ajudante : (c ? (c.ajudante_nome || c.ajudante) : '')) || '',
+    found: found,
+    rotaName: rotaName,
+    placa: placa,
+    motoristaName: motoristaName,
+    ajudanteName: ajudanteName,
+    data: dataVal,
     motoristaId: c ? c.motorista_id : null,
     ajudanteId: c ? c.ajudante_id : null,
     veiculoId: c ? c.veiculo_id : null
@@ -2039,6 +2806,16 @@ function atualizarAvisoCargaNaoEncontrada(inputId, avisoId, cargaNum) {
         let opt = Array.from(funcSel.options).find(o => norm(o.value).includes(target) || target.includes(norm(o.value)));
         if (opt) funcSel.value = opt.value;
       }
+    } else if (inputId === 'md-edit-carga') {
+      // ETAPA 4: mesma lógica dos modais md-oc2/md-occ, aplicada ao modal
+      // "Editar Ocorrência do CD" — só preenche se o colaborador ainda
+      // estiver vazio, nunca sobrescreve uma seleção manual já feita.
+      const colabSel = document.getElementById('md-edit-colab');
+      if (colabSel && !colabSel.value && (info.motoristaName || info.ajudanteName)) {
+        const target = norm(info.motoristaName || info.ajudanteName);
+        let opt = Array.from(colabSel.options).find(o => norm(o.value).includes(target) || target.includes(norm(o.value)));
+        if (opt) colabSel.value = opt.value;
+      }
     }
   }
 }
@@ -2072,7 +2849,7 @@ function abrirModalConfirmacaoAdmin({ titulo, mensagem, palavraConfirmacao = '',
       ${palavraConfirmacao ? `
       <div>
         <label class="block text-[10px] text-amber-400 font-bold mb-1">Para confirmar, digite "${palavraConfirmacao}"</label>
-        <input type="text" id="admin-confirm-palavra" autocomplete="off" class="w-full bg-slate-800 border border-amber-700 text-amber-300 font-bold rounded p-2 text-xs uppercase" placeholder="${palavraConfirmacao}">
+        <input type="text" id="admin-confirm-palavra" autocomplete="off" class="w-full bg-slate-800 border border-amber-700 text-amber-300 font-bold rounded p-2 text-xs uppercase" placeholder="${palavraConfirmacao}" oninput="forcarMaiuscula(this)">
       </div>` : ''}
       <div id="admin-confirm-erro" class="hidden text-[11px] text-red-400 font-semibold"></div>
       <div class="flex justify-end gap-2 pt-1">
@@ -2241,7 +3018,7 @@ function addItemRow() {
   tr.innerHTML = `
     <td class="p-1.5 relative">
       <input type="text" list="produtos-list" placeholder="Digite código ou descrição (Ex: 25555, ASA)..."
-        oninput="onProdutoSelect(this, '${rowId}')" onchange="onProdutoSelect(this, '${rowId}')" autocomplete="off"
+        oninput="forcarMaiuscula(this); onProdutoSelect(this, '${rowId}')" onchange="onProdutoSelect(this, '${rowId}')" autocomplete="off"
         class="item-prod-busca w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs focus:border-emerald-500 focus:outline-none">
       <input type="hidden" class="item-prod-id">
     </td>
@@ -2434,9 +3211,9 @@ function renderSacInvestigacaoView() {
       <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
         <div>
           <h1 class="text-xl font-black text-white flex items-center gap-2">
-            <span>🔍</span> Análise e Monitoramento de Devoluções
+            <span>🔍</span> Análise & Causa Raiz
           </h1>
-          <p class="text-xs text-slate-400">Apuração da causa raiz, classificação do tipo de erro, fotos e encaminhamento ao Gestor</p>
+          <p class="text-xs text-slate-400">Apuração técnica, classificação e encaminhamento</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
@@ -2451,11 +3228,11 @@ function renderSacInvestigacaoView() {
 
           <!-- Abas Pendentes / Monitorados -->
           <div class="flex gap-1 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg">
-            <button onclick="activeInvestigacaoSubTab='pendentes'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeInvestigacaoSubTab==='pendentes'?'bg-amber-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
+            <button onclick="switchInvestigacaoSubTab('pendentes')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeInvestigacaoSubTab==='pendentes'?'bg-amber-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
               <span>⏳</span> Pendentes (${pendentes.length})
             </button>
-            <button onclick="activeInvestigacaoSubTab='monitorados'; renderApp()" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeInvestigacaoSubTab==='monitorados'?'bg-emerald-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>✅</span> Já Monitorados (${monitorados.length})
+            <button onclick="switchInvestigacaoSubTab('monitorados')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeInvestigacaoSubTab==='monitorados'?'bg-emerald-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
+              <span>✅</span> Monitorados (${monitorados.length})
             </button>
           </div>
         </div>
@@ -2522,7 +3299,7 @@ function renderSacInvestigacaoView() {
                   <option value="">-- Selecione o Tipo de Erro --</option>
                   ${erros.map(e => `<option value="${e}" ${d.tipo_erro===e?'selected':''}>${e}</option>`).join('')}
                 </select>
-                <input type="text" id="inv-erro-outro-${d.id}" value="${d.tipo_erro_outro||''}" placeholder="Especifique o outro erro..." class="${d.tipo_erro==='OUTRO'?'':'hidden'} mt-1 w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+                <input type="text" id="inv-erro-outro-${d.id}" value="${d.tipo_erro_outro||''}" placeholder="Especifique o outro erro..." class="${d.tipo_erro==='OUTRO'?'':'hidden'} mt-1 w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
               </div>
 
               <div class="grid grid-cols-2 gap-2">
@@ -2544,7 +3321,7 @@ function renderSacInvestigacaoView() {
 
               <div>
                 <label class="block text-[10px] text-slate-300 mb-1">Ação Tomada / Encaminhamento *</label>
-                <textarea id="inv-acao-${d.id}" required rows="2" placeholder="Descreva a ação tomada ou orientação dada..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">${d.acao_tomada||''}</textarea>
+                <textarea id="inv-acao-${d.id}" required rows="2" placeholder="Descreva a ação tomada ou orientação dada..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${d.acao_tomada||''}</textarea>
               </div>
 
               <div>
@@ -2640,7 +3417,7 @@ function editarInvestigacaoModal(id) {
 
         <div>
           <label class="block text-[10px] text-slate-300 mb-1">Ação Tomada / Encaminhamento *</label>
-          <textarea id="ed-inv-acao" rows="2" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">${d.acao_tomada||''}</textarea>
+          <textarea id="ed-inv-acao" rows="2" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${d.acao_tomada||''}</textarea>
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
@@ -3011,18 +3788,18 @@ function renderGestaoGestorView() {
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 class="text-xl font-black text-white flex items-center gap-2">
-            <span>👔</span> Gestão de Tratativas
+            <span>👔</span> Tratativas do Gestor
           </h1>
-          <p class="text-xs text-slate-400">Acompanhamento de pareceres, apurações por setor, tipo de erro, ações e descontos</p>
+          <p class="text-xs text-slate-400">Pareceres operacionais, ações e descontos</p>
         </div>
 
         <!-- SUBABAS PENDENTES / CONCLUÍDOS -->
         <div class="flex gap-1 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg shrink-0">
-          <button onclick="window._activeGestorSubTab='pendentes'; renderApp()" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeGestorTab === 'pendentes' ? 'bg-amber-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>⏳</span> Ocorrências Pendentes (${todosPendentes.length})
+          <button onclick="switchGestorSubTab('pendentes')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeGestorTab === 'pendentes' ? 'bg-amber-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+            <span>⏳</span> Pendentes (${todosPendentes.length})
           </button>
-          <button onclick="window._activeGestorSubTab='concluidos'; renderApp()" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeGestorTab === 'concluidos' ? 'bg-emerald-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>✅</span> Ocorrências Concluídas (${todosConcluidos.length})
+          <button onclick="switchGestorSubTab('concluidos')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeGestorTab === 'concluidos' ? 'bg-emerald-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+            <span>✅</span> Concluídas (${todosConcluidos.length})
           </button>
         </div>
       </div>
@@ -3054,7 +3831,7 @@ function renderGestaoGestorView() {
         <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end pt-1">
           <div>
             <label class="block text-[10px] text-cyan-400 font-bold mb-1">Nº da Carga</label>
-            <input type="text" id="filtro-gestor-carga" value="${filtroCarga}" placeholder="Ex: 43125..." oninput="aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
+            <input type="text" id="filtro-gestor-carga" value="${filtroCarga}" placeholder="Ex: 43125..." oninput="forcarMaiuscula(this); aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
           </div>
           <div>
             <label class="block text-[10px] text-amber-400 font-bold mb-1">Filtro: Tipo de Erro</label>
@@ -3134,7 +3911,7 @@ function renderGestaoGestorView() {
 
               <div>
                 <label class="block text-[10px] text-slate-400 mb-1">Ação do Gestor / Encaminhamento *</label>
-                <textarea id="gestor-acao-${d.id}" rows="2" required placeholder="Descreva a providência tomada pelo gestor..." class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">${d.acao_gestor||''}</textarea>
+                <textarea id="gestor-acao-${d.id}" rows="2" required placeholder="Descreva a providência tomada pelo gestor..." class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs" oninput="forcarMaiuscula(this)">${d.acao_gestor||''}</textarea>
               </div>
 
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
@@ -3287,18 +4064,18 @@ function renderCdRecepcaoView() {
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 class="text-xl font-black text-white flex items-center gap-2">
-            <span>📦</span> Centro de Distribuição (CD) & Retorno Físico
+            <span>📦</span> Retorno Físico CD
           </h1>
-          <p class="text-xs text-slate-400">Conferência item a item, destinação de estoque, controle de validade e negociação em rota</p>
+          <p class="text-xs text-slate-400">Conferência de entrada, destinação e negociação</p>
         </div>
 
         <!-- SUBABAS DE RECEPÇÃO CD -->
         <div class="flex gap-1 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg shrink-0">
-          <button onclick="window._activeCdSubTab='recepcao'; renderApp()" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeCdSubTab === 'recepcao' ? 'bg-amber-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📥</span> Conferência & Entradas (${pendentes.length} pendentes)
+          <button onclick="switchCdSubTab('recepcao')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeCdSubTab === 'recepcao' ? 'bg-amber-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+            <span>📥</span> Conferência & Entrada (${pendentes.length} pendentes)
           </button>
-          <button onclick="window._activeCdSubTab='destinacao'; renderApp()" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeCdSubTab === 'destinacao' ? 'bg-emerald-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📋</span> Destinação de Produtos por Item (${todosItensDestinados.length})
+          <button onclick="switchCdSubTab('destinacao')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeCdSubTab === 'destinacao' ? 'bg-emerald-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+            <span>📋</span> Destinação de Itens (${todosItensDestinados.length})
           </button>
         </div>
       </div>
@@ -3308,7 +4085,7 @@ function renderCdRecepcaoView() {
         <div class="bg-slate-900 border border-amber-800/60 rounded-xl overflow-hidden shadow-xl">
           <div class="p-4 border-b border-slate-800 flex items-center justify-between">
             <div>
-              <h3 class="font-bold text-white text-sm">⚠️ Retornos Pendentes de Entrada</h3>
+              <h3 class="font-bold text-white text-sm">⚠️ Pendentes de Entrada</h3>
               <p class="text-[10px] text-slate-400 mt-0.5">Devoluções aguardando conferência física no CD</p>
             </div>
             <span class="bg-amber-500/20 text-amber-300 border border-amber-500/50 px-3 py-1 rounded-full text-xs font-black">${pendentes.length} pendente${pendentes.length!==1?'s':''}</span>
@@ -3330,8 +4107,8 @@ function renderCdRecepcaoView() {
         <!-- PAINEL 2: ACOMPANHAMENTO / HISTÓRICO -->
         <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
           <div class="p-4 border-b border-slate-800">
-            <h3 class="font-bold text-white text-sm">📊 Acompanhamento de Retornos</h3>
-            <p class="text-[10px] text-slate-400 mt-0.5">Histórico de entradas confirmadas no CD</p>
+            <h3 class="font-bold text-white text-sm">📊 Histórico de Entradas</h3>
+            <p class="text-[10px] text-slate-400 mt-0.5">Entradas confirmadas no CD</p>
           </div>
 
           <div class="p-4 border-b border-slate-800 grid grid-cols-1 sm:grid-cols-5 gap-3">
@@ -3345,15 +4122,15 @@ function renderCdRecepcaoView() {
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 font-semibold mb-1">Veículo / Placa</label>
-              <input type="text" id="cd-filtro-placa" value="${fPlaca}" placeholder="Ex: TVA8121" onchange="aplicarFiltroCd()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <input type="text" id="cd-filtro-placa" value="${fPlaca}" placeholder="Ex: TVA8121" onchange="aplicarFiltroCd()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 font-semibold mb-1">Rota</label>
-              <input type="text" id="cd-filtro-rota" value="${fRota}" placeholder="Nome da rota" onchange="aplicarFiltroCd()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <input type="text" id="cd-filtro-rota" value="${fRota}" placeholder="Nome da rota" onchange="aplicarFiltroCd()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 font-semibold mb-1">Nº da Carga</label>
-              <input type="text" id="cd-filtro-carga" value="${fCarga}" placeholder="Ex: 10450" onchange="aplicarFiltroCd()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <input type="text" id="cd-filtro-carga" value="${fCarga}" placeholder="Ex: 10450" onchange="aplicarFiltroCd()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
             </div>
           </div>
 
@@ -3529,7 +4306,7 @@ function openEditarItemDestinoModal(itemId, devId) {
 
           <div>
             <label class="block font-bold text-slate-300 mb-1">Observações do CD</label>
-            <input type="text" id="edit-item-obs" value="${item.observacao || ''}" placeholder="Ex: Caixa avariada, reembalado..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+            <input type="text" id="edit-item-obs" value="${item.observacao || ''}" placeholder="Ex: Caixa avariada, reembalado..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
           </div>
 
           <div class="pt-2 flex gap-2">
@@ -3623,7 +4400,7 @@ function openCdModal(devId) {
 
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Observação do Item (opcional)</label>
-            <input type="text" id="item-obs-geral-${idx}" placeholder="Ex: Lote 45B - Embalagem amassada" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-1.5 text-xs">
+            <input type="text" id="item-obs-geral-${idx}" placeholder="Ex: Lote 45B - Embalagem amassada" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
           </div>
 
           <!-- Área expandida de Divergência FÍSICA -->
@@ -3634,7 +4411,7 @@ function openCdModal(devId) {
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 font-bold mb-0.5">Observação da Falta</label>
-              <input type="text" id="item-obs-${idx}" placeholder="Ex: Produto faltante na carga" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs">
+              <input type="text" id="item-obs-${idx}" placeholder="Ex: Produto faltante na carga" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
             </div>
           </div>
         </div>`).join('')}
@@ -3924,7 +4701,9 @@ let activeViagensSubTab = 'largada';
 function switchViagensSubTab(sub) {
   activeViagensSubTab = sub;
   renderApp();
+  scrollToTop();
 }
+window.switchViagensSubTab = switchViagensSubTab;
 
 function renderControleViagensView() {
   let contentHtml = renderViagensLargadaSubTab();
@@ -3944,9 +4723,9 @@ function renderControleViagensView() {
       <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
         <div>
           <h1 class="text-xl font-black text-white flex items-center gap-2">
-            <span>🚍</span> Central de Controle de Operações & Viagens
+            <span>🚍</span> Controle de Viagens
           </h1>
-          <p class="text-xs text-slate-400">Escala de largada, trocas de veículos, ocorrências operacionais, reentregas e frota em rota</p>
+          <p class="text-xs text-slate-400">Escala de largada, trocas, ocorrências e reentregas</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
@@ -3954,27 +4733,23 @@ function renderControleViagensView() {
           <button onclick="gerarRelatorioLargadaOperacaoModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow flex items-center gap-1.5" title="Relatório Corporativo de Largada">
             <span>📄</span> Relatório de Largada
           </button>
-          <!-- Botão Relatório Reentregas A4 -->
-          <button onclick="emitirRelatorioReentregasA4()" class="bg-purple-700 hover:bg-purple-600 text-white font-bold px-3 py-2 rounded-xl text-xs shadow flex items-center gap-1.5" title="Relatório Corporativo Oficial A4 de Reentregas">
-            <span>🔄</span> Relatório Reentregas A4
-          </button>
 
           <!-- SELETOR DE SUB-ABAS -->
           <div class="flex flex-wrap gap-1 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg">
             <button onclick="switchViagensSubTab('largada')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='largada'?'bg-emerald-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🚩</span> Largada (Escala)
+              <span>🚩</span> Largada
             </button>
             <button onclick="switchViagensSubTab('operacional')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${(activeViagensSubTab==='operacional'||activeViagensSubTab==='ocorrencias')?'bg-amber-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>⚠️</span> Oc. Operacionais
+              <span>⚠️</span> Oc. Operacional
             </button>
             <button onclick="switchViagensSubTab('frota_rota')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='frota_rota'?'bg-red-800 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🚚</span> Oc. Rota (Frota)
+              <span>🚚</span> Oc. em Rota
             </button>
             <button onclick="switchViagensSubTab('troca_veiculos')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='troca_veiculos'?'bg-purple-800 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🔄</span> Troca de Veículos
+              <span>🔄</span> Trocas de veículos
             </button>
             <button onclick="switchViagensSubTab('reentregas')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='reentregas'?'bg-purple-700 text-white shadow-lg border border-purple-500':'text-slate-400 hover:text-white'}">
-              <span>🔄</span> Reentregas & Atrasos
+              <span>🔄</span> Reentregas
             </button>
           </div>
         </div>
@@ -3992,15 +4767,17 @@ function triggerImportEscala() {
 }
 
 function parseEscalaWorkbook(workbook, fileName = '') {
-  let fileDate = new Date().toISOString().split('T')[0];
-  const dateMatch = fileName.match(/(\d{2})[\.\/](\d{2})[\.\/](\d{4})/);
+  let fileDate = formatarData(new Date());
+  const dateMatch = fileName.match(/(\d{1,2})[\.\/\-](\d{1,2})[\.\/\-](\d{2,4})/);
   if (dateMatch) {
-    fileDate = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+    let y = dateMatch[3];
+    if (y.length === 2) y = '20' + y;
+    fileDate = `${dateMatch[1].padStart(2, '0')}/${dateMatch[2].padStart(2, '0')}/${y}`;
   }
 
   const sheetName = workbook.SheetNames.includes('Escala') ? 'Escala' : workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
 
   const viagens = [];
   let currentSetor = 'FRIO';
@@ -4033,10 +4810,12 @@ function parseEscalaWorkbook(workbook, fileName = '') {
         else if (c.includes('AJUDANTE')) headerMap.ajudante = colIdx;
         else if (c.includes('OBSERV')) headerMap.observacao = colIdx;
         else if (c.includes('SETOR')) headerMap.setor = colIdx;
+        else if (c.includes('HORA') && (c.includes('SAIDA') || c.includes('SAÍDA'))) headerMap.hora_saida = colIdx;
         else if (c.includes('SAIDA') || c.includes('SAÍDA')) headerMap.data_saida = colIdx;
         else if (c.includes('STATUS')) headerMap.status_viagem = colIdx;
         else if (c.includes('FUSION')) headerMap.fusion = colIdx;
-        else if (c.includes('CHECKLIST')) headerMap.checklist_saida = colIdx;
+        else if (c.includes('CHECKLIST') && (c.includes('CHEGADA') || c.includes('RETORNO'))) headerMap.checklist_chegada = colIdx;
+        else if (c.includes('CHECKLIST') && (c.includes('SAIDA') || c.includes('SAÍDA') || !c.includes('CHEGADA'))) headerMap.checklist_saida = colIdx;
       });
       continue;
     }
@@ -4054,12 +4833,16 @@ function parseEscalaWorkbook(workbook, fileName = '') {
           motorista: (rawMotorista || '').toUpperCase(),
           ajudante: String(headerMap.ajudante !== undefined ? row[headerMap.ajudante] : '').trim().toUpperCase(),
           setor: (headerMap.setor !== undefined && row[headerMap.setor] ? String(row[headerMap.setor]).trim().toUpperCase() : currentSetor),
-          data_saida: (headerMap.data_saida !== undefined && row[headerMap.data_saida] ? String(row[headerMap.data_saida]).trim() : fileDate),
-          hora_saida: '04:30',
-          status_viagem: (headerMap.status_viagem !== undefined && row[headerMap.status_viagem] ? String(row[headerMap.status_viagem]).trim().toUpperCase() : 'EM ANDAMENTO'),
-          fusion: (headerMap.fusion !== undefined && row[headerMap.fusion] ? String(row[headerMap.fusion]).trim().toUpperCase() : 'INICIADO'),
-          checklist_saida: (headerMap.checklist_saida !== undefined && row[headerMap.checklist_saida] ? String(row[headerMap.checklist_saida]).trim().toUpperCase() : 'INICIADO'),
-          checklist_chegada: 'NÃO INICIADO',
+          data_saida: normalizarDataImportacao(headerMap.data_saida !== undefined ? row[headerMap.data_saida] : '', fileDate),
+          hora_saida: (headerMap.hora_saida !== undefined && row[headerMap.hora_saida] ? String(row[headerMap.hora_saida]).trim() : ''),
+          data_entrega: normalizarDataImportacao(headerMap.data_entrega !== undefined ? row[headerMap.data_entrega] : '', ''),
+          hora_entrega: '',
+          data_retorno: normalizarDataImportacao(headerMap.data_retorno !== undefined ? row[headerMap.data_retorno] : '', ''),
+          hora_retorno: '',
+          status_viagem: (headerMap.status_viagem !== undefined && row[headerMap.status_viagem] ? String(row[headerMap.status_viagem]).trim().toUpperCase() : ''),
+          fusion: (headerMap.fusion !== undefined && row[headerMap.fusion] ? String(row[headerMap.fusion]).trim().toUpperCase() : ''),
+          checklist_saida: (headerMap.checklist_saida !== undefined && row[headerMap.checklist_saida] ? String(row[headerMap.checklist_saida]).trim().toUpperCase() : ''),
+          checklist_chegada: (headerMap.checklist_chegada !== undefined && row[headerMap.checklist_chegada] ? String(row[headerMap.checklist_chegada]).trim().toUpperCase() : ''),
           observacao: String(headerMap.observacao !== undefined ? row[headerMap.observacao] : '').trim()
         });
       }
@@ -4067,7 +4850,7 @@ function parseEscalaWorkbook(workbook, fileName = '') {
   }
 
   if (viagens.length === 0) {
-    const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    const json = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
     if (json && json.length > 0) {
       json.forEach(row => {
         const getVal = (possibleKeys) => {
@@ -4087,16 +4870,16 @@ function parseEscalaWorkbook(workbook, fileName = '') {
             motorista: getVal(['MOTORISTA', 'NOME MOTORISTA']),
             ajudante: getVal(['AJUDANTE', 'NOME AJUDANTE']),
             setor: getVal(['SETOR']) || 'FRIO',
-            data_saida: getVal(['DATA SAIDA', 'DATA SAÍDA', 'DATA_SAIDA']) || fileDate,
-            hora_saida: getVal(['HORA SAIDA', 'HORA SAÍDA', 'HORA_SAIDA']) || '04:30',
-            data_entrega: getVal(['DATA 1ª ENTREGA', 'DATA ENTREGA', 'DATA_ENTREGA']),
+            data_saida: normalizarDataImportacao(getVal(['DATA SAIDA', 'DATA SAÍDA', 'DATA_SAIDA', 'DATA']), fileDate),
+            hora_saida: getVal(['HORA SAIDA', 'HORA SAÍDA', 'HORA_SAIDA']) || '',
+            data_entrega: normalizarDataImportacao(getVal(['DATA 1ª ENTREGA', 'DATA ENTREGA', 'DATA_ENTREGA'])),
             hora_entrega: getVal(['HORA 1ª ENTREGA', 'HORA ENTREGA', 'HORA_ENTREGA']),
-            data_retorno: getVal(['DATA RETORNO', 'DATA_RETORNO']),
+            data_retorno: normalizarDataImportacao(getVal(['DATA RETORNO', 'DATA_RETORNO'])),
             hora_retorno: getVal(['HORA RETORNO', 'HORA_RETORNO']),
-            status_viagem: getVal(['STATUS', 'STATUS DA VIAGEM', 'STATUS_VIAGEM']) || 'EM ANDAMENTO',
-            fusion: getVal(['FUSION']) || 'INICIADO',
-            checklist_saida: getVal(['CHECKLIST SAIDA', 'CHECKLIST SAÍDA', 'CHECKLIST_SAIDA']) || 'INICIADO',
-            checklist_chegada: getVal(['CHECKLIST CHEGADA', 'CHECKLIST_CHEGADA']) || 'NÃO INICIADO',
+            status_viagem: getVal(['STATUS', 'STATUS DA VIAGEM', 'STATUS_VIAGEM']) || '',
+            fusion: getVal(['FUSION']) || '',
+            checklist_saida: getVal(['CHECKLIST SAIDA', 'CHECKLIST SAÍDA', 'CHECKLIST_SAIDA']) || '',
+            checklist_chegada: getVal(['CHECKLIST CHEGADA', 'CHECKLIST RETORNO', 'CHECKLIST_CHEGADA', 'CHECKLIST_RETORNO']) || '',
             observacao: getVal(['OBSERVAÇÃO', 'OBSERVACAO', 'OCORRÊNCIA LARGADA', 'OBS'])
           });
         }
@@ -4129,8 +4912,15 @@ function handleImportEscalaFile(event) {
         return;
       }
 
-      const qtd = db.importViagens(viagensFormatadas);
-      alert(`✅ Sucesso! ${qtd} viagens foram importadas da escala (${fileName})!`);
+      const res = db.importViagens(viagensFormatadas);
+      const qtd = typeof res === 'object' ? res.importados : res;
+      const dup = typeof res === 'object' ? res.duplicados : 0;
+
+      let msg = `✅ Sucesso! ${qtd} viagem(ns) importada(s) da escala (${fileName})!`;
+      if (dup > 0) {
+        msg += `\nℹ️ ${dup} registro(s) repetido(s) com todos os 6 campos idênticos (Carga, Rota, Placa, Motorista, Ajudante e Setor) foram ignorados para evitar duplicidade.`;
+      }
+      alert(msg);
       renderApp();
     } catch (err) {
       console.error(err);
@@ -4189,7 +4979,19 @@ function renderViagensLargadaSubTab() {
     const dSaida = v.data_saida || '';
     const dRetorno = v.data_retorno || v.data_entrega || v.data_saida || '';
 
-    if (fCarga && !String(v.carga || '').toLowerCase().includes(fCarga.toLowerCase().trim())) return false;
+    if (fCarga) {
+      const fcRaw = fCarga.toLowerCase().trim().replace(/^#/, '');
+      const fcClean = fcRaw.replace(/[^a-z0-9]/g, '');
+      const cNorm = String(v.carga || '').toLowerCase();
+      const pNorm = String(v.veiculo_placa || v.placa || '').toLowerCase();
+      const pClean = pNorm.replace(/[^a-z0-9]/g, '');
+      const mNorm = String(v.motorista_nome || v.motorista || '').toLowerCase();
+      const rNorm = String(v.rota_nome || v.rota || '').toLowerCase();
+
+      if (!cNorm.includes(fcRaw) && !(fcClean && pClean.includes(fcClean)) && !pNorm.includes(fcRaw) && !mNorm.includes(fcRaw) && !rNorm.includes(fcRaw)) {
+        return false;
+      }
+    }
     if (fSaidaDe && dSaida < fSaidaDe) return false;
     if (fSaidaAte && dSaida > fSaidaAte) return false;
     if (fRetornoDe && dRetorno < fRetornoDe) return false;
@@ -4245,7 +5047,7 @@ function renderViagensLargadaSubTab() {
             <label class="block text-[10px] text-cyan-400 font-bold uppercase">📦 Nº da Carga</label>
             <div>
               <span class="text-[9px] text-slate-400 block">Número da Carga:</span>
-              <input type="text" id="vg-filtro-carga" value="${fCarga}" placeholder="Ex: 43125..." oninput="window._vgFiltroCarga=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px] placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
+              <input type="text" id="vg-filtro-carga" value="${fCarga}" placeholder="Ex: 43125..." oninput="forcarMaiuscula(this); window._vgFiltroCarga=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px] placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
             </div>
           </div>
 
@@ -4289,6 +5091,10 @@ function renderViagensLargadaSubTab() {
               <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
                 <input type="checkbox" ${fStatusList.includes('EM ANDAMENTO') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('EM ANDAMENTO')" class="rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500 w-3.5 h-3.5 cursor-pointer">
                 <span class="font-bold text-amber-400">EM ANDAMENTO</span>
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
+                <input type="checkbox" ${fStatusList.includes('EM ANDAMENTO (PALMAS)') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('EM ANDAMENTO (PALMAS)')" class="rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500 w-3.5 h-3.5 cursor-pointer">
+                <span class="font-bold text-amber-400">EM ANDAMENTO (PALMAS)</span>
               </label>
               <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
                 <input type="checkbox" ${fStatusList.includes('EM RETORNO') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('EM RETORNO')" class="rounded border-slate-700 bg-slate-900 text-blue-500 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer">
@@ -4351,7 +5157,7 @@ function renderViagensLargadaSubTab() {
           <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Nº Carga *</label>
-              <input type="text" id="vg-carga" required placeholder="Ex: 43125" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs">
+              <input type="text" id="vg-carga" required placeholder="Ex: 43125" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
             </div>
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Rota *</label>
@@ -4405,6 +5211,7 @@ function renderViagensLargadaSubTab() {
               <label class="block text-[10px] text-slate-300 mb-1">Status da Viagem</label>
               <select id="vg-status" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1.5 text-xs">
                 <option value="EM ANDAMENTO">EM ANDAMENTO</option>
+                <option value="EM ANDAMENTO (PALMAS)">EM ANDAMENTO (PALMAS)</option>
                 <option value="EM RETORNO">EM RETORNO</option>
                 <option value="FINALIZADO">FINALIZADO</option>
                 <option value="ADIADA">ADIADA</option>
@@ -4421,7 +5228,7 @@ function renderViagensLargadaSubTab() {
           </div>
           <div>
             <label class="block text-[10px] text-slate-300 mb-1">Observação / Ocorrência Largada</label>
-            <input type="text" id="vg-obs" placeholder="Ex: Substituição de ajudante ou atraso..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+            <input type="text" id="vg-obs" placeholder="Ex: Substituição de ajudante ou atraso..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
           </div>
           <div class="flex justify-end gap-2">
             <button type="button" onclick="toggleFormNovaViagem()" class="bg-slate-800 text-slate-300 px-3 py-1.5 rounded text-xs font-bold">Cancelar</button>
@@ -4454,70 +5261,94 @@ function renderViagensLargadaSubTab() {
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800 text-[11px]">
-              ${viagens.length === 0 ? '<tr><td colspan="15" class="p-6 text-center text-slate-500">Nenhuma viagem encontrada no período selecionado.</td></tr>' :
-              viagens.map(v => {
-                let statusBg = 'bg-amber-300 text-slate-950';
-                if (v.status_viagem === 'EM RETORNO') statusBg = 'bg-blue-900 text-white';
-                if (v.status_viagem === 'FINALIZADO') statusBg = 'bg-emerald-700 text-white';
-                if (v.status_viagem === 'ADIADA') statusBg = 'bg-orange-800 text-orange-200 border border-orange-600';
-                if (v.status_viagem === 'REENTREGA') statusBg = 'bg-purple-900 text-purple-200 border border-purple-600 font-black';
+              ${(() => {
+                if (viagens.length === 0) {
+                  return '<tr><td colspan="15" class="p-6 text-center text-slate-500">Nenhuma viagem encontrada no período selecionado.</td></tr>';
+                }
 
-                return `
-                  <tr class="hover:bg-slate-800/50">
-                    <td class="p-2 border-r border-slate-800 font-bold text-emerald-400">${v.carga}</td>
-                    <td class="p-2 border-r border-slate-800 font-semibold text-slate-200">${v.rota}</td>
+                // Contabilizar frequência de cada carga na base
+                const cargaCounts = {};
+                (db.data.controle_viagens || []).forEach(x => {
+                  const c = String(x.carga || '').trim().toUpperCase();
+                  if (c) cargaCounts[c] = (cargaCounts[c] || 0) + 1;
+                });
+
+                return viagens.map(v => {
+                  let statusBg = 'bg-amber-300 text-slate-950';
+                  if (v.status_viagem === 'EM ANDAMENTO' || v.status_viagem === 'EM ANDAMENTO (PALMAS)') statusBg = 'bg-amber-300 text-slate-950';
+                  if (v.status_viagem === 'EM RETORNO') statusBg = 'bg-blue-900 text-white';
+                  if (v.status_viagem === 'FINALIZADO') statusBg = 'bg-emerald-700 text-white';
+                  if (v.status_viagem === 'ADIADA') statusBg = 'bg-orange-800 text-orange-200 border border-orange-600';
+                  if (v.status_viagem === 'REENTREGA') statusBg = 'bg-purple-900 text-purple-200 border border-purple-600 font-black';
+
+                  const cKey = String(v.carga || '').trim().toUpperCase();
+                  const isCargaDuplicada = cKey && (cargaCounts[cKey] > 1);
+
+                  return `
+                    <tr class="hover:bg-slate-800/50 ${isCargaDuplicada ? 'bg-red-950/20' : ''}">
+                      <td class="p-2 border-r border-slate-800 font-bold ${isCargaDuplicada ? 'text-red-400 font-black' : 'text-emerald-400'}" title="${isCargaDuplicada ? '⚠️ Atenção: Carga com ' + cargaCounts[cKey] + ' lançamentos na base (duplicada com divergência)' : 'Carga ' + v.carga}">
+                        <div class="flex items-center gap-1.5">
+                          ${isCargaDuplicada ? '<span class="text-[9px] bg-red-950 border border-red-800 text-red-300 px-1 py-0.2 rounded font-black tracking-tight" title="Carga repetida na base">⚠️ ' + cargaCounts[cKey] + 'x</span>' : ''}
+                          <span>${v.carga}</span>
+                        </div>
+                      </td>
+                      <td class="p-2 border-r border-slate-800 font-semibold text-slate-200">${v.rota}</td>
                     <td class="p-2 border-r border-slate-800 font-bold text-white">${v.placa}</td>
                     <td class="p-2 border-r border-slate-800 text-slate-300">${v.motorista}</td>
                     <td class="p-2 border-r border-slate-800 text-slate-300">${v.ajudante}</td>
                     <td class="p-2 border-r border-slate-800 font-bold text-slate-400 text-[10px]">${v.setor||'FRIO'}</td>
                     
                     <td class="p-2 border-r border-slate-800 text-center text-[10px]">
-                      <div class="text-slate-300 font-medium">${v.data_saida||'—'}</div>
+                      <div class="text-slate-300 font-medium">${formatarData(v.data_saida)}</div>
                       <div class="text-emerald-400 font-bold">${v.hora_saida||'—'}</div>
                     </td>
 
                     <td class="p-2 border-r border-slate-800 text-center text-[10px]">
-                      <div class="text-slate-300 font-medium">${v.data_entrega||'—'}</div>
+                      <div class="text-slate-300 font-medium">${formatarData(v.data_entrega)}</div>
                       <div class="text-blue-400 font-bold">${v.hora_entrega||'—'}</div>
                     </td>
 
                     <td class="p-2 border-r border-slate-800 text-center text-[10px]">
-                      <div class="text-slate-300 font-medium">${v.data_retorno||'—'}</div>
+                      <div class="text-slate-300 font-medium">${formatarData(v.data_retorno)}</div>
                       <div class="text-amber-400 font-bold">${v.hora_retorno||'—'}</div>
                     </td>
 
                     <td class="p-2 border-r border-slate-800 text-[10px] text-slate-300 italic">${v.observacao||'—'}</td>
 
                     <td class="p-2 border-r border-slate-800 text-center">
-                      <span class="${statusBg} font-black px-2 py-0.5 rounded text-[10px] block whitespace-nowrap">
-                        ${v.status_viagem}
-                      </span>
+                      ${v.status_viagem ? `
+                        <span class="${statusBg} font-black px-2 py-0.5 rounded text-[10px] block whitespace-nowrap">
+                          ${v.status_viagem}
+                        </span>` : '<span class="text-slate-500 font-medium text-[10px]">—</span>'}
                     </td>
 
                     <td class="p-2 border-r border-slate-800 text-center">
-                      <span class="${v.fusion==='INICIADO'?'bg-emerald-950 text-emerald-300 border border-emerald-800':'bg-red-950 text-red-400 border border-red-900'} font-bold px-1.5 py-0.5 rounded text-[9px] block">
-                        ${v.fusion==='INICIADO'?'INICIADO':'NÃO INICIADO'}
-                      </span>
+                      ${v.fusion ? `
+                        <span class="${v.fusion==='INICIADO'?'bg-emerald-950 text-emerald-300 border border-emerald-800':'bg-red-950 text-red-400 border border-red-900'} font-bold px-1.5 py-0.5 rounded text-[9px] block">
+                          ${v.fusion}
+                        </span>` : '<span class="text-slate-500 font-medium text-[10px]">—</span>'}
                     </td>
 
                     <td class="p-2 border-r border-slate-800 text-center">
-                      <span class="${v.checklist_saida==='INICIADO'?'bg-emerald-950 text-emerald-300 border border-emerald-800':'bg-red-950 text-red-400 border border-red-900'} font-bold px-1.5 py-0.5 rounded text-[9px] block">
-                        ${v.checklist_saida==='INICIADO'?'INICIADO':'NÃO INICIADO'}
-                      </span>
+                      ${v.checklist_saida ? `
+                        <span class="${v.checklist_saida==='INICIADO'?'bg-emerald-950 text-emerald-300 border border-emerald-800':'bg-red-950 text-red-400 border border-red-900'} font-bold px-1.5 py-0.5 rounded text-[9px] block">
+                          ${v.checklist_saida}
+                        </span>` : '<span class="text-slate-500 font-medium text-[10px]">—</span>'}
                     </td>
 
                     <td class="p-2 border-r border-slate-800 text-center">
-                      <span class="${v.checklist_chegada==='INICIADO'?'bg-emerald-950 text-emerald-300 border border-emerald-800':'bg-red-950 text-red-400 border border-red-900'} font-bold px-1.5 py-0.5 rounded text-[9px] block">
-                        ${v.checklist_chegada==='INICIADO'?'INICIADO':'NÃO INICIADO'}
-                      </span>
+                      ${v.checklist_chegada ? `
+                        <span class="${v.checklist_chegada==='INICIADO'?'bg-emerald-950 text-emerald-300 border border-emerald-800':'bg-red-950 text-red-400 border border-red-900'} font-bold px-1.5 py-0.5 rounded text-[9px] block">
+                          ${v.checklist_chegada}
+                        </span>` : '<span class="text-slate-500 font-medium text-[10px]">—</span>'}
                     </td>
 
                     <td class="p-2 text-right whitespace-nowrap">
                       <button onclick="editarViagemModal('${v.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-sm" title="Editar Viagem">✏️</button>
                       <button onclick="deleteViagem('${v.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-sm" title="Excluir Viagem">🗑️</button>
-                    </td>
-                  </tr>`;
-              }).join('')}
+                    </tr>`;
+                }).join('');
+              })()}
             </tbody>
           </table>
         </div>
@@ -4644,6 +5475,7 @@ function editarViagemModal(id) {
             <label class="block text-[10px] text-slate-400 mb-1">Status da Viagem</label>
             <select id="ed-vg-status" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
               <option value="EM ANDAMENTO" ${v.status_viagem==='EM ANDAMENTO'?'selected':''}>EM ANDAMENTO</option>
+              <option value="EM ANDAMENTO (PALMAS)" ${v.status_viagem==='EM ANDAMENTO (PALMAS)'?'selected':''}>EM ANDAMENTO (PALMAS)</option>
               <option value="EM RETORNO" ${v.status_viagem==='EM RETORNO'?'selected':''}>EM RETORNO</option>
               <option value="FINALIZADO" ${v.status_viagem==='FINALIZADO'?'selected':''}>FINALIZADO</option>
               <option value="ADIADA" ${v.status_viagem==='ADIADA'?'selected':''}>ADIADA</option>
@@ -4686,6 +5518,7 @@ function editarViagemModal(id) {
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Fusion</label>
             <select id="ed-vg-fusion" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="" ${!v.fusion?'selected':''}>-- Não Informado --</option>
               <option value="INICIADO" ${v.fusion==='INICIADO'?'selected':''}>INICIADO</option>
               <option value="NÃO INICIADO" ${v.fusion==='NÃO INICIADO'?'selected':''}>NÃO INICIADO</option>
             </select>
@@ -4693,6 +5526,7 @@ function editarViagemModal(id) {
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Checklist Saída</label>
             <select id="ed-vg-chk-saida" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="" ${!v.checklist_saida?'selected':''}>-- Não Informado --</option>
               <option value="INICIADO" ${v.checklist_saida==='INICIADO'?'selected':''}>INICIADO</option>
               <option value="NÃO INICIADO" ${v.checklist_saida==='NÃO INICIADO'?'selected':''}>NÃO INICIADO</option>
             </select>
@@ -4700,6 +5534,7 @@ function editarViagemModal(id) {
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Checklist Chegada</label>
             <select id="ed-vg-chk-chegada" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="" ${!v.checklist_chegada?'selected':''}>-- Não Informado --</option>
               <option value="INICIADO" ${v.checklist_chegada==='INICIADO'?'selected':''}>INICIADO</option>
               <option value="NÃO INICIADO" ${v.checklist_chegada==='NÃO INICIADO'?'selected':''}>NÃO INICIADO</option>
             </select>
@@ -4708,7 +5543,7 @@ function editarViagemModal(id) {
 
         <div>
           <label class="block text-[10px] text-slate-400 mb-1">Observação / Ocorrência Largada</label>
-          <input type="text" id="ed-vg-obs" value="${v.observacao||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+          <input type="text" id="ed-vg-obs" value="${v.observacao||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
@@ -4782,22 +5617,118 @@ function autoCalcReentrega(prefix = 'md-re') {
 }
 
 function autoPreencherDadosCargaReentrega(cargaNum, prefix = 'md-re') {
-  if (!cargaNum || !cargaNum.trim()) return;
-  const cLimpo = String(cargaNum).trim().toUpperCase();
-  
-  const viagens = typeof db.getControleViagens === 'function' ? db.getControleViagens() : (db.data.viagens || []);
-  const v = viagens.find(x => String(x.carga_numero || x.carga || '').trim().toUpperCase() === cLimpo);
-  
-  if (v) {
-    const rotaEl = document.getElementById(`${prefix}-rota`);
-    const motEl = document.getElementById(`${prefix}-motorista`);
-    const placaEl = document.getElementById(`${prefix}-placa`);
-    const dataEl = document.getElementById(`${prefix}-data`);
+  const cNum = String(cargaNum || '').trim();
+  const aviso = document.getElementById(`${prefix}-carga-aviso`);
+  if (!cNum) {
+    if (aviso) aviso.classList.add('hidden');
+    return;
+  }
 
-    if (rotaEl && (v.rota || v.rota_nome)) rotaEl.value = v.rota || v.rota_nome;
-    if (motEl && (v.motorista || v.motorista_nome)) motEl.value = v.motorista || v.motorista_nome;
-    if (placaEl && v.placa) placaEl.value = v.placa;
-    if (dataEl && (v.data_saida || v.data) && !dataEl.value) dataEl.value = v.data_saida || v.data;
+  let info = buscarCargaInfo(cNum);
+  if (!info.found) {
+    const matchNum = cNum.match(/(\d+)/);
+    if (matchNum) {
+      const matchInfo = buscarCargaInfo(matchNum[1]);
+      if (matchInfo.found) {
+        info = matchInfo;
+      }
+    }
+  }
+
+  if (info && info.found) {
+    if (aviso) aviso.classList.add('hidden');
+    const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+
+    // Auto-selecionar Rota no respectivo <select>
+    const rotaSel = document.getElementById(`${prefix}-rota`);
+    if (rotaSel && info.rotaName) {
+      const nRota = norm(info.rotaName);
+      let opt = Array.from(rotaSel.options).find(o => norm(o.value) === nRota || (o.value && (nRota.includes(norm(o.value)) || norm(o.value).includes(nRota))));
+      if (opt) {
+        rotaSel.value = opt.value;
+      } else {
+        const newOpt = document.createElement('option');
+        newOpt.value = info.rotaName;
+        newOpt.textContent = info.rotaName;
+        newOpt.selected = true;
+        rotaSel.appendChild(newOpt);
+      }
+    }
+
+    // Auto-selecionar Placa no respectivo <select>
+    const placaSel = document.getElementById(`${prefix}-placa`);
+    if (placaSel && info.placa) {
+      const nPlaca = norm(info.placa).replace(/[^A-Z0-9]/g, '');
+      let opt = Array.from(placaSel.options).find(o => {
+        const vNorm = norm(o.value).replace(/[^A-Z0-9]/g, '');
+        const tNorm = norm(o.textContent).replace(/[^A-Z0-9]/g, '');
+        return vNorm === nPlaca || tNorm.includes(nPlaca) || (nPlaca && vNorm.includes(nPlaca));
+      });
+      if (opt) {
+        placaSel.value = opt.value;
+      } else {
+        const newOpt = document.createElement('option');
+        newOpt.value = info.placa;
+        newOpt.textContent = info.placa;
+        newOpt.selected = true;
+        placaSel.appendChild(newOpt);
+      }
+    }
+
+    // Auto-selecionar Motorista Original no respectivo <select>
+    const motSel = document.getElementById(`${prefix}-motorista`);
+    if (motSel && info.motoristaName) {
+      const nMot = norm(info.motoristaName);
+      let opt = Array.from(motSel.options).find(o => norm(o.value) === nMot || norm(o.textContent) === nMot || (o.value && (nMot.includes(norm(o.value)) || norm(o.value).includes(nMot))));
+      if (opt) {
+        motSel.value = opt.value;
+      } else {
+        const newOpt = document.createElement('option');
+        newOpt.value = info.motoristaName;
+        newOpt.textContent = info.motoristaName;
+        newOpt.selected = true;
+        motSel.appendChild(newOpt);
+      }
+    }
+
+    // Auto-selecionar Ajudante no respectivo <select>
+    const ajuSel = document.getElementById(`${prefix}-ajudante`);
+    if (ajuSel && info.ajudanteName) {
+      const nAju = norm(info.ajudanteName);
+      let opt = Array.from(ajuSel.options).find(o => norm(o.value) === nAju || norm(o.textContent) === nAju || (o.value && (nAju.includes(norm(o.value)) || norm(o.value).includes(nAju))));
+      if (opt) {
+        ajuSel.value = opt.value;
+      } else {
+        const newOpt = document.createElement('option');
+        newOpt.value = info.ajudanteName;
+        newOpt.textContent = info.ajudanteName;
+        newOpt.selected = true;
+        ajuSel.appendChild(newOpt);
+      }
+    }
+
+    // Auto-preencher Data (se campo estiver vazio)
+    const dataEl = document.getElementById(`${prefix}-data`);
+    if (dataEl && info.data && !dataEl.value) {
+      dataEl.value = info.data;
+    }
+
+    // Total de entregas (se o campo de entregas estiver zerado ou vazio)
+    const saiuEl = document.getElementById(`${prefix}-ent-saiu`);
+    const cNumDigits = cNum.match(/(\d+)/) ? cNum.match(/(\d+)/)[1] : cNum;
+    const viagens = (db.getControleViagens && db.getControleViagens()) || [];
+    const cargas = (db.data && db.data.cargas) || [];
+    const v = viagens.find(x => String(x.carga || x.carga_numero || '').trim().toUpperCase() === cNumDigits.toUpperCase());
+    const c = cargas.find(x => String(x.numero_carga || x.carga || '').trim().toUpperCase() === cNumDigits.toUpperCase());
+    const totalEntregas = (v && (v.entregas_total || v.total_entregas || v.qtd_entregas || v.entregas_saiu || v.notas)) ||
+                          (c && (c.total_entregas || c.qtd_entregas || c.entregas || c.notas));
+    if (saiuEl && (!saiuEl.value || saiuEl.value === '0') && totalEntregas) {
+      saiuEl.value = parseInt(totalEntregas) || 0;
+      autoCalcReentrega(prefix);
+    }
+  } else {
+    // Se não encontrada, exibir aviso sutil sem travar o preenchimento manual
+    if (aviso) aviso.classList.remove('hidden');
   }
 }
 
@@ -4808,6 +5739,7 @@ function abrirModalNovaReentrega(dados = {}) {
 
   const rotas = db.data.rotas || [];
   const motoristas = db.data.motoristas || [];
+  const ajudantes = db.data.ajudantes || [];
   const veiculos = db.data.veiculos ? db.data.veiculos.filter(v => v.situacao !== 'Inativo') : [];
   const motivos = db.data.motivos_ocorrencia || [
     "DEVOLUÇÃO TOTAL",
@@ -4827,6 +5759,7 @@ function abrirModalNovaReentrega(dados = {}) {
   const defaultCarga = dados.carga || dados.carga_numero || '';
   const defaultRota = dados.rota || dados.rota_nome || '';
   const defaultMotorista = dados.motorista || dados.motorista_nome || '';
+  const defaultAjudante = dados.ajudante || dados.ajudante_nome || '';
   const defaultPlaca = dados.placa || '';
   const defaultSaiu = parseInt(dados.entregas_saiu) || 0;
   const defaultFeitas = parseInt(dados.entregas_feitas) || 0;
@@ -4837,6 +5770,9 @@ function abrirModalNovaReentrega(dados = {}) {
 
   const motoristasOpts = motoristas.map(m => m.nome || m);
   if (defaultMotorista && !motoristasOpts.includes(defaultMotorista)) motoristasOpts.push(defaultMotorista);
+
+  const ajudantesOpts = ajudantes.map(a => a.nome || a);
+  if (defaultAjudante && !ajudantesOpts.includes(defaultAjudante)) ajudantesOpts.push(defaultAjudante);
 
   const veiculosOpts = veiculos.map(v => v.placa || v);
   if (defaultPlaca && !veiculosOpts.includes(defaultPlaca)) veiculosOpts.push(defaultPlaca);
@@ -4857,8 +5793,12 @@ function abrirModalNovaReentrega(dados = {}) {
             <input type="date" id="md-re-data" value="${defaultData}" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold focus:ring-1 focus:ring-purple-500">
           </div>
           <div>
-            <label class="block text-[10px] text-purple-400 font-bold uppercase mb-1">Nº Carga *</label>
-            <input type="text" id="md-re-carga" value="${defaultCarga}" oninput="autoPreencherDadosCargaReentrega(this.value, 'md-re')" required placeholder="Ex: 43125" class="w-full bg-slate-800 border border-slate-700 text-purple-300 rounded p-2 text-xs font-bold focus:ring-1 focus:ring-purple-500 uppercase">
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-[10px] text-purple-400 font-bold uppercase">Nº Carga *</label>
+              <span id="md-re-carga-aviso" class="text-[10px] text-amber-400 font-bold hidden">⚠️ Carga não localizada na Largada</span>
+            </div>
+            <input type="text" id="md-re-carga" list="cargas-list-re" value="${defaultCarga}" oninput="forcarMaiuscula(this); autoPreencherDadosCargaReentrega(this.value, 'md-re')" onchange="autoPreencherDadosCargaReentrega(this.value, 'md-re')" required placeholder="Ex: 43125" class="w-full bg-slate-800 border border-slate-700 text-purple-300 rounded p-2 text-xs font-bold focus:ring-1 focus:ring-purple-500 uppercase">
+            ${renderDatalistCargas('cargas-list-re')}
           </div>
         </div>
 
@@ -4888,12 +5828,20 @@ function abrirModalNovaReentrega(dados = {}) {
             </select>
           </div>
           <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Novo Motorista (Opcional)</label>
-            <select id="md-re-novo-motorista" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
-              <option value="">-- Mesmo da Rota Original --</option>
-              ${motoristas.map(m => `<option value="${m.nome||m}">${m.nome||m}</option>`).join('')}
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ajudante</label>
+            <select id="md-re-ajudante" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+              <option value="">-- Selecione Ajudante --</option>
+              ${ajudantesOpts.map(a => `<option value="${a}" ${a === defaultAjudante ? 'selected' : ''}>${a}</option>`).join('')}
             </select>
           </div>
+        </div>
+
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Novo Motorista (Opcional)</label>
+          <select id="md-re-novo-motorista" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+            <option value="">-- Mesmo da Rota Original --</option>
+            ${motoristas.map(m => `<option value="${m.nome||m}">${m.nome||m}</option>`).join('')}
+          </select>
         </div>
 
         <div class="grid grid-cols-3 gap-3 bg-slate-950/60 p-2.5 rounded-lg border border-slate-800">
@@ -4938,6 +5886,10 @@ function abrirModalNovaReentrega(dados = {}) {
     </div>
   `;
   container.classList.remove('hidden');
+
+  if (defaultCarga) {
+    autoPreencherDadosCargaReentrega(defaultCarga, 'md-re');
+  }
 }
 
 function handleSalvarNovaReentregaModal(e) {
@@ -4948,6 +5900,7 @@ function handleSalvarNovaReentregaModal(e) {
     rota_nome: document.getElementById('md-re-rota').value,
     placa: document.getElementById('md-re-placa').value,
     motorista_nome: document.getElementById('md-re-motorista').value,
+    ajudante_nome: document.getElementById('md-re-ajudante')?.value || null,
     novo_motorista: document.getElementById('md-re-novo-motorista').value || null,
     entregas_saiu: parseInt(document.getElementById('md-re-ent-saiu').value) || 0,
     entregas_feitas: parseInt(document.getElementById('md-re-ent-feitas').value) || 0,
@@ -4958,7 +5911,7 @@ function handleSalvarNovaReentregaModal(e) {
 
   db.addReentrega(reentrega);
   closeModal();
-  alert('✅ Registro de Reentrega cadastrado com sucesso!');
+  showToast(`🚨 Reentrega para rota ${reentrega.rota_nome || 'de entrega'} registrada com sucesso!`, 'warning');
   renderApp();
 }
 
@@ -4975,6 +5928,7 @@ function abrirModalEditarReentrega(id) {
 
   const rotas = db.data.rotas || [];
   const motoristas = db.data.motoristas || [];
+  const ajudantes = db.data.ajudantes || [];
   const veiculos = db.data.veiculos ? db.data.veiculos.filter(v => v.situacao !== 'Inativo') : [];
   const motivos = db.data.motivos_ocorrencia || [
     "DEVOLUÇÃO TOTAL",
@@ -4990,11 +5944,16 @@ function abrirModalEditarReentrega(id) {
     "OUTROS"
   ];
 
+  const defaultAjudante = item.ajudante_nome || item.ajudante || '';
+
   const rotasOpts = [...rotas];
   if (item.rota_nome && !rotasOpts.includes(item.rota_nome)) rotasOpts.push(item.rota_nome);
 
   const motoristasOpts = motoristas.map(m => m.nome || m);
   if (item.motorista_nome && !motoristasOpts.includes(item.motorista_nome)) motoristasOpts.push(item.motorista_nome);
+
+  const ajudantesOpts = ajudantes.map(a => a.nome || a);
+  if (defaultAjudante && !ajudantesOpts.includes(defaultAjudante)) ajudantesOpts.push(defaultAjudante);
 
   const veiculosOpts = veiculos.map(v => v.placa || v);
   if (item.placa && !veiculosOpts.includes(item.placa)) veiculosOpts.push(item.placa);
@@ -5015,8 +5974,12 @@ function abrirModalEditarReentrega(id) {
             <input type="date" id="ed-re-data" value="${item.data || ''}" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold focus:ring-1 focus:ring-purple-500">
           </div>
           <div>
-            <label class="block text-[10px] text-purple-400 font-bold uppercase mb-1">Nº Carga *</label>
-            <input type="text" id="ed-re-carga" value="${item.carga_numero || ''}" oninput="autoPreencherDadosCargaReentrega(this.value, 'ed-re')" required class="w-full bg-slate-800 border border-slate-700 text-purple-300 rounded p-2 text-xs font-bold focus:ring-1 focus:ring-purple-500 uppercase">
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-[10px] text-purple-400 font-bold uppercase">Nº Carga *</label>
+              <span id="ed-re-carga-aviso" class="text-[10px] text-amber-400 font-bold hidden">⚠️ Carga não localizada na Largada</span>
+            </div>
+            <input type="text" id="ed-re-carga" list="cargas-list-ed-re" value="${item.carga_numero || ''}" oninput="forcarMaiuscula(this); autoPreencherDadosCargaReentrega(this.value, 'ed-re')" onchange="autoPreencherDadosCargaReentrega(this.value, 'ed-re')" required class="w-full bg-slate-800 border border-slate-700 text-purple-300 rounded p-2 text-xs font-bold focus:ring-1 focus:ring-purple-500 uppercase">
+            ${renderDatalistCargas('cargas-list-ed-re')}
           </div>
         </div>
 
@@ -5046,12 +6009,20 @@ function abrirModalEditarReentrega(id) {
             </select>
           </div>
           <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Novo Motorista (Opcional)</label>
-            <select id="ed-re-novo-motorista" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
-              <option value="">-- Mesmo da Rota Original --</option>
-              ${motoristas.map(m => `<option value="${m.nome||m}" ${item.novo_motorista === (m.nome||m) ? 'selected' : ''}>${m.nome||m}</option>`).join('')}
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ajudante</label>
+            <select id="ed-re-ajudante" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+              <option value="">-- Selecione Ajudante --</option>
+              ${ajudantesOpts.map(a => `<option value="${a}" ${a === defaultAjudante ? 'selected' : ''}>${a}</option>`).join('')}
             </select>
           </div>
+        </div>
+
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Novo Motorista (Opcional)</label>
+          <select id="ed-re-novo-motorista" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+            <option value="">-- Mesmo da Rota Original --</option>
+            ${motoristas.map(m => `<option value="${m.nome||m}" ${item.novo_motorista === (m.nome||m) ? 'selected' : ''}>${m.nome||m}</option>`).join('')}
+          </select>
         </div>
 
         <div class="grid grid-cols-3 gap-3 bg-slate-950/60 p-2.5 rounded-lg border border-slate-800">
@@ -5106,6 +6077,7 @@ function handleSalvarEdicaoReentrega(e, id) {
     rota_nome: document.getElementById('ed-re-rota').value,
     placa: document.getElementById('ed-re-placa').value,
     motorista_nome: document.getElementById('ed-re-motorista').value,
+    ajudante_nome: document.getElementById('ed-re-ajudante')?.value || null,
     novo_motorista: document.getElementById('ed-re-novo-motorista').value || null,
     entregas_saiu: parseInt(document.getElementById('ed-re-ent-saiu').value) || 0,
     entregas_feitas: parseInt(document.getElementById('ed-re-ent-feitas').value) || 0,
@@ -5187,15 +6159,24 @@ function handleSalvarBaixaReentrega(e, id) {
   renderApp();
 }
 
-// EXCLUIR REENTREGA COM CONFIRMAÇÃO
+// EXCLUIR REENTREGA COM CONFIRMAÇÃO DE ADMIN
 function excluirReentregaComConfirmacao(id) {
   const item = db.getReentregas().find(x => x.id == id);
   if (!item) return;
-  if (confirm(`Deseja realmente excluir o registro de reentrega da Carga ${item.carga_numero} (${item.rota_nome})?`)) {
-    db.deleteReentrega(id);
-    alert('🗑️ Registro de reentrega excluído com sucesso!');
-    renderApp();
-  }
+
+  abrirModalConfirmacaoAdmin({
+    titulo: 'Excluir Registro de Reentrega',
+    mensagem: `Tem certeza que deseja excluir o registro de reentrega da Carga ${item.carga_numero || '—'} (${item.rota_nome || '—'})? Esta ação remove a reentrega da listagem operacional e exige senha de administrador.`,
+    onConfirm: (pwd) => {
+      const res = db.deleteReentrega(id, pwd);
+      if (res && res.success) {
+        showToast('🗑️ Registro de reentrega excluído com sucesso!');
+        renderApp();
+      } else {
+        alert((res && res.message) || 'Senha de administrador incorreta.');
+      }
+    }
+  });
 }
 
 // SUB-ABA 2: TRATAMENTO DE OCORRÊNCIAS OPERACIONAIS DE VIAGEM (DIVIDIDA EM PENDENTES E FINALIZADAS)
@@ -5231,7 +6212,7 @@ function renderViagensOcorrenciasSubTab() {
 
   const buildTableRow = (o) => `
     <tr class="hover:bg-slate-800/50">
-      <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">${o.data}</td>
+      <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">${formatarData(o.data)}</td>
       <td class="p-2 border-r border-slate-800 font-bold text-emerald-400">${o.carga}</td>
       <td class="p-2 border-r border-slate-800 text-slate-200">${o.rota}</td>
       <td class="p-2 border-r border-slate-800 font-bold text-white">${o.placa}</td>
@@ -5254,7 +6235,20 @@ function renderViagensOcorrenciasSubTab() {
           <h2 class="text-sm font-black text-red-400 uppercase tracking-wider">⚠️ Tratamento de Ocorrências Operacionais de Viagem</h2>
           <p class="text-[11px] text-slate-400">Registro de faltas, problemas no checklist, conduta e ações tomadas na largada/rota</p>
         </div>
-        <button onclick="toggleFormNovaOcViagem()" class="bg-red-700 hover:bg-red-600 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg">+ Nova Ocorrência Operacional</button>
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="inline-flex rounded-lg shadow-sm">
+            <button onclick="gerarRelatorioOcOperacionaisModal('TODAS')" class="bg-purple-700 hover:bg-purple-600 text-white font-bold px-3 py-2 rounded-l-lg text-xs shadow flex items-center gap-1 transition" title="Imprimir Relatório Completo (Geral)">
+              <span>🖨️</span> Geral
+            </button>
+            <button onclick="gerarRelatorioOcOperacionaisModal('PENDENTES')" class="bg-amber-700 hover:bg-amber-600 text-white font-bold px-3 py-2 text-xs shadow flex items-center gap-1 border-l border-r border-slate-900/40 transition" title="Imprimir Somente Ocorrências Pendentes">
+              <span>⚠️</span> Pendentes
+            </button>
+            <button onclick="gerarRelatorioOcOperacionaisModal('FINALIZADAS')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-2 rounded-r-lg text-xs shadow flex items-center gap-1 transition" title="Imprimir Somente Ocorrências Finalizadas">
+              <span>✅</span> Finalizadas
+            </button>
+          </div>
+          <button onclick="toggleFormNovaOcViagem()" class="bg-red-700 hover:bg-red-600 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg">+ Nova Ocorrência Operacional</button>
+        </div>
       </div>
 
       <!-- FORMULÁRIO NOVA OCORRÊNCIA VIAGEM -->
@@ -5272,7 +6266,7 @@ function renderViagensOcorrenciasSubTab() {
                 <span id="ocv-carga-aviso" class="text-[10px] text-amber-400 font-bold hidden">⚠️ Carga não localizada na Largada</span>
               </div>
               <input type="text" id="ocv-carga" list="cargas-list-ocv" required placeholder="Ex: 43004"
-                oninput="onOcvCargaSelect(this.value)"
+                oninput="forcarMaiuscula(this); onOcvCargaSelect(this.value)"
                 onchange="onOcvCargaSelect(this.value)"
                 class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs">
               ${renderDatalistCargas('cargas-list-ocv')}
@@ -5295,7 +6289,7 @@ function renderViagensOcorrenciasSubTab() {
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Funcionário Envolvido *</label>
-              <input type="text" id="ocv-funcionario" required placeholder="Ex: PAULO DOS SANTOS RIBEIRO" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs uppercase">
+              <input type="text" id="ocv-funcionario" required placeholder="Ex: PAULO DOS SANTOS RIBEIRO" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs uppercase" oninput="forcarMaiuscula(this)">
             </div>
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Função *</label>
@@ -5317,15 +6311,15 @@ function renderViagensOcorrenciasSubTab() {
           <div class="space-y-2 pt-1 border-t border-slate-800">
             <div>
               <label class="block text-[10px] text-amber-400 font-bold mb-1">Causa da Ocorrência * (Obrigatório)</label>
-              <input type="text" id="ocv-causa" required placeholder="Ex: CONSULTA MEDICA, INCOMPATIBILIDADE DE KM..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+              <input type="text" id="ocv-causa" required placeholder="Ex: CONSULTA MEDICA, INCOMPATIBILIDADE DE KM..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
             </div>
             <div>
               <label class="block text-[10px] text-red-400 font-bold mb-1">Detalhamento da Ocorrência * (Obrigatório)</label>
-              <textarea id="ocv-ocorrencia" required rows="2" placeholder="Ex: FALTA DO AJUDANTE NA ROTA / MOTORISTA NÃO REALIZOU O CHECKLIST..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs"></textarea>
+              <textarea id="ocv-ocorrencia" required rows="2" placeholder="Ex: FALTA DO AJUDANTE NA ROTA / MOTORISTA NÃO REALIZOU O CHECKLIST..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
             </div>
             <div>
               <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ação Tomada * (Obrigatório)</label>
-              <textarea id="ocv-acao" required rows="2" placeholder="Ex: JOSE PAIXAO SUBSTITUTO / FEITO PROCEDIMENTO PARA REGULARIZAR..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs"></textarea>
+              <textarea id="ocv-acao" required rows="2" placeholder="Ex: JOSE PAIXAO SUBSTITUTO / FEITO PROCEDIMENTO PARA REGULARIZAR..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
             </div>
           </div>
           <div class="flex justify-end gap-2 pt-2">
@@ -5337,12 +6331,17 @@ function renderViagensOcorrenciasSubTab() {
 
       <!-- PAINEL 1: OCORRÊNCIAS PENDENTES -->
       <div class="bg-slate-900 border border-amber-800/80 rounded-xl overflow-hidden shadow-xl">
-        <div class="p-3 bg-amber-950/40 border-b border-amber-800/60 flex items-center justify-between">
+        <div class="p-3 bg-amber-950/40 border-b border-amber-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div class="flex items-center gap-2">
             <span class="text-base">⚠️</span>
             <h3 class="font-bold text-amber-300 text-xs uppercase tracking-wider">Ocorrências Operacionais Pendentes</h3>
           </div>
-          <span class="bg-amber-500/20 text-amber-300 border border-amber-500/50 px-2.5 py-0.5 rounded-full text-xs font-black">${pendentes.length} pendente${pendentes.length!==1?'s':''}</span>
+          <div class="flex items-center gap-2">
+            <button onclick="gerarRelatorioOcOperacionaisModal('PENDENTES')" class="bg-amber-700 hover:bg-amber-600 text-white font-bold px-2.5 py-1 rounded text-[11px] shadow flex items-center gap-1 transition" title="Imprimir Relatório de Ocorrências Pendentes">
+              <span>🖨️</span> Imprimir Pendentes
+            </button>
+            <span class="bg-amber-500/20 text-amber-300 border border-amber-500/50 px-2.5 py-0.5 rounded-full text-xs font-black">${pendentes.length} pendente${pendentes.length!==1?'s':''}</span>
+          </div>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full text-left text-xs border-collapse">
@@ -5376,7 +6375,12 @@ function renderViagensOcorrenciasSubTab() {
             <span class="text-base">✅</span>
             <h3 class="font-bold text-emerald-400 text-xs uppercase tracking-wider">Ocorrências Operacionais Finalizadas</h3>
           </div>
-          <span class="text-[10px] text-slate-400 font-semibold">${finalizadas.length} registro(s) encontrado(s)</span>
+          <div class="flex items-center gap-3">
+            <button onclick="gerarRelatorioOcOperacionaisModal('FINALIZADAS')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-2.5 py-1 rounded text-[11px] shadow flex items-center gap-1 transition" title="Imprimir Relatório de Ocorrências Finalizadas com filtros">
+              <span>🖨️</span> Imprimir Finalizadas
+            </button>
+            <span class="text-[10px] text-slate-400 font-semibold">${finalizadas.length} registro(s) encontrado(s)</span>
+          </div>
         </div>
 
         <!-- BARRA DE FILTROS DAS FINALIZADAS -->
@@ -5391,19 +6395,19 @@ function renderViagensOcorrenciasSubTab() {
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Carga</label>
-            <input type="text" value="${fCarga}" placeholder="Ex: 43004" onchange="window._ocFiltroCarga=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs">
+            <input type="text" value="${fCarga}" placeholder="Ex: 43004" onchange="window._ocFiltroCarga=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Funcionário</label>
-            <input type="text" value="${fFunc}" placeholder="Nome" onchange="window._ocFiltroFunc=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs">
+            <input type="text" value="${fFunc}" placeholder="Nome" onchange="window._ocFiltroFunc=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Veículo / Placa</label>
-            <input type="text" value="${fPlaca}" placeholder="Placa" onchange="window._ocFiltroPlaca=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs">
+            <input type="text" value="${fPlaca}" placeholder="Placa" onchange="window._ocFiltroPlaca=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Rota</label>
-            <input type="text" value="${fRota}" placeholder="Rota" onchange="window._ocFiltroRota=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs">
+            <input type="text" value="${fRota}" placeholder="Rota" onchange="window._ocFiltroRota=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Motivo</label>
@@ -5555,7 +6559,7 @@ function editarOcViagemModal(id) {
         <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Nº Carga</label>
-            <input type="text" id="ed-ocv-carga" value="${o.carga}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5">
+            <input type="text" id="ed-ocv-carga" value="${o.carga}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Placa</label>
@@ -5568,7 +6572,7 @@ function editarOcViagemModal(id) {
         <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Funcionário Envolvido</label>
-            <input type="text" id="ed-ocv-func" value="${o.funcionario}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 uppercase">
+            <input type="text" id="ed-ocv-func" value="${o.funcionario}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 uppercase" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Função</label>
@@ -5591,17 +6595,17 @@ function editarOcViagemModal(id) {
 
         <div>
           <label class="block text-[10px] text-amber-400 font-bold mb-1">Causa da Ocorrência *</label>
-          <input type="text" id="ed-ocv-causa" value="${o.causa}" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+          <input type="text" id="ed-ocv-causa" value="${o.causa}" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">
         </div>
 
         <div>
           <label class="block text-[10px] text-red-400 font-bold mb-1">Detalhamento da Ocorrência *</label>
-          <textarea id="ed-ocv-ocorrencia" required rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">${o.ocorrencia}</textarea>
+          <textarea id="ed-ocv-ocorrencia" required rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${o.ocorrencia}</textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ação Tomada *</label>
-          <textarea id="ed-ocv-acao" required rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">${o.acao||''}</textarea>
+          <textarea id="ed-ocv-acao" required rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${o.acao||''}</textarea>
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
@@ -5642,242 +6646,559 @@ function deleteOcViagem(id) {
 let uploadedRotaFotos = [];
 let uploadedRotaVideos = [];
 
-function handleRotaFotosUpload(input) {
-  uploadedRotaFotos = [];
+function renderRotaFotosPreview() {
   const previewDiv = document.getElementById('rota-fotos-preview');
-  if (previewDiv) previewDiv.innerHTML = '';
+  if (!previewDiv) return;
+  if (!uploadedRotaFotos || uploadedRotaFotos.length === 0) {
+    previewDiv.innerHTML = '<span class="text-[11px] text-slate-500 italic">Nenhuma foto selecionada.</span>';
+    return;
+  }
+  previewDiv.innerHTML = uploadedRotaFotos.map((img, idx) => `
+    <div class="relative group w-16 h-16 rounded-lg overflow-hidden border border-emerald-500/80 shadow-md bg-slate-900 shrink-0">
+      <img src="${img}" class="w-full h-full object-cover cursor-pointer hover:scale-105 transition duration-200" onclick="visualizarMidiaModal('${img}', 'image')" title="Clique para ampliar">
+      <button type="button" onclick="removeRotaFoto(${idx})" class="absolute top-0.5 right-0.5 bg-red-600/90 hover:bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold shadow transition" title="Remover foto">✕</button>
+      <span class="absolute bottom-0.5 left-0.5 bg-black/70 text-[8px] text-emerald-300 font-bold px-1 rounded">#${idx + 1}</span>
+    </div>
+  `).join('');
+}
+
+function renderRotaVideosPreview() {
+  const previewDiv = document.getElementById('rota-videos-preview');
+  if (!previewDiv) return;
+  if (!uploadedRotaVideos || uploadedRotaVideos.length === 0) {
+    previewDiv.innerHTML = '<span class="text-[11px] text-slate-500 italic">Nenhum vídeo selecionado.</span>';
+    return;
+  }
+  previewDiv.innerHTML = uploadedRotaVideos.map((vid, idx) => `
+    <div class="relative group w-24 h-16 rounded-lg overflow-hidden border border-blue-500/80 shadow-md bg-slate-900 shrink-0 flex items-center justify-center">
+      <video src="${vid}" class="w-full h-full object-cover" preload="metadata"></video>
+      <button type="button" onclick="visualizarMidiaModal('${vid}', 'video')" class="absolute inset-0 flex items-center justify-center bg-black/40 hover:bg-black/20 text-white font-bold text-xs transition" title="Assistir vídeo">▶</button>
+      <button type="button" onclick="removeRotaVideo(${idx})" class="absolute top-0.5 right-0.5 bg-red-600/90 hover:bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold shadow transition z-10" title="Remover vídeo">✕</button>
+      <span class="absolute bottom-0.5 left-0.5 bg-black/70 text-[8px] text-blue-300 font-bold px-1 rounded z-10">Vídeo ${idx + 1}</span>
+    </div>
+  `).join('');
+}
+
+function handleRotaFotosUpload(input) {
   if (input.files && input.files.length > 0) {
     Array.from(input.files).forEach(file => {
       const reader = new FileReader();
       reader.onload = function(e) {
         uploadedRotaFotos.push(e.target.result);
-        if (previewDiv) {
-          previewDiv.innerHTML += `<img src="${e.target.result}" class="w-12 h-12 object-cover rounded border border-emerald-500 shadow">`;
-        }
+        renderRotaFotosPreview();
       };
       reader.readAsDataURL(file);
     });
   }
+  input.value = '';
 }
 
 function handleRotaVideosUpload(input) {
-  uploadedRotaVideos = [];
-  const previewDiv = document.getElementById('rota-videos-preview');
-  if (previewDiv) previewDiv.innerHTML = '';
   if (input.files && input.files.length > 0) {
     Array.from(input.files).forEach(file => {
       const reader = new FileReader();
       reader.onload = function(e) {
         uploadedRotaVideos.push(e.target.result);
-        if (previewDiv) {
-          previewDiv.innerHTML += `<video src="${e.target.result}" class="w-16 h-12 object-cover rounded border border-blue-500 shadow"></video>`;
-        }
+        renderRotaVideosPreview();
       };
       reader.readAsDataURL(file);
     });
   }
+  input.value = '';
+}
+
+function removeRotaFoto(index) {
+  if (index >= 0 && index < uploadedRotaFotos.length) {
+    uploadedRotaFotos.splice(index, 1);
+    renderRotaFotosPreview();
+  }
+}
+
+function removeRotaVideo(index) {
+  if (index >= 0 && index < uploadedRotaVideos.length) {
+    uploadedRotaVideos.splice(index, 1);
+    renderRotaVideosPreview();
+  }
+}
+
+function visualizarMidiaModal(src, type) {
+  const container = document.getElementById('modal-container');
+  if (!container) return;
+  container.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/90 backdrop-blur-sm z-50 flex items-center justify-center p-4" onclick="closeModal()">
+      <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full p-4 shadow-2xl space-y-3" onclick="event.stopPropagation()">
+        <div class="flex justify-between items-center border-b border-slate-800 pb-2">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2">
+            <span>${type === 'video' ? '🎥 Visualização de Vídeo' : '📷 Visualização de Foto'}</span>
+          </h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-lg px-2">✕</button>
+        </div>
+        <div class="flex items-center justify-center max-h-[75vh] overflow-hidden rounded-lg bg-black">
+          ${type === 'video' 
+            ? `<video src="${src}" controls autoplay class="max-h-[70vh] max-w-full rounded"></video>` 
+            : `<img src="${src}" class="max-h-[70vh] max-w-full object-contain rounded">`}
+        </div>
+        <div class="flex justify-end">
+          <button onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold">Fechar</button>
+        </div>
+      </div>
+    </div>
+  `;
+  container.classList.remove('hidden');
+}
+
+// Tokens visuais padronizados para badges de Frota
+function getBadgeStatusFrota(statusVeiculo, statusChamado) {
+  const isFinalizado = statusChamado === 'finalizado';
+  const st = String(statusVeiculo || '').trim();
+
+  if (isFinalizado || st === 'Em Rota' || st === 'Liberado') {
+    return `<span class="bg-emerald-950 text-emerald-300 border border-emerald-700/80 font-extrabold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1.5 shadow-sm">
+      <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+      ${st || 'Liberado / Em Rota'}
+    </span>`;
+  }
+
+  if (st === 'Aguardando Manutenção' || st === 'Aguardando Socorro') {
+    return `<span class="bg-red-950 text-red-300 border border-red-700/80 font-extrabold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1.5 shadow-sm">
+      <span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
+      ${st}
+    </span>`;
+  }
+
+  if (st === 'Manutenção Externa') {
+    return `<span class="bg-orange-950 text-orange-300 border border-orange-700/80 font-extrabold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1.5 shadow-sm">
+      <span class="w-2 h-2 rounded-full bg-orange-400"></span>
+      ${st}
+    </span>`;
+  }
+
+  if (st === 'Manutenção Interna') {
+    return `<span class="bg-amber-950 text-amber-300 border border-amber-700/80 font-extrabold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1.5 shadow-sm">
+      <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+      ${st}
+    </span>`;
+  }
+
+  return `<span class="bg-slate-800 text-slate-200 border border-slate-700 font-bold px-2.5 py-1 rounded-full text-[11px] inline-flex items-center gap-1.5 shadow-sm">
+    ${st || 'Pendente'}
+  </span>`;
+}
+
+function limparFiltrosRota() {
+  window._rotaFiltroCarga = '';
+  window._rotaFiltroRota = '';
+  window._rotaFiltroVeiculo = '';
+  window._rotaFiltroMotorista = '';
+  window._rotaFiltroMotivo = '';
+  window._rotaFiltroStatus = '';
+  renderApp();
 }
 
 function renderRotaOcorrenciasView() {
   const rotas = db.getOcorrenciasRota();
-  const veiculos = db.data.veiculos.filter(v => v.situacao !== 'Inativo');
-  const motoristas = db.data.motoristas;
+  const veiculos = (db.data.veiculos || []).filter(v => v.situacao !== 'Inativo');
+  const motoristas = db.data.motoristas || [];
   const rotasNomes = db.data.rotas || [];
   const motivosResumidos = db.data.motivos_ocorrencia || ["AVARIA MECÂNICA", "ATRASO DE LARGADA", "CHECKLIST", "FALTA", "SUBSTITUIÇÃO DE EQUIPE", "CONDUTA OPERACIONAL", "OUTRO"];
-  const fMotivo = window._rotaFiltroMotivo || '';
 
-  let rotasFiltradas = rotas;
-  if (fMotivo) {
-    rotasFiltradas = rotas.filter(r => (r.motivo_resumido || r.tipo_ocorrencia) === fMotivo);
+  // Opções para filtros dinâmicos extraídas dos cadastros e dos dados atuais
+  const rotasOpcoes = Array.from(new Set([...rotasNomes, ...rotas.map(r => r.carga_rota || r.rota_nome).filter(Boolean)])).sort();
+  const veiculosOpcoes = veiculos;
+  const motoristasOpcoes = motoristas;
+
+  window._rotaActiveAba = window._rotaActiveAba || 'pendentes';
+
+  const totalChamados = rotas.length;
+  const pendentesCount = rotas.filter(r => r.status_chamado !== 'finalizado').length;
+  const finalizadosCount = rotas.filter(r => r.status_chamado === 'finalizado').length;
+
+  // 1. Filtragem por Aba
+  let listaPorAba = rotas;
+  if (window._rotaActiveAba === 'pendentes') {
+    listaPorAba = rotas.filter(r => r.status_chamado !== 'finalizado');
+  } else if (window._rotaActiveAba === 'finalizados') {
+    listaPorAba = rotas.filter(r => r.status_chamado === 'finalizado');
   }
 
+  // 2. Filtragem Combinada e Universal
+  const normTxt = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const normPlate = s => normTxt(s).replace(/[^a-z0-9]/g, '');
+
+  const fCarga = (window._rotaFiltroCarga || '').trim().toLowerCase().replace(/^#/, '');
+  const fRota = (window._rotaFiltroRota || '').trim();
+  const fVeic = (window._rotaFiltroVeiculo || '').trim();
+  const fMot = (window._rotaFiltroMotorista || '').trim();
+  const fMotivo = (window._rotaFiltroMotivo || '').trim();
+  const fStatus = (window._rotaFiltroStatus || '').trim();
+
+  const hasActiveFilters = !!(fCarga || fRota || fVeic || fMot || fMotivo || fStatus);
+
+  const rotasFiltradas = listaPorAba.filter(r => {
+    if (fCarga) {
+      const cNum = String(r.carga_numero || '').toLowerCase();
+      const cProt = String(r.numero_protocolo || '').toLowerCase();
+      const cPlaca = String(r.veiculo_placa || '').toLowerCase();
+      const cMot = String(r.motorista_nome || '').toLowerCase();
+      if (!cNum.includes(fCarga) && !cProt.includes(fCarga) && !cPlaca.includes(fCarga) && !cMot.includes(fCarga)) {
+        return false;
+      }
+    }
+    if (fRota && (r.carga_rota !== fRota && r.rota_nome !== fRota)) return false;
+    if (fVeic) {
+      const fvClean = normPlate(fVeic);
+      const fvTxt = normTxt(fVeic);
+      const rPlacaClean = normPlate(r.veiculo_placa);
+      const rPlacaTxt = normTxt(r.veiculo_placa);
+      const rModTxt = normTxt(r.veiculo_modelo || r.veiculo_tipo || '');
+      
+      const matchVeic = (fvClean && rPlacaClean.includes(fvClean)) ||
+                        rPlacaTxt.includes(fvTxt) ||
+                        rModTxt.includes(fvTxt) ||
+                        String(r.veiculo_id || '') === fVeic;
+      if (!matchVeic) return false;
+    }
+    if (fMot && (r.motorista_nome !== fMot && r.motorista_id != fMot)) return false;
+    if (fMotivo && (r.motivo_resumido || r.tipo_ocorrencia) !== fMotivo) return false;
+    if (fStatus) {
+      if (fStatus === 'finalizado') {
+        if (r.status_chamado !== 'finalizado') return false;
+      } else if (fStatus === 'pendente') {
+        if (r.status_chamado === 'finalizado') return false;
+      } else {
+        if ((r.status_veiculo || '') !== fStatus) return false;
+      }
+    }
+    return true;
+  });
+
   return `
-    <div class="space-y-5">
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 border border-red-900/60 p-4 rounded-xl shadow-xl">
+    <div class="space-y-4 animate-fadeIn">
+      <!-- HEADER DO MÓDULO COM BOTÃO SOB DEMANDA -->
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900 border border-red-900/60 p-4 rounded-xl shadow-xl">
         <div>
-          <h2 class="text-sm font-black text-red-400 uppercase tracking-wider">🚚 Ocorrências de Frota em Rota (Sinistros, Avarias & Socorro Mecânico)</h2>
-          <p class="text-[11px] text-slate-400">Notificação exclusiva de problemas no veículo (sinistro/avaria/problema mecânico/socorro)</p>
+          <div class="flex items-center gap-2">
+            <span class="text-xl">🚚</span>
+            <h2 class="text-sm font-black text-red-400 uppercase tracking-wider">Ocorrências de Frota em Rota (Socorro Mecânico & Avarias)</h2>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-0.5">Gestão em tempo real de sinistros, quebras em trajeto, envio de socorro mecânico e liberação técnica de veículos</p>
         </div>
-        <div class="flex gap-2 items-center">
-          <div class="bg-slate-950 border border-slate-800 p-1 rounded-lg flex items-center gap-1.5">
-            <span class="text-[10px] text-slate-400 font-bold px-2 uppercase">Filtrar por Motivo:</span>
-            <select onchange="window._rotaFiltroMotivo=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-amber-300 font-bold text-xs rounded p-1">
-              <option value="">Todos os Motivos</option>
-              ${motivosResumidos.map(m => `<option value="${m}" ${fMotivo===m?'selected':''}>${m}</option>`).join('')}
+
+        <div class="flex flex-wrap items-center gap-2.5">
+          <button onclick="emitirRelatorioChamadosRotaA4()" class="bg-slate-800 hover:bg-slate-700 text-red-300 border border-red-700/60 font-bold px-3.5 py-2.5 rounded-xl text-xs shadow flex items-center gap-1.5 transition hover:scale-[1.02]" title="Imprimir Relatório Consolidado A4 dos Chamados Filtrados">
+            <span>🖨️</span> Imprimir Relatório em Lote (A4)
+          </button>
+          <button onclick="abrirModalNovaRota()" class="bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-black px-4 py-2.5 rounded-xl text-xs shadow-lg shadow-red-950/60 flex items-center gap-2 transition hover:scale-[1.02]">
+            <span class="text-base leading-none">＋</span> Registrar Problema de Veículo
+          </button>
+        </div>
+      </div>
+
+      <!-- SELETOR DE ABAS PRINCIPAIS (PENDENTES vs FINALIZADOS vs TODOS) -->
+      <div class="flex flex-wrap items-center justify-between gap-3 bg-slate-900 border border-slate-800 p-2.5 rounded-xl shadow-lg">
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- Aba Pendentes -->
+          <button onclick="window._rotaActiveAba='pendentes'; renderApp()"
+            class="px-4 py-2 rounded-lg text-xs font-black transition flex items-center gap-2 ${window._rotaActiveAba==='pendentes' ? 'bg-red-700 text-white shadow-lg shadow-red-950/50' : 'bg-slate-800/80 text-slate-300 hover:text-white border border-slate-700/60'}">
+            <span>🚨</span>
+            <span>Pendentes (Ação Imediata)</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-black ${window._rotaActiveAba==='pendentes' ? 'bg-red-950 text-red-200 border border-red-500' : 'bg-slate-900 text-red-400 border border-slate-700'}">${pendentesCount}</span>
+          </button>
+
+          <!-- Aba Finalizados -->
+          <button onclick="window._rotaActiveAba='finalizados'; renderApp()"
+            class="px-4 py-2 rounded-lg text-xs font-black transition flex items-center gap-2 ${window._rotaActiveAba==='finalizados' ? 'bg-emerald-700 text-white shadow-lg shadow-emerald-950/50' : 'bg-slate-800/80 text-slate-300 hover:text-white border border-slate-700/60'}">
+            <span>✅</span>
+            <span>Finalizados / Histórico Liberado</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-black ${window._rotaActiveAba==='finalizados' ? 'bg-emerald-950 text-emerald-200 border border-emerald-500' : 'bg-slate-900 text-emerald-400 border border-slate-700'}">${finalizadosCount}</span>
+          </button>
+
+          <!-- Aba Todos -->
+          <button onclick="window._rotaActiveAba='todos'; renderApp()"
+            class="px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${window._rotaActiveAba==='todos' ? 'bg-blue-700 text-white shadow-lg shadow-blue-950/50' : 'bg-slate-800/80 text-slate-400 hover:text-white border border-slate-700/60'}">
+            <span>📋</span>
+            <span>Todos os Registros</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-900 text-slate-300 border border-slate-700">${totalChamados}</span>
+          </button>
+        </div>
+
+        <div class="text-xs text-slate-400 font-medium">
+          Exibindo <strong class="text-white">${rotasFiltradas.length}</strong> de <strong class="text-slate-300">${listaPorAba.length}</strong> registro(s) nesta visão
+        </div>
+      </div>
+
+      <!-- BARRA DE FILTROS COMBINÁVEIS & UNIVERSAIS -->
+      <div class="bg-slate-900/95 border border-slate-800 rounded-xl p-3.5 space-y-3 shadow-lg">
+        <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+          <div class="flex items-center gap-2">
+            <span class="text-sm">🔍</span>
+            <span class="text-xs font-black text-slate-200 uppercase tracking-wide">Filtros Dinâmicos Combináveis</span>
+            ${hasActiveFilters ? `<span class="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-extrabold px-2 py-0.5 rounded-full">Filtro Ativo</span>` : ''}
+          </div>
+          ${hasActiveFilters ? `
+            <button onclick="limparFiltrosRota()" class="text-[11px] bg-red-950/60 hover:bg-red-900/80 text-red-300 border border-red-800 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 transition shadow-sm">
+              <span>✕</span> Limpar Todos os Filtros
+            </button>
+          ` : ''}
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs">
+          <!-- Filtro Carga -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">📦 Nº Carga</label>
+            <input type="text" id="rota-filtro-carga" value="${window._rotaFiltroCarga || ''}"
+              oninput="forcarMaiuscula(this); window._rotaFiltroCarga=this.value; renderApp()"
+              placeholder="Ex: 10450..."
+              class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 text-emerald-400 font-bold rounded-lg p-2 text-xs placeholder:text-slate-500">
+          </div>
+
+          <!-- Filtro Rota -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">🗺️ Rota</label>
+            <select id="rota-filtro-rota" onchange="window._rotaFiltroRota=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+              <option value="">Todas as Rotas</option>
+              ${rotasOpcoes.map(r => `<option value="${r}" ${window._rotaFiltroRota===r?'selected':''}>${r}</option>`).join('')}
             </select>
           </div>
-          <button onclick="toggleNewRotaForm()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg">+ Registrar Problema de Veículo</button>
+
+          <!-- Filtro Veículo / Placa (Consulta flexível por qualquer parte do texto: ex: H89) -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">🚛 Veículo / Placa</label>
+            <div class="relative">
+              <input type="text" id="rota-filtro-veiculo" list="datalist-filtro-veiculos-rota"
+                value="${window._rotaFiltroVeiculo || ''}"
+                oninput="forcarMaiuscula(this); window._rotaFiltroVeiculo=this.value; renderApp()"
+                placeholder="Ex: H89, RMA, Toco..."
+                class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 text-white font-bold rounded-lg p-2 text-xs placeholder:text-slate-500">
+              <datalist id="datalist-filtro-veiculos-rota">
+                ${veiculosOpcoes.map(v => `<option value="${v.placa}">${v.placa} — ${v.tipo||v.modelo||''}</option>`).join('')}
+              </datalist>
+            </div>
+          </div>
+
+          <!-- Filtro Motorista -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">👤 Motorista</label>
+            <select id="rota-filtro-motorista" onchange="window._rotaFiltroMotorista=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+              <option value="">Todos os Motoristas</option>
+              ${motoristasOpcoes.map(m => `<option value="${m.nome}" ${window._rotaFiltroMotorista===m.nome?'selected':''}>${m.nome}</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- Filtro Motivo -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">⚠️ Motivo</label>
+            <select id="rota-filtro-motivo" onchange="window._rotaFiltroMotivo=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded-lg p-2 text-xs">
+              <option value="">Todos os Motivos</option>
+              ${motivosResumidos.map(m => `<option value="${m}" ${window._rotaFiltroMotivo===m?'selected':''}>${m}</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- Filtro Status -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">🚨 Status do Veículo</label>
+            <select id="rota-filtro-status" onchange="window._rotaFiltroStatus=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-amber-400 font-bold rounded-lg p-2 text-xs">
+              <option value="">Todos os Status</option>
+              <option value="Aguardando Manutenção" ${window._rotaFiltroStatus==='Aguardando Manutenção'?'selected':''}>🔴 Aguardando Manutenção</option>
+              <option value="Manutenção Externa" ${window._rotaFiltroStatus==='Manutenção Externa'?'selected':''}>🟠 Manutenção Externa</option>
+              <option value="Manutenção Interna" ${window._rotaFiltroStatus==='Manutenção Interna'?'selected':''}>🔧 Manutenção Interna</option>
+              <option value="Em Rota" ${window._rotaFiltroStatus==='Em Rota'?'selected':''}>🟢 Em Rota (Liberado)</option>
+              <option value="finalizado" ${window._rotaFiltroStatus==='finalizado'?'selected':''}>✔ Finalizado</option>
+              <option value="pendente" ${window._rotaFiltroStatus==='pendente'?'selected':''}>⏳ Pendente</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      <!-- Formulário Nova Ocorrência em Rota (Com Uploads) -->
-      <div id="form-nova-rota" class="hidden bg-slate-900 border border-red-900/60 rounded-xl p-5 space-y-4 shadow-2xl">
-        <h3 class="text-sm font-bold text-red-400 uppercase">Abertura de Chamado em Rota (Frota & Manutenção)</h3>
-        <form onsubmit="handleNovaRotaSubmit(event)" class="space-y-3">
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label class="block text-xs text-slate-300 mb-1">Nº da Carga</label>
-              <input type="text" id="rota-carga-numero" list="cargas-list-rota" placeholder="Ex: 10450"
-                oninput="onOcRotaCargaSelect(this.value)" onchange="onOcRotaCargaSelect(this.value)"
-                class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-2 text-xs">
-              ${renderDatalistCargas('cargas-list-rota')}
-              <div id="rota-carga-nao-encontrada" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
-            </div>
-            <div>
-              <label class="block text-xs text-slate-300 mb-1">Veículo / Placa *</label>
-              <select id="rota-veiculo-id" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
-                <option value="">-- Selecione --</option>
-                ${veiculos.map(v => `<option value="${v.id}" data-placa="${v.placa}">${v.placa} — ${v.tipo||v.modelo}</option>`).join('')}
-              </select>
-            </div>
-            <div>
-              <label class="block text-xs text-slate-300 mb-1">Motorista *</label>
-              <select id="rota-motorista-id" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
-                <option value="">-- Selecione --</option>
-                ${motoristas.map(m => `<option value="${m.id}">${m.nome}</option>`).join('')}
-              </select>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label class="block text-xs text-slate-300 mb-1">Rota</label>
-              <select id="rota-nome" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
-                <option value="">-- Selecione --</option>
-                ${rotasNomes.map(r => `<option value="${r}">${r}</option>`).join('')}
-              </select>
-            </div>
-            <div>
-              <label class="block text-xs text-slate-300 mb-1">Motivo do Problema Mecânico *</label>
-              <select id="rota-motivo-resumido" required class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-2 text-xs">
-                ${motivosResumidos.map(m => `<option value="${m}">${m}</option>`).join('')}
-              </select>
-            </div>
-            <div>
-              <label class="block text-xs text-slate-300 mb-1">Status do Veículo *</label>
-              <select id="rota-status-veiculo" required class="w-full bg-slate-800 border border-slate-700 text-amber-400 font-bold rounded p-2 text-xs">
-                <option value="Aguardando Manutenção">🔴 Aguardando Manutenção</option>
-                <option value="Manutenção Externa">🟠 Manutenção Externa</option>
-                <option value="Manutenção Interna">🔧 Manutenção Interna</option>
-                <option value="Em Rota">🟢 Em Rota (Liberado / Fechar)</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- UPLOADS DE IMAGENS E VÍDEOS -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 p-3 rounded-lg border border-slate-800">
-            <div>
-              <label class="block text-xs text-emerald-400 font-bold mb-1">📷 Fotos da Avaria / Veículo</label>
-              <input type="file" id="rota-fotos-file" accept="image/*" multiple onchange="handleRotaFotosUpload(this)" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-emerald-700 file:text-white">
-              <div id="rota-fotos-preview" class="flex flex-wrap gap-1 mt-1"></div>
-            </div>
-            <div>
-              <label class="block text-xs text-blue-400 font-bold mb-1">🎥 Vídeos do Problema Mecânico</label>
-              <input type="file" id="rota-videos-file" accept="video/*" multiple onchange="handleRotaVideosUpload(this)" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-blue-700 file:text-white">
-              <div id="rota-videos-preview" class="flex flex-wrap gap-1 mt-1"></div>
-            </div>
-          </div>
-
-          <div>
-            <label class="block text-xs text-slate-300 mb-1">Descrição Detalhada do Defeito *</label>
-            <textarea id="rota-descricao" required rows="2" placeholder="Descreva o problema mecânico ou avaria..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs"></textarea>
-          </div>
-          <div>
-            <label class="block text-xs text-slate-300 mb-1">Transcrição Áudio WhatsApp (opcional)</label>
-            <textarea id="rota-audio-wa" rows="2" placeholder="Cole a transcrição do relato do motorista..." class="w-full bg-slate-800 border border-slate-700 text-slate-300 rounded p-2 text-xs italic"></textarea>
-          </div>
-          <div class="flex justify-end gap-2">
-            <button type="button" onclick="toggleNewRotaForm()" class="bg-slate-800 text-slate-300 px-3 py-1.5 rounded text-xs font-bold">Cancelar</button>
-            <button type="submit" class="bg-red-600 hover:bg-red-500 text-white px-5 py-1.5 rounded text-xs font-bold shadow">Registrar Chamado</button>
-          </div>
-        </form>
-      </div>
-
-      <!-- Lista de Ocorrências -->
+      <!-- LISTA DE OCORRÊNCIAS -->
       <div class="space-y-4">
-        ${rotasFiltradas.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">Nenhuma ocorrência de frota em rota registrada.</div>` :
-        rotasFiltradas.map(r => `
-          <div class="bg-slate-900 border ${r.veiculo_parado ? 'border-red-600/80' : 'border-slate-800'} rounded-xl p-4 shadow-xl space-y-3">
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
-              <div>
-                <div class="flex items-center gap-2">
-                  <span class="text-xs font-black text-red-400 uppercase">${r.numero_protocolo}</span>
-                  <span class="bg-slate-800 text-amber-300 border border-amber-800/60 font-bold px-2 py-0.5 rounded text-[10px]">${r.motivo_resumido || r.tipo_ocorrencia || 'PROBLEMA MECÂNICO'}</span>
-                </div>
-                <div class="text-sm font-bold text-white mt-0.5">🚛 ${r.veiculo_placa} (${r.veiculo_modelo}) • ${r.motorista_nome}</div>
-                <div class="text-[11px] text-slate-400">Carga: ${r.carga_numero} | Rota: ${r.carga_rota}</div>
-              </div>
-              <div>
-                <span class="bg-slate-950 text-amber-300 border border-amber-800/80 font-bold px-3 py-1 rounded-full text-xs block text-center">
-                  ${r.status_veiculo || (r.veiculo_parado ? '🔴 Aguardando Manutenção' : '🟢 Em Rota')}
-                </span>
-                ${r.status === 'RESOLVIDO' ? '<span class="text-[9px] text-emerald-400 font-semibold block text-center mt-0.5">✔ Concluído</span>' : ''}
-              </div>
-            </div>
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs">
-              <div class="bg-slate-950 p-3 rounded border border-slate-800 space-y-2">
-                <div class="font-bold text-slate-300">Relato do Problema:</div>
-                <div class="text-slate-300">${r.descricao}</div>
-                ${r.transcricao_audio_wa ? `
-                  <div class="bg-emerald-950/40 border border-emerald-900/60 p-2 rounded text-[11px] text-emerald-200">
-                    <b>🎙️ WhatsApp:</b><br><span class="italic">"${r.transcricao_audio_wa}"</span>
-                  </div>` : ''}
-
-                <!-- MÍDIAS ANEXADAS (FOTOS E VÍDEOS) -->
-                ${Array.isArray(r.midia_fotos) && r.midia_fotos.length > 0 ? `
-                  <div class="pt-2 border-t border-slate-800">
-                    <div class="font-bold text-emerald-400 text-[10px] mb-1">📷 Fotos da Avaria:</div>
-                    <div class="flex flex-wrap gap-1.5">
-                      ${r.midia_fotos.map(img => `<img src="${img}" class="w-16 h-16 object-cover rounded border border-slate-700 cursor-pointer hover:opacity-80" onclick="window.open('${img}')">`).join('')}
-                    </div>
-                  </div>` : ''}
-
-                ${Array.isArray(r.midia_videos) && r.midia_videos.length > 0 ? `
-                  <div class="pt-2 border-t border-slate-800">
-                    <div class="font-bold text-blue-400 text-[10px] mb-1">🎥 Vídeos do Chamado:</div>
-                    <div class="space-y-1">
-                      ${r.midia_videos.map(vid => `<video src="${vid}" controls class="w-full max-h-36 rounded border border-blue-600/80"></video>`).join('')}
-                    </div>
-                  </div>` : ''}
-              </div>
-              <form onsubmit="handleManutencaoSubmit(event, '${r.id}')" class="bg-slate-950 p-3 rounded border border-slate-800 space-y-2">
-                <div class="font-bold text-red-400">Ação de Manutenção:</div>
+        ${rotasFiltradas.length === 0 ? `
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-slate-500 space-y-3">
+            <span class="text-4xl block">${window._rotaActiveAba === 'finalizados' ? '✅' : '🚚'}</span>
+            <p class="font-bold text-sm text-slate-300">
+              ${hasActiveFilters 
+                ? 'Nenhum chamado encontrado para os filtros selecionados.' 
+                : (window._rotaActiveAba === 'pendentes' 
+                    ? 'Nenhum chamado pendente no momento! Todos os veículos estão liberados.' 
+                    : (window._rotaActiveAba === 'finalizados' 
+                        ? 'Nenhum chamado finalizado no histórico até o momento.' 
+                        : 'Nenhuma ocorrência de frota em rota registrada.'))}
+            </p>
+            ${hasActiveFilters ? `
+              <button onclick="limparFiltrosRota()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-4 py-1.5 rounded-lg text-xs transition">
+                Limpar Filtros
+              </button>
+            ` : (window._rotaActiveAba === 'pendentes' ? `
+              <button onclick="abrirModalNovaRota()" class="bg-red-700 hover:bg-red-600 text-white font-bold px-4 py-2 rounded-lg text-xs transition">
+                + Registrar Problema de Veículo
+              </button>
+            ` : '')}
+          </div>
+        ` : rotasFiltradas.map(r => {
+          const isFinalizado = r.status_chamado === 'finalizado';
+          return `
+            <div class="bg-slate-900 border ${isFinalizado ? 'border-emerald-700/60 bg-emerald-950/5' : (r.veiculo_parado || r.status_veiculo === 'Aguardando Manutenção' ? 'border-red-600/80 shadow-red-950/20' : 'border-slate-800')} rounded-2xl p-4 sm:p-5 shadow-xl space-y-3.5 transition">
+              <!-- TOPO DO CARD -->
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
                 <div>
-                  <label class="block text-[10px] text-slate-400">Detalhamento do Socorro</label>
-                  <textarea id="man-acao-${r.id}" rows="2" required placeholder="Peças, mecânico..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">${r.acao_mecanico||''}</textarea>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-xs font-black text-red-400 uppercase tracking-wider">${r.numero_protocolo}</span>
+                    <span class="bg-slate-800 text-amber-300 border border-amber-800/60 font-bold px-2 py-0.5 rounded text-[10px]">${r.motivo_resumido || r.tipo_ocorrencia || 'PROBLEMA MECÂNICO'}</span>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-black ${isFinalizado ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-red-950 text-red-300 border border-red-800'}">
+                      ${isFinalizado ? '✔ FINALIZADO' : '⏳ PENDENTE'}
+                    </span>
+                  </div>
+                  <div class="text-sm sm:text-base font-extrabold text-white mt-1">🚛 ${r.veiculo_placa} (${r.veiculo_modelo || 'Veículo'}) • 👤 ${r.motorista_nome}</div>
+                  <div class="text-[11px] text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
+                    <span>📦 Carga: <strong class="text-emerald-400">#${r.carga_numero}</strong></span>
+                    <span>•</span>
+                    <span>🗺️ Rota: <strong class="text-white">${r.carga_rota || r.rota_nome || 'Não informada'}</strong></span>
+                  </div>
+                  ${r.localizacao ? `<div class="text-[11px] text-amber-300 font-semibold mt-1 flex items-center gap-1"><span>📍</span> Local: ${r.localizacao}</div>` : ''}
                 </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <div>
-                    <label class="block text-[10px] text-slate-400">Peças Trocadas</label>
-                    <input type="text" id="man-pecas-${r.id}" value="${r.pecas_trocadas||''}" placeholder="Radiador..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">
+
+                <div class="flex flex-col sm:items-end gap-2 shrink-0">
+                  <div class="flex items-center gap-1.5">
+                    <button onclick="imprimirFichaOficinaChamadoPdf('${r.id}')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-2.5 py-1.5 rounded-lg text-[11px] border border-blue-700/60 flex items-center gap-1 transition shadow-sm" title="Imprimir Ordem de Serviço / Ficha de Oficina (A4)">
+                      <span>🖨️</span> Imprimir OS
+                    </button>
+                    <button onclick="editarOcorrenciaRotaModal('${r.id}')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-2.5 py-1.5 rounded-lg text-[11px] border border-slate-700 flex items-center gap-1 transition shadow-sm" title="Editar Chamado (Gera Snapshot Rollback)">
+                      <span>✏️</span> Editar
+                    </button>
+                    <button onclick="deleteOcorrenciaRota('${r.id}')" class="bg-red-950/60 hover:bg-red-900/80 text-red-300 font-bold px-2.5 py-1.5 rounded-lg text-[11px] border border-red-800 flex items-center gap-1 transition shadow-sm" title="Mover para Lixeira (Soft Delete)">
+                      <span>🗑️</span> Excluir
+                    </button>
                   </div>
                   <div>
-                    <label class="block text-[10px] text-slate-400">Custo (R$)</label>
-                    <input type="number" step="0.01" id="man-custo-${r.id}" value="${r.custo_socorro||0}" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs">
+                    ${getBadgeStatusFrota(r.status_veiculo, r.status_chamado)}
                   </div>
+                  <span class="text-[10px] text-slate-500">Aberto em: ${new Date(r.criado_em || r.id).toLocaleString('pt-BR')}</span>
                 </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <div>
-                    <label class="block text-[10px] text-slate-400">Guincho</label>
-                    <select id="man-guincho-${r.id}" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">
-                      <option value="nao" ${!r.guincho_acionado?'selected':''}>Não</option>
-                      <option value="sim" ${r.guincho_acionado?'selected':''}>Sim</option>
-                    </select>
+              </div>
+
+              <!-- CORPO: RELATO DO PROBLEMA & RETORNO DA MANUTENÇÃO -->
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 text-xs">
+                <!-- Coluna 1: Relato da Avaria e Mídias -->
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
+                  <div class="font-bold text-slate-300 flex items-center gap-1.5">
+                    <span>⚠️</span> Relato do Problema / Avaria:
                   </div>
-                  <div>
-                    <label class="block text-[10px] text-slate-400">Status do Veículo</label>
-                    <select id="man-status-veiculo-${r.id}" class="w-full bg-slate-900 border border-slate-700 text-amber-300 font-bold rounded p-1.5 text-xs">
-                      <option value="Aguardando Manutenção" ${r.status_veiculo==='Aguardando Manutenção'?'selected':''}>🔴 Aguardando Manutenção</option>
-                      <option value="Manutenção Externa" ${r.status_veiculo==='Manutenção Externa'?'selected':''}>🟠 Manutenção Externa</option>
-                      <option value="Manutenção Interna" ${r.status_veiculo==='Manutenção Interna'?'selected':''}>🔧 Manutenção Interna</option>
-                      <option value="Em Rota" ${r.status_veiculo==='Em Rota'||r.status==='RESOLVIDO'?'selected':''}>🟢 Em Rota (Liberado & Concluir)</option>
-                    </select>
-                  </div>
+                  <div class="text-slate-300 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800 leading-relaxed">${r.descricao}</div>
+
+                  <!-- MÍDIAS ANEXADAS -->
+                  ${Array.isArray(r.midia_fotos) && r.midia_fotos.length > 0 ? `
+                    <div class="pt-2 border-t border-slate-800">
+                      <div class="font-bold text-emerald-400 text-[11px] mb-1.5 flex items-center gap-1">
+                        <span>📷</span> Fotos Anexadas (${r.midia_fotos.length}):
+                      </div>
+                      <div class="flex flex-wrap gap-2">
+                        ${r.midia_fotos.map(img => `
+                          <div class="w-16 h-16 rounded-lg overflow-hidden border border-slate-700 bg-black cursor-pointer hover:border-emerald-500 transition shrink-0" onclick="visualizarMidiaModal('${img}', 'image')">
+                            <img src="${img}" class="w-full h-full object-cover hover:scale-105 transition duration-200" title="Clique para ampliar">
+                          </div>
+                        `).join('')}
+                      </div>
+                    </div>` : ''}
+
+                  ${Array.isArray(r.midia_videos) && r.midia_videos.length > 0 ? `
+                    <div class="pt-2 border-t border-slate-800">
+                      <div class="font-bold text-blue-400 text-[11px] mb-1.5 flex items-center gap-1">
+                        <span>🎥</span> Vídeos Anexados (${r.midia_videos.length}):
+                      </div>
+                      <div class="flex flex-wrap gap-2">
+                        ${r.midia_videos.map(vid => `
+                          <div class="w-28 h-16 rounded-lg overflow-hidden border border-blue-600/80 bg-black relative flex items-center justify-center cursor-pointer" onclick="visualizarMidiaModal('${vid}', 'video')">
+                            <video src="${vid}" class="w-full h-full object-cover" preload="metadata"></video>
+                            <span class="absolute inset-0 flex items-center justify-center bg-black/40 text-white font-bold text-sm hover:bg-black/20 transition">▶</span>
+                          </div>
+                        `).join('')}
+                      </div>
+                    </div>` : ''}
                 </div>
-                <button type="submit" class="w-full bg-red-700 hover:bg-red-600 text-white font-bold py-1.5 rounded text-xs">Atualizar Manutenção</button>
-              </form>
+
+                <!-- Coluna 2: Retorno da Manutenção (Pendente vs Finalizado) -->
+                ${isFinalizado ? `
+                  <!-- FICHA TÉCNICA DE RETORNO CONCLUÍDO -->
+                  <div class="bg-emerald-950/20 p-3.5 rounded-xl border border-emerald-700/60 space-y-2.5 flex flex-col justify-between">
+                    <div class="space-y-2">
+                      <div class="flex items-center justify-between border-b border-emerald-800/60 pb-1.5">
+                        <span class="font-black text-emerald-400 text-xs flex items-center gap-1.5">
+                          <span>✅</span> Retorno da Manutenção Concluído
+                        </span>
+                        <span class="text-[10px] text-emerald-300 font-bold bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">Veículo Liberado</span>
+                      </div>
+
+                      <div class="space-y-1.5 text-[11px]">
+                        <div>
+                          <span class="text-slate-400 block text-[10px] uppercase font-bold">Serviço Realizado / Peça Trocada:</span>
+                          <span class="text-white font-semibold leading-relaxed">${r.retorno_manutencao_descricao || r.acao_mecanico || 'Reparo concluído.'}</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 pt-1 border-t border-emerald-900/40">
+                          <div>
+                            <span class="text-slate-400 block text-[10px] uppercase font-bold">Responsável Técnico:</span>
+                            <span class="text-emerald-300 font-bold">${r.retorno_manutencao_responsavel || 'Mecânica/Frota'}</span>
+                          </div>
+                          <div>
+                            <span class="text-slate-400 block text-[10px] uppercase font-bold">Data da Liberação:</span>
+                            <span class="text-slate-200 font-semibold">${r.retorno_manutencao_data ? new Date(r.retorno_manutencao_data).toLocaleString('pt-BR') : 'N/A'}</span>
+                          </div>
+                        </div>
+                        ${r.pecas_trocadas ? `
+                          <div>
+                            <span class="text-slate-400 block text-[10px] uppercase font-bold">Peças Substituídas:</span>
+                            <span class="text-amber-200">${r.pecas_trocadas}</span>
+                          </div>` : ''}
+                        <div class="grid grid-cols-2 gap-2 pt-1 border-t border-emerald-900/40 text-[10px]">
+                          <div><span class="text-slate-400 font-bold">Custo Total:</span> <strong class="text-emerald-400">R$ ${(parseFloat(r.custo_socorro)||0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong></div>
+                          <div><span class="text-slate-400 font-bold">Guincho Acionado:</span> <strong class="text-white">${r.guincho_acionado ? 'Sim' : 'Não'}</strong></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ` : `
+                  <!-- PAINEL OPERACIONAL DE CHAMADO PENDENTE -->
+                  <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3 flex flex-col justify-between">
+                    <div>
+                      <div class="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                        <span class="font-bold text-red-400 flex items-center gap-1.5">
+                          <span>🔧</span> Fluxo de Retorno da Oficina / Socorro
+                        </span>
+                        <span class="text-[10px] text-amber-300 bg-amber-950 px-2 py-0.5 rounded border border-amber-800 font-bold">Em Atendimento</span>
+                      </div>
+                      <p class="text-[11px] text-slate-400 mt-1.5">
+                        Após o atendimento pelo mecânico volante ou oficina, registre a liberação técnica para que o veículo retorne ao status operacional.
+                      </p>
+                    </div>
+
+                    <div class="space-y-2">
+                      <button onclick="abrirModalRetornoManutencao('${r.id}')" class="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold py-2.5 px-4 rounded-xl text-xs shadow-lg shadow-emerald-950/40 flex items-center justify-center gap-2 transition hover:scale-[1.01]">
+                        <span>🔧</span> Retorno da Manutenção / Liberar Veículo
+                      </button>
+
+                      <form onsubmit="handleManutencaoSubmit(event, '${r.id}')" class="pt-2 border-t border-slate-800/80 space-y-2">
+                        <div class="flex items-center justify-between">
+                          <label class="text-[10px] text-slate-400 font-bold uppercase">Atualizar Status Intermediário:</label>
+                          <button type="submit" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-2 py-0.5 rounded border border-slate-700">Salvar Mudança</button>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                          <select id="man-status-veiculo-${r.id}" class="w-full bg-slate-900 border border-slate-700 text-amber-300 font-bold rounded p-1.5 text-[11px]">
+                            <option value="Aguardando Manutenção" ${r.status_veiculo==='Aguardando Manutenção'?'selected':''}>🔴 Aguardando Manutenção</option>
+                            <option value="Manutenção Externa" ${r.status_veiculo==='Manutenção Externa'?'selected':''}>🟠 Manutenção Externa</option>
+                            <option value="Manutenção Interna" ${r.status_veiculo==='Manutenção Interna'?'selected':''}>🔧 Manutenção Interna</option>
+                          </select>
+                          <input type="text" id="man-acao-${r.id}" value="${r.acao_mecanico||''}" placeholder="Anotação de progresso..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-[11px]" oninput="forcarMaiuscula(this)">
+                        </div>
+                        <input type="hidden" id="man-pecas-${r.id}" value="${r.pecas_trocadas||''}">
+                        <input type="hidden" id="man-custo-${r.id}" value="${r.custo_socorro||0}">
+                        <input type="hidden" id="man-guincho-${r.id}" value="${r.guincho_acionado ? 'sim' : 'nao'}">
+                      </form>
+                    </div>
+                  </div>
+                `}
+              </div>
             </div>
-          </div>`).join('')}
+          `;
+        }).join('')}
       </div>
     </div>`;
 }
@@ -5909,10 +7230,18 @@ function renderViagensTrocaVeiculosSubTab() {
 
   const fMotivo = window._trocaFiltroMotivo || '';
   const fAutorizado = window._trocaFiltroAutorizado || '';
+  const fVeic = (window._trocaFiltroVeiculo || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
   let trocasFiltradas = trocas;
   if (fMotivo) trocasFiltradas = trocasFiltradas.filter(t => t.motivo_resumido === fMotivo);
   if (fAutorizado) trocasFiltradas = trocasFiltradas.filter(t => t.autorizado_por === fAutorizado);
+  if (fVeic) {
+    trocasFiltradas = trocasFiltradas.filter(t => {
+      const esc = String(t.veiculo_escalado || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const troc = String(t.veiculo_trocado || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      return esc.includes(fVeic) || troc.includes(fVeic);
+    });
+  }
 
   return `
     <div class="space-y-5">
@@ -5955,7 +7284,7 @@ function renderViagensTrocaVeiculosSubTab() {
               <select id="tr-motivo-resumido" required onchange="toggleMotivoOutroTroca(this.value)" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
                 ${motivos.map(m => `<option value="${m}">${m}</option>`).join('')}
               </select>
-              <input type="text" id="tr-motivo-outro" placeholder="Especifique o outro motivo..." class="hidden mt-1 w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <input type="text" id="tr-motivo-outro" placeholder="Especifique o outro motivo..." class="hidden mt-1 w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">
             </div>
 
             <div>
@@ -5968,7 +7297,7 @@ function renderViagensTrocaVeiculosSubTab() {
 
           <div>
             <label class="block text-[10px] text-slate-300 mb-1">Detalhamento *</label>
-            <textarea id="tr-detalhamento" required rows="2" placeholder="Descreva os detalhes da substituição..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></textarea>
+            <textarea id="tr-detalhamento" required rows="2" placeholder="Descreva os detalhes da substituição..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></textarea>
           </div>
 
           <div class="flex justify-end gap-2 pt-2">
@@ -5985,7 +7314,8 @@ function renderViagensTrocaVeiculosSubTab() {
             <span class="text-base">🔄</span>
             <h3 class="font-bold text-purple-400 text-xs uppercase tracking-wider">Histórico de Trocas de Veículos</h3>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2">
+            <input type="text" id="troca-filtro-veiculo" value="${window._trocaFiltroVeiculo || ''}" placeholder="Buscar Placa (ex: H89)..." oninput="forcarMaiuscula(this); window._trocaFiltroVeiculo=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1 focus:border-purple-500 focus:outline-none">
             <select onchange="window._trocaFiltroMotivo=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1">
               <option value="">Todos os Motivos</option>
               ${motivos.map(m => `<option value="${m}" ${fMotivo===m?'selected':''}>${m}</option>`).join('')}
@@ -6014,7 +7344,7 @@ function renderViagensTrocaVeiculosSubTab() {
               ${trocasFiltradas.length === 0 ? '<tr><td colspan="7" class="p-6 text-center text-slate-500">Nenhuma troca de veículo registrada.</td></tr>' :
               trocasFiltradas.map(t => `
                 <tr class="hover:bg-slate-800/50">
-                  <td class="p-2 border-r border-slate-800 font-medium text-slate-300">${t.data}</td>
+                  <td class="p-2 border-r border-slate-800 font-medium text-slate-300">${formatarData(t.data)}</td>
                   <td class="p-2 border-r border-slate-800 font-bold text-amber-400">🚛 ${t.veiculo_escalado}</td>
                   <td class="p-2 border-r border-slate-800 font-bold text-emerald-400">🚛 ${t.veiculo_trocado}</td>
                   <td class="p-2 border-r border-slate-800">
@@ -6120,7 +7450,7 @@ function editarTrocaVeiculoModal(id) {
 
         <div>
           <label class="block text-[10px] text-slate-400 mb-1">Detalhamento</label>
-          <textarea id="ed-tr-detalhe" rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">${t.detalhamento}</textarea>
+          <textarea id="ed-tr-detalhe" rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${t.detalhamento}</textarea>
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
@@ -6148,58 +7478,153 @@ function handleSalvarEdicaoTrocaVeiculo(e, id) {
 }
 
 // ===== SUB-ABA 5: PAINEL DE CONTROLE DE REENTREGAS & ATRASOS EM ROTAS =====
+function limparFiltrosReentregas() {
+  window._reFiltroCarga = '';
+  window._reFiltroRota = '';
+  window._reFiltroVeiculo = '';
+  window._reFiltroMotorista = '';
+  window._reFiltroNovoMotorista = '';
+  window._reFiltroMotivo = '';
+  window._reFiltroStatus = 'TODOS';
+  window._reFiltroDataDe = '';
+  window._reFiltroDataAte = '';
+  window._reFiltroBusca = '';
+  renderApp();
+}
+
 function renderViagensReentregasSubTab() {
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
-  
-  // Filtros ativos
-  const fStatus = window._reFiltroStatus || 'TODOS';
+  const veiculos = (db.data.veiculos || []).filter(v => v.situacao !== 'Inativo');
+  const motoristas = db.data.motoristas || [];
+  const rotasNomes = db.data.rotas || [];
+  const motivosPadrao = [
+    "CLIENTE AUSENTE",
+    "HORÁRIO EXCEDIDO",
+    "AVARIA EM ROTA",
+    "RECUSA DO CLIENTE",
+    "ENDEREÇO NÃO LOCALIZADO",
+    "PROBLEMA MECÂNICO",
+    "SUBSTITUIÇÃO DE EQUIPE",
+    "CONDUTA OPERACIONAL",
+    "OUTRO"
+  ];
+
+  // Opções dinâmicas para filtros
+  const rotasOpcoes = Array.from(new Set([...rotasNomes, ...todasReentregas.map(r => r.rota_nome).filter(Boolean)])).sort();
+  const motoristasOpcoes = Array.from(new Set([...motoristas.map(m => m.nome), ...todasReentregas.map(r => r.motorista_nome).filter(Boolean)])).sort();
+  const novosMotoristasOpcoes = Array.from(new Set([...motoristas.map(m => m.nome), ...todasReentregas.map(r => r.novo_motorista).filter(Boolean)])).sort();
+  const motivosOpcoes = Array.from(new Set([...motivosPadrao, ...todasReentregas.map(r => r.motivo).filter(Boolean)])).sort();
+
+  // Controle de Aba Ativa (pendentes, realizadas, todos)
+  window._reActiveAba = window._reActiveAba || 'pendentes';
+
+  // Contagens Globais
+  const totalReentregasGeral = todasReentregas.length;
+  const pendentesGeralCount = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO').length;
+  const realizadasGeralCount = todasReentregas.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO').length;
+
+  // 1. Filtragem por Aba
+  let listaPorAba = todasReentregas;
+  if (window._reActiveAba === 'pendentes') {
+    listaPorAba = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
+  } else if (window._reActiveAba === 'realizadas') {
+    listaPorAba = todasReentregas.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO');
+  }
+
+  // 2. Filtros Combináveis
+  const normTxt = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const normPlate = s => normTxt(s).replace(/[^a-z0-9]/g, '');
+
+  const fCarga = (window._reFiltroCarga || '').trim().toLowerCase().replace(/^#/, '');
+  const fRota = (window._reFiltroRota || '').trim();
+  const fVeic = (window._reFiltroVeiculo || '').trim();
+  const fMot = (window._reFiltroMotorista || '').trim();
+  const fNovoMot = (window._reFiltroNovoMotorista || '').trim();
+  const fMotivo = (window._reFiltroMotivo || '').trim();
+  const fStatus = (window._reFiltroStatus || 'TODOS').trim();
   const fDataDe = window._reFiltroDataDe || '';
   const fDataAte = window._reFiltroDataAte || '';
   const fBusca = (window._reFiltroBusca || '').trim().toLowerCase();
 
-  // Filtragem da lista
-  let lista = todasReentregas;
+  const hasActiveFilters = !!(fCarga || fRota || fVeic || fMot || fNovoMot || fMotivo || (fStatus && fStatus !== 'TODOS') || fDataDe || fDataAte || fBusca);
 
-  if (fStatus !== 'TODOS') {
-    if (fStatus === 'PENDENTE') {
-      lista = lista.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
-    } else if (fStatus === 'REALIZADA') {
-      lista = lista.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO');
+  const listaFiltrada = listaPorAba.filter(r => {
+    // Filtro Período De / Até
+    if (fDataDe && (r.data || '') < fDataDe) return false;
+    if (fDataAte && (r.data || '') > fDataAte) return false;
+
+    // Filtro Carga
+    if (fCarga && !String(r.carga_numero || '').toLowerCase().includes(fCarga)) {
+      return false;
     }
-  }
 
-  if (fDataDe) {
-    lista = lista.filter(r => (r.data || '') >= fDataDe);
-  }
-  if (fDataAte) {
-    lista = lista.filter(r => (r.data || '') <= fDataAte);
-  }
+    // Filtro Rota
+    if (fRota && r.rota_nome !== fRota) {
+      return false;
+    }
 
-  if (fBusca) {
-    lista = lista.filter(r =>
-      (r.motorista_nome || '').toLowerCase().includes(fBusca) ||
-      (r.rota_nome || '').toLowerCase().includes(fBusca) ||
-      (r.carga_numero || '').toLowerCase().includes(fBusca) ||
-      (r.placa || '').toLowerCase().includes(fBusca) ||
-      (r.novo_motorista || '').toLowerCase().includes(fBusca) ||
-      (r.motivo || '').toLowerCase().includes(fBusca)
-    );
-  }
+    // Filtro Veículo / Placa
+    if (fVeic) {
+      const fvClean = normPlate(fVeic);
+      const fvTxt = normTxt(fVeic);
+      const rPlacaClean = normPlate(r.placa);
+      const rPlacaTxt = normTxt(r.placa);
+      const matchVeic = (fvClean && rPlacaClean.includes(fvClean)) || rPlacaTxt.includes(fvTxt);
+      if (!matchVeic) return false;
+    }
 
-  // Cálculos de Indicadores (KPIs)
-  const totalReentregas = lista.length;
-  const totalPendentes = lista.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO').length;
-  const totalRealizadas = lista.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO').length;
-  const totalQtdReentregas = lista.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
-  const totalSaiu = lista.reduce((acc, r) => acc + (parseInt(r.entregas_saiu) || 0), 0);
-  const totalFeitas = lista.reduce((acc, r) => acc + (parseInt(r.entregas_feitas) || 0), 0);
+    // Filtro Motorista Original
+    if (fMot && r.motorista_nome !== fMot) {
+      return false;
+    }
 
-  const fmtData = d => d ? d.split('-').reverse().join('/') : '—';
+    // Filtro Novo Motorista
+    if (fNovoMot && r.novo_motorista !== fNovoMot) {
+      return false;
+    }
+
+    // Filtro Motivo
+    if (fMotivo && r.motivo !== fMotivo) {
+      return false;
+    }
+
+    // Filtro Status (se selecionado na barra de filtros)
+    if (fStatus && fStatus !== 'TODOS') {
+      const isPend = r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO';
+      if (fStatus === 'PENDENTE' && !isPend) return false;
+      if (fStatus === 'REALIZADA' && isPend) return false;
+    }
+
+    // Busca Rápida Geral
+    if (fBusca) {
+      const matchBusca =
+        (r.motorista_nome || '').toLowerCase().includes(fBusca) ||
+        (r.rota_nome || '').toLowerCase().includes(fBusca) ||
+        String(r.carga_numero || '').toLowerCase().includes(fBusca) ||
+        (r.placa || '').toLowerCase().includes(fBusca) ||
+        (r.novo_motorista || '').toLowerCase().includes(fBusca) ||
+        (r.motivo || '').toLowerCase().includes(fBusca) ||
+        (r.detalhes || '').toLowerCase().includes(fBusca);
+      if (!matchBusca) return false;
+    }
+
+    return true;
+  });
+
+  // Cálculos de Indicadores (KPIs) Reativos - recalculam dinamicamente com base nos filtros e datas
+  const totalReentregas = listaFiltrada.length;
+  const totalPendentes = listaFiltrada.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO').length;
+  const totalRealizadas = listaFiltrada.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO').length;
+  const totalQtdReentregas = listaFiltrada.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
+  const totalSaiu = listaFiltrada.reduce((acc, r) => acc + (parseInt(r.entregas_saiu) || 0), 0);
+  const totalFeitas = listaFiltrada.reduce((acc, r) => acc + (parseInt(r.entregas_feitas) || 0), 0);
+
+  const fmtData = d => formatarData(d);
 
   return `
-    <div class="space-y-5">
+    <div class="space-y-4 animate-fadeIn">
       <!-- HEADER DO MÓDULO -->
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 border border-purple-900/60 p-4 rounded-xl shadow-xl">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900 border border-purple-900/60 p-4 rounded-xl shadow-xl">
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 rounded-xl bg-purple-950/80 border border-purple-600 flex items-center justify-center text-xl shadow">
             🔄
@@ -6208,21 +7633,55 @@ function renderViagensReentregasSubTab() {
             <h2 class="text-sm font-black text-purple-400 uppercase tracking-wider flex items-center gap-2">
               Painel de Gestão de Reentregas & Atrasos em Rotas
             </h2>
-            <p class="text-[11px] text-slate-400">Controle operacional de devoluções de rota, acompanhamento de pendências e emissão oficial</p>
+            <p class="text-[11px] text-slate-400 mt-0.5">Controle operacional de devoluções de rota, acompanhamento de pendências e emissão oficial</p>
           </div>
         </div>
+
         <div class="flex flex-wrap items-center gap-2">
-          <button onclick="emitirRelatorioReentregasA4()" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
+          <button onclick="emitirRelatorioReentregasA4()" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs shadow-lg flex items-center gap-1.5 transition hover:scale-[1.02]">
             <span>📄</span> Imprimir Relatório Oficial A4
           </button>
-          <button onclick="abrirModalNovaReentrega()" class="bg-purple-700 hover:bg-purple-600 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
-            <span>➕</span> Nova Reentrega
+          <button onclick="abrirModalNovaReentrega()" class="bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-600 hover:to-indigo-600 text-white font-black px-4 py-2 rounded-xl text-xs shadow-lg shadow-purple-950/60 flex items-center gap-1.5 transition hover:scale-[1.02]">
+            <span>➕</span> Registrar Reentrega
           </button>
         </div>
       </div>
 
-      <!-- CARDS DE INDICADORES (KPIS) -->
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- SELETOR DE ABAS PRINCIPAIS (PENDENTES vs REALIZADAS vs TODOS) -->
+      <div class="flex flex-wrap items-center justify-between gap-3 bg-slate-900 border border-slate-800 p-2.5 rounded-xl shadow-lg">
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- Aba Pendentes -->
+          <button onclick="window._reActiveAba='pendentes'; renderApp()"
+            class="px-4 py-2 rounded-lg text-xs font-black transition flex items-center gap-2 ${window._reActiveAba==='pendentes' ? 'bg-amber-700 text-white shadow-lg shadow-amber-950/50' : 'bg-slate-800/80 text-slate-300 hover:text-white border border-slate-700/60'}">
+            <span>🚨</span>
+            <span>Pendentes (Ação Imediata)</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-black ${window._reActiveAba==='pendentes' ? 'bg-amber-950 text-amber-200 border border-amber-500' : 'bg-slate-900 text-amber-400 border border-slate-700'}">${pendentesGeralCount}</span>
+          </button>
+
+          <!-- Aba Realizadas -->
+          <button onclick="window._reActiveAba='realizadas'; renderApp()"
+            class="px-4 py-2 rounded-lg text-xs font-black transition flex items-center gap-2 ${window._reActiveAba==='realizadas' ? 'bg-emerald-700 text-white shadow-lg shadow-emerald-950/50' : 'bg-slate-800/80 text-slate-300 hover:text-white border border-slate-700/60'}">
+            <span>✅</span>
+            <span>Realizadas / Histórico</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-black ${window._reActiveAba==='realizadas' ? 'bg-emerald-950 text-emerald-200 border border-emerald-500' : 'bg-slate-900 text-emerald-400 border border-slate-700'}">${realizadasGeralCount}</span>
+          </button>
+
+          <!-- Aba Todos -->
+          <button onclick="window._reActiveAba='todos'; renderApp()"
+            class="px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${window._reActiveAba==='todos' ? 'bg-purple-700 text-white shadow-lg shadow-purple-950/50' : 'bg-slate-800/80 text-slate-400 hover:text-white border border-slate-700/60'}">
+            <span>📋</span>
+            <span>Todos os Registros</span>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-900 text-slate-300 border border-slate-700">${totalReentregasGeral}</span>
+          </button>
+        </div>
+
+        <div class="text-xs text-slate-400 font-medium">
+          Exibindo <strong class="text-white">${listaFiltrada.length}</strong> de <strong class="text-slate-300">${listaPorAba.length}</strong> registro(s) nesta visão
+        </div>
+      </div>
+
+      <!-- CARDS DE INDICADORES (KPIS REATIVOS) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
         <!-- Total Reentregas -->
         <div class="bg-slate-900 border border-purple-900/50 p-4 rounded-xl shadow-lg relative overflow-hidden">
           <div class="flex items-center justify-between">
@@ -6231,10 +7690,25 @@ function renderViagensReentregasSubTab() {
           </div>
           <div class="mt-2 flex items-baseline gap-2">
             <span class="text-2xl font-black text-white">${totalReentregas}</span>
-            <span class="text-[10px] text-slate-400">rotas registradas</span>
+            <span class="text-[10px] text-slate-400">rotas filtradas</span>
           </div>
           <div class="mt-2 text-[10px] text-purple-300 font-semibold flex items-center gap-1">
             <span>📦 Saiu: <b>${totalSaiu}</b></span> • <span>Feitas: <b>${totalFeitas}</b></span>
+          </div>
+        </div>
+
+        <!-- Índice de Reentrega por Viagem (%) (NOVO) -->
+        <div class="bg-slate-900 border border-indigo-900/60 p-4 rounded-xl shadow-lg relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-indigo-400 uppercase">Índice Reentrega / Viagem</span>
+            <span class="text-lg">🔄</span>
+          </div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span class="text-2xl font-black text-indigo-300">${(typeof db.getControleViagens === 'function' && db.getControleViagens().length > 0) ? ((totalReentregas / db.getControleViagens().length) * 100).toFixed(1) : '0.0'}%</span>
+            <span class="text-[10px] text-indigo-400 font-bold">taxa operacional</span>
+          </div>
+          <div class="mt-2 text-[10px] text-slate-400">
+            Proporção sobre viagens expedidas
           </div>
         </div>
 
@@ -6284,40 +7758,108 @@ function renderViagensReentregasSubTab() {
         </div>
       </div>
 
-      <!-- BARRA DE FILTROS -->
-      <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div class="flex flex-wrap items-center gap-2.5 flex-1">
-          <!-- Busca Rápida -->
-          <div class="relative min-w-[220px] flex-1 max-w-sm">
-            <span class="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-slate-500 text-xs">🔍</span>
-            <input type="text" value="${window._reFiltroBusca || ''}" oninput="window._reFiltroBusca = this.value; renderApp()" placeholder="Buscar Motorista, Rota, Carga ou Placa..." class="w-full bg-slate-900 border border-slate-700 text-white rounded-lg pl-8 pr-3 py-1.5 text-xs placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-purple-500">
+      <!-- BARRA DE FILTROS DEDICADOS COMBINÁVEIS -->
+      <div class="bg-slate-900/95 border border-slate-800 rounded-xl p-3.5 space-y-3 shadow-lg">
+        <div class="flex items-center justify-between border-b border-slate-800/80 pb-2">
+          <div class="flex items-center gap-2">
+            <span class="text-sm">🔍</span>
+            <span class="text-xs font-black text-slate-200 uppercase tracking-wide">Filtros Dinâmicos Combináveis</span>
+            ${hasActiveFilters ? `<span class="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-extrabold px-2 py-0.5 rounded-full">Filtro Ativo</span>` : ''}
           </div>
-
-          <!-- Filtro Status -->
-          <select onchange="window._reFiltroStatus = this.value; renderApp()" class="bg-slate-900 border border-slate-700 text-white rounded-lg text-xs px-2.5 py-1.5 font-bold focus:outline-none focus:ring-1 focus:ring-purple-500">
-            <option value="TODOS" ${fStatus === 'TODOS' ? 'selected' : ''}>Status: Todos</option>
-            <option value="PENDENTE" ${fStatus === 'PENDENTE' ? 'selected' : ''}>⏳ PENDENTE</option>
-            <option value="REALIZADA" ${fStatus === 'REALIZADA' ? 'selected' : ''}>✅ REALIZADA</option>
-          </select>
-
-          <!-- Período De / Até -->
-          <div class="flex items-center gap-1.5 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1">
-            <span class="text-[10px] text-slate-400 font-bold uppercase">De:</span>
-            <input type="date" value="${fDataDe}" onchange="window._reFiltroDataDe = this.value; renderApp()" class="bg-transparent text-white text-xs border-0 p-0 focus:ring-0">
-            <span class="text-[10px] text-slate-400 font-bold uppercase ml-1">Até:</span>
-            <input type="date" value="${fDataAte}" onchange="window._reFiltroDataAte = this.value; renderApp()" class="bg-transparent text-white text-xs border-0 p-0 focus:ring-0">
-          </div>
-
-          <!-- Limpar Filtros -->
-          ${(fStatus !== 'TODOS' || fDataDe || fDataAte || fBusca) ? `
-            <button onclick="window._reFiltroStatus='TODOS'; window._reFiltroDataDe=''; window._reFiltroDataAte=''; window._reFiltroBusca=''; renderApp()" class="text-xs text-slate-400 hover:text-white px-2 py-1 rounded hover:bg-slate-800 transition flex items-center gap-1">
-              <span>✕</span> Limpar
+          ${hasActiveFilters ? `
+            <button onclick="limparFiltrosReentregas()" class="text-[11px] bg-red-950/60 hover:bg-red-900/80 text-red-300 border border-red-800 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 transition shadow-sm">
+              <span>✕</span> Limpar Todos os Filtros
             </button>
           ` : ''}
         </div>
 
-        <div class="text-[11px] text-slate-400 font-semibold">
-          Exibindo <b>${lista.length}</b> de <b>${todasReentregas.length}</b> registros
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8 gap-2.5 text-xs">
+          <!-- Filtro Carga -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">📦 Nº Carga</label>
+            <input type="text" id="re-filtro-carga" value="${window._reFiltroCarga || ''}"
+              oninput="forcarMaiuscula(this); window._reFiltroCarga=this.value; renderApp()"
+              placeholder="Ex: 43125..."
+              class="w-full bg-slate-800 border border-slate-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-purple-300 font-bold rounded-lg p-2 text-xs placeholder:text-slate-500">
+          </div>
+
+          <!-- Filtro Rota -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">🗺️ Rota</label>
+            <select id="re-filtro-rota" onchange="window._reFiltroRota=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+              <option value="">Todas as Rotas</option>
+              ${rotasOpcoes.map(r => `<option value="${r}" ${window._reFiltroRota===r?'selected':''}>${r}</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- Filtro Veículo / Placa -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">🚛 Veículo / Placa</label>
+            <div class="relative">
+              <input type="text" id="re-filtro-veiculo" list="datalist-filtro-veiculos-re"
+                value="${window._reFiltroVeiculo || ''}"
+                oninput="forcarMaiuscula(this); window._reFiltroVeiculo=this.value; renderApp()"
+                placeholder="Ex: RMA, H89..."
+                class="w-full bg-slate-800 border border-slate-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-amber-300 font-bold rounded-lg p-2 text-xs placeholder:text-slate-500">
+              <datalist id="datalist-filtro-veiculos-re">
+                ${veiculos.map(v => `<option value="${v.placa}">${v.placa} — ${v.tipo||v.modelo||''}</option>`).join('')}
+              </datalist>
+            </div>
+          </div>
+
+          <!-- Filtro Motorista Original -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">👤 Motorista Original</label>
+            <select id="re-filtro-motorista" onchange="window._reFiltroMotorista=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+              <option value="">Todos os Motoristas</option>
+              ${motoristasOpcoes.map(m => `<option value="${m}" ${window._reFiltroMotorista===m?'selected':''}>${m}</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- Filtro Novo Motorista -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">🔄 Novo Motorista</label>
+            <select id="re-filtro-novo-motorista" onchange="window._reFiltroNovoMotorista=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-purple-300 font-bold rounded-lg p-2 text-xs">
+              <option value="">Todos os Novos</option>
+              ${novosMotoristasOpcoes.map(m => `<option value="${m}" ${window._reFiltroNovoMotorista===m?'selected':''}>${m}</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- Filtro Motivo -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">⚠️ Motivo</label>
+            <select id="re-filtro-motivo" onchange="window._reFiltroMotivo=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded-lg p-2 text-xs">
+              <option value="">Todos os Motivos</option>
+              ${motivosOpcoes.map(m => `<option value="${m}" ${window._reFiltroMotivo===m?'selected':''}>${m}</option>`).join('')}
+            </select>
+          </div>
+
+          <!-- Filtro Status -->
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">🚨 Status</label>
+            <select id="re-filtro-status" onchange="window._reFiltroStatus=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white font-bold rounded-lg p-2 text-xs">
+              <option value="TODOS" ${fStatus==='TODOS'?'selected':''}>Todos</option>
+              <option value="PENDENTE" ${fStatus==='PENDENTE'?'selected':''}>⏳ Pendente</option>
+              <option value="REALIZADA" ${fStatus==='REALIZADA'?'selected':''}>✅ Realizada</option>
+            </select>
+          </div>
+
+          <!-- Período De / Até -->
+          <div class="col-span-1 sm:col-span-2 md:col-span-1 lg:col-span-1">
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">📅 Período (De / Até)</label>
+            <div class="flex items-center gap-1">
+              <input type="date" value="${fDataDe}" onchange="window._reFiltroDataDe=this.value; renderApp()" class="w-1/2 bg-slate-800 border border-slate-700 text-white text-[10px] rounded p-1.5">
+              <input type="date" value="${fDataAte}" onchange="window._reFiltroDataAte=this.value; renderApp()" class="w-1/2 bg-slate-800 border border-slate-700 text-white text-[10px] rounded p-1.5">
+            </div>
+          </div>
+        </div>
+
+        <!-- Busca Rápida Adicional -->
+        <div class="pt-2 border-t border-slate-800/60 flex items-center gap-2">
+          <span class="text-xs text-slate-500">🔍</span>
+          <input type="text" value="${window._reFiltroBusca || ''}" oninput="forcarMaiuscula(this); window._reFiltroBusca=this.value; renderApp()"
+            placeholder="Pesquisa rápida livre por qualquer termo..."
+            class="w-full bg-slate-800/80 border border-slate-700/80 text-white rounded-lg px-3 py-1.5 text-xs placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-purple-500">
         </div>
       </div>
 
@@ -6340,17 +7882,33 @@ function renderViagensReentregasSubTab() {
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800 text-[11px]">
-              ${lista.length === 0 ? `
+              ${listaFiltrada.length === 0 ? `
                 <tr>
-                  <td colspan="10" class="p-8 text-center text-slate-500">
+                  <td colspan="10" class="p-10 text-center text-slate-500">
                     <div class="flex flex-col items-center justify-center gap-2">
-                      <span class="text-3xl">🔄</span>
-                      <span class="font-bold text-slate-400">Nenhum registro de reentrega encontrado com os filtros atuais.</span>
-                      <button onclick="abrirModalNovaReentrega()" class="mt-2 text-xs text-purple-400 hover:text-purple-300 font-bold underline">+ Cadastrar Primeira Reentrega</button>
+                      <span class="text-4xl">${window._reActiveAba === 'realizadas' ? '✅' : '🔄'}</span>
+                      <span class="font-bold text-sm text-slate-300">
+                        ${hasActiveFilters 
+                          ? 'Nenhum registro de reentrega encontrado para os filtros selecionados.' 
+                          : (window._reActiveAba === 'pendentes' 
+                              ? 'Nenhuma reentrega pendente no momento! Todas as rotas estão finalizadas.' 
+                              : (window._reActiveAba === 'realizadas' 
+                                  ? 'Nenhuma reentrega realizada encontrada no histórico.' 
+                                  : 'Nenhum registro de reentrega cadastrado.'))}
+                      </span>
+                      ${hasActiveFilters ? `
+                        <button onclick="limparFiltrosReentregas()" class="mt-2 bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-4 py-1.5 rounded-lg text-xs transition">
+                          Limpar Filtros
+                        </button>
+                      ` : `
+                        <button onclick="abrirModalNovaReentrega()" class="mt-2 bg-purple-700 hover:bg-purple-600 text-white font-bold px-4 py-2 rounded-lg text-xs transition">
+                          + Registrar Nova Reentrega
+                        </button>
+                      `}
                     </div>
                   </td>
                 </tr>
-              ` : lista.map(r => {
+              ` : listaFiltrada.map(r => {
                 const isPendente = r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO';
                 const statusBadge = isPendente
                   ? `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-950/90 text-amber-300 border border-amber-500/80 shadow"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> PENDENTE</span>`
@@ -6389,7 +7947,7 @@ function renderViagensReentregasSubTab() {
                           </button>
                         ` : ''}
                         <button onclick="abrirModalEditarReentrega(${r.id})" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-sm hover:bg-slate-800 rounded transition" title="Editar Reentrega">✏️</button>
-                        <button onclick="excluirReentregaComConfirmacao(${r.id})" class="text-red-400 hover:text-red-300 p-1 font-bold text-sm hover:bg-slate-800 rounded transition" title="Excluir Reentrega">🗑️</button>
+                        <button onclick="excluirReentregaComConfirmacao(${r.id})" class="text-red-400 hover:text-red-300 p-1 font-bold text-sm hover:bg-slate-800 rounded transition" title="Excluir Reentrega (Requer Senha Admin)">🗑️</button>
                       </div>
                     </td>
                   </tr>
@@ -6445,7 +8003,7 @@ function emitirRelatorioReentregasA4(filtro = null) {
   const horaFmt = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const usuarioNome = (db.currentUser && db.currentUser.nome) ? db.currentUser.nome.toUpperCase() : 'THIAGO FERREIRA';
 
-  const fmtData = d => d ? d.split('-').reverse().join('/') : '—';
+  const fmtData = d => formatarData(d);
 
   // Cálculos de Totais para o Relatório
   const totRotas = lista.length;
@@ -6883,22 +8441,34 @@ function gerarRelatorioLargadaOperacaoModal() {
       </tr>
     </thead>
     <tbody>
-      ${filtradas.length === 0 ? '<tr><td colspan="11" style="text-align:center;">Nenhuma viagem encontrada.</td></tr>' :
-      filtradas.map(v => `
-        <tr>
-          <td><b>${v.carga}</b></td>
-          <td>${v.rota}</td>
-          <td><b>${v.placa}</b></td>
-          <td>${v.motorista}</td>
-          <td>${v.ajudante}</td>
-          <td>${v.setor||'FRIO'}</td>
-          <td>${v.data_saida||'—'} ${v.hora_saida||'—'}</td>
-          <td>${v.status_viagem}</td>
-          <td><span class="${v.fusion==='INICIADO'?'badge-ok':'badge-nok'}">${v.fusion}</span></td>
-          <td><span class="${v.checklist_saida==='INICIADO'?'badge-ok':'badge-nok'}">${v.checklist_saida}</span></td>
-          <td>${v.observacao||'—'}</td>
-        </tr>
-      `).join('')}
+      ${(() => {
+        if (filtradas.length === 0) return '<tr><td colspan="11" style="text-align:center;">Nenhuma viagem encontrada.</td></tr>';
+        
+        const cargaCounts = {};
+        filtradas.forEach(x => {
+          const c = String(x.carga || '').trim().toUpperCase();
+          if (c) cargaCounts[c] = (cargaCounts[c] || 0) + 1;
+        });
+
+        return filtradas.map(v => {
+          const cKey = String(v.carga || '').trim().toUpperCase();
+          const isDup = cKey && (cargaCounts[cKey] > 1);
+          return `
+            <tr style="${isDup ? 'background-color:#fee2e2;' : ''}">
+              <td style="${isDup ? 'color:#dc2626;font-weight:900;' : 'font-weight:bold;'}">${isDup ? '⚠️ ' : ''}${v.carga}</td>
+              <td>${v.rota}</td>
+              <td><b>${v.placa}</b></td>
+              <td>${v.motorista}</td>
+              <td>${v.ajudante}</td>
+              <td>${v.setor||'FRIO'}</td>
+              <td>${(v.data_saida || v.hora_saida) ? `${formatarData(v.data_saida)} ${v.hora_saida||'—'}` : '—'}</td>
+              <td>${v.status_viagem || '—'}</td>
+              <td>${v.fusion ? `<span class="${v.fusion==='INICIADO'?'badge-ok':'badge-nok'}">${v.fusion}</span>` : '—'}</td>
+              <td>${v.checklist_saida ? `<span class="${v.checklist_saida==='INICIADO'?'badge-ok':'badge-nok'}">${v.checklist_saida}</span>` : '—'}</td>
+              <td>${v.observacao||'—'}</td>
+            </tr>`;
+        }).join('');
+      })()}
     </tbody>
   </table>
 
@@ -6917,15 +8487,351 @@ function gerarRelatorioLargadaOperacaoModal() {
   }
 }
 
+// ===== GERADOR DO RELATÓRIO DE OCORRÊNCIAS OPERACIONAIS (IMPRESSÃO / PDF) =====
+function gerarRelatorioOcOperacionaisModal(tipo = 'TODAS') {
+  const todasOcs = db.getOcorrenciasViagens();
+  const fDe     = window._ocFiltroDataDe  || window._vgFiltroDataDe  || '';
+  const fAte    = window._ocFiltroDataAte || window._vgFiltroDataAte || '';
+  const fCarga  = window._ocFiltroCarga   || '';
+  const fFunc   = window._ocFiltroFunc    || '';
+  const fPlaca  = window._ocFiltroPlaca   || '';
+  const fRota   = window._ocFiltroRota    || '';
+  const fMotivo = window._ocFiltroMotivo  || '';
+
+  let ocs = todasOcs;
+
+  if (tipo === 'PENDENTES') {
+    ocs = ocs.filter(o => o.status !== 'FINALIZADA');
+    if (fDe)  ocs = ocs.filter(o => (o.data || '') >= fDe);
+    if (fAte) ocs = ocs.filter(o => (o.data || '') <= fAte);
+  } else if (tipo === 'FINALIZADAS') {
+    ocs = ocs.filter(o => o.status === 'FINALIZADA');
+    if (fDe)     ocs = ocs.filter(o => (o.data || '') >= fDe);
+    if (fAte)    ocs = ocs.filter(o => (o.data || '') <= fAte);
+    if (fCarga)  ocs = ocs.filter(o => String(o.carga || '').includes(fCarga));
+    if (fFunc)   ocs = ocs.filter(o => (o.funcionario || '').toLowerCase().includes(fFunc.toLowerCase()));
+    if (fPlaca)  ocs = ocs.filter(o => (o.placa || '').toLowerCase().includes(fPlaca.toLowerCase()));
+    if (fRota)   ocs = ocs.filter(o => (o.rota || '').toLowerCase().includes(fRota.toLowerCase()));
+    if (fMotivo) ocs = ocs.filter(o => o.motivo === fMotivo);
+  } else {
+    // TODAS
+    if (fDe)  ocs = ocs.filter(o => (o.data || '') >= fDe);
+    if (fAte) ocs = ocs.filter(o => (o.data || '') <= fAte);
+  }
+
+  const totOcs         = ocs.length;
+  const totPendentes   = ocs.filter(o => o.status !== 'FINALIZADA').length;
+  const totFinalizadas = ocs.filter(o => o.status === 'FINALIZADA').length;
+
+  let tituloDoc = 'RELATÓRIO DE OCORRÊNCIAS OPERACIONAIS — GERAL';
+  let headerTitle = '⚠️ Ocorrências Operacionais de Viagem';
+  let temaCor = '#7e22ce';
+  let temaHeaderBg = '#581c87';
+  let temaLightBg = '#faf5ff';
+  let temaBorder = '#e2d9f3';
+
+  if (tipo === 'PENDENTES') {
+    tituloDoc = 'RELATÓRIO DE OCORRÊNCIAS OPERACIONAIS — PENDENTES';
+    headerTitle = '⚠️ Ocorrências Operacionais — PENDENTES DE TRATAMENTO';
+    temaCor = '#b45309';
+    temaHeaderBg = '#92400e';
+    temaLightBg = '#fffbeb';
+    temaBorder = '#fde68a';
+  } else if (tipo === 'FINALIZADAS') {
+    tituloDoc = 'RELATÓRIO DE OCORRÊNCIAS OPERACIONAIS — FINALIZADAS';
+    headerTitle = '✅ Ocorrências Operacionais — CONCLUÍDAS / FINALIZADAS';
+    temaCor = '#059669';
+    temaHeaderBg = '#065f46';
+    temaLightBg = '#ecfdf5';
+    temaBorder = '#a7f3d0';
+  }
+
+  const periodo = (fDe || fAte)
+    ? `${fDe ? 'De: ' + formatarData(fDe) : ''} ${fAte ? 'Até: ' + formatarData(fAte) : ''}`.trim()
+    : 'Histórico Completo';
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>${tituloDoc} — JR DISTRIBUIDORA</title>
+  <style>
+    @media print {
+      @page { margin: 10mm; size: A4 landscape; }
+      body { -webkit-print-color-adjust: exact; }
+      .no-print { display: none !important; }
+    }
+    body { font-family: Arial, sans-serif; padding: 20px; color: #0f172a; background: #fff; }
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid ${temaCor}; padding-bottom: 10px; margin-bottom: 15px; }
+    .logo { height: 60px; }
+    .title-area { text-align: right; }
+    .title-area h1 { margin: 0; font-size: 18px; color: ${temaHeaderBg}; text-transform: uppercase; }
+    .title-area p { margin: 2px 0 0; font-size: 11px; color: #64748b; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 15px; }
+    .kpi-box { border: 1px solid ${temaBorder}; background: ${temaLightBg}; padding: 10px; border-radius: 6px; text-align: center; }
+    .kpi-num { font-size: 22px; font-weight: 900; color: ${temaCor}; }
+    .kpi-label { font-size: 10px; font-weight: bold; color: ${temaHeaderBg}; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 9px; }
+    th, td { border: 1px solid #e2d9f3; padding: 5px 7px; text-align: left; }
+    th { background: ${temaHeaderBg}; color: #fff; text-transform: uppercase; font-size: 8px; }
+    tr:nth-child(even) { background: ${temaLightBg}; }
+    .badge-ok  { background: #dcfce7; color: #14532d; font-weight: bold; padding: 2px 5px; border-radius: 3px; font-size: 8px; }
+    .badge-nok { background: #fef3c7; color: #92400e; font-weight: bold; padding: 2px 5px; border-radius: 3px; font-size: 8px; }
+    .badge-pend { background: #fee2e2; color: #7f1d1d; font-weight: bold; padding: 2px 5px; border-radius: 3px; font-size: 8px; }
+    .btn-print {
+      position: fixed; top: 16px; right: 20px;
+      background: ${temaCor}; color: #fff; border: none;
+      border-radius: 6px; padding: 10px 18px; font-size: 12px;
+      font-weight: bold; cursor: pointer; z-index: 99999;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .btn-print:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <button onclick="window.print()" class="btn-print no-print">🖨️ Imprimir / Salvar PDF</button>
+
+  <div class="header">
+    <img src="${typeof LOGO_JR_VERDE_BASE64 !== 'undefined' ? LOGO_JR_VERDE_BASE64 : ''}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+    <div class="title-area">
+      <h1>${headerTitle}</h1>
+      <p>JR Distribuidora • Período: ${periodo} • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
+    </div>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi-box"><div class="kpi-num">${totOcs}</div><div class="kpi-label">${tipo === 'PENDENTES' ? 'Total Pendentes' : (tipo === 'FINALIZADAS' ? 'Total Finalizadas' : 'Total de Ocorrências')}</div></div>
+    <div class="kpi-box"><div class="kpi-num" style="color:#dc2626;">${totPendentes}</div><div class="kpi-label">Pendentes</div></div>
+    <div class="kpi-box"><div class="kpi-num" style="color:#16a34a;">${totFinalizadas}</div><div class="kpi-label">Finalizadas</div></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Data</th>
+        <th>Carga</th>
+        <th>Rota</th>
+        <th>Placa</th>
+        <th>Funcionário</th>
+        <th>Função</th>
+        <th>Motivo</th>
+        <th>Causa</th>
+        <th>Ocorrência</th>
+        <th>Ação Tomada</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${ocs.length === 0
+        ? '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:15px;">Nenhuma ocorrência encontrada para o escopo selecionado.</td></tr>'
+        : ocs.map(o => `
+        <tr>
+          <td>${formatarData(o.data)}</td>
+          <td><b>${o.carga || '—'}</b></td>
+          <td>${o.rota || '—'}</td>
+          <td><b>${o.placa || '—'}</b></td>
+          <td>${o.funcionario || '—'}</td>
+          <td>${o.funcao || '—'}</td>
+          <td><span class="badge-nok">${o.motivo || '—'}</span></td>
+          <td>${o.causa || '—'}</td>
+          <td>${o.ocorrencia || '—'}</td>
+          <td>${o.acao || '<i style="color:#b45309;">Aguardando</i>'}</td>
+          <td><span class="${o.status === 'FINALIZADA' ? 'badge-ok' : 'badge-pend'}">${o.status || 'PENDENTE'}</span></td>
+        </tr>`).join('')}
+    </tbody>
+  </table>
+
+  <script>
+    window.onload = function() { setTimeout(function(){ window.print(); }, 500); }
+  <\/script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=1100,height=850');
+  if (win) {
+    win.document.write(htmlContent);
+    win.document.close();
+  } else {
+    alert('Permita pop-ups no navegador para visualizar o Relatório de Ocorrências Operacionais.');
+  }
+}
+
+function abrirModalNovaRota() {
+  const container = document.getElementById('modal-container');
+  if (!container) return;
+
+
+  uploadedRotaFotos = [];
+  uploadedRotaVideos = [];
+
+  const veiculos = (db.data.veiculos || []).filter(v => v.situacao !== 'Inativo');
+  const motoristas = db.data.motoristas || [];
+  const rotasNomes = db.data.rotas || [];
+  const motivosResumidos = db.data.motivos_ocorrencia || ["AVARIA MECÂNICA", "ATRASO DE LARGADA", "CHECKLIST", "FALTA", "SUBSTITUIÇÃO DE EQUIPE", "CONDUTA OPERACIONAL", "OUTRO"];
+
+  container.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-fadeIn" onclick="closeModal()">
+      <div class="bg-slate-900 border border-red-800/80 rounded-2xl max-w-3xl w-full p-5 sm:p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto" onclick="event.stopPropagation()">
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center gap-2.5">
+            <span class="text-2xl">🚨</span>
+            <div>
+              <h3 class="text-sm sm:text-base font-black text-red-400 uppercase tracking-wider">
+                Abertura de Chamado em Rota (Frota & Socorro Mecânico)
+              </h3>
+              <p class="text-[11px] text-slate-400">Registre sinistros, quebras mecânicas ou avarias ocorridas durante o trajeto da viagem</p>
+            </div>
+          </div>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-xl px-2 py-1 rounded-lg hover:bg-slate-800 transition">✕</button>
+        </div>
+
+        <form onsubmit="handleNovaRotaSubmit(event)" class="space-y-4 text-xs">
+          <!-- LINHA 1: Carga (Largada), Veículo/Placa, Motorista -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">
+                📦 Nº da Carga (Herança da Largada) *
+              </label>
+              <div class="relative">
+                <input type="text" id="rota-carga-numero" list="cargas-list-rota" required
+                  placeholder="Digite o nº da carga..."
+                  oninput="forcarMaiuscula(this); onOcRotaCargaSelect(this.value)"
+                  onchange="onOcRotaCargaSelect(this.value)"
+                  autocomplete="off"
+                  class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 text-emerald-400 font-bold rounded-lg p-2.5 text-xs placeholder:text-slate-500">
+                ${renderDatalistCargas('cargas-list-rota')}
+              </div>
+              <div id="rota-carga-nao-encontrada" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">🚛 Veículo / Placa *</label>
+              <select id="rota-veiculo-id" required class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2.5 text-xs">
+                <option value="">-- Selecione Veículo --</option>
+                ${veiculos.map(v => `<option value="${v.id}" data-placa="${v.placa}">${v.placa} — ${v.tipo||v.modelo}</option>`).join('')}
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">👤 Motorista *</label>
+              <select id="rota-motorista-id" required class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2.5 text-xs">
+                <option value="">-- Selecione Motorista --</option>
+                ${motoristas.map(m => `<option value="${m.id}">${m.nome}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+
+          <!-- LINHA 2: Rota, Localização (Obrigatório), Motivo -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">🗺️ Rota *</label>
+              <select id="rota-nome" required class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2.5 text-xs">
+                <option value="">-- Selecione Rota --</option>
+                ${rotasNomes.map(r => `<option value="${r}">${r}</option>`).join('')}
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-amber-300 mb-1">
+                📍 Localização (KM Rodovia / Ponto Ref.) *
+              </label>
+              <input type="text" id="rota-localizacao" required placeholder="Ex: Rod. Pres. Dutra, KM 210 - Posto Sakamoto" class="w-full bg-slate-800 border border-amber-500/60 focus:border-amber-400 text-white rounded-lg p-2.5 text-xs placeholder:text-slate-500" oninput="forcarMaiuscula(this)">
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">⚠️ Motivo do Problema Mecânico *</label>
+              <select id="rota-motivo-resumido" required class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded-lg p-2.5 text-xs">
+                ${motivosResumidos.map(m => `<option value="${m}">${m}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+
+          <!-- LINHA 3: Status Inicial do Veículo, Descrição Detalhada -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">🚨 Status Inicial do Veículo *</label>
+              <select id="rota-status-veiculo" required class="w-full bg-slate-800 border border-slate-700 text-amber-400 font-bold rounded-lg p-2.5 text-xs">
+                <option value="Aguardando Manutenção">🔴 Aguardando Manutenção</option>
+                <option value="Manutenção Externa">🟠 Manutenção Externa</option>
+                <option value="Manutenção Interna">🔧 Manutenção Interna</option>
+                <option value="Em Rota">🟢 Em Rota (Liberado / Direto)</option>
+              </select>
+            </div>
+
+            <div class="sm:col-span-2">
+              <label class="block text-xs font-bold text-slate-300 mb-1">📝 Descrição Detalhada do Defeito *</label>
+              <textarea id="rota-descricao" required rows="2" placeholder="Descreva com detalhes o problema mecânico, avaria ou sinistro do veículo..." class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs leading-relaxed" oninput="forcarMaiuscula(this)"></textarea>
+            </div>
+          </div>
+
+          <!-- UPLOADS DE IMAGENS E VÍDEOS COM PREVIEWS EM MINIATURA -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/80 p-3.5 rounded-xl border border-slate-800">
+            <div class="space-y-2">
+              <label class="block text-xs text-emerald-400 font-bold">📷 Fotos da Avaria / Veículo</label>
+              <input type="file" id="rota-fotos-file" accept="image/*" multiple onchange="handleRotaFotosUpload(this)" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-emerald-700 file:text-white hover:file:bg-emerald-600 cursor-pointer">
+              <div id="rota-fotos-preview" class="flex flex-wrap gap-2 pt-1 min-h-[40px] items-center">
+                <span class="text-[11px] text-slate-500 italic">Nenhuma foto selecionada.</span>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <label class="block text-xs text-blue-400 font-bold">🎥 Vídeos do Problema Mecânico</label>
+              <input type="file" id="rota-videos-file" accept="video/*" multiple onchange="handleRotaVideosUpload(this)" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-blue-700 file:text-white hover:file:bg-blue-600 cursor-pointer">
+              <div id="rota-videos-preview" class="flex flex-wrap gap-2 pt-1 min-h-[40px] items-center">
+                <span class="text-[11px] text-slate-500 italic">Nenhum vídeo selecionado.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+            <button type="button" onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-xs font-bold transition">Cancelar</button>
+            <button type="submit" class="bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white px-6 py-2 rounded-lg text-xs font-black shadow-lg shadow-red-950/50 transition hover:scale-[1.02]">
+              🚨 Registrar Chamado
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  container.classList.remove('hidden');
+  renderRotaFotosPreview();
+  renderRotaVideosPreview();
+}
+
 function toggleNewRotaForm() {
-  document.getElementById('form-nova-rota')?.classList.toggle('hidden');
+  abrirModalNovaRota();
 }
 
 function onOcRotaCargaSelect(cargaNum) {
   const avisoHint = document.getElementById('rota-carga-nao-encontrada');
-  if (!cargaNum) { if (avisoHint) avisoHint.classList.add('hidden'); return; }
+  const inputEl = document.getElementById('rota-carga-numero');
+  const rawVal = String(cargaNum || '').trim();
+  
+  if (!rawVal) { 
+    if (avisoHint) avisoHint.classList.add('hidden'); 
+    return; 
+  }
 
-  const info = buscarCargaInfo(cargaNum);
+  // Tenta buscar diretamente pelo texto ou extraindo o número da carga (caso venha do texto do datalist)
+  let info = buscarCargaInfo(rawVal);
+  let resolvedCNum = rawVal;
+
+  if (!info.found) {
+    const matchNum = rawVal.match(/(\d+)/);
+    if (matchNum) {
+      const matchInfo = buscarCargaInfo(matchNum[1]);
+      if (matchInfo.found) {
+        info = matchInfo;
+        resolvedCNum = matchNum[1];
+        if (inputEl && inputEl.value !== resolvedCNum) {
+          inputEl.value = resolvedCNum;
+        }
+      }
+    }
+  }
+
   if (avisoHint) avisoHint.classList.toggle('hidden', info.found);
   if (!info.found) return;
 
@@ -6960,38 +8866,529 @@ function onOcRotaCargaSelect(cargaNum) {
     }
   }
 }
+
 function handleNovaRotaSubmit(e) {
   e.preventDefault();
   const veicSel = document.getElementById('rota-veiculo-id');
-  const veicOpt = veicSel.options[veicSel.selectedIndex];
-  const statusVeic = document.getElementById('rota-status-veiculo').value;
-  const motivoResumido = document.getElementById('rota-motivo-resumido').value;
+  const veicOpt = veicSel ? veicSel.options[veicSel.selectedIndex] : null;
+  const statusVeic = document.getElementById('rota-status-veiculo')?.value || 'Aguardando Manutenção';
+  const motivoResumido = document.getElementById('rota-motivo-resumido')?.value || 'AVARIA MECÂNICA';
+  const cargaInput = document.getElementById('rota-carga-numero');
+  const cargaNum = cargaInput ? cargaInput.value.trim() : '';
+  const loc = document.getElementById('rota-localizacao')?.value || '';
+  const desc = document.getElementById('rota-descricao')?.value || '';
+
+  if (!cargaNum) {
+    alert('⚠️ Por favor, digite ou selecione o Nº da Carga.');
+    cargaInput?.focus();
+    return;
+  }
+
+  const cargaInfo = buscarCargaInfo(cargaNum);
+  if (!cargaInfo.found) {
+    alert(`⚠️ A carga "${cargaNum}" não foi localizada na Largada da operação.\nConfira o número digitado ou selecione uma carga existente.`);
+    cargaInput?.focus();
+    return;
+  }
+
+  if (!loc.trim()) {
+    alert('⚠️ O campo "Localização" é obrigatório.');
+    document.getElementById('rota-localizacao')?.focus();
+    return;
+  }
+
   db.addOcorrenciaRota({
-    carga_numero: document.getElementById('rota-carga-numero').value,
-    veiculo_id: veicSel.value,
+    carga_numero: cargaNum,
+    veiculo_id: veicSel ? veicSel.value : null,
     veiculo_placa: veicOpt?.getAttribute('data-placa') || '',
-    motorista_id: document.getElementById('rota-motorista-id').value,
-    rota_nome: document.getElementById('rota-nome').value,
+    motorista_id: document.getElementById('rota-motorista-id')?.value || null,
+    rota_nome: document.getElementById('rota-nome')?.value || '',
     tipo_ocorrencia: motivoResumido,
     motivo_resumido: motivoResumido,
     status_veiculo: statusVeic,
-    descricao: document.getElementById('rota-descricao').value,
-    transcricao_audio_wa: document.getElementById('rota-audio-wa').value,
+    localizacao: loc.trim(),
+    descricao: desc.trim(),
+    midia_fotos: [...uploadedRotaFotos],
+    midia_videos: [...uploadedRotaVideos]
   });
-  alert('✅ Ocorrência em rota registrada!');
+
+  uploadedRotaFotos = [];
+  uploadedRotaVideos = [];
+  closeModal();
+  alert('✅ Ocorrência de frota em rota registrada com sucesso!');
   renderApp();
 }
+
 function handleManutencaoSubmit(e, id) {
   e.preventDefault();
-  const statusVeic = document.getElementById(`man-status-veiculo-${id}`).value;
+  const statusVeic = document.getElementById(`man-status-veiculo-${id}`)?.value || 'Aguardando Manutenção';
+  const acao = document.getElementById(`man-acao-${id}`)?.value || '';
+  
   db.updateOcorrenciaRota(id, {
     status_veiculo: statusVeic,
-    acao_mecanico: document.getElementById(`man-acao-${id}`).value,
-    pecas_trocadas: document.getElementById(`man-pecas-${id}`).value,
-    custo_socorro: document.getElementById(`man-custo-${id}`).value,
-    guincho_acionado: document.getElementById(`man-guincho-${id}`).value,
+    status_chamado: statusVeic === 'Em Rota' ? 'finalizado' : 'pendente',
+    acao_mecanico: acao,
+    retorno_manutencao_descricao: acao,
+    retorno_manutencao_responsavel: db.currentUser ? db.currentUser.nome : 'MANUTENÇÃO',
+    retorno_manutencao_data: statusVeic === 'Em Rota' ? new Date().toISOString() : null,
+    pecas_trocadas: document.getElementById(`man-pecas-${id}`)?.value || '',
+    custo_socorro: document.getElementById(`man-custo-${id}`)?.value || 0,
+    guincho_acionado: document.getElementById(`man-guincho-${id}`)?.value || 'nao',
   });
-  alert('✅ Status da frota/manutenção atualizado!');
+  
+  alert('✅ Status intermediário atualizado!');
+  renderApp();
+}
+
+// ===== ETAPA / MODAL: RETORNO DA MANUTENÇÃO & LIBERAÇÃO TÉCNICA =====
+function abrirModalRetornoManutencao(id) {
+  const item = db.getOcorrenciasRota().find(x => x.id == id);
+  if (!item) {
+    alert('Chamado não localizado.');
+    return;
+  }
+  if (item.status_chamado === 'finalizado') {
+    alert('Este chamado já foi finalizado e o veículo já está liberado.');
+    return;
+  }
+
+  const container = document.getElementById('modal-container');
+  if (!container) return;
+
+  const defaultResp = (db.currentUser && db.currentUser.nome) ? db.currentUser.nome : (item.retorno_manutencao_responsavel || '');
+
+  container.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn" onclick="closeModal()">
+      <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-xl w-full p-5 shadow-2xl space-y-4" onclick="event.stopPropagation()">
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-black text-emerald-400 uppercase tracking-wide">🔧 Retorno da Manutenção</span>
+              <span class="bg-red-950 text-red-300 border border-red-800 text-[10px] font-bold px-2 py-0.5 rounded">${item.numero_protocolo}</span>
+            </div>
+            <h3 class="text-base font-black text-white mt-0.5">Liberação Técnica do Veículo</h3>
+          </div>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-lg px-2">✕</button>
+        </div>
+
+        <!-- Resumo do Chamado -->
+        <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-[11px]">
+          <div>
+            <span class="text-slate-500 block text-[10px] uppercase font-bold">Veículo / Placa</span>
+            <span class="text-white font-bold">🚛 ${item.veiculo_placa} (${item.veiculo_modelo})</span>
+          </div>
+          <div>
+            <span class="text-slate-500 block text-[10px] uppercase font-bold">Motorista</span>
+            <span class="text-white font-bold">👤 ${item.motorista_nome}</span>
+          </div>
+          <div>
+            <span class="text-slate-500 block text-[10px] uppercase font-bold">Carga / Rota</span>
+            <span class="text-white font-bold">📦 #${item.carga_numero} | ${item.carga_rota}</span>
+          </div>
+          <div class="col-span-2 sm:col-span-3">
+            <span class="text-slate-500 block text-[10px] uppercase font-bold">Localização do Socorro</span>
+            <span class="text-amber-300 font-semibold">📍 ${item.localizacao || 'Não informada'}</span>
+          </div>
+          <div class="col-span-2 sm:col-span-3">
+            <span class="text-slate-500 block text-[10px] uppercase font-bold">Problema Original Relatado</span>
+            <span class="text-slate-300 bg-slate-900/60 p-2 rounded block mt-0.5 border border-slate-800/80">${item.descricao}</span>
+          </div>
+        </div>
+
+        <!-- Formulário de Liberação Técnica -->
+        <form onsubmit="event.preventDefault(); confirmarLiberacaoVeiculo('${item.id}');" class="space-y-3.5">
+          <div>
+            <label class="block text-xs font-bold text-emerald-400 mb-1">
+              🛠️ Descrição do Serviço Realizado / Peça Trocada *
+            </label>
+            <textarea id="ret-man-descricao" required rows="3" placeholder="Descreva os reparos efetuados, testes realizados e parecer da mecânica..." class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 text-white rounded-lg p-2.5 text-xs leading-relaxed" oninput="forcarMaiuscula(this)">${item.retorno_manutencao_descricao || item.acao_mecanico || ''}</textarea>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-bold text-emerald-400 mb-1">
+                👤 Responsável Técnico pela Liberação *
+              </label>
+              <input type="text" id="ret-man-responsavel" required value="${defaultResp}" placeholder="Ex: Roberto Mecânico / Encarregado" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 text-white rounded-lg p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">
+                🔩 Peças Substituídas (Resumo)
+              </label>
+              <input type="text" id="ret-man-pecas" value="${item.pecas_trocadas || ''}" placeholder="Ex: Correia dentada, rolamento" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs" oninput="forcarMaiuscula(this)">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">
+                💰 Custo Total do Socorro (R$)
+              </label>
+              <input type="number" step="0.01" id="ret-man-custo" value="${item.custo_socorro || 0}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded-lg p-2 text-xs">
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">
+                🚜 Houve Guincho Acionado?
+              </label>
+              <select id="ret-man-guincho" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+                <option value="nao" ${!item.guincho_acionado ? 'selected' : ''}>Não</option>
+                <option value="sim" ${item.guincho_acionado ? 'selected' : ''}>Sim</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Rodapé com Ação -->
+          <div class="pt-3 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-center gap-3">
+            <span class="text-[11px] text-slate-400">
+              Ao liberar, o status é alterado para <strong>FINALIZADO</strong> e <strong>EM ROTA</strong> com timestamp exato.
+            </span>
+            <div class="flex gap-2 shrink-0">
+              <button type="button" onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded-lg text-xs transition">Cancelar</button>
+              <button type="submit" class="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black px-6 py-2 rounded-lg text-xs shadow-lg shadow-emerald-950/50 flex items-center gap-1.5 transition hover:scale-[1.02]">
+                🚀 Liberar Veículo
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  container.classList.remove('hidden');
+}
+
+function confirmarLiberacaoVeiculo(id) {
+  const descEl = document.getElementById('ret-man-descricao');
+  const respEl = document.getElementById('ret-man-responsavel');
+  const pecasEl = document.getElementById('ret-man-pecas');
+  const custoEl = document.getElementById('ret-man-custo');
+  const guinchoEl = document.getElementById('ret-man-guincho');
+
+  const descServico = descEl ? descEl.value.trim() : '';
+  const respTecnico = respEl ? respEl.value.trim() : '';
+
+  if (!descServico) {
+    alert('⚠️ Por favor, informe a "Descrição do Serviço Realizado / Peça Trocada".');
+    if (descEl) descEl.focus();
+    return;
+  }
+  if (!respTecnico) {
+    alert('⚠️ Por favor, informe o "Responsável Técnico pela Liberação".');
+    if (respEl) respEl.focus();
+    return;
+  }
+
+  const pecas = pecasEl ? pecasEl.value.trim() : '';
+  const custo = custoEl ? (parseFloat(custoEl.value) || 0) : 0;
+  const guincho = guinchoEl ? guinchoEl.value : 'nao';
+  const nowIso = new Date().toISOString();
+
+  db.updateOcorrenciaRota(id, {
+    status_chamado: 'finalizado',
+    status: 'RESOLVIDO',
+    status_veiculo: 'Em Rota',
+    veiculo_parado: false,
+    retorno_manutencao_descricao: descServico,
+    acao_mecanico: descServico,
+    retorno_manutencao_responsavel: respTecnico,
+    retorno_manutencao_data: nowIso,
+    pecas_trocadas: pecas,
+    custo_socorro: custo,
+    guincho_acionado: guincho
+  });
+
+  closeModal();
+  alert('✅ Veículo liberado com sucesso! Chamado finalizado e registrado na auditoria.');
+  renderApp();
+}
+
+// ===== EDIÇÃO & EXCLUSÃO COM GOVERNANÇA, LIXEIRA E ROLLBACK =====
+function deleteOcorrenciaRota(id) {
+  const item = db.getOcorrenciasRota().find(x => x.id == id);
+  const desc = item ? `${item.numero_protocolo} - Placa ${item.veiculo_placa}` : `ID #${id}`;
+  
+  if (!confirm(`Deseja realmente mover o chamado [${desc}] para a Lixeira (Soft Delete)?\n\n• O registro ficará preservado na aba Governança & Lixeira e poderá ser restaurado.\n• A ação será registrada na trilha imutável de auditoria.`)) {
+    return;
+  }
+
+  const res = db.deleteOcorrenciaRota(id);
+  if (res) {
+    alert(`🗑️ Chamado [${desc}] movido para a Lixeira com sucesso!`);
+    renderApp();
+  } else {
+    alert('Erro ao excluir o chamado.');
+  }
+}
+
+function onOcRotaCargaSelectEdit(cargaNum) {
+  const avisoHint = document.getElementById('ed-rota-carga-nao-encontrada');
+  const inputEl = document.getElementById('ed-rota-carga-numero');
+  const rawVal = String(cargaNum || '').trim();
+  
+  if (!rawVal) { 
+    if (avisoHint) avisoHint.classList.add('hidden'); 
+    return; 
+  }
+
+  let info = buscarCargaInfo(rawVal);
+  let resolvedCNum = rawVal;
+
+  if (!info.found) {
+    const matchNum = rawVal.match(/(\d+)/);
+    if (matchNum) {
+      const matchInfo = buscarCargaInfo(matchNum[1]);
+      if (matchInfo.found) {
+        info = matchInfo;
+        resolvedCNum = matchNum[1];
+        if (inputEl && inputEl.value !== resolvedCNum) {
+          inputEl.value = resolvedCNum;
+        }
+      }
+    }
+  }
+
+  if (avisoHint) avisoHint.classList.toggle('hidden', info.found);
+  if (!info.found) return;
+
+  const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+
+  const motSel = document.getElementById('ed-rota-motorista-id');
+  if (motSel && info.motoristaName) {
+    const nTarget = norm(info.motoristaName);
+    let opt = Array.from(motSel.options).find(o => norm(o.textContent).includes(nTarget) || nTarget.includes(norm(o.textContent)));
+    if (opt) motSel.value = opt.value;
+  }
+
+  const veicSel = document.getElementById('ed-rota-veiculo-id');
+  if (veicSel && info.placa) {
+    let opt = Array.from(veicSel.options).find(o => o.getAttribute('data-placa') === info.placa || o.textContent.includes(info.placa));
+    if (opt) veicSel.value = opt.value;
+  }
+
+  const rotaSel = document.getElementById('ed-rota-nome');
+  if (rotaSel && info.rotaName) {
+    let opt = Array.from(rotaSel.options).find(o => norm(o.value) === norm(info.rotaName));
+    if (opt) {
+      rotaSel.value = opt.value;
+    } else if (rotaSel.tagName === 'SELECT') {
+      const newOpt = document.createElement('option');
+      newOpt.value = info.rotaName;
+      newOpt.textContent = info.rotaName;
+      newOpt.selected = true;
+      rotaSel.appendChild(newOpt);
+    } else {
+      rotaSel.value = info.rotaName;
+    }
+  }
+}
+
+function editarOcorrenciaRotaModal(id) {
+  const item = db.getOcorrenciasRota().find(x => x.id == id);
+  if (!item) {
+    alert('Chamado não localizado.');
+    return;
+  }
+
+  const container = document.getElementById('modal-container');
+  if (!container) return;
+
+  const veiculos = db.data.veiculos ? db.data.veiculos.filter(v => v.situacao !== 'Inativo' || v.id == item.veiculo_id) : [];
+  const motoristas = db.data.motoristas || [];
+  const rotasNomes = db.data.rotas || [];
+  const motivosResumidos = db.data.motivos_ocorrencia || ["AVARIA MECÂNICA", "ATRASO DE LARGADA", "CHECKLIST", "FALTA", "SUBSTITUIÇÃO DE EQUIPE", "CONDUTA OPERACIONAL", "OUTRO"];
+
+  container.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn" onclick="closeModal()">
+      <div class="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-2xl w-full p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto" onclick="event.stopPropagation()">
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-black text-amber-400 uppercase tracking-wide">✏️ Edição de Chamado em Rota</span>
+              <span class="bg-amber-950 text-amber-300 border border-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">${item.numero_protocolo}</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-0.5">Governança: Esta alteração salvará um snapshot da versão atual para Rollback e será registrada na auditoria.</p>
+          </div>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-lg px-2">✕</button>
+        </div>
+
+        <form onsubmit="handleEditarRotaSubmit(event, '${item.id}')" class="space-y-4 text-xs">
+          <!-- Bloco 1: Identificação Operacional -->
+          <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+            <h4 class="font-bold text-slate-300 uppercase text-[11px] flex items-center gap-1.5">
+              <span>📦</span> Dados Operacionais da Viagem & Veículo
+            </h4>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Nº da Carga (Largada) *</label>
+                <input type="text" id="ed-rota-carga-numero" list="cargas-list-rotedit" required value="${item.carga_numero || ''}"
+                  oninput="forcarMaiuscula(this); onOcRotaCargaSelectEdit(this.value)"
+                  onchange="onOcRotaCargaSelectEdit(this.value)"
+                  placeholder="Ex: 10450"
+                  class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-2 text-xs">
+                ${renderDatalistCargas('cargas-list-rotedit')}
+                <div id="ed-rota-carga-nao-encontrada" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
+              </div>
+
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Veículo / Placa *</label>
+                <select id="ed-rota-veiculo-id" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+                  <option value="">-- Selecione Veículo --</option>
+                  ${veiculos.map(v => `<option value="${v.id}" data-placa="${v.placa}" ${v.id == item.veiculo_id || v.placa === item.veiculo_placa ? 'selected' : ''}>${v.placa} — ${v.tipo||v.modelo}</option>`).join('')}
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Motorista *</label>
+                <select id="ed-rota-motorista-id" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+                  <option value="">-- Selecione Motorista --</option>
+                  ${motoristas.map(m => `<option value="${m.id}" ${m.id == item.motorista_id || m.nome === item.motorista_nome ? 'selected' : ''}>${m.nome}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Rota *</label>
+                <select id="ed-rota-nome" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+                  <option value="">-- Selecione Rota --</option>
+                  ${rotasNomes.map(r => `<option value="${r}" ${r === item.rota_nome || r === item.carga_rota ? 'selected' : ''}>${r}</option>`).join('')}
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-[10px] font-bold text-amber-300 mb-1">Localização (KM Rodovia / Ref.) *</label>
+                <input type="text" id="ed-rota-localizacao" required value="${item.localizacao || ''}" placeholder="Ex: Rod. Pres. Dutra, KM 210" class="w-full bg-slate-800 border border-amber-500/60 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+              </div>
+
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Motivo do Problema *</label>
+                <select id="ed-rota-motivo-resumido" required class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-2 text-xs">
+                  ${motivosResumidos.map(m => `<option value="${m}" ${(item.motivo_resumido||item.tipo_ocorrencia) === m ? 'selected' : ''}>${m}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Status do Veículo *</label>
+                <select id="ed-rota-status-veiculo" required class="w-full bg-slate-800 border border-slate-700 text-amber-400 font-bold rounded p-2 text-xs">
+                  <option value="Aguardando Manutenção" ${item.status_veiculo === 'Aguardando Manutenção' ? 'selected' : ''}>🔴 Aguardando Manutenção</option>
+                  <option value="Manutenção Externa" ${item.status_veiculo === 'Manutenção Externa' ? 'selected' : ''}>🟠 Manutenção Externa</option>
+                  <option value="Manutenção Interna" ${item.status_veiculo === 'Manutenção Interna' ? 'selected' : ''}>🔧 Manutenção Interna</option>
+                  <option value="Em Rota" ${item.status_veiculo === 'Em Rota' ? 'selected' : ''}>🟢 Em Rota (Liberado)</option>
+                </select>
+              </div>
+
+              <div class="sm:col-span-2">
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Descrição Detalhada do Defeito *</label>
+                <textarea id="ed-rota-descricao" required rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.descricao || ''}</textarea>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bloco 2: Ficha Técnica de Manutenção & Liberação -->
+          <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+            <h4 class="font-bold text-emerald-400 uppercase text-[11px] flex items-center gap-1.5">
+              <span>🔧</span> Ficha Técnica de Retorno da Manutenção (Se houver)
+            </h4>
+            <div>
+              <label class="block text-[10px] font-bold text-slate-300 mb-1">Serviço Realizado / Parecer Técnico</label>
+              <textarea id="ed-rota-retorno-descricao" rows="2" placeholder="Reparos executados pela mecânica/oficina..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.retorno_manutencao_descricao || item.acao_mecanico || ''}</textarea>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Responsável Técnico</label>
+                <input type="text" id="ed-rota-retorno-responsavel" value="${item.retorno_manutencao_responsavel || ''}" placeholder="Nome do Mecânico / Oficina" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+              </div>
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Peças Trocadas</label>
+                <input type="text" id="ed-rota-pecas" value="${item.pecas_trocadas || ''}" placeholder="Peças substituídas..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Custo Total (R$)</label>
+                <input type="number" step="0.01" id="ed-rota-custo" value="${item.custo_socorro || 0}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-2 text-xs">
+              </div>
+              <div>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Guincho Acionado?</label>
+                <select id="ed-rota-guincho" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+                  <option value="nao" ${!item.guincho_acionado ? 'selected' : ''}>Não</option>
+                  <option value="sim" ${item.guincho_acionado ? 'selected' : ''}>Sim</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Rodapé do Modal -->
+          <div class="pt-3 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-center gap-2">
+            <span class="text-[11px] text-slate-400">Snapshot de versão será criado automaticamente para histórico e rollback.</span>
+            <div class="flex gap-2 shrink-0">
+              <button type="button" onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded-lg text-xs transition">Cancelar</button>
+              <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-slate-950 font-black px-6 py-2 rounded-lg text-xs shadow-lg transition">
+                💾 Salvar Alterações
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  container.classList.remove('hidden');
+}
+
+function handleEditarRotaSubmit(e, id) {
+  e.preventDefault();
+  const veicSel = document.getElementById('ed-rota-veiculo-id');
+  const veicOpt = veicSel ? veicSel.options[veicSel.selectedIndex] : null;
+  const statusVeic = document.getElementById('ed-rota-status-veiculo')?.value || 'Aguardando Manutenção';
+  const motivoResumido = document.getElementById('ed-rota-motivo-resumido')?.value || 'AVARIA MECÂNICA';
+  const cargaInput = document.getElementById('ed-rota-carga-numero');
+  const cargaNum = cargaInput ? cargaInput.value.trim() : '';
+  const loc = document.getElementById('ed-rota-localizacao')?.value || '';
+  const desc = document.getElementById('ed-rota-descricao')?.value || '';
+  const retornoDesc = document.getElementById('ed-rota-retorno-descricao')?.value || '';
+  const retornoResp = document.getElementById('ed-rota-retorno-responsavel')?.value || '';
+  const pecas = document.getElementById('ed-rota-pecas')?.value || '';
+  const custo = document.getElementById('ed-rota-custo')?.value || 0;
+  const guincho = document.getElementById('ed-rota-guincho')?.value || 'nao';
+
+  if (!loc.trim()) {
+    alert('⚠️ O campo "Localização" é obrigatório.');
+    document.getElementById('ed-rota-localizacao')?.focus();
+    return;
+  }
+
+  const isFinalizado = statusVeic === 'Em Rota';
+
+  db.updateOcorrenciaRota(id, {
+    carga_numero: cargaNum,
+    veiculo_id: veicSel ? veicSel.value : null,
+    veiculo_placa: veicOpt?.getAttribute('data-placa') || '',
+    motorista_id: document.getElementById('ed-rota-motorista-id')?.value || null,
+    rota_nome: document.getElementById('ed-rota-nome')?.value || '',
+    tipo_ocorrencia: motivoResumido,
+    motivo_resumido: motivoResumido,
+    status_veiculo: statusVeic,
+    status_chamado: isFinalizado ? 'finalizado' : 'pendente',
+    status: isFinalizado ? 'RESOLVIDO' : 'ABERTO',
+    localizacao: loc.trim(),
+    descricao: desc.trim(),
+    retorno_manutencao_descricao: retornoDesc,
+    acao_mecanico: retornoDesc,
+    retorno_manutencao_responsavel: retornoResp,
+    retorno_manutencao_data: isFinalizado ? new Date().toISOString() : null,
+    pecas_trocadas: pecas,
+    custo_socorro: custo,
+    guincho_acionado: guincho,
+    acao_auditoria: 'EDICAO_GOVERNANCA_ROTA'
+  });
+
+  closeModal();
+  alert('✅ Chamado atualizado com sucesso! Nova versão gerada na aba Governança & Rollback.');
   renderApp();
 }
 
@@ -7000,8 +9397,8 @@ function renderCadastrosDadosView() {
   return `
     <div class="space-y-5">
       <div>
-        <h1 class="text-xl font-black text-white">Gerenciador de Cadastros & Dados SAC</h1>
-        <p class="text-xs text-slate-400">Atualize as tabelas de apoio (Motoristas, Ajudantes, Separadores, Produtos, Veículos, Rotas e Motivos de Devolução)</p>
+        <h1 class="text-xl font-black text-white flex items-center gap-2"><span>⚙️</span> Cadastros Mestres</h1>
+        <p class="text-xs text-slate-400">Tabelas de apoio: equipes, veículos, rotas e produtos</p>
       </div>
       <!-- SUB-TABS rolável horizontal no mobile -->
       <div class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
@@ -7012,7 +9409,8 @@ function renderCadastrosDadosView() {
     </div>`;
 }
 
-function switchCadSubTab(tab) { activeCadSubTab = tab; renderApp(); }
+function switchCadSubTab(tab) { activeCadSubTab = tab; renderApp(); scrollToTop(); }
+window.switchCadSubTab = switchCadSubTab;
 
 function handleCadColaboradorCDSubmit(e) {
   e.preventDefault();
@@ -7078,17 +9476,17 @@ function abrirModalEditarColaboradorCD(id) {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 mb-1 font-bold">Nº Chapa</label>
-            <input type="text" id="ed-colab-chapa" value="${item.chapa||''}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-2 text-xs">
+            <input type="text" id="ed-colab-chapa" value="${item.chapa||''}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 mb-1 font-bold">CPF</label>
-            <input type="text" id="ed-colab-cpf" value="${item.cpf||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+            <input type="text" id="ed-colab-cpf" value="${item.cpf||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
           </div>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 mb-1 font-bold">Nome Completo *</label>
-          <input type="text" id="ed-colab-nome" required value="${item.nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs uppercase font-bold">
+          <input type="text" id="ed-colab-nome" required value="${item.nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs uppercase font-bold" oninput="forcarMaiuscula(this)">
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -7184,17 +9582,17 @@ function renderCadSubTabContent() {
         <form onsubmit="handleCadClienteSubmit(event)" class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
           <h3 class="font-bold text-emerald-400 text-xs uppercase">🏢 Novo Cliente</h3>
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div><label class="block text-[10px] text-slate-400">Código ERP</label><input type="text" id="cad-cli-cod" placeholder="Ex: 1052" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></div>
-            <div class="sm:col-span-2"><label class="block text-[10px] text-slate-400">Nome Razão Social / Fantasia *</label><input type="text" id="cad-cli-nome" required placeholder="SUPERMERCADO SILVA LTDA" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs uppercase"></div>
-            <div><label class="block text-[10px] text-slate-400">Cidade</label><input type="text" id="cad-cli-cidade" placeholder="GOIANIA" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
-            <div><label class="block text-[10px] text-slate-400">CNPJ / CPF</label><input type="text" id="cad-cli-cnpj" placeholder="00.000.000/0001-00" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+            <div><label class="block text-[10px] text-slate-400">Código ERP</label><input type="text" id="cad-cli-cod" placeholder="Ex: 1052" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+            <div class="sm:col-span-2"><label class="block text-[10px] text-slate-400">Nome Razão Social / Fantasia *</label><input type="text" id="cad-cli-nome" required placeholder="SUPERMERCADO SILVA LTDA" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs uppercase" oninput="forcarMaiuscula(this)"></div>
+            <div><label class="block text-[10px] text-slate-400">Cidade</label><input type="text" id="cad-cli-cidade" placeholder="GOIANIA" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+            <div><label class="block text-[10px] text-slate-400">CNPJ / CPF</label><input type="text" id="cad-cli-cnpj" placeholder="00.000.000/0001-00" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar Cliente</button>
         </form>
 
         <div class="flex gap-2 items-center">
           <input type="text" id="cli-busca" value="${window._cliBusca||''}" placeholder="Buscar por código ou nome..."
-            oninput="window._cliBusca=this.value; renderApp()"
+            oninput="forcarMaiuscula(this); window._cliBusca=this.value; renderApp()"
             class="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
           <span class="text-[10px] text-slate-400 whitespace-nowrap">${filtrados.length} de ${clientes.length}</span>
           ${busca ? `<button onclick="window._cliBusca=''; renderApp()" class="text-[10px] text-red-400 hover:text-red-300 font-bold px-2 py-1 bg-slate-800 rounded">Limpar</button>` : ''}
@@ -7263,15 +9661,15 @@ function renderCadSubTabContent() {
           <div class="grid grid-cols-1 sm:grid-cols-6 gap-3 text-xs">
             <div>
               <label class="block text-[10px] text-slate-400 mb-1 font-bold">Nº Chapa</label>
-              <input type="text" id="cad-colab-chapa" placeholder="Ex: 111" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs">
+              <input type="text" id="cad-colab-chapa" placeholder="Ex: 111" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
             </div>
             <div class="sm:col-span-2">
               <label class="block text-[10px] text-slate-400 mb-1 font-bold">Nome Completo *</label>
-              <input type="text" id="cad-colab-nome" required placeholder="Ex: ADONIAS MILHOMEM" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs uppercase font-bold">
+              <input type="text" id="cad-colab-nome" required placeholder="Ex: ADONIAS MILHOMEM" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs uppercase font-bold" oninput="forcarMaiuscula(this)">
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 mb-1 font-bold">CPF</label>
-              <input type="text" id="cad-colab-cpf" placeholder="000.000.000-00" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <input type="text" id="cad-colab-cpf" placeholder="000.000.000-00" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 mb-1 font-bold">Função *</label>
@@ -7298,7 +9696,7 @@ function renderCadSubTabContent() {
         <div class="flex flex-col sm:flex-row gap-2 sm:items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs">
           <div class="flex items-center gap-2 flex-1">
             <input type="text" id="colab-busca" value="${window._colabBusca||''}" placeholder="Buscar por Nome, Chapa, CPF ou Seção..."
-              oninput="window._colabBusca=this.value; renderApp()"
+              oninput="forcarMaiuscula(this); window._colabBusca=this.value; renderApp()"
               class="w-full bg-slate-900 border border-slate-700 text-white rounded-lg p-2 text-xs">
             ${busca ? `<button onclick="window._colabBusca=''; renderApp()" class="text-[10px] text-red-400 hover:text-red-300 font-bold px-2 py-1 bg-slate-800 rounded">Limpar</button>` : ''}
           </div>
@@ -7365,8 +9763,8 @@ function renderCadSubTabContent() {
           <h3 class="font-bold text-emerald-400 text-xs uppercase">Novo Motorista</h3>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div><label class="block text-[10px] text-slate-400">Cód. ERP</label><input type="number" id="cad-mot-erp" placeholder="Ex: 520" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></div>
-            <div class="col-span-2"><label class="block text-[10px] text-slate-400">Nome Completo *</label><input type="text" id="cad-mot-nome" required placeholder="CARLOS ALBERTO SILVA" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
-            <div><label class="block text-[10px] text-slate-400">CNH</label><input type="text" id="cad-mot-cnh" placeholder="00000000000" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+            <div class="col-span-2"><label class="block text-[10px] text-slate-400">Nome Completo *</label><input type="text" id="cad-mot-nome" required placeholder="CARLOS ALBERTO SILVA" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+            <div><label class="block text-[10px] text-slate-400">CNH</label><input type="text" id="cad-mot-cnh" placeholder="00000000000" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
@@ -7387,7 +9785,7 @@ function renderCadSubTabContent() {
           <h3 class="font-bold text-emerald-400 text-xs uppercase">Novo Ajudante</h3>
           <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <div><label class="block text-[10px] text-slate-400">Cód. ERP</label><input type="number" id="cad-aju-erp" placeholder="530" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></div>
-            <div class="col-span-2"><label class="block text-[10px] text-slate-400">Nome *</label><input type="text" id="cad-aju-nome" required placeholder="GABRIEL SANTOS" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+            <div class="col-span-2"><label class="block text-[10px] text-slate-400">Nome *</label><input type="text" id="cad-aju-nome" required placeholder="GABRIEL SANTOS" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
@@ -7407,9 +9805,9 @@ function renderCadSubTabContent() {
         <form onsubmit="handleCadProdutoSubmit(event)" class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
           <h3 class="font-bold text-emerald-400 text-xs uppercase">Novo Produto</h3>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div><label class="block text-[10px] text-slate-400">Código *</label><input type="text" id="cad-prod-cod" required placeholder="5600" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></div>
-            <div class="col-span-2"><label class="block text-[10px] text-slate-400">Descrição *</label><input type="text" id="cad-prod-desc" required placeholder="FILE DE PEITO BANDEJA FRIATO" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
-            <div><label class="block text-[10px] text-slate-400">Categoria</label><input type="text" id="cad-prod-cat" placeholder="Frios/Carnes" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+            <div><label class="block text-[10px] text-slate-400">Código *</label><input type="text" id="cad-prod-cod" required placeholder="5600" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+            <div class="col-span-2"><label class="block text-[10px] text-slate-400">Descrição *</label><input type="text" id="cad-prod-desc" required placeholder="FILE DE PEITO BANDEJA FRIATO" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+            <div><label class="block text-[10px] text-slate-400">Categoria</label><input type="text" id="cad-prod-cat" placeholder="Frios/Carnes" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
@@ -7429,7 +9827,7 @@ function renderCadSubTabContent() {
         <form onsubmit="handleCadVeiculoSubmit(event)" class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
           <h3 class="font-bold text-emerald-400 text-xs uppercase">Novo Veículo</h3>
           <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <div><label class="block text-[10px] text-slate-400">Placa *</label><input type="text" id="cad-veic-placa" required placeholder="TVA8I25" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></div>
+            <div><label class="block text-[10px] text-slate-400">Placa *</label><input type="text" id="cad-veic-placa" required placeholder="TVA8I25" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
             <div><label class="block text-[10px] text-slate-400">Grupo *</label>
               <select id="cad-veic-tipo" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">
                 ${['TOCO','TRUCK','CARRETA','3/4','VUC','CAVALO','UTILITARIO','PASSEIO'].map(t=>`<option value="${t}">${t}</option>`).join('')}
@@ -7459,7 +9857,7 @@ function renderCadSubTabContent() {
       <div class="space-y-5">
         <form onsubmit="handleCadRotaSubmit(event)" class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
           <h3 class="font-bold text-emerald-400 text-xs uppercase">Nova Rota</h3>
-          <div><label class="block text-[10px] text-slate-400">Nome da Rota *</label><input type="text" id="cad-rota-nome" required placeholder="Ex: ARAGUAINA SECO III" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+          <div><label class="block text-[10px] text-slate-400">Nome da Rota *</label><input type="text" id="cad-rota-nome" required placeholder="Ex: ARAGUAINA SECO III" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar Rota</button>
         </form>
         <div>
@@ -7479,7 +9877,7 @@ function renderCadSubTabContent() {
           <div class="flex gap-2">
             <div class="flex-1">
               <label class="block text-[10px] text-slate-400 mb-1">Descrição do Motivo *</label>
-              <input type="text" id="cad-motivo-nome" required placeholder="Ex: PRODUTO AVARIADO NO TRANSPORTE" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs uppercase">
+              <input type="text" id="cad-motivo-nome" required placeholder="Ex: PRODUTO AVARIADO NO TRANSPORTE" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs uppercase" oninput="forcarMaiuscula(this)">
             </div>
             <div class="flex items-end">
               <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar Motivo</button>
@@ -7541,9 +9939,9 @@ function renderConectorDadosView() {
           <div class="p-3 bg-blue-950/80 border border-blue-800/80 rounded-xl text-2xl text-blue-400">🔌</div>
           <div>
             <h1 class="text-xl font-black text-white uppercase tracking-wider flex items-center gap-2">
-              Central de Ingestão de Dados & Conector Power BI
+              🔌 Conector Power BI
             </h1>
-            <p class="text-xs text-slate-400">Área do Analista de Dados: Extração JSON / SQL e Conexão Multidepartamental na Nuvem</p>
+            <p class="text-xs text-slate-400">Exportação SQL/JSON e integração de dados</p>
           </div>
         </div>
       </div>
@@ -7554,20 +9952,10 @@ function renderConectorDadosView() {
           <span>⚡</span> Ferramentas de Extração e Integração
         </h2>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
-          <div class="bg-slate-950 p-5 rounded-xl border border-slate-800 space-y-3 shadow-inner">
-            <h3 class="font-bold text-emerald-400 text-sm flex items-center gap-2">
-              <span>💾</span> 1. Exportação Instantânea em JSON
-            </h3>
-            <p class="text-slate-400 text-xs leading-relaxed">Baixe a base de dados completa em formato JSON para ingestão direta via Obter Dados -> JSON no Power BI Desktop.</p>
-            <button onclick="const b=new Blob([JSON.stringify(db.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='jr_sac_database.json';a.click()" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-4 py-2.5 rounded-lg text-xs shadow flex items-center gap-2">
-              💾 Baixar Base JSON
-            </button>
-          </div>
-
+        <div class="grid grid-cols-1 gap-6 text-xs">
           <div class="bg-slate-950 p-5 rounded-xl border border-slate-800 space-y-3 shadow-inner">
             <h3 class="font-bold text-blue-400 text-sm flex items-center gap-2">
-              <span>📥</span> 2. Conexão e Exportação SQL (PostgreSQL / Supabase)
+              <span>📥</span> Conexão e Exportação SQL (PostgreSQL / Supabase)
             </h3>
             <p class="text-slate-400 text-xs leading-relaxed">Gerador de Script SQL (.sql) com todas as tabelas e dados para carga direta no PostgreSQL ou Power BI DirectQuery.</p>
             <div class="flex flex-wrap gap-2">
@@ -7601,182 +9989,8 @@ function renderPowerBiView() {
   return renderConectorDadosView();
 }
 
-function imprimirBoletimOperacional() {
-  const fDe  = window._biFiltroDe  || '';
-  const fAte = window._biFiltroAte || '';
-
-  const allDevs = db.getDevolucoes();
-  const allRotas = db.getOcorrenciasRota();
-  const allRelatorios = db.data.relatorios_divergencia || [];
-  const allViagens = db.getControleViagens();
-  const allOcViagens = db.getOcorrenciasViagens();
-
-  const devs = allDevs.filter(d => {
-    const data = d.criado_em ? d.criado_em.split('T')[0] : '';
-    if (fDe && data < fDe) return false;
-    if (fAte && data > fAte) return false;
-    return true;
-  });
-
-  const rotas = allRotas.filter(r => {
-    const data = r.criado_em ? r.criado_em.split('T')[0] : '';
-    if (fDe && data < fDe) return false;
-    if (fAte && data > fAte) return false;
-    return true;
-  });
-
-  const relatorios = allRelatorios.filter(rel => {
-    const data = rel.gerado_em ? rel.gerado_em.split('T')[0] : '';
-    if (fDe && data < fDe) return false;
-    if (fAte && data > fAte) return false;
-    return true;
-  });
-
-  const viagens = allViagens.filter(v => {
-    const data = v.data_saida || '';
-    if (fDe && data < fDe) return false;
-    if (fAte && data > fAte) return false;
-    return true;
-  });
-
-  const ocViagens = allOcViagens.filter(o => {
-    const data = o.data || '';
-    if (fDe && data < fDe) return false;
-    if (fAte && data > fAte) return false;
-    return true;
-  });
-
-  const totalDevValor = devs.reduce((acc, d) => acc + (parseFloat(d.valor_reclamado)||0), 0);
-  const totalPendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
-
-  const htmlContent = `
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>BOLETIM OPERACIONAL — JR DISTRIBUIDORA</title>
-  <style>
-    @media print { @page { margin: 10mm; size: A4 portrait; } }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #0f172a; }
-    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 15px; }
-    .logo { height: 50px; }
-    .title { text-align: right; }
-    .title h2 { margin: 0; font-size: 18px; }
-    .title p { margin: 2px 0 0; font-size: 10px; color: #64748b; }
-    .doc-banner { background: #0f172a; color: white; padding: 8px; text-align: center; font-weight: bold; font-size: 14px; margin-bottom: 15px; border-radius: 4px; }
-    .kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 20px; }
-    .kpi-box { border: 1px solid #cbd5e1; padding: 8px; text-align: center; border-radius: 4px; background: #f8fafc; }
-    .kpi-num { font-size: 16px; font-weight: bold; color: #0f172a; margin-top: 2px; }
-    .kpi-label { font-size: 9px; font-weight: bold; color: #64748b; text-transform: uppercase; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-    th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; font-size: 10px; }
-    th { background: #f1f5f9; font-weight: bold; text-transform: uppercase; }
-    .section-title { font-size: 12px; font-weight: bold; margin-bottom: 6px; text-transform: uppercase; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
-    <div class="title">
-      <h2>JR DISTRIBUIDORA</h2>
-      <p>Boletim Operacional de Viagens, Rota, CD & SAC</p>
-    </div>
-  </div>
-
-  <div class="doc-banner">BOLETIM OPERACIONAL GERENCIAL ${fDe || fAte ? `(${fDe || 'Início'} até ${fAte || 'Hoje'})` : '(Período Completo)'}</div>
-
-  <div class="kpi-grid">
-    <div class="kpi-box"><div class="kpi-label">Viagens Escala</div><div class="kpi-num">${viagens.length}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Devoluções</div><div class="kpi-num">${devs.length}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Valor Reclamado</div><div class="kpi-num">R$ ${totalDevValor.toFixed(2)}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Ocorrências Rota</div><div class="kpi-num">${rotas.length}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Ocorrências CCO</div><div class="kpi-num">${ocViagens.length}</div></div>
-  </div>
-
-  <div class="section-title">1. Acompanhamento de Largadas & Controle de Viagens (${viagens.length})</div>
-  <table>
-    <thead><tr><th>Carga</th><th>Rota</th><th>Placa</th><th>Motorista</th><th>Ajudante</th><th>Status</th><th>Fusion</th><th>Checklist Saída</th></tr></thead>
-    <tbody>
-      ${viagens.length===0?'<tr><td colspan="8" style="text-align:center;">Nenhuma viagem registrada no período</td></tr>':viagens.map(v=>`
-        <tr>
-          <td><b>${v.carga}</b></td>
-          <td>${v.rota}</td>
-          <td>${v.placa}</td>
-          <td>${v.motorista}</td>
-          <td>${v.ajudante}</td>
-          <td><b>${v.status_viagem}</b></td>
-          <td>${v.fusion}</td>
-          <td>${v.checklist_saida}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
-
-  <div class="section-title">2. Ocorrências Operacionais de Viagem CCO (${ocViagens.length})</div>
-  <table>
-    <thead><tr><th>Data</th><th>Carga</th><th>Rota / Placa</th><th>Funcionário (Função)</th><th>Motivo</th><th>Ocorrência & Ação</th></tr></thead>
-    <tbody>
-      ${ocViagens.length===0?'<tr><td colspan="6" style="text-align:center;">Nenhuma ocorrência operacional registrada</td></tr>':ocViagens.map(o=>`
-        <tr>
-          <td>${o.data}</td>
-          <td><b>${o.carga}</b></td>
-          <td>${o.rota} (${o.placa})</td>
-          <td>${o.funcionario} (${o.funcao})</td>
-          <td><b>${o.motivo}</b></td>
-          <td><b>Causa:</b> ${o.causa}<br><b>Ocorrência:</b> ${o.ocorrencia}<br><b>Ação:</b> ${o.acao}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
-
-  <div class="section-title">3. Resumo Ocorrências de Devolução (${devs.length})</div>
-  <table>
-    <thead><tr><th>Protocolo</th><th>Cliente</th><th>Motorista</th><th>Rota</th><th>Motivo Reclamado</th><th>Valor</th></tr></thead>
-    <tbody>
-      ${devs.length===0?'<tr><td colspan="6" style="text-align:center;">Nenhum registro</td></tr>':devs.map(d=>`
-        <tr>
-          <td><b>${d.numero_devolucao||d.numero_protocolo}</b></td>
-          <td>${d.cliente_nome}</td>
-          <td>${d.motorista_nome}</td>
-          <td>${d.carga_rota}</td>
-          <td>${d.motivo_reclamado}</td>
-          <td>R$ ${(parseFloat(d.valor_reclamado)||0).toFixed(2)}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
-  <div class="section-title">4. Ocorrências em Rota & Frota (${rotas.length})</div>
-  <table>
-    <thead><tr><th>Protocolo</th><th>Veículo / Placa</th><th>Motorista</th><th>Tipo Ocorrência</th><th>Status Veículo</th></tr></thead>
-    <tbody>
-      ${rotas.length===0?'<tr><td colspan="5" style="text-align:center;">Nenhum registro</td></tr>':rotas.map(r=>`
-        <tr>
-          <td><b>${r.numero_protocolo}</b></td>
-          <td>${r.veiculo_placa}</td>
-          <td>${r.motorista_nome}</td>
-          <td>${r.tipo_ocorrencia}</td>
-          <td>${r.status_veiculo||'Aguardando Manutenção'}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
-
-  <script>
-    window.onload = function() { setTimeout(function(){ window.print(); }, 500); }
-  </script>
-</body>
-</html>`;
-
-  const win = window.open('','_blank','width=900,height=800');
-  if (win) {
-    win.document.write(htmlContent);
-    win.document.close();
-  }
-}
-
 function downloadSqlScript() { window.open('./database/schema.sql','_blank'); }
 function copyJsonData() { navigator.clipboard.writeText(JSON.stringify(db.data,null,2)).then(()=>alert('✅ JSON copiado!')); }
-function downloadJsonData() { const b=new Blob([JSON.stringify(db.data,null,2)],{type:'application/json'}); const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download='jr_oper_export.json'; a.click(); URL.revokeObjectURL(u); }
 
 // ===== MÓDULO: RESUMO DIÁRIO CD & GESTÃO DE OCORRÊNCIAS =====
 function getTodasOcorrenciasCD() {
@@ -7885,7 +10099,7 @@ function editarOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor</label>
-            <input type="text" readonly value="${parentTurno}" class="w-full bg-slate-800/60 border border-slate-700 text-slate-400 rounded p-2 text-xs font-bold">
+            <input type="text" readonly value="${parentTurno}" class="w-full bg-slate-800/60 border border-slate-700 text-slate-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status *</label>
@@ -7906,7 +10120,7 @@ function editarOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha *</label>
-            <input type="text" id="md-edit-req" value="${reqAtual}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase">
+            <input type="text" id="md-edit-req" value="${reqAtual}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
           </div>
         </div>
 
@@ -7914,7 +10128,7 @@ function editarOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
             <input type="text" id="md-edit-carga" list="cargas-list-mdedit" value="${item.carga || ''}" placeholder="ex: 7689"
-              oninput="atualizarAvisoCargaNaoEncontrada('md-edit-carga','md-edit-carga-aviso',this.value)"
+              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-edit-carga','md-edit-carga-aviso',this.value)"
               onchange="atualizarAvisoCargaNaoEncontrada('md-edit-carga','md-edit-carga-aviso',this.value)"
               class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
             ${renderDatalistCargas('cargas-list-mdedit')}
@@ -7928,12 +10142,12 @@ function editarOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-edit-causa" rows="3" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs">${item.detalhamento || item.causa || ''}</textarea>
+          <textarea id="md-edit-causa" rows="3" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.detalhamento || item.causa || ''}</textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-edit-acao" rows="2" class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs">${item.acao || ''}</textarea>
+          <textarea id="md-edit-acao" rows="2" class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.acao || ''}</textarea>
         </div>
       </div>
 
@@ -8040,7 +10254,7 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
             <input type="text" id="md-oc2-carga" list="cargas-list-mdoc2" placeholder="ex: 7689"
-              oninput="atualizarAvisoCargaNaoEncontrada('md-oc2-carga','md-oc2-carga-aviso',this.value)"
+              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-oc2-carga','md-oc2-carga-aviso',this.value)"
               onchange="atualizarAvisoCargaNaoEncontrada('md-oc2-carga','md-oc2-carga-aviso',this.value)"
               class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
             ${renderDatalistCargas('cargas-list-mdoc2')}
@@ -8054,12 +10268,12 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-oc2-causa" rows="3" placeholder="Descreva os detalhes da ocorrência..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs"></textarea>
+          <textarea id="md-oc2-causa" rows="3" placeholder="Descreva os detalhes da ocorrência..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-oc2-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs"></textarea>
+          <textarea id="md-oc2-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
         </div>
       </div>
 
@@ -8248,7 +10462,9 @@ function gerarRelatorioOcorrenciasPdf() {
 function switchFrotaSubTab(tab) {
   activeFrotaSubTab = tab;
   renderApp();
+  scrollToTop();
 }
+window.switchFrotaSubTab = switchFrotaSubTab;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3A — CONTAINER
@@ -8257,6 +10473,30 @@ function renderDisponibilidadeFrotaView() {
   const retencoes = db.getRetencoesFrota();
   const nRetidos   = retencoes.filter(r => r.status === 'RETIDO').length;
   const nLiberados = retencoes.filter(r => r.status === 'LIBERADO').length;
+
+  const retidosCriticos8h = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'CRITICO_8H');
+  const retidosAlerta4h = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'ALERTA_4H');
+
+  // Cálculo do MTTR Operacional da Frota (em hh:mm:ss)
+  let totalMttrMs = 0;
+  let countMttr = 0;
+  retencoes.forEach(r => {
+    const dtInicio = r.criado_em ? new Date(r.criado_em) : (r.data_parada ? new Date(r.data_parada + 'T08:00:00') : null);
+    if (dtInicio && !isNaN(dtInicio.getTime())) {
+      let dtFim = null;
+      if (r.status === 'LIBERADO' && r.data_liberacao) {
+        dtFim = new Date(r.data_liberacao.includes('T') ? r.data_liberacao : r.data_liberacao + 'T18:00:00');
+      } else if (r.status === 'RETIDO') {
+        dtFim = new Date();
+      }
+      if (dtFim && !isNaN(dtFim.getTime())) {
+        totalMttrMs += Math.max(0, dtFim.getTime() - dtInicio.getTime());
+        countMttr++;
+      }
+    }
+  });
+  const mttrMedioMs = countMttr > 0 ? (totalMttrMs / countMttr) : 0;
+  const mttrMedioHhmmss = formatarDuracaoHHMMSS(mttrMedioMs, 'ms');
 
   const tabBtn = (key, label, cor) => {
     const ativo = activeFrotaSubTab === key;
@@ -8277,12 +10517,12 @@ function renderDisponibilidadeFrotaView() {
   return `
     <div class="space-y-5">
       <!-- CABEÇALHO -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-lg">
         <div>
           <h2 class="text-base font-black text-white tracking-wide flex items-center gap-2">
             🚛 Disponibilidade da Frota
           </h2>
-          <p class="text-[11px] text-slate-400 mt-0.5">Controle de retenção e liberação de veículos</p>
+          <p class="text-[11px] text-slate-400 mt-0.5">Retenção, imobilização e SLA de manutenção</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <div class="flex items-center gap-1 bg-slate-950 border border-slate-700 p-1 rounded-xl">
@@ -8297,6 +10537,37 @@ function renderDisponibilidadeFrotaView() {
           </button>
         </div>
       </div>
+
+      <!-- CARDS DE INDICADORES / KPIS DE SLA & MTTR DA FROTA -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="bg-slate-900 border border-slate-800 p-3.5 rounded-xl shadow">
+          <div class="text-[10px] text-slate-400 font-bold uppercase">Veículos Retidos</div>
+          <div class="text-2xl font-black text-white mt-1">${nRetidos}</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Atualmente na oficina</div>
+        </div>
+        <div class="bg-slate-900 border border-red-900/70 p-3.5 rounded-xl shadow ${retidosCriticos8h.length > 0 ? 'animate-pulse' : ''}">
+          <div class="text-[10px] text-red-400 font-bold uppercase flex items-center gap-1">
+            <span>🔴</span> SLA Crítico &gt;8h
+          </div>
+          <div class="text-2xl font-black text-red-300 mt-1">${retidosCriticos8h.length}</div>
+          <div class="text-[10px] text-red-400/80 mt-0.5">Parados há mais de 8h</div>
+        </div>
+        <div class="bg-slate-900 border border-amber-900/70 p-3.5 rounded-xl shadow">
+          <div class="text-[10px] text-amber-400 font-bold uppercase flex items-center gap-1">
+            <span>🟡</span> SLA Atenção &gt;4h
+          </div>
+          <div class="text-2xl font-black text-amber-300 mt-1">${retidosAlerta4h.length}</div>
+          <div class="text-[10px] text-amber-400/80 mt-0.5">Parados entre 4h e 8h</div>
+        </div>
+        <div class="bg-slate-900 border border-emerald-900/70 p-3.5 rounded-xl shadow">
+          <div class="text-[10px] text-emerald-400 font-bold uppercase flex items-center gap-1">
+            <span>⏱️</span> MTTR Imobilização
+          </div>
+          <div class="text-lg font-black text-emerald-300 mt-1 font-mono">${mttrMedioHhmmss}</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Média geral (hh:mm:ss)</div>
+        </div>
+      </div>
+
       <!-- PAINEL ATIVO -->
       ${painelHtml}
     </div>`;
@@ -8330,7 +10601,7 @@ function renderPainelReterVeiculo() {
             <!-- Input de busca visível -->
             <input type="text" id="frt-veiculo-busca" autocomplete="off"
               placeholder="Digite placa ou trecho (ex: H05, TOCO…)"
-              oninput="frtFiltrarVeiculos(this.value)"
+              oninput="forcarMaiuscula(this); frtFiltrarVeiculos(this.value)"
               onfocus="frtFiltrarVeiculos(this.value)"
               onblur="setTimeout(()=>frtFecharDropdown(),180)"
               class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600
@@ -8357,7 +10628,7 @@ function renderPainelReterVeiculo() {
         <div class="flex flex-col gap-1">
           <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide">Motivo / Descrição *</label>
           <textarea id="frt-motivo" rows="3" required placeholder="Descreva o motivo da retenção…"
-            class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white resize-none focus:outline-none focus:border-amber-500 transition"></textarea>
+            class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white resize-none focus:outline-none focus:border-amber-500 transition" oninput="forcarMaiuscula(this)"></textarea>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
@@ -8379,14 +10650,14 @@ function renderPainelReterVeiculo() {
               <span class="text-slate-600 font-normal normal-case">(externo)</span>
             </label>
             <input type="text" id="frt-numero-os" placeholder="Ex.: OS-4521"
-              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 transition" />
+              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 transition"  oninput="forcarMaiuscula(this)" />
           </div>
 
           <!-- Local / Oficina -->
           <div class="flex flex-col gap-1">
             <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide">Local / Oficina</label>
             <input type="text" id="frt-local" placeholder="Ex.: Oficina Central"
-              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 transition" />
+              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 transition"  oninput="forcarMaiuscula(this)" />
           </div>
 
           <!-- Data de Previsão -->
@@ -8415,8 +10686,10 @@ function renderPainelRetidos(retencoes) {
   const retidos = retencoes.filter(r => r.status === 'RETIDO');
 
   const linhas = retidos.length === 0
-    ? `<tr><td colspan="9" class="p-8 text-center text-slate-500 text-xs">Nenhum veículo retido no momento.</td></tr>`
-    : retidos.map((r, i) => `
+    ? `<tr><td colspan="10" class="p-8 text-center text-slate-500 text-xs">Nenhum veículo retido no momento.</td></tr>`
+    : retidos.map((r, i) => {
+        const slaInfo = calcularSlaManutencao(r);
+        return `
         <tr class="hover:bg-slate-800/40 transition group">
           <td class="p-2 text-center text-slate-400 text-xs font-bold">${i + 1}</td>
           <td class="p-2 font-black text-white text-xs tracking-wide">${r.placa || '—'}</td>
@@ -8435,32 +10708,36 @@ function renderPainelRetidos(retencoes) {
           <td class="p-2 text-sky-300 text-xs font-mono">${r.numero_os || '—'}</td>
           <td class="p-2 text-slate-400 text-xs">${r.local || '—'}</td>
           <td class="p-2 text-xs ${!r.data_previsao ? 'text-slate-500' : new Date(r.data_previsao) < new Date() ? 'text-red-400 font-bold' : 'text-emerald-400'}">
-            ${r.data_previsao ? r.data_previsao.split('-').reverse().join('/') : '—'}
+            ${formatarData(r.data_previsao)}
+          </td>
+          <td class="p-2 text-center">
+            ${slaInfo.badgeHtml}
           </td>
           <td class="p-2">
-            <div class="flex items-center gap-1">
+            <div class="flex items-center gap-1 justify-center">
               <button onclick="abrirModalEdicaoFrota(${r.id})"
-                class="bg-sky-700 hover:bg-sky-600 active:scale-95 text-white text-[10px] font-bold px-2 py-1 rounded-lg transition flex items-center gap-1">
+                class="bg-sky-700 hover:bg-sky-600 active:scale-95 text-white text-[10px] font-bold px-2 py-1 rounded-lg transition flex items-center gap-1" title="Editar Retenção">
                 ✏️
               </button>
               <button onclick="abrirModalLiberacao(${r.id})"
-                class="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-[10px] font-bold px-2 py-1 rounded-lg transition flex items-center gap-1">
+                class="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-[10px] font-bold px-2 py-1 rounded-lg transition flex items-center gap-1" title="Liberar Veículo">
                 ✅ Liberar
               </button>
               <button onclick="excluirRetencaoFrota(${r.id})"
-                class="bg-red-900/60 hover:bg-red-700 active:scale-95 text-red-300 text-[10px] font-bold px-2 py-1 rounded-lg transition flex items-center gap-1">
+                class="bg-red-900/60 hover:bg-red-700 active:scale-95 text-red-300 text-[10px] font-bold px-2 py-1 rounded-lg transition flex items-center gap-1" title="Excluir">
                 🗑️
               </button>
             </div>
           </td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
 
   return `
-    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
       <!-- Cabeçalho -->
       <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800">
         <div class="flex items-center gap-2">
-          <span class="text-sm font-black text-red-400">🔴 Veículos Retidos</span>
+          <span class="text-sm font-black text-red-400">🔴 Veículos Retidos na Manutenção</span>
           <span class="bg-red-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full">${retidos.length}</span>
         </div>
         <button onclick="emitirRelatorioFrota('retidos')"
@@ -8481,6 +10758,7 @@ function renderPainelRetidos(retencoes) {
               <th class="p-2 text-left">N° OS</th>
               <th class="p-2 text-left">LOCAL</th>
               <th class="p-2 text-left">PREVISÃO</th>
+              <th class="p-2 text-center">STATUS SLA</th>
               <th class="p-2 text-center">AÇÕES</th>
             </tr>
           </thead>
@@ -8517,19 +10795,21 @@ function renderPainelLiberados(retencoes) {
   const liberados = retencoes.filter(r => r.status === 'LIBERADO')
     .sort((a, b) => new Date(b.data_liberacao) - new Date(a.data_liberacao));
 
-  const calcDias = (inicio, fim) => {
-    if (!inicio || !fim) return '—';
-    const d = Math.round((new Date(fim) - new Date(inicio)) / 86400000);
-    return d >= 0 ? d : '—';
+  const calcImobilizacao = (inicioStr, fimStr) => {
+    if (!inicioStr || !fimStr) return { dias: '—', hhmmss: '—', cls: 'text-slate-500' };
+    const dtI = new Date(inicioStr.includes('T') ? inicioStr : inicioStr + 'T08:00:00');
+    const dtF = new Date(fimStr.includes('T') ? fimStr : fimStr + 'T18:00:00');
+    const diffMs = Math.max(0, dtF.getTime() - dtI.getTime());
+    const dias = Math.round(diffMs / 86400000);
+    const hhmmss = formatarDuracaoHHMMSS(diffMs, 'ms');
+    const cls = dias <= 1 ? 'text-emerald-400' : (dias <= 3 ? 'text-amber-400' : 'text-red-400');
+    return { dias, hhmmss, cls };
   };
 
   const linhas = liberados.length === 0
     ? `<tr><td colspan="11" class="p-8 text-center text-slate-500 text-xs">Nenhum veículo liberado ainda.</td></tr>`
     : liberados.map((r, i) => {
-        const dias = calcDias(r.data_parada, r.data_liberacao);
-        const diasCls = typeof dias === 'number'
-          ? (dias <= 3 ? 'text-emerald-400' : dias <= 7 ? 'text-amber-400' : 'text-red-400')
-          : 'text-slate-500';
+        const imob = calcImobilizacao(r.data_parada || r.criado_em, r.data_liberacao);
         return `
         <tr class="hover:bg-slate-800/40 transition">
           <td class="p-2 text-center text-slate-400 text-xs font-bold">${i + 1}</td>
@@ -8548,12 +10828,12 @@ function renderPainelLiberados(retencoes) {
           <td class="p-2 text-slate-400 text-xs font-mono">${r.numero_retencao || '—'}</td>
           <td class="p-2 text-sky-300 text-xs font-mono">${r.numero_os || '—'}</td>
           <td class="p-2 text-slate-400 text-xs">${r.local || '—'}</td>
-          <td class="p-2 text-slate-400 text-xs">${r.data_parada ? r.data_parada.split('-').reverse().join('/') : '—'}</td>
-          <td class="p-2 text-emerald-400 text-xs font-bold">${r.data_liberacao ? r.data_liberacao.split('-').reverse().join('/') : '—'}</td>
-          <td class="p-2 text-center font-black text-sm ${diasCls}">${dias}${typeof dias === 'number' ? 'd' : ''}</td>
+          <td class="p-2 text-slate-400 text-xs">${formatarData(r.data_parada)}</td>
+          <td class="p-2 text-emerald-400 text-xs font-bold">${formatarData(r.data_liberacao)}</td>
+          <td class="p-2 text-center font-mono font-bold text-xs ${imob.cls}">${imob.hhmmss} <span class="text-[10px] text-slate-500">(${imob.dias}d)</span></td>
           <td class="p-2 text-center">
             <button onclick="abrirModalEdicaoFrota(${r.id})"
-              class="bg-sky-700 hover:bg-sky-600 active:scale-95 text-white text-[10px] font-bold px-2 py-1 rounded-lg transition flex items-center gap-1">
+              class="bg-sky-700 hover:bg-sky-600 active:scale-95 text-white text-[10px] font-bold px-2 py-1 rounded-lg transition flex items-center gap-1 justify-center mx-auto">
               ✏️
             </button>
           </td>
@@ -8561,11 +10841,11 @@ function renderPainelLiberados(retencoes) {
       }).join('');
 
   return `
-    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
       <!-- Cabeçalho -->
       <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800">
         <div class="flex items-center gap-2">
-          <span class="text-sm font-black text-emerald-400">✅ Veículos Liberados</span>
+          <span class="text-sm font-black text-emerald-400">✅ Veículos Liberados da Oficina</span>
           <span class="bg-emerald-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full">${liberados.length}</span>
         </div>
         <button onclick="emitirRelatorioFrota('liberados')"
@@ -8587,7 +10867,7 @@ function renderPainelLiberados(retencoes) {
               <th class="p-2 text-left">LOCAL</th>
               <th class="p-2 text-left">PARADO EM</th>
               <th class="p-2 text-left">LIBERADO EM</th>
-              <th class="p-2 text-center">DIAS</th>
+              <th class="p-2 text-center">TEMPO IMOBILIZADO</th>
               <th class="p-2 text-center">AÇÕES</th>
             </tr>
           </thead>
@@ -8634,8 +10914,8 @@ function salvarRetencaoFrota(event) {
 
   if (result.success) {
     activeFrotaSubTab = 'retidos';
+    showToast(`🔒 Retenção ${result.retencao.numero_retencao} (${result.retencao.placa}) registrada com sucesso!`, 'warning');
     renderApp();
-    setTimeout(() => alert(`✅ Retenção ${result.retencao.numero_retencao} registrada com sucesso!`), 100);
   } else {
     alert('❌ Erro ao registrar retenção. Tente novamente.');
   }
@@ -8805,7 +11085,7 @@ function abrirModalEdicaoFrota(id) {
           <div class="flex flex-col gap-1">
             <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide">Motivo / Descrição</label>
             <textarea id="edit-frt-motivo" rows="3"
-              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white resize-none focus:outline-none focus:border-sky-500 transition">${r.motivo || ''}</textarea>
+              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white resize-none focus:outline-none focus:border-sky-500 transition" oninput="forcarMaiuscula(this)">${r.motivo || ''}</textarea>
           </div>
 
           <div class="grid grid-cols-2 gap-4">
@@ -8816,14 +11096,14 @@ function abrirModalEdicaoFrota(id) {
               </label>
               <input type="text" id="edit-frt-numero-os" value="${r.numero_os || ''}"
                 placeholder="Ex.: OS-4521"
-                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition" />
+                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition"  oninput="forcarMaiuscula(this)" />
             </div>
             <!-- Local / Oficina -->
             <div class="flex flex-col gap-1">
               <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide">Local / Oficina</label>
               <input type="text" id="edit-frt-local" value="${r.local || ''}"
                 placeholder="Ex.: Oficina Central"
-                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition" />
+                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition"  oninput="forcarMaiuscula(this)" />
             </div>
           </div>
 
@@ -8911,7 +11191,7 @@ function confirmarLiberacaoFrota() {
   if (result.success) {
     activeFrotaSubTab = 'liberados';
     renderApp();
-    setTimeout(() => alert(`✅ Veículo liberado com sucesso em ${data.split('-').reverse().join('/')}!`), 100);
+    setTimeout(() => alert(`✅ Veículo liberado com sucesso em ${formatarData(data)}!`), 100);
   } else {
     alert(`❌ ${result.message || 'Erro ao liberar veículo.'}`);
   }
@@ -8961,7 +11241,7 @@ function emitirRelatorioFrota(tipo) {
   const horaFmt = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const usuarioNome = (db.currentUser && db.currentUser.nome) ? db.currentUser.nome.toUpperCase() : 'THIAGO FERREIRA';
 
-  const fmtData = d => d ? d.split('-').reverse().join('/') : '—';
+  const fmtData = d => formatarData(d);
   const calcDias = (ini, fim) => {
     if (!ini || !fim) return null;
     const d = Math.round((new Date(fim) - new Date(ini)) / 86400000);
@@ -9410,6 +11690,712 @@ function emitirRelatorioFrota(tipo) {
   }
 }
 
+function imprimirFichaOficinaChamadoPdf(chamadoId) {
+  const rotas = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
+  const r = rotas.find(x => x.id == chamadoId);
+  if (!r) {
+    alert('Ordem de serviço / Chamado de rota não encontrado.');
+    return;
+  }
+
+  const agora = new Date();
+  const dataSimples = agora.toLocaleDateString('pt-BR');
+  const horaFmt = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const usuarioNome = (db.currentUser && db.currentUser.nome) ? db.currentUser.nome.toUpperCase() : 'ANALISTA DE LOGÍSTICA';
+
+  const fmtDataHora = d => formatarDataHora(d);
+
+  const isFinalizado = r.status_chamado === 'finalizado' || r.status === 'RESOLVIDO' || r.status_veiculo === 'Em Rota';
+  const statusBadge = isFinalizado
+    ? '<span style="background:#dcfce7;color:#166534;border:1px solid #86efac;padding:3px 10px;border-radius:4px;font-weight:900;font-size:11px;letter-spacing:0.5px;">✔ FINALIZADO / LIBERADO</span>'
+    : '<span style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;padding:3px 10px;border-radius:4px;font-weight:900;font-size:11px;letter-spacing:0.5px;">⏳ PENDENTE / EM ATENDIMENTO</span>';
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ORDEM DE SERVIÇO DE OFICINA — ${r.numero_protocolo || 'ROT-2026'} — JR DISTRIBUIDORA</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 8mm 10mm 8mm 10mm;
+    }
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #fff !important; padding: 0 !important; }
+      .no-print { display: none !important; }
+      .page-container { box-shadow: none !important; border: 1.5px solid #0f172a !important; margin: 0 !important; padding: 10mm !important; width: 100% !important; max-width: 100% !important; }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background: #e2e8f0;
+      color: #0f172a;
+      padding: 20px 0;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .page-container {
+      background: #ffffff;
+      width: 210mm;
+      min-height: 275mm;
+      margin: 0 auto;
+      padding: 12mm 14mm;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+      border: 1.5px solid #0f172a;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .btn-print {
+      position: fixed;
+      top: 16px;
+      right: 20px;
+      background: #047857;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 18px;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      z-index: 9999;
+    }
+    .btn-print:hover { background: #065f46; }
+    .btn-close {
+      position: fixed;
+      top: 16px;
+      right: 210px;
+      background: #334155;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+      z-index: 9999;
+    }
+    .header-table {
+      width: 100%;
+      border-bottom: 2.5px solid #047857;
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+    }
+    .logo-img { height: 46px; width: auto; }
+    .header-center { text-align: center; }
+    .header-center h1 { font-size: 15px; font-weight: 900; color: #047857; letter-spacing: 0.5px; text-transform: uppercase; }
+    .header-center h2 { font-size: 11px; font-weight: 700; color: #1e293b; text-transform: uppercase; margin-top: 2px; }
+    .header-center p { font-size: 9px; color: #64748b; margin-top: 1px; }
+    .os-badge-box {
+      border: 1.5px solid #047857;
+      background: #f0fdf4;
+      padding: 6px 10px;
+      border-radius: 6px;
+      text-align: right;
+    }
+    .section-title {
+      font-size: 10.5px;
+      font-weight: 900;
+      color: #ffffff;
+      background: #047857;
+      padding: 4px 8px;
+      border-radius: 4px 4px 0 0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .section-box {
+      border: 1px solid #cbd5e1;
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+      padding: 8px 10px;
+      background: #f8fafc;
+      margin-bottom: 8px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px 12px;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 12px;
+    }
+    .field-lbl {
+      font-size: 8.5px;
+      font-weight: bold;
+      color: #64748b;
+      text-transform: uppercase;
+    }
+    .field-val {
+      font-size: 10.5px;
+      font-weight: 700;
+      color: #0f172a;
+      margin-top: 1px;
+    }
+    .field-val-highlight {
+      color: #047857;
+      font-weight: 900;
+    }
+    .text-content-box {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 4px;
+      padding: 8px;
+      font-size: 10.5px;
+      color: #1e293b;
+      min-height: 48px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    .signatures-block {
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1.5px dashed #cbd5e1;
+      page-break-inside: avoid;
+    }
+    .sig-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+      text-align: center;
+      margin-top: 32px;
+    }
+    .sig-line {
+      border-top: 1px solid #0f172a;
+      padding-top: 4px;
+      font-size: 9px;
+      font-weight: bold;
+      color: #0f172a;
+      text-transform: uppercase;
+    }
+    .sig-role {
+      font-size: 8px;
+      color: #64748b;
+      font-weight: normal;
+      margin-top: 1px;
+    }
+    .footer-box {
+      margin-top: 10px;
+      padding-top: 6px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 8px;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body onload="setTimeout(function(){ window.print(); }, 400)">
+
+  <div class="no-print">
+    <button class="btn-close" onclick="window.close()">✕ Fechar</button>
+    <button class="btn-print" onclick="window.print()">
+      <span>🖨️</span> Imprimir OS / Ficha A4
+    </button>
+  </div>
+
+  <div class="page-container">
+    <div>
+      <!-- CABEÇALHO OFICIAL -->
+      <table class="header-table">
+        <tr>
+          <td style="width: 20%; vertical-align: middle;">
+            <img src="${LOGO_JR_VERDE_BASE64}" class="logo-img" alt="JR Distribuidora" onerror="this.outerHTML='<div style=\\'font-size:22px;font-weight:900;color:#047857;\\'>JR DISTRIBUIDORA</div>'">
+          </td>
+          <td class="header-center" style="width: 55%; vertical-align: middle;">
+            <h1>JR DISTRIBUIDORA DE ALIMENTOS</h1>
+            <h2>ORDEM DE SERVIÇO & FICHA TÉCNICA DE OFICINA</h2>
+            <p>Manutenção Corretiva / Socorro Mecânico de Frota em Rota</p>
+          </td>
+          <td style="width: 25%; vertical-align: middle; text-align: right;">
+            <div class="os-badge-box">
+              <div style="font-size: 8.5px; font-weight: bold; color: #047857; text-transform: uppercase;">Nº ORDEM DE SERVIÇO</div>
+              <div style="font-size: 13px; font-weight: 900; color: #047857; font-family: monospace;">${r.numero_protocolo || 'ROT-2026-000'}</div>
+              <div style="margin-top: 3px;">${statusBadge}</div>
+            </div>
+          </td>
+        </tr>
+      </table>
+
+      <!-- 1. DADOS DA OPERAÇÃO E VEÍCULO -->
+      <div class="section-title">
+        <span>1. Dados da Operação & Veículo Escalado</span>
+        <span style="font-size: 8.5px; font-weight: normal; opacity: 0.9;">Identificação do Ativo</span>
+      </div>
+      <div class="section-box">
+        <div class="grid-3">
+          <div>
+            <div class="field-lbl">Placa do Veículo</div>
+            <div class="field-val field-val-highlight">${r.veiculo_placa || '—'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Modelo / Categoria</div>
+            <div class="field-val">${r.veiculo_modelo || r.veiculo_tipo || 'Caminhão Frota'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Motorista Operante</div>
+            <div class="field-val">${r.motorista_nome || '—'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Manifesto / Nº Carga</div>
+            <div class="field-val">#${r.carga_numero || '—'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Rota / Região Operacional</div>
+            <div class="field-val">${r.carga_rota || r.rota_nome || '—'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Localização Exata da Quebra / Parada</div>
+            <div class="field-val" style="color:#b45309;">📍 ${r.localizacao || 'Em trânsito na rota'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Data e Hora de Abertura</div>
+            <div class="field-val">${fmtDataHora(r.criado_em || r.id)}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Aberto Por</div>
+            <div class="field-val">${r.criado_por || 'SISTEMA'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Status Atual do Veículo</div>
+            <div class="field-val">${r.status_veiculo || 'Aguardando Manutenção'}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. DIAGNÓSTICO DO PROBLEMA E RELATO DA AVARIA -->
+      <div class="section-title">
+        <span>2. Diagnóstico da Quebra / Relato da Avaria</span>
+        <span style="font-size: 8.5px; font-weight: normal; opacity: 0.9;">Ocorrência em Rota</span>
+      </div>
+      <div class="section-box">
+        <div class="grid-2" style="margin-bottom: 6px;">
+          <div>
+            <div class="field-lbl">Tipo de Ocorrência</div>
+            <div class="field-val" style="color:#dc2626;">${r.tipo_ocorrencia || 'MECÂNICA'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Motivo Resumido / Defeito Constatado</div>
+            <div class="field-val">${r.motivo_resumido || r.tipo_ocorrencia || 'AVARIA MECÂNICA'}</div>
+          </div>
+        </div>
+        <div>
+          <div class="field-lbl" style="margin-bottom: 2px;">Descrição Detalhada do Relato do Motorista / Ocorrência:</div>
+          <div class="text-content-box">${r.descricao || 'Nenhuma descrição adicional informada.'}</div>
+        </div>
+      </div>
+
+      <!-- 3. LAUDO TÉCNICO, SERVIÇOS EXECUTADOS E RETORNO DE OFICINA -->
+      <div class="section-title">
+        <span>3. Laudo Técnico & Retorno da Manutenção (Oficina / Socorro Volante)</span>
+        <span style="font-size: 8.5px; font-weight: normal; opacity: 0.9;">Execução dos Reparos</span>
+      </div>
+      <div class="section-box">
+        <div style="margin-bottom: 6px;">
+          <div class="field-lbl" style="margin-bottom: 2px;">Serviços Executados / Ação Corretiva Realizada:</div>
+          <div class="text-content-box" style="background:#f0fdf4; border-color:#bbf7d0; color:#14532d; font-weight:600;">${r.retorno_manutencao_descricao || r.acao_mecanico || (isFinalizado ? 'Reparo e regulagem concluídos com sucesso. Veículo apto para operação.' : 'Aguardando execução dos reparos e retorno técnico da oficina.')}</div>
+        </div>
+        <div class="grid-3" style="margin-top: 8px;">
+          <div>
+            <div class="field-lbl">Responsável Técnico / Oficina</div>
+            <div class="field-val">${r.retorno_manutencao_responsavel || r.mecanico_nome || 'Equipe de Manutenção Externa'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Data e Hora da Liberação</div>
+            <div class="field-val">${r.retorno_manutencao_data ? fmtDataHora(r.retorno_manutencao_data) : (isFinalizado ? fmtDataHora(r.resolvido_em || r.atualizado_em) : 'Pendente de Liberação')}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Guincho Acionado?</div>
+            <div class="field-val">${(r.guincho_acionado === true || r.guincho_acionado === 'sim') ? 'SIM (Socorro Pesado)' : 'NÃO (Socorro Volante / Oficina Local)'}</div>
+          </div>
+          <div style="grid-column: span 2;">
+            <div class="field-lbl">Peças e Componentes Substituídos</div>
+            <div class="field-val">${r.pecas_trocadas || 'Nenhuma peça cadastrada ou troca não necessária.'}</div>
+          </div>
+          <div>
+            <div class="field-lbl">Custo Total de Manutenção / Socorro</div>
+            <div class="field-val" style="color:#047857; font-size:12px; font-weight:900;">R$ ${(parseFloat(r.custo_socorro)||0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. TERMO DE LIBERAÇÃO E ASSINATURAS FÍSICAS -->
+      <div class="signatures-block">
+        <div style="font-size: 8.5px; color: #475569; text-align: center; margin-bottom: 8px; font-style: italic;">
+          Atestamos que os serviços acima foram inspecionados e o veículo encontra-se em perfeitas condições mecânicas e de segurança viária para circulação.
+        </div>
+        <div class="sig-grid">
+          <div>
+            <div class="sig-line">${r.retorno_manutencao_responsavel || r.mecanico_nome || 'Mecânico / Oficina'}</div>
+            <div class="sig-role">Responsável Técnico / Mecânica</div>
+          </div>
+          <div>
+            <div class="sig-line">${r.motorista_nome || 'Motorista'}</div>
+            <div class="sig-role">Motorista / Condutor</div>
+          </div>
+          <div>
+            <div class="sig-line">Gestão de Frota JR</div>
+            <div class="sig-role">Analista / Supervisor de Logística</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RODAPÉ -->
+    <div class="footer-box">
+      <div>Documento gerado eletronicamente em <strong>${dataSimples} às ${horaFmt}</strong></div>
+      <div>Operador: <strong>${usuarioNome}</strong></div>
+      <div>JR Distribuidora • Sistema SAC &amp; Frota Integrada</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=950,height=980');
+  if (win) {
+    win.document.write(htmlContent);
+    win.document.close();
+  }
+}
+
+function emitirRelatorioChamadosRotaA4(filtro = null) {
+  const todasRotas = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
+
+  const fStatus = (filtro && filtro.status) || window._rotaFiltroStatus || window._rotaActiveAba || 'TODOS';
+  const fDataDe = (filtro && filtro.data_de) || (filtro && filtro.fDe) || window._rotaFiltroDataDe || '';
+  const fDataAte = (filtro && filtro.data_ate) || (filtro && filtro.fAte) || window._rotaFiltroDataAte || '';
+  const fRota = (filtro && filtro.rota) || window._rotaFiltroRota || '';
+  const fVeiculo = (filtro && filtro.veiculo) || window._rotaFiltroVeiculo || '';
+  const fBusca = (filtro && filtro.busca) || (window._rotaFiltroCarga || '').trim().toLowerCase();
+
+  let lista = todasRotas;
+
+  if (fStatus && fStatus !== 'TODOS' && fStatus !== 'todos') {
+    if (fStatus === 'PENDENTE' || fStatus === 'pendentes') {
+      lista = lista.filter(r => r.status_chamado !== 'finalizado');
+    } else if (fStatus === 'FINALIZADO' || fStatus === 'finalizados' || fStatus === 'RESOLVIDO') {
+      lista = lista.filter(r => r.status_chamado === 'finalizado');
+    } else {
+      lista = lista.filter(r => r.status_veiculo === fStatus || r.status === fStatus);
+    }
+  }
+
+  if (fDataDe) {
+    lista = lista.filter(r => {
+      const dt = r.criado_em ? r.criado_em.split('T')[0] : '';
+      return !dt || dt >= fDataDe;
+    });
+  }
+
+  if (fDataAte) {
+    lista = lista.filter(r => {
+      const dt = r.criado_em ? r.criado_em.split('T')[0] : '';
+      return !dt || dt <= fDataAte;
+    });
+  }
+
+  if (fRota) {
+    lista = lista.filter(r => r.carga_rota === fRota || r.rota_nome === fRota);
+  }
+
+  if (fVeiculo) {
+    const vClean = String(fVeiculo).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const vTxt = String(fVeiculo).toLowerCase().trim();
+    lista = lista.filter(r => {
+      const pClean = String(r.veiculo_placa || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const pTxt = String(r.veiculo_placa || '').toLowerCase();
+      const mTxt = String(r.veiculo_modelo || '').toLowerCase();
+      return pClean.includes(vClean) || pTxt.includes(vTxt) || mTxt.includes(vTxt);
+    });
+  }
+
+  if (fBusca) {
+    lista = lista.filter(r =>
+      (r.motorista_nome || '').toLowerCase().includes(fBusca) ||
+      (r.carga_numero || '').toLowerCase().includes(fBusca) ||
+      (r.numero_protocolo || '').toLowerCase().includes(fBusca) ||
+      (r.veiculo_placa || '').toLowerCase().includes(fBusca) ||
+      (r.motivo_resumido || '').toLowerCase().includes(fBusca) ||
+      (r.localizacao || '').toLowerCase().includes(fBusca)
+    );
+  }
+
+  const agora = new Date();
+  const dataSimples = agora.toLocaleDateString('pt-BR');
+  const horaFmt = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const usuarioNome = (db.currentUser && db.currentUser.nome) ? db.currentUser.nome.toUpperCase() : 'ANALISTA DE LOGÍSTICA';
+
+  const fmtData = d => formatarData(d);
+
+  // KPIs
+  const totChamados = lista.length;
+  const totPendentes = lista.filter(r => r.status_chamado !== 'finalizado').length;
+  const totFinalizados = lista.filter(r => r.status_chamado === 'finalizado').length;
+  const totCustoSocorro = lista.reduce((acc, r) => acc + (parseFloat(r.custo_socorro) || 0), 0);
+  const mediaCusto = totChamados > 0 ? (totCustoSocorro / totChamados) : 0;
+
+  const linhasHtml = lista.length === 0
+    ? `<tr><td colspan="11" style="text-align:center;padding:24px;color:#64748b;font-size:11px;font-style:italic;">Nenhum chamado de rota encontrado para este período ou filtro.</td></tr>`
+    : lista.map((r, i) => {
+        const rowBg = (i % 2 === 0) ? '#ffffff' : '#f8fafc';
+        const isFin = r.status_chamado === 'finalizado';
+        const statusBg = isFin ? '#dcfce7' : '#fee2e2';
+        const statusColor = isFin ? '#166534' : '#991b1b';
+        const statusBorder = isFin ? '#86efac' : '#fca5a5';
+        const statusText = isFin ? 'FINALIZADO' : 'PENDENTE';
+
+        return `
+          <tr style="background:${rowBg};">
+            <td style="text-align:center;font-weight:bold;color:#475569;font-size:9px;">${i + 1}</td>
+            <td style="text-align:center;font-family:'Courier New',monospace;font-weight:900;color:#047857;font-size:10px;white-space:nowrap;">${r.numero_protocolo || '—'}</td>
+            <td style="text-align:center;font-size:9.5px;color:#334155;white-space:nowrap;">${fmtData(r.criado_em || r.id)}</td>
+            <td style="font-weight:900;color:#0f172a;font-family:'Courier New',monospace;font-size:10.5px;">${r.veiculo_placa || '—'}</td>
+            <td style="font-weight:700;color:#1e293b;font-size:9.5px;text-transform:uppercase;">${r.motorista_nome || '—'}</td>
+            <td style="font-size:9px;color:#334155;"><b>#${r.carga_numero || '—'}</b> (${r.carga_rota || r.rota_nome || '—'})</td>
+            <td style="font-size:9px;color:#b45309;font-weight:600;">${r.localizacao ? '📍 ' + r.localizacao : '—'}</td>
+            <td style="font-size:9px;color:#1e293b;"><strong style="color:#dc2626;">${r.motivo_resumido || r.tipo_ocorrencia || '—'}</strong>: ${r.descricao ? r.descricao.slice(0, 70) + (r.descricao.length > 70 ? '...' : '') : '—'}</td>
+            <td style="font-size:9px;color:#15803d;font-weight:600;">${r.retorno_manutencao_descricao || r.acao_mecanico || (isFin ? 'Reparo Concluído' : 'Em atendimento')}</td>
+            <td style="text-align:right;font-family:monospace;font-weight:bold;color:#047857;font-size:10px;">R$ ${(parseFloat(r.custo_socorro)||0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td style="text-align:center;white-space:nowrap;">
+              <span style="display:inline-block;padding:2px 6px;border-radius:3px;font-weight:900;font-size:8.5px;background:${statusBg};color:${statusColor};border:1px solid ${statusBorder};">
+                ${statusText}
+              </span>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RELATÓRIO DE CHAMADOS DE FROTA EM ROTA – ${dataSimples} – JR DISTRIBUIDORA</title>
+  <style>
+    @page {
+      size: A4 landscape;
+      margin: 8mm 10mm 8mm 10mm;
+    }
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #fff !important; padding: 0 !important; }
+      .no-print { display: none !important; }
+      .page-container { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background: #e2e8f0;
+      color: #000;
+      padding: 16px 0;
+      font-size: 10px;
+      line-height: 1.3;
+    }
+    .page-container {
+      background: #ffffff;
+      width: 277mm;
+      min-height: 190mm;
+      margin: 0 auto;
+      padding: 10mm 12mm;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+      border: 1px solid #cbd5e1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .btn-print {
+      position: fixed;
+      top: 16px;
+      right: 20px;
+      background: #047857;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 18px;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      z-index: 9999;
+    }
+    .btn-print:hover { background: #065f46; }
+    .btn-close {
+      position: fixed;
+      top: 16px;
+      right: 240px;
+      background: #334155;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+      z-index: 9999;
+    }
+    .header-table {
+      width: 100%;
+      border-bottom: 2px solid #047857;
+      padding-bottom: 6px;
+      margin-bottom: 10px;
+    }
+    .logo-img { height: 42px; width: auto; }
+    .header-center { text-align: center; }
+    .header-center h1 { font-size: 14px; font-weight: 900; color: #047857; letter-spacing: 0.5px; text-transform: uppercase; }
+    .header-center h2 { font-size: 11px; font-weight: 700; color: #1e293b; text-transform: uppercase; margin-top: 1px; }
+    .header-center p { font-size: 9px; color: #64748b; margin-top: 1px; }
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .kpi-card {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 6px 10px;
+      text-align: center;
+    }
+    .kpi-card-lbl { font-size: 8px; font-weight: bold; color: #64748b; text-transform: uppercase; }
+    .kpi-card-val { font-size: 13px; font-weight: 900; color: #0f172a; margin-top: 2px; }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 9px;
+    }
+    table.data-table th, table.data-table td {
+      border: 1px solid #cbd5e1;
+      padding: 5px 6px;
+      text-align: left;
+    }
+    table.data-table th {
+      background: #047857;
+      color: #ffffff;
+      font-weight: 900;
+      text-transform: uppercase;
+      font-size: 8px;
+      letter-spacing: 0.3px;
+    }
+    .footer-box {
+      margin-top: 10px;
+      padding-top: 6px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 8px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body onload="setTimeout(function(){ window.print(); }, 400)">
+
+  <div class="no-print">
+    <button class="btn-close" onclick="window.close()">✕ Fechar</button>
+    <button class="btn-print" onclick="window.print()">
+      <span>🖨️</span> Imprimir Relatório A4
+    </button>
+  </div>
+
+  <div class="page-container">
+    <div>
+      <!-- CABEÇALHO -->
+      <table class="header-table">
+        <tr>
+          <td style="width: 20%; vertical-align: middle;">
+            <img src="${LOGO_JR_VERDE_BASE64}" class="logo-img" alt="JR Distribuidora" onerror="this.outerHTML='<div style=\\'font-size:20px;font-weight:900;color:#047857;\\'>JR DISTRIBUIDORA</div>'">
+          </td>
+          <td class="header-center" style="width: 60%; vertical-align: middle;">
+            <h1>JR DISTRIBUIDORA DE ALIMENTOS</h1>
+            <h2>RELATÓRIO CONSOLIDADO DE CHAMADOS DE FROTA EM ROTA & SOCORRO MECÂNICO</h2>
+            <p>Emissão: <strong>${dataSimples}</strong> às <strong>${horaFmt}</strong> ${fDataDe || fDataAte ? `• Período: <strong>${fDataDe || 'Início'}</strong> até <strong>${fDataAte || 'Hoje'}</strong>` : ''}</p>
+          </td>
+          <td style="width: 20%; vertical-align: middle; text-align: right; font-size: 8.5px; color: #64748b;">
+            <div>Status: <strong style="color:#047857;">${String(fStatus).toUpperCase()}</strong></div>
+            <div>Registros: <strong>${totChamados}</strong></div>
+          </td>
+        </tr>
+      </table>
+
+      <!-- KPIS EXECUTIVOS -->
+      <div class="kpi-row">
+        <div class="kpi-card">
+          <div class="kpi-card-lbl">Total Chamados</div>
+          <div class="kpi-card-val">${totChamados}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card-lbl">Pendentes / Em Aberto</div>
+          <div class="kpi-card-val" style="color:#dc2626;">${totPendentes}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card-lbl">Finalizados / Liberados</div>
+          <div class="kpi-card-val" style="color:#16a34a;">${totFinalizados}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card-lbl">Custo Total Socorro</div>
+          <div class="kpi-card-val" style="color:#047857;">R$ ${totCustoSocorro.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card-lbl">Média Custo / Chamado</div>
+          <div class="kpi-card-val" style="color:#0284c7;">R$ ${mediaCusto.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+        </div>
+      </div>
+
+      <!-- TABELA DE DADOS -->
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="width:25px; text-align:center;">#</th>
+            <th style="width:75px; text-align:center;">OS / Prot.</th>
+            <th style="width:65px; text-align:center;">Data</th>
+            <th style="width:65px;">Placa</th>
+            <th style="width:110px;">Motorista</th>
+            <th style="width:90px;">Carga / Rota</th>
+            <th style="width:110px;">Localização</th>
+            <th>Defeito / Ocorrência</th>
+            <th style="width:130px;">Ação Corretiva / Oficina</th>
+            <th style="width:75px; text-align:right;">Custo (R$)</th>
+            <th style="width:65px; text-align:center;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${linhasHtml}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- RODAPÉ -->
+    <div class="footer-box">
+      <div>Emitido por: <strong>${usuarioNome}</strong> • Logística Operacional JR</div>
+      <div>Sistema SAC &amp; Controle de Frota Integrado • JR Distribuidora</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=1180,height=820');
+  if (win) {
+    win.document.write(htmlContent);
+    win.document.close();
+  }
+}
+
 
 function renderResumoDiarioCdView() {
 
@@ -9459,10 +12445,10 @@ function renderResumoDiarioCdView() {
       <!-- BARRA DE SUBABAS: RESUMO DIÁRIO CD vs OCORRÊNCIAS -->
       <div class="flex items-center justify-between bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg">
         <div class="flex items-center gap-2">
-          <button onclick="activeResumoSubTab='resumo'; renderApp()" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeResumoSubTab === 'resumo' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800'}">
+          <button onclick="switchResumoSubTab('resumo')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeResumoSubTab === 'resumo' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800'}">
             <span>📋</span> Resumo Diário
           </button>
-          <button onclick="activeResumoSubTab='ocorrencias'; renderApp()" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeResumoSubTab === 'ocorrencias' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800'}">
+          <button onclick="switchResumoSubTab('ocorrencias')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeResumoSubTab === 'ocorrencias' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800'}">
             <span>🚨</span> Ocorrências CD ${pendentesTotais > 0 ? `<span class="bg-amber-500 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-full">${pendentesTotais}</span>` : ''}
           </button>
         </div>
@@ -9488,7 +12474,7 @@ function renderSubabaResumoDiario(p) {
               RESUMO DIÁRIO CD
               <span class="bg-emerald-800 text-emerald-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">JR OPER</span>
             </h2>
-            <p class="text-[11px] text-slate-300 font-medium">Controle de Movimentação, Equipe, Ocorrências e Cortes de Produtos no CD</p>
+            <p class="text-[11px] text-slate-300 font-medium">Movimentação de carga, cortes e produtividade</p>
           </div>
         </div>
 
@@ -9512,7 +12498,7 @@ function renderSubabaResumoDiario(p) {
           <!-- GESTOR RESPONSÁVEL -->
           <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700">
             <label class="block text-[9px] text-slate-400 font-bold uppercase">Gestor do Turno</label>
-            <input type="text" id="rs-gestor" value="${p.gestorNome}" class="bg-slate-800 border border-slate-600 text-white text-xs rounded p-1 font-bold uppercase w-36">
+            <input type="text" id="rs-gestor" value="${p.gestorNome}" class="bg-slate-800 border border-slate-600 text-white text-xs rounded p-1 font-bold uppercase w-36" oninput="forcarMaiuscula(this)">
           </div>
 
           <button onclick="salvarResumoDiarioCdCurrent()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
@@ -9810,7 +12796,7 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
                 pendentes.map(o => `
                   <tr class="hover:bg-slate-800/40">
                     <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">
-                      <div class="font-bold">${o.data}</div>
+                      <div class="font-bold">${formatarData(o.data)}</div>
                       <div class="text-[10px] text-amber-400 font-semibold">${o.turno}</div>
                     </td>
                     <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.colaborador}</td>
@@ -9865,7 +12851,7 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-4 gap-3 items-center">
             <div class="sm:col-span-2">
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Pesquisar em Fechadas (Funcionário, Falha, Carga ou Solução)</label>
-              <input type="text" placeholder="🔎 Digite para pesquisar..." value="${window._ocFiltroBusca||''}" oninput="window._ocFiltroBusca=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-medium focus:border-emerald-500 focus:outline-none">
+              <input type="text" placeholder="🔎 Digite para pesquisar..." value="${window._ocFiltroBusca||''}" oninput="forcarMaiuscula(this); window._ocFiltroBusca=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-medium focus:border-emerald-500 focus:outline-none">
             </div>
             <div>
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Filtrar por Data</label>
@@ -9902,7 +12888,7 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
                 fechadas.map(o => `
                   <tr class="hover:bg-slate-800/40">
                     <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">
-                      <div class="font-bold">${o.data}</div>
+                      <div class="font-bold">${formatarData(o.data)}</div>
                       <div class="text-[10px] text-emerald-400 font-semibold">${o.turno}</div>
                     </td>
                     <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.colaborador}</td>
@@ -10016,7 +13002,7 @@ function adicionarFaltaResumo(data, turno) {
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência</label>
-          <input type="text" id="md-fl-conduta" placeholder="ex: FALTA, ATRASO OPERACIONAL, SAÍDA ANTECIPADA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+          <input type="text" id="md-fl-conduta" placeholder="ex: FALTA, ATRASO OPERACIONAL, SAÍDA ANTECIPADA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -10030,7 +13016,7 @@ function adicionarFaltaResumo(data, turno) {
 
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Período</label>
-            <input type="text" id="md-fl-periodo" value="Integral" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <input type="text" id="md-fl-periodo" value="Integral" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
         </div>
 
@@ -10114,7 +13100,7 @@ function editarFaltaResumoModal(data, turno, index) {
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência *</label>
-          <input type="text" id="md-fl-conduta" value="${item.conduta || 'FALTA'}" placeholder="ex: FALTA, ATESTADO MÉDICO, ATRASO OPERACIONAL" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase">
+          <input type="text" id="md-fl-conduta" value="${item.conduta || 'FALTA'}" placeholder="ex: FALTA, ATESTADO MÉDICO, ATRASO OPERACIONAL" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -10128,7 +13114,7 @@ function editarFaltaResumoModal(data, turno, index) {
 
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Período</label>
-            <input type="text" id="md-fl-periodo" value="${item.periodo || 'Integral'}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <input type="text" id="md-fl-periodo" value="${item.periodo || 'Integral'}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
         </div>
 
@@ -10188,17 +13174,17 @@ function adicionarOcorrenciaResumo(data, turno) {
       <div class="space-y-3 text-xs">
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Título / Tipo de Ocorrência *</label>
-          <input type="text" id="md-oc-titulo" placeholder="ex: QUEBRA DE EMPILHADEIRA, QUEDA DE ENERGIA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+          <input type="text" id="md-oc-titulo" placeholder="ex: QUEBRA DE EMPILHADEIRA, QUEDA DE ENERGIA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Causa / Detalhamento</label>
-          <textarea id="md-oc-causa" rows="3" placeholder="Descreva os detalhes e causas do ocorrido..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs"></textarea>
+          <textarea id="md-oc-causa" rows="3" placeholder="Descreva os detalhes e causas do ocorrido..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Tomada / Solução</label>
-          <textarea id="md-oc-acao" rows="2" placeholder="Descreva a solução ou encaminhamento realizado..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs"></textarea>
+          <textarea id="md-oc-acao" rows="2" placeholder="Descreva a solução ou encaminhamento realizado..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
         </div>
       </div>
 
@@ -10257,17 +13243,17 @@ function editarOcorrenciaResumoModal(data, turno, index) {
       <div class="space-y-3 text-xs">
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Título / Tipo de Ocorrência *</label>
-          <input type="text" id="md-oc-titulo" value="${o.ocorrencia}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+          <input type="text" id="md-oc-titulo" value="${o.ocorrencia}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Causa / Detalhamento</label>
-          <textarea id="md-oc-causa" rows="3" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs">${o.causa||''}</textarea>
+          <textarea id="md-oc-causa" rows="3" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${o.causa||''}</textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Tomada / Solução</label>
-          <textarea id="md-oc-acao" rows="2" class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs">${o.acao||''}</textarea>
+          <textarea id="md-oc-acao" rows="2" class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${o.acao||''}</textarea>
         </div>
       </div>
 
@@ -10311,18 +13297,18 @@ function editarCorteResumoModal(data, turno, index) {
         <div class="grid grid-cols-3 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Cód Item</label>
-            <input type="text" id="md-cr-cod" value="${c.codigo_item}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold">
+            <input type="text" id="md-cr-cod" value="${c.codigo_item}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div class="col-span-2">
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Descrição do Produto</label>
-            <input type="text" id="md-cr-desc" value="${c.descricao}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+            <input type="text" id="md-cr-desc" value="${c.descricao}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada (Kg)</label>
-            <input type="text" id="md-cr-qtd" value="${c.quantidade}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
+            <input type="text" id="md-cr-qtd" value="${c.quantidade}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Valor Total (R$)</label>
@@ -10365,18 +13351,18 @@ function adicionarCorteResumo(data, turno) {
         <div class="grid grid-cols-3 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Cód Item</label>
-            <input type="text" id="md-cr-cod" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold">
+            <input type="text" id="md-cr-cod" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div class="col-span-2">
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Descrição do Produto</label>
-            <input type="text" id="md-cr-desc" placeholder="ex: MEIO DA ASA C/PONTA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+            <input type="text" id="md-cr-desc" placeholder="ex: MEIO DA ASA C/PONTA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada (Kg)</label>
-            <input type="text" id="md-cr-qtd" placeholder="ex: 45.00 Kg ou 15.5" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
+            <input type="text" id="md-cr-qtd" placeholder="ex: 45.00 Kg ou 15.5" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Valor Total (R$)</label>
@@ -10468,7 +13454,7 @@ function adicionarOcorrenciaColaboradorResumo(data, turno) {
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
             <input type="text" id="md-occ-carga" list="cargas-list-mdocc" placeholder="ex: 7689"
-              oninput="atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
+              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
               onchange="atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
               class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
             ${renderDatalistCargas('cargas-list-mdocc')}
@@ -10505,12 +13491,12 @@ function adicionarOcorrenciaColaboradorResumo(data, turno) {
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-occ-detalhamento" rows="3" placeholder="Descreva os detalhes da ocorrência ocorrida com o colaborador..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs"></textarea>
+          <textarea id="md-occ-detalhamento" rows="3" placeholder="Descreva os detalhes da ocorrência ocorrida com o colaborador..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-occ-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs"></textarea>
+          <textarea id="md-occ-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
         </div>
       </div>
 
@@ -10593,7 +13579,7 @@ function gerarResumoDiarioPdf(data, turno) {
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <title>RESUMO DIÁRIO CD — ${resumo.data} (${resumo.turno})</title>
+  <title>RESUMO DIÁRIO CD — ${formatarData(resumo.data)} (${resumo.turno})</title>
   <style>
     @media print {
       @page { margin: 10mm; size: A4 landscape; }
@@ -10614,7 +13600,7 @@ function gerarResumoDiarioPdf(data, turno) {
   <div class="banner">JR DISTRIBUIDORA — RESUMO DIÁRIO CD</div>
   
   <div class="meta-bar">
-    <div>DATA: ${resumo.data}</div>
+    <div>DATA: ${formatarData(resumo.data)}</div>
     <div>TURNO: ${resumo.turno}</div>
     <div>GESTOR: ${resumo.gestor || 'N/A'}</div>
   </div>
@@ -10770,33 +13756,30 @@ function gerarResumoDiarioPdf(data, turno) {
   }
 }
 
-// ===== IMPRESSOR EXECUTIVO DO BOLETIM GERENCIAL =====
+// ===== IMPRESSOR EXECUTIVO DO BOLETIM GERENCIAL MASTER (D-1 FECHADO) =====
 function imprimirBoletimGerencialExecutivo() {
-  const fDe = window._boletimFiltroDe || '';
-  const fAte = window._boletimFiltroAte || '';
+  const ontemDate = new Date();
+  ontemDate.setDate(ontemDate.getDate() - 1);
+  const dMenosUmStr = ontemDate.toISOString().split('T')[0];
+
+  const fDe = window._boletimFiltroDe !== undefined && window._boletimFiltroDe !== '' ? window._boletimFiltroDe : dMenosUmStr;
+  const fAte = window._boletimFiltroAte !== undefined && window._boletimFiltroAte !== '' ? window._boletimFiltroAte : dMenosUmStr;
 
   const allDevs = db.getDevolucoes();
   const allRotas = db.getOcorrenciasRota();
-  const allViagens = db.getControleViagens();
   const allOcViagens = db.getOcorrenciasViagens();
   const allTrocas = db.getTrocasVeiculos();
+  const allReentregas = db.getReentregas();
 
   const devs = allDevs.filter(d => {
-    const dt = d.criado_em ? d.criado_em.split('T')[0] : '';
+    const dt = d.criado_em ? d.criado_em.split('T')[0] : (d.data_abertura || '');
     if (fDe && dt < fDe) return false;
     if (fAte && dt > fAte) return false;
     return true;
   });
 
   const rotas = allRotas.filter(r => {
-    const dt = r.criado_em ? r.criado_em.split('T')[0] : '';
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const viagens = allViagens.filter(v => {
-    const dt = v.data_saida || '';
+    const dt = r.criado_em ? r.criado_em.split('T')[0] : (r.data_ocorrencia || '');
     if (fDe && dt < fDe) return false;
     if (fAte && dt > fAte) return false;
     return true;
@@ -10810,7 +13793,14 @@ function imprimirBoletimGerencialExecutivo() {
   });
 
   const trocas = allTrocas.filter(t => {
-    const dt = t.data || '';
+    const dt = t.data || (t.criado_em ? t.criado_em.split('T')[0] : '');
+    if (fDe && dt < fDe) return false;
+    if (fAte && dt > fAte) return false;
+    return true;
+  });
+
+  const reentregas = allReentregas.filter(re => {
+    const dt = re.data || (re.criado_em ? re.criado_em.split('T')[0] : '');
     if (fDe && dt < fDe) return false;
     if (fAte && dt > fAte) return false;
     return true;
@@ -10839,56 +13829,85 @@ function imprimirBoletimGerencialExecutivo() {
     if (r.faltas_condutas && Array.isArray(r.faltas_condutas)) faltasColabList.push(...r.faltas_condutas);
   });
 
+  // KPIs CD
+  const qtdOcorrenciasCd = ocorrenciasCdList.length;
+  const qtdFaltaColaborador = faltasColabList.length;
+
+  // KPIs Expedição & SAC
   const totalDevValor = devs.reduce((acc, d) => acc + (parseFloat(d.valor_reclamado)||0), 0);
   const qtdDevolucoes = devs.length;
   const corteValor = cortesList.reduce((acc, c) => acc + (parseFloat(c.valor)||0), 0);
   const qtdProdutosCorte = cortesList.length;
-  const qtdOcorrenciasCd = ocorrenciasCdList.length;
+  const totalPendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
 
-  const viagensIniciadas = viagens.length;
+  // KPIs Transporte & Rota (Ocorrências, Socorros, Trocas e Reentregas)
   const ocTransporteQtd = ocViagens.length;
-  const chkNaoRealizado = viagens.filter(v => v.checklist_saida !== 'INICIADO').length;
-  const fusionNaoAberto = viagens.filter(v => v.fusion !== 'INICIADO').length;
-  const qtdTrocasVeiculos = trocas.length;
-  const qtdFaltaColaborador = faltasColabList.length;
   const qtdProblemaMecanico = rotas.length;
+  const custoTotalSocorro = rotas.reduce((acc, r) => acc + (parseFloat(r.custo_socorro) || 0), 0);
+  const qtdTrocasVeiculos = trocas.length;
+  const qtdReentregas = reentregas.length;
+  const totalEntregasSaiu = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_saiu) || 0), 0);
+  const totalEntregasFeitas = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_feitas) || 0), 0);
+  const totalEntregasReentrega = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_reentrega) || 0), 0);
+  const reentregasPendentes = reentregas.filter(re => re.status === 'PENDENTE').length;
+  const socorrosEmAberto = rotas.filter(r => r.status_veiculo !== 'Liberado').length;
+
+  // KPIs Fechamento
+  const impactoFinanceiroTotal = totalDevValor + corteValor + custoTotalSocorro;
+  const taxaSucessoEntregas = totalEntregasSaiu > 0 ? ((totalEntregasFeitas / totalEntregasSaiu) * 100).toFixed(1) : '100.0';
+  const taxaReentregas = totalEntregasSaiu > 0 ? ((totalEntregasReentrega / totalEntregasSaiu) * 100).toFixed(1) : '0.0';
 
   const htmlContent = `
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <title>BOLETIM GERENCIAL LOGÍSTICO — JR DISTRIBUIDORA</title>
+  <title>BOLETIM GERENCIAL MASTER (D-1) — JR DISTRIBUIDORA</title>
   <style>
     @media print {
-      @page { margin: 10mm; size: A4 portrait; }
+      @page { margin: 8mm; size: A4 portrait; }
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; color: #0f172a; background: #ffffff; }
-    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0d4722; padding-bottom: 10px; margin-bottom: 15px; }
-    .logo { height: 50px; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 15px; color: #0f172a; background: #ffffff; font-size: 10px; }
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0d4722; padding-bottom: 8px; margin-bottom: 12px; }
+    .logo { height: 44px; }
     .header-info { text-align: right; }
-    .header-info h2 { margin: 0; font-size: 18px; color: #0d4722; font-weight: 800; text-transform: uppercase; }
-    .header-info p { margin: 3px 0 0; font-size: 11px; color: #475569; font-weight: 600; }
-    .doc-banner { background: #0d4722; color: #ffffff; padding: 8px 12px; text-align: center; font-weight: 800; font-size: 13px; margin-bottom: 18px; border-radius: 6px; }
+    .header-info h2 { margin: 0; font-size: 16px; color: #0d4722; font-weight: 900; text-transform: uppercase; letter-spacing: 0.5px; }
+    .header-info p { margin: 2px 0 0; font-size: 10px; color: #475569; font-weight: 600; }
+    .doc-banner { background: #0d4722; color: #ffffff; padding: 7px 10px; text-align: center; font-weight: 800; font-size: 11.5px; margin-bottom: 14px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
     
-    .section-header { background: #f1f5f9; border-left: 4px solid #10b981; padding: 6px 10px; font-size: 11px; font-weight: 800; text-transform: uppercase; margin-top: 18px; margin-bottom: 10px; color: #0f172a; }
+    .section-header { background: #f1f5f9; border-left: 4px solid #10b981; padding: 5px 8px; font-size: 10.5px; font-weight: 900; text-transform: uppercase; margin-top: 14px; margin-bottom: 8px; color: #0f172a; display: flex; justify-content: space-between; align-items: center; }
+    .section-header-amber { border-left-color: #d97706; }
     .section-header-blue { border-left-color: #2563eb; }
+    .section-header-dark { border-left-color: #0f172a; background: #e2e8f0; }
 
-    .kpi-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 12px; }
-    .kpi-box { border: 1px solid #cbd5e1; padding: 6px 3px; text-align: center; border-radius: 4px; background: #f8fafc; }
-    .kpi-num { font-size: 12px; font-weight: 800; color: #0d4722; margin-top: 2px; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 8px; }
+    .kpi-grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 8px; }
+    .kpi-box { border: 1px solid #cbd5e1; padding: 5px 4px; text-align: center; border-radius: 4px; background: #f8fafc; }
+    .kpi-num { font-size: 11px; font-weight: 800; color: #0d4722; margin-top: 1px; }
     .kpi-num-red { color: #dc2626; }
     .kpi-num-blue { color: #2563eb; }
-    .kpi-label { font-size: 8px; font-weight: 700; color: #64748b; text-transform: uppercase; }
+    .kpi-num-amber { color: #b45309; }
+    .kpi-label { font-size: 7.5px; font-weight: 700; color: #64748b; text-transform: uppercase; }
 
-    table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-    th, td { border: 1px solid #cbd5e1; padding: 5px 7px; text-align: left; font-size: 9.5px; }
-    th { background: #e2e8f0; font-weight: 700; text-transform: uppercase; color: #1e293b; }
+    .sub-title { font-size: 9.5px; font-weight: bold; margin-top: 8px; margin-bottom: 4px; text-transform: uppercase; color: #1e293b; display: flex; justify-content: space-between; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+    th, td { border: 1px solid #cbd5e1; padding: 4px 6px; text-align: left; font-size: 8.5px; }
+    th { background: #e2e8f0; font-weight: 800; text-transform: uppercase; color: #1e293b; font-size: 8px; }
     tr:nth-child(even) { background: #f8fafc; }
     .text-right { text-align: right; }
     .text-center { text-align: center; }
-    .footer-note { text-align: center; font-size: 9px; color: #94a3b8; margin-top: 20px; border-top: 1px solid #e2e8f0; padding-top: 6px; }
+    .badge { padding: 1px 4px; border-radius: 3px; font-weight: bold; font-size: 7.5px; display: inline-block; }
+    .badge-ok { background: #dcfce7; color: #166534; }
+    .badge-warn { background: #fef3c7; color: #92400e; }
+    .badge-danger { background: #fee2e2; color: #991b1b; }
+    .badge-info { background: #e0f2fe; color: #075985; }
+
+    .fechamento-container { background: #f8fafc; border: 1.5px solid #0d4722; border-radius: 6px; padding: 10px; margin-top: 12px; }
+    .fechamento-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 6px; }
+    .fechamento-card { background: #ffffff; border: 1px solid #cbd5e1; padding: 8px; border-radius: 4px; }
+    .footer-note { text-align: center; font-size: 8px; color: #94a3b8; margin-top: 14px; border-top: 1px solid #e2e8f0; padding-top: 4px; }
   </style>
 </head>
 <body>
@@ -10896,64 +13915,176 @@ function imprimirBoletimGerencialExecutivo() {
     <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
     <div class="header-info">
       <h2>JR DISTRIBUIDORA</h2>
-      <p>Boletim Gerencial Logístico Executivo</p>
+      <p>Boletim Gerencial Master Executivo — Consolidação Diária D-1</p>
     </div>
   </div>
 
   <div class="doc-banner">
-    BOLETIM GERENCIAL LOGÍSTICO ${fDe || fAte ? `(Período: ${fDe || 'Início'} até ${fAte || 'Hoje'})` : '(Período Completo)'} — Emissão: ${new Date().toLocaleDateString('pt-BR')}
+    <span>BOLETIM GERENCIAL MASTER (D-1)</span>
+    <span>Período Fechado: ${fDe === fAte ? (formatarData(fDe) || 'Ontem D-1') : `${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'}`}</span>
+    <span>Emissão: ${formatarDataHora(new Date())}</span>
   </div>
 
-  <!-- BLOCO 1: MÓDULO CD -->
-  <div class="section-header">📦 BLOCO 1: MÓDULO CENTRO DE DISTRIBUIÇÃO (CD)</div>
+  <!-- ETAPA 1: CENTRO DE DISTRIBUIÇÃO (CD & ARMAZÉM) -->
+  <div class="section-header">
+    <span>📦 ETAPA 1: CENTRO DE DISTRIBUIÇÃO (CD & ARMAZÉM)</span>
+    <span style="font-size: 8px; font-weight: normal; color: #475569;">Movimentação de Estoque, Ocorrências Internas & Gestão de Pessoas</span>
+  </div>
   <div class="kpi-grid">
-    <div class="kpi-box"><div class="kpi-label">Devolução (R$)</div><div class="kpi-num">R$ ${totalDevValor.toFixed(2)}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Qtd Devolução</div><div class="kpi-num">${qtdDevolucoes}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Corte (R$)</div><div class="kpi-num kpi-num-red">R$ ${corteValor.toFixed(2)}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Qtd Prod Corte</div><div class="kpi-num">${qtdProdutosCorte}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Peso Expedição</div><div class="kpi-num kpi-num-blue">${pesoExpedicao.toFixed(2)} Kg</div></div>
-    <div class="kpi-box"><div class="kpi-label">Peso Recebimento</div><div class="kpi-num">${pesoRecebimento.toFixed(2)} Kg</div></div>
-    <div class="kpi-box"><div class="kpi-label">Oc. do CD</div><div class="kpi-num">${qtdOcorrenciasCd}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Peso Recebimento</div><div class="kpi-num">${pesoRecebimento.toLocaleString('pt-BR',{minimumFractionDigits:2})} Kg</div></div>
+    <div class="kpi-box"><div class="kpi-label">Peso Expedição</div><div class="kpi-num kpi-num-blue">${pesoExpedicao.toLocaleString('pt-BR',{minimumFractionDigits:2})} Kg</div></div>
+    <div class="kpi-box"><div class="kpi-label">Ocorrências Internas CD</div><div class="kpi-num ${qtdOcorrenciasCd>0?'kpi-num-amber':''}">${qtdOcorrenciasCd}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Faltas / Ausências CD</div><div class="kpi-num ${qtdFaltaColaborador>0?'kpi-num-red':''}">${qtdFaltaColaborador}</div></div>
   </div>
 
-  <div style="font-size: 10px; font-weight: bold; margin-bottom: 4px; text-transform: uppercase; color: #0f172a;">Detalhamento de Devoluções CD (${devs.length})</div>
+  <div class="sub-title"><span>Detalhamento das Ocorrências do CD (${ocorrenciasCdList.length})</span></div>
   <table>
-    <thead><tr><th>Protocolo</th><th>Cliente</th><th>Motorista</th><th>Rota</th><th>Motivo</th><th class="text-right">Valor</th></tr></thead>
+    <thead><tr><th style="width: 25%;">Ocorrência</th><th style="width: 45%;">Causa / Detalhamento</th><th style="width: 30%;">Ação Tomada</th></tr></thead>
     <tbody>
-      ${devs.length===0?'<tr><td colspan="6" class="text-center">Nenhuma devolução no período</td></tr>':
-      devs.map(d=>`<tr><td><b>${d.numero_devolucao||d.numero_protocolo}</b></td><td>${d.cliente_nome}</td><td>${d.motorista_nome}</td><td>${d.carga_rota}</td><td>${d.motivo_reclamado}</td><td class="text-right"><b>R$ ${(parseFloat(d.valor_reclamado)||0).toFixed(2)}</b></td></tr>`).join('')}
+      ${ocorrenciasCdList.length===0?'<tr><td colspan="3" class="text-center" style="color: #64748b;">Nenhuma ocorrência do armazém registrada no período</td></tr>':
+      ocorrenciasCdList.map(o=>`<tr><td><b>${o.ocorrencia||'—'}</b></td><td>${o.causa||'—'}</td><td>${o.acao||'—'}</td></tr>`).join('')}
     </tbody>
   </table>
 
-  <!-- BLOCO 2: MÓDULO TRANSPORTE -->
-  <div class="section-header section-header-blue">🚍 BLOCO 2: MÓDULO TRANSPORTE & FROTA</div>
-  <div class="kpi-grid">
-    <div class="kpi-box"><div class="kpi-label">Viagens Iniciadas</div><div class="kpi-num kpi-num-blue">${viagensIniciadas}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Oc. Transporte</div><div class="kpi-num">${ocTransporteQtd}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Checklist Ñ Realiz.</div><div class="kpi-num kpi-num-red">${chkNaoRealizado}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Fusion Ñ Aberto</div><div class="kpi-num kpi-num-red">${fusionNaoAberto}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Trocas Veículos</div><div class="kpi-num">${qtdTrocasVeiculos}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Falta Colaborador</div><div class="kpi-num">${qtdFaltaColaborador}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Prob. Mecânico</div><div class="kpi-num kpi-num-red">${qtdProblemaMecanico}</div></div>
-  </div>
-
-  <div style="font-size: 10px; font-weight: bold; margin-bottom: 4px; text-transform: uppercase; color: #0f172a;">Acompanhamento de Viagens & Largadas (${viagens.length})</div>
+  <div class="sub-title"><span>Gestão de Faltas e Ausências da Equipe de CD (${faltasColabList.length})</span></div>
   <table>
-    <thead><tr><th>Carga</th><th>Rota</th><th>Placa</th><th>Motorista</th><th>Ajudante</th><th>Status</th><th>Fusion</th></tr></thead>
+    <thead><tr><th style="width: 30%;">Colaborador</th><th style="width: 30%;">Conduta / Ausência</th><th class="text-center" style="width: 15%;">Avisado?</th><th class="text-center" style="width: 12%;">Período</th><th class="text-center" style="width: 13%;">Compensar?</th></tr></thead>
     <tbody>
-      ${viagens.length===0?'<tr><td colspan="7" class="text-center">Nenhuma viagem no período</td></tr>':
-      viagens.map(v=>`<tr><td><b>${v.carga}</b></td><td>${v.rota}</td><td>${v.placa}</td><td>${v.motorista}</td><td>${v.ajudante}</td><td><b>${v.status_viagem}</b></td><td>${v.fusion}</td></tr>`).join('')}
+      ${faltasColabList.length===0?'<tr><td colspan="5" class="text-center" style="color: #64748b;">Nenhuma ausência registrada no período</td></tr>':
+      faltasColabList.map(f=>`<tr><td><b>${f.nome||'—'}</b></td><td style="color: #b45309; font-weight: bold;">${f.conduta||'—'}</td><td class="text-center"><span class="badge ${f.avisado==='SIM'?'badge-ok':'badge-danger'}">${f.avisado||'NÃO'}</span></td><td class="text-center">${f.periodo||'Integral'}</td><td class="text-center">${f.compensar||'NÃO'}</td></tr>`).join('')}
     </tbody>
   </table>
 
-  <div class="footer-note">JR Distribuidora 2026 – Boletim Gerencial Executivo de Operações Logísticas</div>
+  <!-- ETAPA 2: EXPEDIÇÃO & SAC -->
+  <div class="section-header section-header-amber">
+    <span>📋 ETAPA 2: EXPEDIÇÃO & SAC (QUALIDADE, DEVOLUÇÕES E CORTES)</span>
+    <span style="font-size: 8px; font-weight: normal; color: #475569;">Controle de Cortes e Retornos de Mercadorias com Validação Física</span>
+  </div>
+  <div class="kpi-grid-5">
+    <div class="kpi-box"><div class="kpi-label">Devolução Total (R$)</div><div class="kpi-num kpi-num-red">R$ ${totalDevValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Qtd Devoluções</div><div class="kpi-num">${qtdDevolucoes}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Cortes de Estoque (R$)</div><div class="kpi-num kpi-num-red">R$ ${corteValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Qtd Itens Cortados</div><div class="kpi-num">${qtdProdutosCorte}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Pendente Físico CD</div><div class="kpi-num ${totalPendCd>0?'kpi-num-amber':'kpi-num'}">${totalPendCd}</div></div>
+  </div>
+
+  <div class="sub-title"><span>Detalhamento de Devoluções SAC (${devs.length})</span></div>
+  <table>
+    <thead><tr><th>Protocolo</th><th>Cliente</th><th>Motorista</th><th>Rota</th><th>Motivo Reclamado</th><th class="text-center">Status Físico</th><th class="text-right">Valor (R$)</th></tr></thead>
+    <tbody>
+      ${devs.length===0?'<tr><td colspan="7" class="text-center" style="color: #64748b;">Nenhuma devolução no período</td></tr>':
+      devs.map(d=>`<tr><td><b>${d.numero_devolucao||d.numero_protocolo}</b></td><td>${d.cliente_nome||'—'}</td><td>${d.motorista_nome||'—'}</td><td>${d.carga_rota||'—'}</td><td>${d.motivo_reclamado||'—'}</td><td class="text-center"><span class="badge ${d.status_fechamento==='PENDENTE_FISICO'?'badge-warn':'badge-ok'}">${d.status_fechamento||'OK'}</span></td><td class="text-right"><b>R$ ${(parseFloat(d.valor_reclamado)||0).toFixed(2)}</b></td></tr>`).join('')}
+    </tbody>
+  </table>
+
+  <div class="sub-title"><span>Detalhamento dos Cortes de Mercadorias (${cortesList.length})</span></div>
+  <table>
+    <thead><tr><th style="width: 15%;">Cód Item</th><th style="width: 50%;">Descrição do Produto</th><th class="text-center" style="width: 15%;">Quantidade</th><th class="text-right" style="width: 20%;">Valor Total (R$)</th></tr></thead>
+    <tbody>
+      ${cortesList.length===0?'<tr><td colspan="4" class="text-center" style="color: #64748b;">Nenhum corte registrado no período</td></tr>':
+      cortesList.map(c=>`<tr><td><b>${c.codigo_item||'—'}</b></td><td>${c.descricao||'—'}</td><td class="text-center font-bold" style="color: #b45309;">${c.quantidade}</td><td class="text-right" style="color: #dc2626; font-weight: bold;">R$ ${(parseFloat(c.valor)||0).toFixed(2)}</td></tr>`).join('')}
+    </tbody>
+  </table>
+
+  <!-- ETAPA 3: TRANSPORTE & OPERAÇÃO EM ROTA -->
+  <div class="section-header section-header-blue">
+    <span>🚍 ETAPA 3: TRANSPORTE & OPERAÇÃO EM ROTA (OCORRÊNCIAS, TROCAS E REENTREGAS)</span>
+    <span style="font-size: 8px; font-weight: normal; color: #475569;">Consolidação Fechada de Ocorrências CCO, Socorros Mecânicos, Trocas e Reentregas</span>
+  </div>
+  <div class="kpi-grid-5">
+    <div class="kpi-box"><div class="kpi-label">Oc. CCO Transporte</div><div class="kpi-num">${ocTransporteQtd}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Socorro Mecânico</div><div class="kpi-num ${qtdProblemaMecanico>0?'kpi-num-red':''}">${qtdProblemaMecanico}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Custo Socorros (R$)</div><div class="kpi-num ${custoTotalSocorro>0?'kpi-num-red':''}">R$ ${custoTotalSocorro.toFixed(2)}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Trocas Veículos</div><div class="kpi-num kpi-num-blue">${qtdTrocasVeiculos}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Reentregas Rota</div><div class="kpi-num ${qtdReentregas>0?'kpi-num-amber':''}">${qtdReentregas}</div></div>
+  </div>
+
+  <div class="sub-title"><span>1. Ocorrências Operacionais de Viagem CCO (${ocViagens.length})</span></div>
+  <table>
+    <thead><tr><th>Data</th><th>Carga</th><th>Rota / Placa</th><th>Funcionário</th><th>Motivo</th><th>Ocorrência & Ação</th></tr></thead>
+    <tbody>
+      ${ocViagens.length===0?'<tr><td colspan="6" class="text-center" style="color: #64748b;">Nenhuma ocorrência operacional registrada no período</td></tr>':
+      ocViagens.map(o=>`<tr><td>${formatarData(o.data)}</td><td><b>${o.carga||'—'}</b></td><td>${o.rota||'—'} (${o.placa||'—'})</td><td>${o.funcionario||'—'} (${o.funcao||'—'})</td><td><b style="color:#b45309;">${o.motivo||'—'}</b></td><td>${o.ocorrencia||'—'}</td></tr>`).join('')}
+    </tbody>
+  </table>
+
+  <div class="sub-title"><span>2. Socorro Mecânico & Manutenção em Rota (${rotas.length})</span></div>
+  <table>
+    <thead><tr><th>Protocolo</th><th>Placa</th><th>Motorista</th><th>Motivo / Ocorrência</th><th>Status Veículo</th><th class="text-right">Custo Socorro</th></tr></thead>
+    <tbody>
+      ${rotas.length===0?'<tr><td colspan="6" class="text-center" style="color: #64748b;">Nenhum socorro mecânico registrado no período</td></tr>':
+      rotas.map(r=>`<tr><td><b>${r.numero_protocolo}</b></td><td><b>${r.veiculo_placa}</b></td><td>${r.motorista_nome}</td><td>${r.motivo_resumido||r.tipo_ocorrencia}</td><td><span class="badge ${r.status_veiculo==='Liberado'?'badge-ok':'badge-danger'}">${r.status_veiculo||'Aguardando'}</span></td><td class="text-right"><b>R$ ${(parseFloat(r.custo_socorro)||0).toFixed(2)}</b></td></tr>`).join('')}
+    </tbody>
+  </table>
+
+  <!-- SEÇÃO CONSOLIDADA: TROCA DE VEÍCULOS EM ROTA -->
+  <div class="sub-title"><span>3. 🔄 Trocas de Veículos em Rota (${trocas.length})</span></div>
+  <table>
+    <thead><tr><th>Data</th><th>Veículo Escalado</th><th>Veículo Substituto</th><th>Motivo</th><th>Detalhamento</th><th>Autorizado Por</th></tr></thead>
+    <tbody>
+      ${trocas.length===0?'<tr><td colspan="6" class="text-center" style="color: #64748b;">Nenhuma troca de veículo registrada no período</td></tr>':
+      trocas.map(t=>`<tr><td>${formatarData(t.data)}</td><td><span class="badge badge-danger">${t.veiculo_escalado||'—'}</span></td><td><span class="badge badge-ok">${t.veiculo_trocado||'—'}</span></td><td style="color: #b45309; font-weight: bold;">${t.motivo_resumido||t.motivo_outro||'—'}</td><td>${t.detalhamento||'—'}</td><td><b>${t.autorizado_por||'—'}</b></td></tr>`).join('')}
+    </tbody>
+  </table>
+
+  <!-- SEÇÃO CONSOLIDADA: REENTREGAS & OCORRÊNCIAS DE ROTA -->
+  <div class="sub-title"><span>4. 🔁 Reentregas & Ocorrências de Rota (${reentregas.length})</span></div>
+  <table>
+    <thead><tr><th>Data</th><th>Carga / Rota</th><th>Motorista</th><th class="text-center">Saiu</th><th class="text-center">Entregue</th><th class="text-center">Reentrega</th><th>Motivo da Pendência</th><th>Substituto / Placa</th><th class="text-center">Status</th></tr></thead>
+    <tbody>
+      ${reentregas.length===0?'<tr><td colspan="9" class="text-center" style="color: #64748b;">Nenhuma reentrega registrada no período</td></tr>':
+      reentregas.map(re=>`<tr><td>${formatarData(re.data)}</td><td><b>${re.carga_numero||'—'}</b> (${re.rota_nome||'—'})</td><td>${re.motorista_nome||'—'}</td><td class="text-center font-bold">${re.entregas_saiu}</td><td class="text-center font-bold" style="color: #166534;">${re.entregas_feitas}</td><td class="text-center font-bold" style="color: #dc2626;">${re.entregas_reentrega}</td><td>${re.motivo||'—'}</td><td>${re.novo_motorista ? `${re.novo_motorista} (${re.placa||'—'})` : (re.placa||'—')}</td><td class="text-center"><span class="badge ${re.status==='CONCLUIDO'?'badge-ok':'badge-warn'}">${re.status||'PENDENTE'}</span></td></tr>`).join('')}
+    </tbody>
+  </table>
+
+  <!-- ETAPA 4: FECHAMENTO EXECUTIVO & CONSOLIDAÇÃO DIÁRIA -->
+  <div class="section-header section-header-dark">
+    <span>🏁 ETAPA 4: FECHAMENTO EXECUTIVO & AUDITORIA CONSOLIDADA</span>
+    <span style="font-size: 8px; font-weight: normal; color: #475569;">Visão Sintética de Indicadores, Custos e Auditoria Diária D-1</span>
+  </div>
+
+  <div class="fechamento-container">
+    <div class="fechamento-grid">
+      <div class="fechamento-card">
+        <div class="kpi-label">Impacto Financeiro Consolidado</div>
+        <div class="kpi-num kpi-num-red" style="font-size: 13px; margin: 3px 0;">R$ ${impactoFinanceiroTotal.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+        <div style="font-size: 7.5px; color: #64748b; line-height: 1.3;">
+          • Devoluções: R$ ${totalDevValor.toFixed(2)}<br>
+          • Cortes de Estoque: R$ ${corteValor.toFixed(2)}<br>
+          • Socorros Mecânicos: R$ ${custoTotalSocorro.toFixed(2)}
+        </div>
+      </div>
+      <div class="fechamento-card">
+        <div class="kpi-label">Eficiência Operacional de Rota</div>
+        <div class="kpi-num kpi-num-blue" style="font-size: 13px; margin: 3px 0;">${taxaSucessoEntregas}% Êxito</div>
+        <div style="font-size: 7.5px; color: #64748b; line-height: 1.3;">
+          • Entregas Realizadas: <b>${totalEntregasFeitas}</b> / ${totalEntregasSaiu}<br>
+          • Taxa de Reentrega: <b>${taxaReentregas}%</b> (${totalEntregasReentrega} vols)<br>
+          • Trocas de Veículo: <b>${qtdTrocasVeiculos}</b> ocorrência(s)
+        </div>
+      </div>
+      <div class="fechamento-card">
+        <div class="kpi-label">Auditoria & Pendências em Aberto</div>
+        <div class="kpi-num ${ (totalPendCd + reentregasPendentes + socorrosEmAberto) > 0 ? 'kpi-num-amber' : 'kpi-num' }" style="font-size: 13px; margin: 3px 0;">
+          ${totalPendCd + reentregasPendentes + socorrosEmAberto} Pendência(s)
+        </div>
+        <div style="font-size: 7.5px; color: #64748b; line-height: 1.3;">
+          • Devoluções Pendentes Físico CD: <b>${totalPendCd}</b><br>
+          • Reentregas Pendentes: <b>${reentregasPendentes}</b><br>
+          • Socorros Aguardando Oficina: <b>${socorrosEmAberto}</b>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-note">JR Distribuidora 2026 — Boletim Gerencial Master Executivo (D-1) • Single Source of Truth Operacional</div>
   <script>
     window.onload = function() { setTimeout(function(){ window.print(); }, 500); }
   </script>
 </body>
 </html>`;
 
-  const win = window.open('','_blank','width=950,height=850');
+  const win = window.open('','_blank','width=1000,height=900');
   if (win) {
     win.document.write(htmlContent);
     win.document.close();
@@ -11068,21 +14199,26 @@ const MODULE_COLUMNS_MAP = {
     { id: 'acao', label: 'Ação Tomada' }
   ],
   transporte_oc_rota: [
-    { id: 'numero_protocolo', label: 'Protocolo Chamado' },
-    { id: 'criado_em', label: 'Data Ocorrência' },
+    { id: 'numero_protocolo', label: 'Protocolo / Nº OS' },
+    { id: 'criado_em', label: 'Data de Abertura' },
     { id: 'carga_numero', label: 'Nº Carga' },
     { id: 'carga_rota', label: 'Rota' },
     { id: 'veiculo_placa', label: 'Placa Veículo' },
+    { id: 'veiculo_modelo', label: 'Modelo do Veículo' },
     { id: 'motorista_nome', label: 'Motorista' },
+    { id: 'localizacao', label: 'Localização / Ponto de Parada' },
     { id: 'tipo_ocorrencia', label: 'Tipo Ocorrência' },
+    { id: 'motivo_resumido', label: 'Motivo Resumido' },
     { id: 'descricao', label: 'Descrição / Defeito' },
     { id: 'status_veiculo', label: 'Status Veículo' },
-    { id: 'status', label: 'Status Chamado' },
-    { id: 'mecanico_nome', label: 'Mecânico Responsável' },
-    { id: 'acao_mecanico', label: 'Ação Corretiva' },
+    { id: 'status_chamado', label: 'Status Chamado (Pendente/Finalizado)' },
+    { id: 'retorno_manutencao_descricao', label: 'Retorno Manutenção / Ação Corretiva' },
+    { id: 'retorno_manutencao_responsavel', label: 'Responsável Técnico / Mecânico' },
+    { id: 'retorno_manutencao_data', label: 'Data Retorno Manutenção / Liberação' },
     { id: 'pecas_trocadas', label: 'Peças Trocadas' },
     { id: 'guincho_acionado', label: 'Guincho Acionado?' },
-    { id: 'custo_socorro', label: 'Custo Socorro (R$)' }
+    { id: 'custo_socorro', label: 'Custo Socorro (R$)' },
+    { id: 'criado_por', label: 'Registrado Por' }
   ],
   transporte_troca_veiculo: [
     { id: 'data', label: 'Data da Troca' },
@@ -11095,30 +14231,31 @@ const MODULE_COLUMNS_MAP = {
     { id: 'criado_em', label: 'Data de Registro' }
   ],
   transporte_frota_retencao: [
-    { id: 'numero_retencao', label: 'Nº Retenção' },
+    { id: 'numero_retencao', label: 'Nº Retenção / Protocolo' },
+    { id: 'numero_os', label: 'Nº OS Oficina' },
     { id: 'placa', label: 'Placa' },
     { id: 'tipo_veiculo', label: 'Tipo Veículo' },
-    { id: 'data_parada', label: 'Data Parada' },
-    { id: 'motivo', label: 'Motivo' },
+    { id: 'data_parada', label: 'Data Parada / Abertura' },
+    { id: 'motivo', label: 'Motivo da Retenção' },
     { id: 'tipo_os', label: 'Tipo OS' },
-    { id: 'local', label: 'Local' },
-    { id: 'data_previsao', label: 'Previsão' },
-    { id: 'data_liberacao', label: 'Liberação' },
+    { id: 'local', label: 'Localização / Oficina' },
+    { id: 'data_previsao', label: 'Previsão de Retorno' },
+    { id: 'data_liberacao', label: 'Data Liberação / Retorno' },
     { id: 'status', label: 'Status' },
     { id: 'criado_por', label: 'Criado Por' },
-    { id: 'criado_em', label: 'Criado Em' }
+    { id: 'criado_em', label: 'Data Registro' }
   ],
   transporte_reentregas: [
-    { id: 'data', label: 'Data' },
-    { id: 'motorista_nome', label: 'Motorista' },
-    { id: 'carga_numero', label: 'Carga' },
-    { id: 'rota_nome', label: 'Nome Rota' },
+    { id: 'data', label: 'Data da Operação' },
+    { id: 'motorista_nome', label: 'Motorista Original' },
+    { id: 'carga_numero', label: 'Nº Carga' },
+    { id: 'rota_nome', label: 'Nome da Rota' },
+    { id: 'placa', label: 'Placa' },
     { id: 'entregas_saiu', label: 'Entregas Saiu' },
     { id: 'entregas_feitas', label: 'Entregas Feitas' },
     { id: 'entregas_reentrega', label: 'Entregas Reentrega' },
-    { id: 'motivo', label: 'Motivo' },
-    { id: 'placa', label: 'Placa' },
-    { id: 'novo_motorista', label: 'Novo Motorista' },
+    { id: 'motivo', label: 'Motivo da Reentrega' },
+    { id: 'novo_motorista', label: 'Novo Motorista (Reentrega)' },
     { id: 'status', label: 'Status' },
     { id: 'criado_por', label: 'Registrado Por' },
     { id: 'criado_em', label: 'Registrado Em' }
@@ -11138,18 +14275,24 @@ const MODULE_COLUMNS_MAP = {
     { id: 'observacao', label: 'Observações' }
   ],
   rotas: [
-    { id: 'numero_protocolo', label: 'Protocolo Chamado' },
-    { id: 'criado_em', label: 'Data da Ocorrência' },
+    { id: 'numero_protocolo', label: 'Protocolo / Nº OS' },
+    { id: 'criado_em', label: 'Data de Abertura' },
+    { id: 'carga_numero', label: 'Nº Carga' },
+    { id: 'carga_rota', label: 'Rota' },
     { id: 'veiculo_placa', label: 'Placa do Veículo' },
     { id: 'motorista_nome', label: 'Motorista' },
+    { id: 'localizacao', label: 'Localização / Ponto de Parada' },
     { id: 'motivo_resumido', label: 'Motivo / Defeito' },
     { id: 'tipo_ocorrencia', label: 'Tipo Ocorrência' },
+    { id: 'descricao', label: 'Descrição da Avaria' },
     { id: 'status_veiculo', label: 'Status Veículo' },
+    { id: 'status_chamado', label: 'Status Chamado' },
+    { id: 'retorno_manutencao_descricao', label: 'Retorno Manutenção / Ação Corretiva' },
+    { id: 'retorno_manutencao_responsavel', label: 'Responsável Liberação / Mecânico' },
+    { id: 'retorno_manutencao_data', label: 'Data Liberação / Retorno' },
     { id: 'custo_socorro', label: 'Custo Socorro (R$)' },
-    { id: 'veiculo_substituto', label: 'Veículo Substituto' },
-    { id: 'local_parada', label: 'Local da Parada' },
-    { id: 'oficina_guincho', label: 'Oficina / Guincho' },
-    { id: 'acao_corretiva', label: 'Ação Corretiva' }
+    { id: 'pecas_trocadas', label: 'Peças Trocadas' },
+    { id: 'guincho_acionado', label: 'Guincho Acionado?' }
   ],
 
   // CENTRO DE DISTRIBUIÇÃO CD (Módulos Granulares)
@@ -11312,7 +14455,7 @@ function getRawDataParaModulo(modulo) {
     return db.getTrocasVeiculos();
   }
   if (modulo === 'transporte_frota_retencao') {
-    return db.data.retencoes_frota || [];
+    return typeof db.getRetencoesFrota === 'function' ? db.getRetencoesFrota() : (db.data.retencoes_frota || []);
   }
   if (modulo === 'transporte_reentregas') {
     return db.getReentregas ? db.getReentregas() : (db.data.reentregas || []);
@@ -11459,7 +14602,7 @@ function getRawDataParaModulo(modulo) {
 // Extrai o valor de um campo de relatório para uma linha
 function getValorCampoRelatorio(row, modulo, campoId) {
   if (modulo === 'resumos_cd' || modulo === 'cd_resumo_diario') {
-    if (campoId === 'data') return row.data || '';
+    if (campoId === 'data') return formatarData(row.data, '');
     if (campoId === 'peso_expedicao') return row.movimentacao?.expedicao?.peso || 0;
     if (campoId === 'aux_exp') return row.movimentacao?.expedicao?.aux_junior || 0;
     if (campoId === 'mov_exp') return row.movimentacao?.expedicao?.movimentador || 0;
@@ -11483,9 +14626,74 @@ function getValorCampoRelatorio(row, modulo, campoId) {
     if (campoId === 'qtd_ocorrencias_cd') return Array.isArray(row.ocorrencias) ? row.ocorrencias.length : 0;
     if (campoId === 'qtd_faltas_colaborador') return Array.isArray(row.faltas_condutas) ? row.faltas_condutas.length : 0;
     if (campoId === 'observacoes_gerais') return row.observacoes || '';
+    if (campoId.includes('data') || campoId.includes('criado') || campoId.includes('atualizado')) return formatarData(row[campoId], '');
     return row[campoId];
   }
-  return row[campoId];
+
+  // Transporte Ocorrências em Rota (Frota)
+  if (modulo === 'transporte_oc_rota' || modulo === 'rotas') {
+    if (campoId === 'retorno_manutencao_descricao') return row.retorno_manutencao_descricao || row.acao_mecanico || '';
+    if (campoId === 'retorno_manutencao_responsavel') return row.retorno_manutencao_responsavel || row.mecanico_nome || '';
+    if (campoId === 'retorno_manutencao_data') {
+      const d = row.retorno_manutencao_data || row.resolvido_em;
+      return d ? formatarDataHora(d, '') : '';
+    }
+    if (campoId === 'criado_em') {
+      const d = row.criado_em || row.id;
+      return d ? formatarDataHora(d, '') : '';
+    }
+    if (campoId === 'status_chamado') {
+      return row.status_chamado ? String(row.status_chamado).toUpperCase() : (row.status === 'RESOLVIDO' ? 'FINALIZADO' : 'PENDENTE');
+    }
+    if (campoId === 'guincho_acionado') {
+      return (row.guincho_acionado === true || row.guincho_acionado === 'sim' || row.guincho_acionado === 'SIM') ? 'SIM' : 'NÃO';
+    }
+    if (campoId === 'localizacao') return row.localizacao || '';
+    if (campoId === 'veiculo_modelo') return row.veiculo_modelo || row.veiculo_tipo || '';
+  }
+
+  // Retenção de Frota
+  if (modulo === 'transporte_frota_retencao') {
+    if (campoId === 'data_parada' || campoId === 'data_previsao' || campoId === 'data_liberacao') {
+      return formatarData(row[campoId], '');
+    }
+    if (campoId === 'criado_em') {
+      return formatarDataHora(row.criado_em, '');
+    }
+    if (campoId === 'local') return row.local || '';
+    if (campoId === 'numero_os') return row.numero_os || 'N/A';
+  }
+
+  // Reentregas
+  if (modulo === 'transporte_reentregas') {
+    if (campoId === 'data') {
+      return formatarData(row.data, '');
+    }
+    if (campoId === 'novo_motorista') return row.novo_motorista || 'N/A';
+    if (campoId === 'criado_em') {
+      return formatarDataHora(row.criado_em, '');
+    }
+  }
+
+  // Viagens
+  if (modulo === 'transporte_largada' || modulo === 'viagens') {
+    if (campoId === 'data_saida' || campoId === 'data_entrega' || campoId === 'data_retorno') {
+      return formatarData(row[campoId], '');
+    }
+  }
+
+  // Devoluções
+  if (modulo && String(modulo).startsWith('devolucao')) {
+    if (campoId === 'criado_em' || campoId === 'atualizado_em' || campoId === 'data_entrada_cd' || campoId === 'data_acao_gestor') {
+      return formatarData(row[campoId], '');
+    }
+  }
+
+  const val = row[campoId];
+  if (typeof val === 'string' && (/^\d{4}-\d{2}-\d{2}/.test(val) || /^\d{2}\/\d{2}\/\d{4}/.test(val))) {
+    return formatarData(val, '');
+  }
+  return val;
 }
 
 function valorRelatorioPreenchido(val) {
@@ -11495,15 +14703,95 @@ function valorRelatorioPreenchido(val) {
   return true; // números (inclusive 0) e booleanos contam como preenchido
 }
 
-// Retorna apenas as colunas do módulo que têm valor preenchido em pelo
-// menos 1 registro da base atual — colunas que nunca têm dado em nenhum
-// registro são removidas da lista (não apenas desabilitadas), para não
-// confundir o usuário com colunas que sempre virão vazias no CSV.
+// Formata nomes técnicos de campos para rótulos amigáveis de fallback
+function formatarRotuloCampoFallback(campoId) {
+  if (!campoId) return '';
+  const siglas = {
+    'id': 'ID',
+    'cd': 'CD',
+    'nf': 'NF',
+    'os': 'OS',
+    'cpf': 'CPF',
+    'cnh': 'CNH',
+    'cnpj': 'CNPJ',
+    'uf': 'UF',
+    'km': 'KM',
+    'sac': 'SAC',
+    'kg': 'Kg',
+    'qtd': 'Qtd',
+    'dt': 'Data',
+    'obs': 'Observações'
+  };
+
+  const words = String(campoId)
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .split(/\s+/);
+
+  return words.map(w => {
+    const lower = w.toLowerCase();
+    if (siglas[lower]) return siglas[lower];
+    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  }).join(' ');
+}
+
+// Obtém o rótulo amigável usando MODULE_COLUMNS_MAP como dicionário ou fallback formatado
+function getRotuloAmigavelColuna(campoId, modulo) {
+  if (!campoId) return '';
+  // 1. Procura no módulo especificado
+  if (modulo && MODULE_COLUMNS_MAP[modulo]) {
+    const found = MODULE_COLUMNS_MAP[modulo].find(c => c.id === campoId);
+    if (found && found.label) return found.label;
+  }
+  // 2. Procura em qualquer outro módulo do dicionário global
+  for (const modKey in MODULE_COLUMNS_MAP) {
+    if (Array.isArray(MODULE_COLUMNS_MAP[modKey])) {
+      const found = MODULE_COLUMNS_MAP[modKey].find(c => c.id === campoId);
+      if (found && found.label) return found.label;
+    }
+  }
+  // 3. Fallback inteligente de texto formatado
+  return formatarRotuloCampoFallback(campoId);
+}
+
+// Retorna apenas as colunas do módulo dinamicamente inspecionando chaves dos dados reais,
+// mantendo a ordem das colunas prioritárias e traduzindo chaves desconhecidas com fallback.
 function getColunasDisponiveisParaModulo(modulo) {
-  const cols = MODULE_COLUMNS_MAP[modulo] || MODULE_COLUMNS_MAP['devolucoes'];
   const rawData = getRawDataParaModulo(modulo);
-  if (!rawData || rawData.length === 0) return cols; // sem registros ainda: não há como saber o que "nunca" é preenchido, mantém tudo
-  return cols.filter(c => rawData.some(row => valorRelatorioPreenchido(getValorCampoRelatorio(row, modulo, c.id))));
+  const predefined = MODULE_COLUMNS_MAP[modulo] || [];
+
+  const colsMap = new Map();
+
+  // 1. Registra colunas pré-definidas para manter a ordem lógica recomendada
+  predefined.forEach(c => {
+    colsMap.set(c.id, { id: c.id, label: c.label || getRotuloAmigavelColuna(c.id, modulo) });
+  });
+
+  // 2. Inspeciona dinamicamente novas chaves presentes nos registros reais
+  if (Array.isArray(rawData) && rawData.length > 0) {
+    rawData.forEach(row => {
+      if (row && typeof row === 'object' && !Array.isArray(row)) {
+        Object.keys(row).forEach(key => {
+          if (typeof row[key] === 'function' || key.startsWith('__')) return;
+          if (!colsMap.has(key)) {
+            colsMap.set(key, {
+              id: key,
+              label: getRotuloAmigavelColuna(key, modulo)
+            });
+          }
+        });
+      }
+    });
+  }
+
+  const allCols = Array.from(colsMap.values());
+
+  // Sem registros ainda: mantém a lista pré-definida
+  if (!rawData || rawData.length === 0) return allCols;
+
+  // Filtra colunas que têm valor preenchido em pelo menos 1 registro da base atual
+  return allCols.filter(c => rawData.some(row => valorRelatorioPreenchido(getValorCampoRelatorio(row, modulo, c.id))));
 }
 
 function updateCsvColumnsUI(moduloVal) {
@@ -11524,33 +14812,30 @@ function toggleSelectAllCsvCols(selectAll) {
   checkboxes.forEach(cb => cb.checked = selectAll);
 }
 
-// ===== MÓDULO: BOLETIM GERENCIAL LOGÍSTICO & CENTRAL DE RELATÓRIOS =====
+// ===== MÓDULO: BOLETIM GERENCIAL MASTER LOGÍSTICO & CENTRAL DE RELATÓRIOS =====
 function renderBoletimGerencialView() {
-  const fDe = window._boletimFiltroDe || '';
-  const fAte = window._boletimFiltroAte || '';
+  const ontemDate = new Date();
+  ontemDate.setDate(ontemDate.getDate() - 1);
+  const dMenosUmStr = ontemDate.toISOString().split('T')[0];
+
+  const fDe = window._boletimFiltroDe !== undefined && window._boletimFiltroDe !== '' ? window._boletimFiltroDe : dMenosUmStr;
+  const fAte = window._boletimFiltroAte !== undefined && window._boletimFiltroAte !== '' ? window._boletimFiltroAte : dMenosUmStr;
 
   const allDevs = db.getDevolucoes();
   const allRotas = db.getOcorrenciasRota();
-  const allViagens = db.getControleViagens();
   const allOcViagens = db.getOcorrenciasViagens();
   const allTrocas = db.getTrocasVeiculos();
+  const allReentregas = db.getReentregas();
 
   const devs = allDevs.filter(d => {
-    const dt = d.criado_em ? d.criado_em.split('T')[0] : '';
+    const dt = d.criado_em ? d.criado_em.split('T')[0] : (d.data_abertura || '');
     if (fDe && dt < fDe) return false;
     if (fAte && dt > fAte) return false;
     return true;
   });
 
   const rotas = allRotas.filter(r => {
-    const dt = r.criado_em ? r.criado_em.split('T')[0] : '';
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const viagens = allViagens.filter(v => {
-    const dt = v.data_saida || '';
+    const dt = r.criado_em ? r.criado_em.split('T')[0] : (r.data_ocorrencia || '');
     if (fDe && dt < fDe) return false;
     if (fAte && dt > fAte) return false;
     return true;
@@ -11564,7 +14849,14 @@ function renderBoletimGerencialView() {
   });
 
   const trocas = allTrocas.filter(t => {
-    const dt = t.data || '';
+    const dt = t.data || (t.criado_em ? t.criado_em.split('T')[0] : '');
+    if (fDe && dt < fDe) return false;
+    if (fAte && dt > fAte) return false;
+    return true;
+  });
+
+  const reentregas = allReentregas.filter(re => {
+    const dt = re.data || (re.criado_em ? re.criado_em.split('T')[0] : '');
     if (fDe && dt < fDe) return false;
     if (fAte && dt > fAte) return false;
     return true;
@@ -11593,158 +14885,115 @@ function renderBoletimGerencialView() {
     if (r.faltas_condutas && Array.isArray(r.faltas_condutas)) faltasColabList.push(...r.faltas_condutas);
   });
 
+  // KPIs CD
+  const qtdOcorrenciasCd = ocorrenciasCdList.length;
+  const qtdFaltaColaborador = faltasColabList.length;
+
+  // KPIs Expedição & SAC
   const totalDevValor = devs.reduce((acc, d) => acc + (parseFloat(d.valor_reclamado)||0), 0);
   const qtdDevolucoes = devs.length;
   const corteValor = cortesList.reduce((acc, c) => acc + (parseFloat(c.valor)||0), 0);
   const qtdProdutosCorte = cortesList.length;
-  const qtdOcorrenciasCd = ocorrenciasCdList.length;
+  const totalPendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
 
-  const viagensIniciadas = viagens.length;
+  // KPIs Transporte & Rota (Ocorrências, Socorros, Trocas e Reentregas)
   const ocTransporteQtd = ocViagens.length;
-  const chkNaoRealizado = viagens.filter(v => v.checklist_saida !== 'INICIADO').length;
-  const fusionNaoAberto = viagens.filter(v => v.fusion !== 'INICIADO').length;
-  const qtdTrocasVeiculos = trocas.length;
-  const qtdFaltaColaborador = faltasColabList.length;
   const qtdProblemaMecanico = rotas.length;
+  const custoTotalSocorro = rotas.reduce((acc, r) => acc + (parseFloat(r.custo_socorro) || 0), 0);
+  const qtdTrocasVeiculos = trocas.length;
+  const qtdReentregas = reentregas.length;
+  const totalEntregasSaiu = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_saiu) || 0), 0);
+  const totalEntregasFeitas = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_feitas) || 0), 0);
+  const totalEntregasReentrega = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_reentrega) || 0), 0);
+  const reentregasPendentes = reentregas.filter(re => re.status === 'PENDENTE').length;
+  const socorrosEmAberto = rotas.filter(r => r.status_veiculo !== 'Liberado').length;
+
+  // KPIs Fechamento
+  const impactoFinanceiroTotal = totalDevValor + corteValor + custoTotalSocorro;
+  const taxaSucessoEntregas = totalEntregasSaiu > 0 ? ((totalEntregasFeitas / totalEntregasSaiu) * 100).toFixed(1) : '100.0';
+  const taxaReentregas = totalEntregasSaiu > 0 ? ((totalEntregasReentrega / totalEntregasSaiu) * 100).toFixed(1) : '0.0';
+
+  const isD1Active = (fDe === dMenosUmStr && fAte === dMenosUmStr);
 
   const activeBolSubTab = window._activeBolSubTab || 'executiva';
 
   return `
     <div class="space-y-8 max-w-7xl mx-auto pb-12">
-      <!-- CABEÇALHO BOLETIM GERENCIAL -->
+      <!-- CABEÇALHO BOLETIM GERENCIAL MASTER -->
       <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-2xl">
         <div class="flex items-center gap-4">
           <img src="./public/logo.png" alt="JR Logo" class="h-12 w-auto" onerror="this.style.display='none'">
           <div>
             <h1 class="text-xl font-black text-white uppercase tracking-wider flex items-center gap-2">
-              <span>📄</span> Boletim Gerencial Logístico & Central de Relatórios
+              <span>📄</span> Boletim Gerencial
             </h1>
-            <p class="text-xs text-slate-400">Consolidação executiva, exportador de dados em CSV customizável e relatórios PDF</p>
+            <p class="text-xs text-slate-400">Consolidação executiva de fechamento (D-1)</p>
           </div>
         </div>
 
         <!-- SUBABAS BOLETIM GERENCIAL -->
         <div class="flex gap-1 bg-slate-950 border border-slate-800 p-1.5 rounded-xl shadow-lg shrink-0 no-print">
-          <button onclick="window._activeBolSubTab='executiva'; renderApp()" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'executiva' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+          <button onclick="switchBolSubTab('executiva')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'executiva' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
             <span>📊</span> Visão Executiva
           </button>
-          <button onclick="window._activeBolSubTab='export_csv'; renderApp()" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'export_csv' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📥</span> Exportação CSV Custom
+          <button onclick="switchBolSubTab('export_csv')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'export_csv' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+            <span>📥</span> Exportação CSV
           </button>
-          <button onclick="window._activeBolSubTab='relatorios_pdf'; renderApp()" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'relatorios_pdf' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+          <button onclick="switchBolSubTab('relatorios_pdf')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'relatorios_pdf' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
             <span>📄</span> Central de PDFs
           </button>
         </div>
       </div>
 
       ${activeBolSubTab === 'executiva' ? `
-        <!-- SUBABA 1: VISÃO EXECUTIVA COMPLETA -->
+        <!-- SUBABA 1: VISÃO EXECUTIVA MASTER COMPLETA -->
         <div class="space-y-6">
-          <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-3.5 rounded-xl no-print">
-            <div class="flex items-center gap-2">
-              <span class="text-xs font-bold text-slate-300 uppercase">Filtrar Período Executivo:</span>
-              <input type="date" id="bol-filtro-de" value="${fDe}" onchange="window._boletimFiltroDe=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs">
+          <!-- BARRA DE FILTRO DE DATA & BOTÃO DE IMPRESSÃO MASTER -->
+          <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3 bg-slate-900 border border-slate-800 p-4 rounded-xl no-print shadow-lg">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-xs font-bold text-slate-300 uppercase">Filtrar Período:</span>
+              <input type="date" id="bol-filtro-de" value="${fDe}" onchange="window._boletimFiltroDe=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded-lg p-1.5 text-xs font-bold">
               <span class="text-xs text-slate-500 font-bold">Até</span>
-              <input type="date" id="bol-filtro-ate" value="${fAte}" onchange="window._boletimFiltroAte=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs">
-              <button onclick="window._boletimFiltroDe=''; window._boletimFiltroAte=''; renderApp()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold px-2.5 py-1 rounded">Limpar</button>
+              <input type="date" id="bol-filtro-ate" value="${fAte}" onchange="window._boletimFiltroAte=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded-lg p-1.5 text-xs font-bold">
+              <button onclick="window._boletimFiltroDe='${dMenosUmStr}'; window._boletimFiltroAte='${dMenosUmStr}'; renderApp()" class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center gap-1.5 ${isD1Active ? 'bg-emerald-600 text-white shadow-md border border-emerald-500 font-extrabold' : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold'}" title="Definir período exatamente para ontem (D-1)">
+                <span>📅</span> Ontem (D-1)
+              </button>
             </div>
-            <button onclick="imprimirBoletimGerencialExecutivo()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold px-4 py-2 rounded-xl text-xs shadow flex items-center gap-1.5">
-              <span>🖨️</span> Gerar PDF Executivo
+            <button onclick="imprimirBoletimGerencialExecutivo()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs shadow-lg flex items-center gap-2 transition">
+              <span>🖨️</span> Gerar Boletim Master (PDF / Impressão A4)
             </button>
           </div>
 
-          <!-- BLOCO 1: MÓDULO CD -->
+          <!-- ETAPA 1: MÓDULO CENTRO DE DISTRIBUIÇÃO (CD) -->
           <div class="bg-slate-900 border border-emerald-900/60 rounded-2xl p-6 shadow-2xl space-y-6">
             <div class="flex items-center justify-between border-b border-emerald-800/60 pb-3">
               <h2 class="text-base font-black text-emerald-400 uppercase tracking-wider flex items-center gap-2">
-                <span>📦</span> BLOCO 1: MÓDULO CENTRO DE DISTRIBUIÇÃO (CD)
+                <span>📦</span> 1. Centro de Distribuição
               </h2>
-              <span class="text-xs text-slate-400 font-bold">Resumo Executivo CD</span>
+              <span class="text-xs text-slate-400 font-bold">Movimentação, ocorrências e equipe</span>
             </div>
 
-            <!-- KPIs DO CD (7 CARDS) -->
-            <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Devolução (R$)</div>
-                <div class="text-sm font-black text-emerald-400 mt-1">R$ ${totalDevValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-              </div>
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Qtd Devolução</div>
-                <div class="text-base font-black text-white mt-1">${qtdDevolucoes}</div>
-              </div>
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Corte (R$)</div>
-                <div class="text-sm font-black text-red-400 mt-1">R$ ${corteValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
-              </div>
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Qtd Prod. Corte</div>
-                <div class="text-base font-black text-amber-400 mt-1">${qtdProdutosCorte}</div>
-              </div>
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Peso Expedição</div>
-                <div class="text-xs font-black text-blue-400 mt-1">${pesoExpedicao.toLocaleString('pt-BR',{minimumFractionDigits:2})} Kg</div>
-              </div>
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
+            <!-- KPIs DO CD (4 CARDS) -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
                 <div class="text-[10px] text-slate-400 font-bold uppercase">Peso Recebimento</div>
-                <div class="text-xs font-black text-purple-400 mt-1">${pesoRecebimento.toLocaleString('pt-BR',{minimumFractionDigits:2})} Kg</div>
+                <div class="text-sm font-black text-purple-400 mt-1">${pesoRecebimento.toLocaleString('pt-BR',{minimumFractionDigits:2})} Kg</div>
               </div>
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Oc. do CD</div>
-                <div class="text-base font-black text-orange-400 mt-1">${qtdOcorrenciasCd}</div>
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Peso Expedição</div>
+                <div class="text-sm font-black text-blue-400 mt-1">${pesoExpedicao.toLocaleString('pt-BR',{minimumFractionDigits:2})} Kg</div>
               </div>
-            </div>
-
-            <!-- TABELA 1: DETALHAMENTO DE DEVOLUÇÃO -->
-            <div class="space-y-2">
-              <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
-                <span>📝</span> Detalhamento de Devolução CD (${devs.length})
-              </h3>
-              <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
-                <table class="w-full text-left text-xs">
-                  <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase sticky top-0">
-                    <tr><th class="p-2">Protocolo</th><th class="p-2">Cliente</th><th class="p-2">Motorista</th><th class="p-2">Rota</th><th class="p-2">Motivo</th><th class="p-2 text-right">Valor</th></tr>
-                  </thead>
-                  <tbody class="divide-y divide-slate-800">
-                    ${devs.length===0?'<tr><td colspan="6" class="p-4 text-center text-slate-500">Nenhuma devolução no período.</td></tr>':
-                    devs.map(d => `
-                      <tr class="hover:bg-slate-800/40">
-                        <td class="p-2 font-bold text-emerald-400">${d.numero_devolucao||d.numero_protocolo}</td>
-                        <td class="p-2 text-white">${d.cliente_nome}</td>
-                        <td class="p-2 text-slate-300">${d.motorista_nome}</td>
-                        <td class="p-2 text-slate-400">${d.carga_rota}</td>
-                        <td class="p-2 text-amber-300 font-medium">${d.motivo_reclamado}</td>
-                        <td class="p-2 text-right font-bold text-emerald-400">R$ ${(parseFloat(d.valor_reclamado)||0).toFixed(2)}</td>
-                      </tr>`).join('')}
-                  </tbody>
-                </table>
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Ocorrências Internas CD</div>
+                <div class="text-base font-black ${qtdOcorrenciasCd>0?'text-amber-400':'text-slate-300'} mt-1">${qtdOcorrenciasCd}</div>
+              </div>
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Faltas / Ausências CD</div>
+                <div class="text-base font-black ${qtdFaltaColaborador>0?'text-red-400':'text-slate-300'} mt-1">${qtdFaltaColaborador}</div>
               </div>
             </div>
 
-            <!-- TABELA 2: DETALHAMENTO DE CORTE -->
-            <div class="space-y-2">
-              <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
-                <span>✂️</span> Detalhamento de Corte (${cortesList.length})
-              </h3>
-              <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
-                <table class="w-full text-left text-xs">
-                  <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase sticky top-0">
-                    <tr><th class="p-2">Cód Item</th><th class="p-2">Descrição do Produto</th><th class="p-2 text-center">Quantidade</th><th class="p-2 text-right">Valor Total</th></tr>
-                  </thead>
-                  <tbody class="divide-y divide-slate-800">
-                    ${cortesList.length===0?'<tr><td colspan="4" class="p-4 text-center text-slate-500">Nenhum corte registrado no período.</td></tr>':
-                    cortesList.map(c => `
-                      <tr class="hover:bg-slate-800/40">
-                        <td class="p-2 font-bold text-emerald-400">${c.codigo_item}</td>
-                        <td class="p-2 font-bold text-white uppercase">${c.descricao}</td>
-                        <td class="p-2 text-center font-bold text-amber-300">${c.quantidade}</td>
-                        <td class="p-2 text-right font-bold text-red-400">R$ ${(parseFloat(c.valor)||0).toFixed(2)}</td>
-                      </tr>`).join('')}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <!-- TABELA 3: DETALHAMENTO DAS OCORRÊNCIAS DO CD -->
+            <!-- TABELA 1.1: DETALHAMENTO DAS OCORRÊNCIAS DO CD -->
             <div class="space-y-2">
               <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
                 <span>📢</span> Detalhamento das Ocorrências do CD (${ocorrenciasCdList.length})
@@ -11758,21 +15007,19 @@ function renderBoletimGerencialView() {
                     ${ocorrenciasCdList.length===0?'<tr><td colspan="3" class="p-4 text-center text-slate-500">Nenhuma ocorrência do CD registrada no período.</td></tr>':
                     ocorrenciasCdList.map(o => `
                       <tr class="hover:bg-slate-800/40">
-                        <td class="p-2 font-bold text-white uppercase">${o.ocorrencia}</td>
-                        <td class="p-2 text-slate-300">${o.causa}</td>
-                        <td class="p-2 text-emerald-300 font-medium">${o.acao}</td>
+                        <td class="p-2 font-bold text-white uppercase">${o.ocorrencia||'—'}</td>
+                        <td class="p-2 text-slate-300">${o.causa||'—'}</td>
+                        <td class="p-2 text-emerald-300 font-medium">${o.acao||'—'}</td>
                       </tr>`).join('')}
                   </tbody>
                 </table>
               </div>
             </div>
 
-            <!-- TABELA REALOCADA (PRIORIDADE 5): DETALHAMENTO DAS FALTAS DO
-                 COLABORADOR — movida do Bloco 2 (Transporte) para o Bloco 1
-                 (CD), a pedido da diretoria. Dados e cálculos inalterados. -->
+            <!-- TABELA 1.2: GESTÃO DE FALTAS E AUSÊNCIAS DA EQUIPE CD -->
             <div class="space-y-2">
               <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
-                <span>👤</span> Detalhamento das Faltas e Ausências (${faltasColabList.length})
+                <span>👤</span> Gestão de Faltas e Ausências da Equipe de CD (${faltasColabList.length})
               </h3>
               <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
                 <table class="w-full text-left text-xs">
@@ -11783,9 +15030,9 @@ function renderBoletimGerencialView() {
                     ${faltasColabList.length===0?'<tr><td colspan="5" class="p-4 text-center text-slate-500">Nenhuma falta de colaborador registrada no período.</td></tr>':
                     faltasColabList.map(f => `
                       <tr class="hover:bg-slate-800/40">
-                        <td class="p-2 font-bold text-white uppercase">${f.nome}</td>
-                        <td class="p-2 text-amber-300 font-bold">${f.conduta}</td>
-                        <td class="p-2 text-center font-bold ${f.avisado==='SIM'?'text-emerald-400':'text-red-400'}">${f.avisado}</td>
+                        <td class="p-2 font-bold text-white uppercase">${f.nome||'—'}</td>
+                        <td class="p-2 text-amber-300 font-bold">${f.conduta||'—'}</td>
+                        <td class="p-2 text-center font-bold ${f.avisado==='SIM'?'text-emerald-400':'text-red-400'}">${f.avisado||'NÃO'}</td>
                         <td class="p-2 text-center text-slate-300">${f.periodo||'Integral'}</td>
                         <td class="p-2 text-center text-slate-300">${f.compensar||'NÃO'}</td>
                       </tr>`).join('')}
@@ -11795,51 +15042,132 @@ function renderBoletimGerencialView() {
             </div>
           </div>
 
-          <!-- BLOCO 2: MÓDULO TRANSPORTE -->
+          <!-- ETAPA 2: EXPEDIÇÃO & SAC (DEVOLUÇÕES E CORTES) -->
+          <div class="bg-slate-900 border border-amber-900/60 rounded-2xl p-6 shadow-2xl space-y-6">
+            <div class="flex items-center justify-between border-b border-amber-800/60 pb-3">
+              <h2 class="text-base font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                <span>📋</span> 2. Expedição & SAC
+              </h2>
+              <span class="text-xs text-slate-400 font-bold">Devoluções, perdas e cortes de estoque</span>
+            </div>
+
+            <!-- KPIs DE EXPEDIÇÃO & SAC (5 CARDS) -->
+            <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Devolução Total (R$)</div>
+                <div class="text-sm font-black text-red-400 mt-1">R$ ${totalDevValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+              </div>
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Qtd Devoluções</div>
+                <div class="text-base font-black text-white mt-1">${qtdDevolucoes}</div>
+              </div>
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Cortes Estoque (R$)</div>
+                <div class="text-sm font-black text-red-400 mt-1">R$ ${corteValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+              </div>
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Qtd Prod. Cortes</div>
+                <div class="text-base font-black text-amber-400 mt-1">${qtdProdutosCorte}</div>
+              </div>
+              <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Pendente Físico CD</div>
+                <div class="text-base font-black ${totalPendCd>0?'text-amber-400':'text-emerald-400'} mt-1">${totalPendCd}</div>
+              </div>
+            </div>
+
+            <!-- TABELA 2.1: DETALHAMENTO DE DEVOLUÇÃO -->
+            <div class="space-y-2">
+              <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
+                <span>📝</span> Detalhamento de Devoluções SAC (${devs.length})
+              </h3>
+              <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
+                <table class="w-full text-left text-xs">
+                  <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase sticky top-0">
+                    <tr><th class="p-2">Protocolo</th><th class="p-2">Cliente</th><th class="p-2">Motorista</th><th class="p-2">Rota</th><th class="p-2">Motivo</th><th class="p-2 text-center">Status Físico</th><th class="p-2 text-right">Valor</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800">
+                    ${devs.length===0?'<tr><td colspan="7" class="p-4 text-center text-slate-500">Nenhuma devolução no período.</td></tr>':
+                    devs.map(d => `
+                      <tr class="hover:bg-slate-800/40">
+                        <td class="p-2 font-bold text-emerald-400">${d.numero_devolucao||d.numero_protocolo}</td>
+                        <td class="p-2 text-white">${d.cliente_nome||'—'}</td>
+                        <td class="p-2 text-slate-300">${d.motorista_nome||'—'}</td>
+                        <td class="p-2 text-slate-400">${d.carga_rota||'—'}</td>
+                        <td class="p-2 text-amber-300 font-medium">${d.motivo_reclamado||'—'}</td>
+                        <td class="p-2 text-center">
+                          <span class="px-2 py-0.5 rounded text-[10px] font-bold ${d.status_fechamento==='PENDENTE_FISICO'?'bg-amber-950 text-amber-300 border border-amber-800':'bg-emerald-950 text-emerald-300 border border-emerald-800'}">
+                            ${d.status_fechamento||'OK'}
+                          </span>
+                        </td>
+                        <td class="p-2 text-right font-bold text-emerald-400">R$ ${(parseFloat(d.valor_reclamado)||0).toFixed(2)}</td>
+                      </tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- TABELA 2.2: DETALHAMENTO DE CORTE -->
+            <div class="space-y-2">
+              <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
+                <span>✂️</span> Detalhamento de Cortes de Mercadorias (${cortesList.length})
+              </h3>
+              <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
+                <table class="w-full text-left text-xs">
+                  <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase sticky top-0">
+                    <tr><th class="p-2">Cód Item</th><th class="p-2">Descrição do Produto</th><th class="p-2 text-center">Quantidade</th><th class="p-2 text-right">Valor Total</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800">
+                    ${cortesList.length===0?'<tr><td colspan="4" class="p-4 text-center text-slate-500">Nenhum corte registrado no período.</td></tr>':
+                    cortesList.map(c => `
+                      <tr class="hover:bg-slate-800/40">
+                        <td class="p-2 font-bold text-emerald-400">${c.codigo_item||'—'}</td>
+                        <td class="p-2 font-bold text-white uppercase">${c.descricao||'—'}</td>
+                        <td class="p-2 text-center font-bold text-amber-300">${c.quantidade}</td>
+                        <td class="p-2 text-right font-bold text-red-400">R$ ${(parseFloat(c.valor)||0).toFixed(2)}</td>
+                      </tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- ETAPA 3: TRANSPORTE & OPERAÇÃO EM ROTA (OCORRÊNCIAS, TROCAS E REENTREGAS) -->
           <div class="bg-slate-900 border border-blue-900/60 rounded-2xl p-6 shadow-2xl space-y-6">
             <div class="flex items-center justify-between border-b border-blue-800/60 pb-3">
               <h2 class="text-base font-black text-blue-400 uppercase tracking-wider flex items-center gap-2">
-                <span>🚍</span> BLOCO 2: MÓDULO TRANSPORTE & FROTA
+                <span>🚍</span> 3. Transporte & Rota
               </h2>
-              <span class="text-xs text-slate-400 font-bold">Resumo Executivo Transporte</span>
+              <span class="text-xs text-slate-400 font-bold">CCO, manutenção, trocas e reentregas</span>
             </div>
 
-            <!-- KPIs DO TRANSPORTE (7 CARDS) -->
-            <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+            <!-- KPIs DO TRANSPORTE (5 CARDS) -->
+            <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Viagens Iniciadas</div>
-                <div class="text-base font-black text-emerald-400 mt-1">${viagensIniciadas}</div>
-              </div>
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Oc. Transporte</div>
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Oc. CCO Transporte</div>
                 <div class="text-base font-black text-amber-400 mt-1">${ocTransporteQtd}</div>
               </div>
               <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Checklist Pend.</div>
-                <div class="text-base font-black ${chkNaoRealizado>0?'text-red-400':'text-slate-300'} mt-1">${chkNaoRealizado}</div>
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Socorro Mecânico</div>
+                <div class="text-base font-black ${qtdProblemaMecanico>0?'text-red-400':'text-slate-300'} mt-1">${qtdProblemaMecanico}</div>
               </div>
               <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Fusion Pend.</div>
-                <div class="text-base font-black ${fusionNaoAberto>0?'text-red-400':'text-slate-300'} mt-1">${fusionNaoAberto}</div>
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Custo Socorros (R$)</div>
+                <div class="text-base font-black ${custoTotalSocorro>0?'text-red-400':'text-slate-300'} mt-1">R$ ${custoTotalSocorro.toFixed(2)}</div>
               </div>
               <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
                 <div class="text-[10px] text-slate-400 font-bold uppercase">Trocas Veículos</div>
                 <div class="text-base font-black text-purple-400 mt-1">${qtdTrocasVeiculos}</div>
               </div>
               <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Falta Colaborador</div>
-                <div class="text-base font-black text-orange-400 mt-1">${qtdFaltaColaborador}</div>
-              </div>
-              <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl text-center">
-                <div class="text-[10px] text-slate-400 font-bold uppercase">Prob. Mecânico</div>
-                <div class="text-base font-black ${qtdProblemaMecanico>0?'text-red-400':'text-slate-300'} mt-1">${qtdProblemaMecanico}</div>
+                <div class="text-[10px] text-slate-400 font-bold uppercase">Reentregas Rota</div>
+                <div class="text-base font-black ${qtdReentregas>0?'text-amber-400':'text-slate-300'} mt-1">${qtdReentregas}</div>
               </div>
             </div>
 
-            <!-- TABELA 4: DETALHAMENTO DAS OCORRÊNCIAS OPERACIONAIS -->
+            <!-- TABELA 3.1: OCORRÊNCIAS OPERACIONAIS DE VIAGEM CCO -->
             <div class="space-y-2">
               <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
-                <span>⚠️</span> Detalhamento das Ocorrências Operacionais (${ocViagens.length})
+                <span>⚠️</span> 1. Ocorrências Operacionais de Viagem CCO (${ocViagens.length})
               </h3>
               <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
                 <table class="w-full text-left text-xs">
@@ -11850,22 +15178,22 @@ function renderBoletimGerencialView() {
                     ${ocViagens.length===0?'<tr><td colspan="6" class="p-4 text-center text-slate-500">Nenhuma ocorrência operacional registrada no período.</td></tr>':
                     ocViagens.map(o => `
                       <tr class="hover:bg-slate-800/40">
-                        <td class="p-2 text-slate-400">${o.data}</td>
-                        <td class="p-2 font-bold text-emerald-400">${o.carga}</td>
-                        <td class="p-2 text-white">${o.rota} (${o.placa})</td>
-                        <td class="p-2 text-slate-300">${o.funcionario} (${o.funcao})</td>
-                        <td class="p-2 font-bold text-amber-300">${o.motivo}</td>
-                        <td class="p-2 text-slate-300">${o.ocorrencia}</td>
+                        <td class="p-2 text-slate-400">${o.data||'—'}</td>
+                        <td class="p-2 font-bold text-emerald-400">${o.carga||'—'}</td>
+                        <td class="p-2 text-white">${o.rota||'—'} (${o.placa||'—'})</td>
+                        <td class="p-2 text-slate-300">${o.funcionario||'—'} (${o.funcao||'—'})</td>
+                        <td class="p-2 font-bold text-amber-300">${o.motivo||'—'}</td>
+                        <td class="p-2 text-slate-300">${o.ocorrencia||'—'}</td>
                       </tr>`).join('')}
                   </tbody>
                 </table>
               </div>
             </div>
 
-            <!-- TABELA 5: DETALHAMENTO DOS PROBLEMAS MECÂNICOS -->
+            <!-- TABELA 3.2: SOCORRO MECÂNICO & MANUTENÇÃO EM ROTA -->
             <div class="space-y-2">
               <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
-                <span>🔧</span> Detalhamento dos Problemas Mecânicos (${rotas.length})
+                <span>🔧</span> 2. Socorro Mecânico & Manutenção em Rota (${rotas.length})
               </h3>
               <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
                 <table class="w-full text-left text-xs">
@@ -11873,18 +15201,130 @@ function renderBoletimGerencialView() {
                     <tr><th class="p-2">Protocolo</th><th class="p-2">Placa</th><th class="p-2">Motorista</th><th class="p-2">Motivo</th><th class="p-2">Status Veículo</th><th class="p-2 text-right">Custo Socorro</th></tr>
                   </thead>
                   <tbody class="divide-y divide-slate-800">
-                    ${rotas.length===0?'<tr><td colspan="6" class="p-4 text-center text-slate-500">Nenhum problema mecânico registrado no período.</td></tr>':
+                    ${rotas.length===0?'<tr><td colspan="6" class="p-4 text-center text-slate-500">Nenhum socorro mecânico registrado no período.</td></tr>':
                     rotas.map(r => `
                       <tr class="hover:bg-slate-800/40">
                         <td class="p-2 font-bold text-red-400">${r.numero_protocolo}</td>
                         <td class="p-2 font-bold text-white">${r.veiculo_placa}</td>
                         <td class="p-2 text-slate-300">${r.motorista_nome}</td>
                         <td class="p-2 text-amber-300 font-bold">${r.motivo_resumido||r.tipo_ocorrencia}</td>
-                        <td class="p-2 font-bold text-amber-400">${r.status_veiculo||'Aguardando Manutenção'}</td>
+                        <td class="p-2 font-bold ${r.status_veiculo==='Liberado'?'text-emerald-400':'text-amber-400'}">${r.status_veiculo||'Aguardando Manutenção'}</td>
                         <td class="p-2 text-right font-bold text-emerald-400">R$ ${(parseFloat(r.custo_socorro)||0).toFixed(2)}</td>
                       </tr>`).join('')}
                   </tbody>
                 </table>
+              </div>
+            </div>
+
+            <!-- TABELA 3.3: SEÇÃO CONSOLIDADA DE TROCA DE VEÍCULOS EM ROTA -->
+            <div class="space-y-2">
+              <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
+                <span>🔄</span> 3. Trocas de Veículos em Rota (${trocas.length})
+              </h3>
+              <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
+                <table class="w-full text-left text-xs">
+                  <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase sticky top-0">
+                    <tr><th class="p-2">Data</th><th class="p-2">Veículo Escalado</th><th class="p-2">Veículo Substituto</th><th class="p-2">Motivo</th><th class="p-2">Detalhamento</th><th class="p-2">Autorizado Por</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800">
+                    ${trocas.length===0?'<tr><td colspan="6" class="p-4 text-center text-slate-500">Nenhuma troca de veículo registrada no período.</td></tr>':
+                    trocas.map(t => `
+                      <tr class="hover:bg-slate-800/40">
+                        <td class="p-2 text-slate-400">${t.data||'—'}</td>
+                        <td class="p-2 font-bold text-red-400">${t.veiculo_escalado||'—'}</td>
+                        <td class="p-2 font-bold text-emerald-400">${t.veiculo_trocado||'—'}</td>
+                        <td class="p-2 font-bold text-amber-300">${t.motivo_resumido||t.motivo_outro||'—'}</td>
+                        <td class="p-2 text-slate-300">${t.detalhamento||'—'}</td>
+                        <td class="p-2 font-bold text-white">${t.autorizado_por||'—'}</td>
+                      </tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- TABELA 3.4: SEÇÃO CONSOLIDADA DE REENTREGAS & OCORRÊNCIAS DE ROTA -->
+            <div class="space-y-2">
+              <h3 class="text-xs font-bold text-slate-200 uppercase flex items-center gap-1.5">
+                <span>🔁</span> 4. Reentregas & Ocorrências de Rota (${reentregas.length})
+              </h3>
+              <div class="overflow-x-auto rounded-xl border border-slate-800 max-h-56">
+                <table class="w-full text-left text-xs">
+                  <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase sticky top-0">
+                    <tr><th class="p-2">Data</th><th class="p-2">Carga / Rota</th><th class="p-2">Motorista</th><th class="p-2 text-center">Saiu</th><th class="p-2 text-center">Entregue</th><th class="p-2 text-center">Reentrega</th><th class="p-2">Motivo</th><th class="p-2">Substituto / Placa</th><th class="p-2 text-center">Status</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800">
+                    ${reentregas.length===0?'<tr><td colspan="9" class="p-4 text-center text-slate-500">Nenhuma reentrega registrada no período.</td></tr>':
+                    reentregas.map(re => `
+                      <tr class="hover:bg-slate-800/40">
+                        <td class="p-2 text-slate-400">${re.data||'—'}</td>
+                        <td class="p-2 font-bold text-white">${re.carga_numero||'—'} <span class="text-slate-400 font-normal">(${re.rota_nome||'—'})</span></td>
+                        <td class="p-2 text-slate-300">${re.motorista_nome||'—'}</td>
+                        <td class="p-2 text-center font-bold text-slate-200">${re.entregas_saiu}</td>
+                        <td class="p-2 text-center font-bold text-emerald-400">${re.entregas_feitas}</td>
+                        <td class="p-2 text-center font-bold text-red-400">${re.entregas_reentrega}</td>
+                        <td class="p-2 text-amber-300 font-medium">${re.motivo||'—'}</td>
+                        <td class="p-2 text-slate-300">${re.novo_motorista ? `${re.novo_motorista} (${re.placa||'—'})` : (re.placa||'—')}</td>
+                        <td class="p-2 text-center">
+                          <span class="px-2 py-0.5 rounded text-[10px] font-bold ${re.status==='CONCLUIDO'?'bg-emerald-950 text-emerald-300 border border-emerald-800':'bg-amber-950 text-amber-300 border border-amber-800'}">
+                            ${re.status||'PENDENTE'}
+                          </span>
+                        </td>
+                      </tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- ETAPA 4: FECHAMENTO EXECUTIVO & AUDITORIA CONSOLIDADA -->
+          <div class="bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border-2 border-emerald-700/80 rounded-2xl p-6 shadow-2xl space-y-6">
+            <div class="flex items-center justify-between border-b border-emerald-800/60 pb-3">
+              <h2 class="text-base font-black text-emerald-400 uppercase tracking-wider flex items-center gap-2">
+                <span>🏁</span> 4. Fechamento Consolidado
+              </h2>
+              <span class="text-xs text-emerald-300 font-bold bg-emerald-950 px-2.5 py-1 rounded-lg border border-emerald-700">Auditoria integrada e KPIs finais (D-1)</span>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <!-- CARD 1: IMPACTO FINANCEIRO TOTAL -->
+              <div class="bg-slate-900 border border-red-900/60 rounded-xl p-4 shadow-lg flex flex-col justify-between space-y-3">
+                <div>
+                  <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Impacto Financeiro Consolidado</div>
+                  <div class="text-xl font-black text-red-400 mt-1">R$ ${impactoFinanceiroTotal.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
+                </div>
+                <div class="space-y-1 text-xs border-t border-slate-800 pt-2 text-slate-300">
+                  <div class="flex justify-between"><span>• Devoluções SAC:</span><b class="text-white">R$ ${totalDevValor.toFixed(2)}</b></div>
+                  <div class="flex justify-between"><span>• Cortes de Estoque:</span><b class="text-white">R$ ${corteValor.toFixed(2)}</b></div>
+                  <div class="flex justify-between"><span>• Socorros Mecânicos:</span><b class="text-white">R$ ${custoTotalSocorro.toFixed(2)}</b></div>
+                </div>
+              </div>
+
+              <!-- CARD 2: EFICIÊNCIA OPERACIONAL DE ROTA -->
+              <div class="bg-slate-900 border border-blue-900/60 rounded-xl p-4 shadow-lg flex flex-col justify-between space-y-3">
+                <div>
+                  <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Eficiência de Entregas & Rota</div>
+                  <div class="text-xl font-black text-blue-400 mt-1">${taxaSucessoEntregas}% de Êxito</div>
+                </div>
+                <div class="space-y-1 text-xs border-t border-slate-800 pt-2 text-slate-300">
+                  <div class="flex justify-between"><span>• Entregas Realizadas:</span><b class="text-emerald-400">${totalEntregasFeitas} / ${totalEntregasSaiu}</b></div>
+                  <div class="flex justify-between"><span>• Taxa de Reentrega:</span><b class="text-amber-400">${taxaReentregas}% (${totalEntregasReentrega} vols)</b></div>
+                  <div class="flex justify-between"><span>• Trocas de Caminhão:</span><b class="text-purple-400">${qtdTrocasVeiculos} ocorrência(s)</b></div>
+                </div>
+              </div>
+
+              <!-- CARD 3: AUDITORIA E PENDÊNCIAS CRÍTICAS -->
+              <div class="bg-slate-900 border border-amber-900/60 rounded-xl p-4 shadow-lg flex flex-col justify-between space-y-3">
+                <div>
+                  <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Auditoria & Pendências em Aberto</div>
+                  <div class="text-xl font-black ${(totalPendCd + reentregasPendentes + socorrosEmAberto) > 0 ? 'text-amber-400' : 'text-emerald-400'} mt-1">
+                    ${totalPendCd + reentregasPendentes + socorrosEmAberto} Pendência(s)
+                  </div>
+                </div>
+                <div class="space-y-1 text-xs border-t border-slate-800 pt-2 text-slate-300">
+                  <div class="flex justify-between"><span>• Devoluções Pend. Físico CD:</span><b class="${totalPendCd>0?'text-amber-400':'text-white'}">${totalPendCd}</b></div>
+                  <div class="flex justify-between"><span>• Reentregas Pendentes:</span><b class="${reentregasPendentes>0?'text-amber-400':'text-white'}">${reentregasPendentes}</b></div>
+                  <div class="flex justify-between"><span>• Socorros Aguardando Oficina:</span><b class="${socorrosEmAberto>0?'text-amber-400':'text-white'}">${socorrosEmAberto}</b></div>
+                </div>
               </div>
             </div>
           </div>
@@ -12031,17 +15471,17 @@ function renderBoletimGerencialView() {
             </div>
           </div>
 
-          <!-- PAINEL DE BOLETINS MESTRE (DESTAQUE) -->
+          <!-- PAINEL DE BOLETIM MESTRE (DESTAQUE) -->
           <div class="space-y-2">
             <h3 class="text-xs font-black text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-              <span>🏆</span> BOLETINS MESTRE EXECUTIVOS (DESTAQUE CORPORATIVO)
+              <span>🏆</span> BOLETIM MESTRE EXECUTIVO (DESTAQUE CORPORATIVO)
             </h3>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 gap-4">
               <!-- BOLETIM EXECUTIVO COMPLETO -->
               <div class="bg-gradient-to-br from-slate-950 via-emerald-950/40 to-slate-950 border-2 border-emerald-600/70 rounded-2xl p-4 flex flex-col justify-between space-y-3 shadow-xl hover:border-emerald-500 transition">
                 <div class="flex items-start justify-between">
                   <div>
-                    <span class="bg-emerald-800 text-emerald-100 text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-wider">BOLETIM MASTER 1</span>
+                    <span class="bg-emerald-800 text-emerald-100 text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-wider">BOLETIM EXECUTIVO</span>
                     <h4 class="text-sm font-black text-emerald-400 uppercase mt-1 flex items-center gap-1.5">
                       <span>📊</span> BOLETIM EXECUTIVO COMPLETO
                     </h4>
@@ -12050,22 +15490,6 @@ function renderBoletimGerencialView() {
                 </div>
                 <button onclick="openPdfFilterModal('boletim_executivo')" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-lg flex items-center justify-center gap-2 transition">
                   <span>🖨️</span> Gerar Boletim Executivo Completo (PDF)
-                </button>
-              </div>
-
-              <!-- BOLETIM OPERACIONAL DIÁRIO -->
-              <div class="bg-gradient-to-br from-slate-950 via-blue-950/40 to-slate-950 border-2 border-blue-600/70 rounded-2xl p-4 flex flex-col justify-between space-y-3 shadow-xl hover:border-blue-500 transition">
-                <div class="flex items-start justify-between">
-                  <div>
-                    <span class="bg-blue-800 text-blue-100 text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-wider">BOLETIM MASTER 2</span>
-                    <h4 class="text-sm font-black text-blue-400 uppercase mt-1 flex items-center gap-1.5">
-                      <span>📋</span> BOLETIM OPERACIONAL DIÁRIO
-                    </h4>
-                    <p class="text-[11px] text-slate-300 mt-1">Impressão sintética do diário operacional contendo devoluções do dia, chamados ativos, frota em trânsito e ocorrências por veículo.</p>
-                  </div>
-                </div>
-                <button onclick="openPdfFilterModal('boletim_operacional')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-lg flex items-center justify-center gap-2 transition">
-                  <span>🖨️</span> Imprimir Boletim Operacional Diário (PDF)
                 </button>
               </div>
             </div>
@@ -12120,7 +15544,7 @@ function renderBoletimGerencialView() {
                 <h3 class="text-xs font-black text-blue-400 uppercase tracking-wider flex items-center gap-2">
                   <span>🚍</span> BLOCO 2: MÓDULO TRANSPORTE & FROTA
                 </h3>
-                <span class="text-[10px] bg-blue-950 border border-blue-700 text-blue-300 px-2 py-0.5 rounded-full font-bold">5 Relatórios Disponíveis</span>
+                <span class="text-[10px] bg-blue-950 border border-blue-700 text-blue-300 px-2 py-0.5 rounded-full font-bold">6 Relatórios Disponíveis</span>
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-blue-700/60 transition">
@@ -12135,11 +15559,21 @@ function renderBoletimGerencialView() {
 
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-blue-700/60 transition">
                   <div>
-                    <div class="text-xs font-bold text-blue-300 uppercase flex items-center gap-1"><span>🛠️</span> Ocorrências de Rota & Socorro Mecânico</div>
-                    <div class="text-[11px] text-slate-400 mt-1">Relatório de falhas mecânicas, chamados de guincho e manutenções em viagem.</div>
+                    <div class="text-xs font-bold text-blue-300 uppercase flex items-center gap-1"><span>🛠️</span> Ordem de Serviço & Ficha de Oficina</div>
+                    <div class="text-[11px] text-slate-400 mt-1">Emissão individual da OS com dados do socorro, peças trocadas e termo para assinaturas.</div>
                   </div>
-                  <button onclick="openPdfFilterModal('ocorrencias_transporte')" class="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
-                    <span>🔧</span> Relatório Mecânico (PDF)
+                  <button onclick="openPdfFilterModal('ficha_oficina')" class="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
+                    <span>🛠️</span> Ficha de Oficina (A4)
+                  </button>
+                </div>
+
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-blue-700/60 transition">
+                  <div>
+                    <div class="text-xs font-bold text-blue-300 uppercase flex items-center gap-1"><span>🚚</span> Chamados em Rota & Socorro Mecânico</div>
+                    <div class="text-[11px] text-slate-400 mt-1">Relatório consolidado em lote dos chamados em viagem com filtros e custos.</div>
+                  </div>
+                  <button onclick="openPdfFilterModal('chamados_rota_lote')" class="w-full bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold py-2 rounded-lg text-xs border border-blue-700/50 flex items-center justify-center gap-1">
+                    <span>🖨️</span> Relatório em Lote (A4)
                   </button>
                 </div>
 
@@ -12153,7 +15587,7 @@ function renderBoletimGerencialView() {
                   </button>
                 </div>
 
-                <!-- CARD 4: DISPONIBILIDADE DA FROTA (A4) -->
+                <!-- CARD 5: DISPONIBILIDADE DA FROTA (A4) -->
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-blue-700/60 transition">
                   <div>
                     <div class="text-xs font-bold text-blue-300 uppercase flex items-center gap-1"><span>🚛</span> Disponibilidade da Frota (A4)</div>
@@ -12172,7 +15606,7 @@ function renderBoletimGerencialView() {
                   </div>
                 </div>
 
-                <!-- CARD 5: REENTREGAS & ATRASO EM ROTAS (A4) -->
+                <!-- CARD 6: REENTREGAS & ATRASO EM ROTAS (A4) -->
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-blue-700/60 transition">
                   <div>
                     <div class="text-xs font-bold text-blue-300 uppercase flex items-center gap-1"><span>🔄</span> Reentregas & Atraso em Rotas (A4)</div>
@@ -12345,12 +15779,12 @@ function handleExportCsvSubmit(e) {
     return;
   }
 
-  const moduleColsDef = MODULE_COLUMNS_MAP[modulo] || MODULE_COLUMNS_MAP['devolucoes'];
+  const colunasDisponiveis = getColunasDisponiveisParaModulo(modulo);
   const headerMap = {};
-  moduleColsDef.forEach(c => headerMap[c.id] = c.label);
+  colunasDisponiveis.forEach(c => { headerMap[c.id] = c.label; });
 
   const csvRows = [];
-  csvRows.push(colsSelecionadas.map(c => `"${headerMap[c] || c}"`).join(';'));
+  csvRows.push(colsSelecionadas.map(c => `"${headerMap[c] || getRotuloAmigavelColuna(c, modulo) || c}"`).join(';'));
 
   dadosFiltrados.forEach(row => {
     const line = colsSelecionadas.map(c => {
@@ -12497,31 +15931,6 @@ function openPdfFilterModal(pdfType) {
           <span>📄</span> Confirmar e Gerar PDF de Ocorrências
         </button>
       </div>`;
-  } else if (pdfType === 'boletim_operacional') {
-    title = '📋 Filtros do Boletim Operacional Diário (CD & Frota)';
-    fieldsHtml = `
-      <div class="grid grid-cols-2 gap-3">
-        <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Data Inicial (De):</label>
-          <input type="date" id="pdf-filter-de" value="${defDe}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-        </div>
-        <div>
-          <label class="block text-xs font-bold text-slate-300 mb-1">Data Final (Até):</label>
-          <input type="date" id="pdf-filter-ate" value="${defAte}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-        </div>
-      </div>
-      <div>
-        <label class="block text-xs font-bold text-slate-300 mb-1">Filtrar por Veículo / Placa:</label>
-        <select id="pdf-filter-veiculo" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          <option value="">-- Todos os Veículos --</option>
-          ${veiculos.map(v => `<option value="${v.placa}">${v.placa} (${v.modelo})</option>`).join('')}
-        </select>
-      </div>
-      <div class="pt-3">
-        <button onclick="confirmarEGerarPdf('boletim_operacional')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
-          <span>🖨️</span> Confirmar e Imprimir Diário Operacional
-        </button>
-      </div>`;
   } else if (pdfType === 'vale_motorista') {
     title = '⚖️ Seleção para Adiantamento Motorista (Termo de Notificação)';
     const devListErroMotorista = devList.filter(d => String(d.tipo_erro || '').trim().toUpperCase() === 'ERRO MOTORISTA');
@@ -12546,7 +15955,7 @@ function openPdfFilterModal(pdfType) {
         <label class="block text-xs font-bold text-slate-300 mb-1">Selecione a Conferência / Devolução com Divergência:</label>
         <select id="pdf-filter-rel-idx" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
           ${relsDivergencia.length === 0 ? `<option value="">Nenhum relatório registrado</option>` :
-            relsDivergencia.map((r, idx) => `<option value="${idx}">${r.numero_devolucao || r.protocolo} — ${r.motorista} (Data: ${new Date(r.gerado_em).toLocaleDateString('pt-BR')})</option>`).join('')}
+            relsDivergencia.map((r, idx) => `<option value="${idx}">${r.numero_devolucao || r.protocolo} — ${r.motorista} (Data: ${formatarData(r.gerado_em)})</option>`).join('')}
         </select>
       </div>
       <div class="pt-3">
@@ -12622,10 +16031,10 @@ function openPdfFilterModal(pdfType) {
       </div>
       <div>
         <label class="block text-xs font-bold text-slate-300 mb-1">Filtrar por Veículo / Placa:</label>
-        <select id="pdf-filter-veiculo" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          <option value="">-- Todos os Veículos --</option>
+        <input type="text" id="pdf-filter-veiculo" list="datalist-pdf-veiculos-oc" placeholder="Digite trecho da placa (ex: H89) ou deixe vazio..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+        <datalist id="datalist-pdf-veiculos-oc">
           ${veiculos.map(v => `<option value="${v.placa}">${v.placa} (${v.modelo})</option>`).join('')}
-        </select>
+        </datalist>
       </div>
       <div class="pt-3">
         <button onclick="confirmarEGerarPdf('ocorrencias_transporte')" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
@@ -12655,11 +16064,65 @@ function openPdfFilterModal(pdfType) {
       </div>
       <div>
         <label class="block text-xs font-bold text-slate-300 mb-1">Buscar (Motorista, Rota, Carga ou Placa):</label>
-        <input type="text" id="pdf-filter-busca" placeholder="Ex: SP-01, Nome motorista..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+        <input type="text" id="pdf-filter-busca" placeholder="Ex: SP-01, Nome motorista..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
       </div>
       <div class="pt-3">
         <button onclick="confirmarEGerarPdf('reentregas_a4')" class="w-full bg-amber-600 hover:bg-amber-500 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
           <span>🖨️</span> Confirmar e Emitir Relatório A4
+        </button>
+      </div>`;
+  } else if (pdfType === 'ficha_oficina') {
+    title = '🛠️ Ordem de Serviço & Ficha Individual de Oficina (A4)';
+    const chamados = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
+    fieldsHtml = `
+      <div>
+        <label class="block text-xs font-bold text-slate-300 mb-1">Selecione o Chamado de Rota / OS:</label>
+        <select id="pdf-filter-chamado-id" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          ${chamados.length === 0 ? `<option value="">Nenhum chamado de rota registrado no sistema</option>` :
+            chamados.map(c => `<option value="${c.id}">${c.numero_protocolo || 'ROT-2026'} — Placa: ${c.veiculo_placa || 'N/A'} (Motorista: ${c.motorista_nome || 'N/I'} - ${c.motivo_resumido || c.tipo_ocorrencia || 'Avaria'}) [${c.status_chamado === 'finalizado' ? 'LIBERADO' : 'PENDENTE'}]</option>`).join('')}
+        </select>
+        <p class="text-[10px] text-blue-400 mt-1.5 font-semibold">📄 Gera a Ordem de Serviço completa formatada em folha A4 com laudo técnico e campos para assinaturas físicas.</p>
+      </div>
+      <div class="pt-3">
+        <button onclick="confirmarEGerarPdf('ficha_oficina')" ${chamados.length === 0 ? 'disabled' : ''} class="w-full ${chamados.length === 0 ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 text-white'} font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
+          <span>🖨️</span> Imprimir Ficha de Oficina / OS (A4)
+        </button>
+      </div>`;
+  } else if (pdfType === 'chamados_rota_lote') {
+    title = '🚚 Relatório Consolidado de Chamados em Rota (A4 Lote)';
+    fieldsHtml = `
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-bold text-slate-300 mb-1">Data Inicial (De):</label>
+          <input type="date" id="pdf-filter-de" value="${defDe}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-300 mb-1">Data Final (Até):</label>
+          <input type="date" id="pdf-filter-ate" value="${defAte}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs font-bold text-slate-300 mb-1">Filtrar por Status:</label>
+        <select id="pdf-filter-status" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          <option value="TODOS">-- Todos os Status --</option>
+          <option value="PENDENTE">Pendentes / Em Aberto</option>
+          <option value="FINALIZADO">Finalizados / Liberados</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-bold text-slate-300 mb-1">Filtrar por Veículo / Placa:</label>
+        <input type="text" id="pdf-filter-veiculo" list="datalist-pdf-veiculos-rota" placeholder="Digite trecho da placa ou deixe vazio..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+        <datalist id="datalist-pdf-veiculos-rota">
+          ${veiculos.map(v => `<option value="${v.placa}">${v.placa} (${v.modelo})</option>`).join('')}
+        </datalist>
+      </div>
+      <div>
+        <label class="block text-xs font-bold text-slate-300 mb-1">Buscar (Motorista, Rota, Carga, Defeito):</label>
+        <input type="text" id="pdf-filter-busca" placeholder="Ex: Motorista, SP-02, carga..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+      </div>
+      <div class="pt-3">
+        <button onclick="confirmarEGerarPdf('chamados_rota_lote')" class="w-full bg-blue-700 hover:bg-blue-600 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
+          <span>🖨️</span> Confirmar e Emitir Relatório Consolidado A4
         </button>
       </div>`;
   } else if (pdfType === 'advertencia_disciplinar') {
@@ -12693,6 +16156,7 @@ function confirmarEGerarPdf(pdfType) {
   const status = document.getElementById('pdf-filter-status')?.value || '';
   const veiculo = document.getElementById('pdf-filter-veiculo')?.value || '';
   const devId = document.getElementById('pdf-filter-dev-id')?.value || '';
+  const chamadoId = document.getElementById('pdf-filter-chamado-id')?.value || '';
   const relIdx = document.getElementById('pdf-filter-rel-idx')?.value || '';
   const turno = document.getElementById('pdf-filter-turno')?.value || 'GERAL';
   const busca = document.getElementById('pdf-filter-busca')?.value || '';
@@ -12705,8 +16169,6 @@ function confirmarEGerarPdf(pdfType) {
     imprimirBoletimGerencialExecutivo();
   } else if (pdfType === 'relatorio_ocorrencias') {
     gerarRelatorioOcorrenciasPdfComFiltro({ fDe, fAte, rota, status, motorista });
-  } else if (pdfType === 'boletim_operacional') {
-    imprimirBoletimOperacionalComFiltro({ fDe, fAte, veiculo });
   } else if (pdfType === 'vale_motorista') {
     if (devId) gerarValeMotoristaPdf(devId);
     else alert('Selecione uma ocorrência válida.');
@@ -12720,6 +16182,11 @@ function confirmarEGerarPdf(pdfType) {
   } else if (pdfType === 'ficha_devolucao') {
     if (devId) imprimirFichaDevolucaoPdf(devId);
     else alert('Selecione um protocolo válido.');
+  } else if (pdfType === 'ficha_oficina') {
+    if (chamadoId) imprimirFichaOficinaChamadoPdf(chamadoId);
+    else alert('Selecione uma ordem de serviço válida.');
+  } else if (pdfType === 'chamados_rota_lote') {
+    emitirRelatorioChamadosRotaA4({ data_de: fDe, data_ate: fAte, status: status || 'TODOS', veiculo, busca });
   } else if (pdfType === 'resumo_cd') {
     gerarResumoDiarioPdf(fDe || new Date().toISOString().slice(0,10), turno);
   } else if (pdfType === 'adiantamento_motorista') {
@@ -12803,7 +16270,7 @@ function gerarRelatorioOcorrenciasPdfComFiltro(filtros) {
       </div>
       <div class="title-bar">
         <span>📄 RELATÓRIO GERAL DE DEVOLUÇÕES & SAC</span>
-        <span style="font-weight: normal; font-size: 10px;">Emissão: ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</span>
+        <span style="font-weight: normal; font-size: 10px;">Emissão: ${formatarDataHora(new Date())}</span>
       </div>
 
       <div class="kpis">
@@ -12831,7 +16298,7 @@ function gerarRelatorioOcorrenciasPdfComFiltro(filtros) {
             devs.map(d => `
               <tr>
                 <td><b>${d.numero_devolucao || d.numero_protocolo || d.id}</b></td>
-                <td>${d.criado_em ? new Date(d.criado_em).toLocaleDateString('pt-BR') : '—'}</td>
+                <td>${formatarData(d.criado_em || d.data_abertura)}</td>
                 <td><b>${d.motorista_nome || 'N/I'}</b><br><span style="color:#64748b; font-size:9px;">Rota: ${d.carga_rota || '—'}</span></td>
                 <td><b>${d.cliente_nome || '—'}</b><br><span style="color:#64748b; font-size:9px;">${d.nota_fiscal ? 'NF: ' + d.nota_fiscal : ''}</span></td>
                 <td>${d.motivo_reclamado || '—'}</td>
@@ -12850,14 +16317,6 @@ function gerarRelatorioOcorrenciasPdfComFiltro(filtros) {
     </html>
   `);
   win.document.close();
-}
-
-function imprimirBoletimOperacionalComFiltro(filtros) {
-  let rCD = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  if (filtros.fDe) rCD = rCD.filter(r => r && (r.data || '') >= filtros.fDe);
-  if (filtros.fAte) rCD = rCD.filter(r => r && (r.data || '') <= filtros.fAte);
-
-  imprimirBoletimOperacional();
 }
 
 // ===== GERADORES DE RELATÓRIOS PDF DA CENTRAL =====
@@ -12939,7 +16398,7 @@ function gerarRelatorioDevolucoesPorRotaPdf() {
       </div>
       <div class="title-bar">
         <span>🚚 ANÁLISE DE DEVOLUÇÕES POR ROTA & MOTORISTA</span>
-        <span style="font-weight: normal; font-size: 10px;">Emissão: ${new Date().toLocaleDateString('pt-BR')} ${new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})}</span>
+        <span style="font-weight: normal; font-size: 10px;">Emissão: ${formatarDataHora(new Date())}</span>
       </div>
 
       <div class="kpis">
@@ -13111,7 +16570,7 @@ function gerarRelatorioTrocasVeiculosPdf() {
     </head>
     <body onload="window.print()">
       <h1>🔄 Relatório Corporativo de Trocas e Substituições de Veículos</h1>
-      <p>Emissão: ${new Date().toLocaleDateString('pt-BR')} ${fDe || fAte ? `(Período: ${fDe || 'Início'} até ${fAte || 'Hoje'})` : ''}</p>
+      <p>Emissão: ${formatarData(new Date())} ${fDe || fAte ? `(Período: ${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'})` : ''}</p>
       <table>
         <thead>
           <tr>
@@ -13127,7 +16586,7 @@ function gerarRelatorioTrocasVeiculosPdf() {
           ${filtrados.length === 0 ? '<tr><td colspan="6" style="text-align:center;">Nenhuma troca de veículo registrada no período.</td></tr>' :
             filtrados.map(t => `
               <tr>
-                <td>${t.data || '-'}</td>
+                <td>${formatarData(t.data)}</td>
                 <td>${t.carga || '-'} (${t.rota || '-'})</td>
                 <td><b>${t.motorista || '-'}</b></td>
                 <td><span style="color:#b91c1c; font-weight:bold;">${t.veiculo_anterior || '-'}</span></td>
@@ -13173,7 +16632,7 @@ function gerarRelatorioCortesCdPdf() {
     </head>
     <body onload="window.print()">
       <h1>✂️ Relatório Executivo de Cortes & Faltas de Estoque CD</h1>
-      <p>Emissão: ${new Date().toLocaleDateString('pt-BR')} ${fDe || fAte ? `(Período: ${fDe || 'Início'} até ${fAte || 'Hoje'})` : ''}</p>
+      <p>Emissão: ${formatarData(new Date())} ${fDe || fAte ? `(Período: ${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'})` : ''}</p>
       <table>
         <thead>
           <tr>
@@ -13231,7 +16690,7 @@ function gerarRelatorioOcorrenciasCdPdf() {
     </head>
     <body onload="window.print()">
       <h1>📢 Ocorrências Internas do Armazém / Galpão CD</h1>
-      <p>Emissão: ${new Date().toLocaleDateString('pt-BR')} ${fDe || fAte ? `(Período: ${fDe || 'Início'} até ${fAte || 'Hoje'})` : ''}</p>
+      <p>Emissão: ${formatarData(new Date())} ${fDe || fAte ? `(Período: ${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'})` : ''}</p>
       <table>
         <thead>
           <tr>
@@ -13263,7 +16722,13 @@ function gerarRelatorioOcorrenciasTransportePdf(filtros) {
     const dt = o.data || '';
     if (filtros.fDe && dt < filtros.fDe) return false;
     if (filtros.fAte && dt > filtros.fAte) return false;
-    if (filtros.veiculo && (o.placa || '') !== filtros.veiculo) return false;
+    if (filtros.veiculo) {
+      const fvClean = String(filtros.veiculo).toLowerCase().replace(/[^a-z0-9]/g, '');
+      const fvTxt = String(filtros.veiculo).toLowerCase().trim();
+      const pClean = String(o.placa || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const pTxt = String(o.placa || '').toLowerCase();
+      if (!pClean.includes(fvClean) && !pTxt.includes(fvTxt)) return false;
+    }
     return true;
   });
 
@@ -13284,7 +16749,7 @@ function gerarRelatorioOcorrenciasTransportePdf(filtros) {
     </head>
     <body onload="window.print()">
       <h1>🛠️ Relatório de Ocorrências Operacionais de Transporte & Rota</h1>
-      <p>Emissão: ${new Date().toLocaleDateString('pt-BR')}</p>
+      <p>Emissão: ${formatarData(new Date())}</p>
       <table>
         <thead>
           <tr>
@@ -13300,7 +16765,7 @@ function gerarRelatorioOcorrenciasTransportePdf(filtros) {
           ${filtrados.length === 0 ? '<tr><td colspan="6" style="text-align:center;">Nenhuma ocorrência operacional de transporte registrada no período.</td></tr>' :
             filtrados.map(o => `
               <tr>
-                <td>${o.data || '-'}</td>
+                <td>${formatarData(o.data)}</td>
                 <td><b>${o.carga || '-'}</b> (${o.rota || '-'})</td>
                 <td><b>${o.placa || '-'}</b></td>
                 <td>${o.funcionario || '-'} (${o.funcao || '-'})</td>
@@ -13343,7 +16808,7 @@ function gerarRelatorioAcertosFinanceirosPdf() {
     </head>
     <body onload="window.print()">
       <h1>💰 Extrato de Acertos Financeiros e Indenizações Operacionais</h1>
-      <p>Emissão: ${new Date().toLocaleDateString('pt-BR')} ${fDe || fAte ? `(Período: ${fDe || 'Início'} até ${fAte || 'Hoje'})` : ''}</p>
+      <p>Emissão: ${formatarData(new Date())} ${fDe || fAte ? `(Período: ${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'})` : ''}</p>
       <table>
         <thead>
           <tr>
@@ -13408,7 +16873,7 @@ function gerarRelatorioFaltasDisciplinarPdf() {
     </head>
     <body onload="window.print()">
       <h1>⚖️ Relatório de Faltas, Ausências e Ocorrências Disciplinares</h1>
-      <p>Emissão: ${new Date().toLocaleDateString('pt-BR')} ${fDe || fAte ? `(Período: ${fDe || 'Início'} até ${fAte || 'Hoje'})` : ''}</p>
+      <p>Emissão: ${formatarData(new Date())} ${fDe || fAte ? `(Período: ${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'})` : ''}</p>
       <table>
         <thead>
           <tr>
@@ -13686,14 +17151,14 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
             </div>
             <div class="sm:col-span-2">
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Gestor Emissor / Responsável *</label>
-              <input type="text" id="disc-gestor" value="${window._userName || 'SUPERVISÃO CD - CSA SERVICES'}" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+              <input type="text" id="disc-gestor" value="${window._userName || 'SUPERVISÃO CD - CSA SERVICES'}" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
             </div>
           </div>
 
           <!-- DETALHAMENTO DOS FATOS -->
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Detalhamento dos Fatos Observados & Motivo *</label>
-            <textarea id="disc-motivo" rows="3" required placeholder="Descreva os detalhes dos fatos, ocorrência ou conduta indisciplinar praticada..." class="w-full bg-slate-900 border border-slate-700 text-slate-200 rounded p-2 text-xs font-bold">${options.motivo||''}</textarea>
+            <textarea id="disc-motivo" rows="3" required placeholder="Descreva os detalhes dos fatos, ocorrência ou conduta indisciplinar praticada..." class="w-full bg-slate-900 border border-slate-700 text-slate-200 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">${options.motivo||''}</textarea>
           </div>
 
           <div class="flex items-center justify-between gap-3 pt-3 border-t border-slate-800">
@@ -13899,7 +17364,7 @@ function gerarPdfDisciplinarOficial(dados) {
         </div>
         <div class="company-cnpj">
           CNPJ: 50.699.226/0001-09<br>
-          <span style="font-size:9.5px; font-weight:bold; color:#64748b;">Emissão: ${new Date().toLocaleDateString('pt-BR')}</span>
+          <span style="font-size:9.5px; font-weight:bold; color:#64748b;">Emissão: ${formatarData(new Date())}</span>
         </div>
       </div>
 
@@ -13916,7 +17381,7 @@ function gerarPdfDisciplinarOficial(dados) {
           <div><div class="lbl">CPF</div><div class="val">${cpf}</div></div>
           <div><div class="lbl">FUNÇÃO / CARGO</div><div class="val">${funcao}</div></div>
           <div><div class="lbl">SEÇÃO / SETOR</div><div class="val">${secao}</div></div>
-          <div><div class="lbl">DATA DA OCORRÊNCIA</div><div class="val">${dados.dataOc ? new Date(dados.dataOc + 'T12:00:00').toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR')}</div></div>
+          <div><div class="lbl">DATA DA OCORRÊNCIA</div><div class="val">${formatarData(dados.dataOc || new Date())}</div></div>
         </div>
       </div>
 

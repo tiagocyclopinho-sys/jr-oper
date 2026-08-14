@@ -3,6 +3,42 @@
 <head>
   <meta charset="UTF-8">
   <script>
+    // PRIORIDADE 3 (Etapa 3 do plano de correção): backup de emergência,
+    // autocontido e sem nenhuma dependência de js/app.js (pois o erro pode
+    // estar justamente lá). Lê o localStorage bruto e força o download de um
+    // .json antes de qualquer limpeza de dados.
+    function baixarBackupEmergencia() {
+      try {
+        var dump = {};
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          dump[k] = localStorage.getItem(k);
+        }
+        var carimbo = new Date().toISOString().replace(/[:.]/g, '-');
+        var blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'jr_oper_backup_emergencia_' + carimbo + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+      } catch (e) {
+        console.error('[Backup de Emergência] Falha ao gerar backup:', e);
+      }
+    }
+
+    function limparCacheComBackup() {
+      baixarBackupEmergencia();
+      // Aguarda o navegador iniciar o download antes de apagar os dados.
+      setTimeout(function () {
+        localStorage.clear();
+        sessionStorage.clear();
+        location.reload();
+      }, 500);
+    }
+
     function showSystemError(msg, url, lineNo, colNo, error) {
       console.error("Erro Detectado:", msg, url, lineNo, colNo, error);
       var container = document.getElementById('main-content');
@@ -15,7 +51,8 @@
           '<p style="font-size:12px; color:#cbd5e1; margin-bottom:15px;">Ocorreu um erro na execução da interface:</p>' +
           '<div style="background:#020617; color:#fca5a5; font-family:monospace; font-size:11px; padding:12px; border-radius:8px; border:1px solid #1e293b; text-align:left; overflow-x:auto; margin-bottom:20px; white-space:pre-wrap; max-height:200px;">' +
           '<b>Erro:</b> ' + details + '</div>' +
-          '<button onclick="localStorage.clear(); sessionStorage.clear(); location.reload();" style="background:#10b981; color:#ffffff; font-weight:bold; padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-size:12px;">🔄 Limpar Cache e Reiniciar JR Oper</button>' +
+          '<p style="font-size:11px; color:#94a3b8; margin-bottom:10px;">Um backup de emergência dos seus dados será baixado automaticamente antes de reiniciar o sistema.</p>' +
+          '<button onclick="limparCacheComBackup()" style="background:#10b981; color:#ffffff; font-weight:bold; padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-size:12px;">🔄 Limpar Cache e Reiniciar JR Oper</button>' +
           '</div>';
       }
     }
@@ -57,8 +94,44 @@
     }
   </script>
   <style>
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #030712; color: #f3f4f6; -webkit-tap-highlight-color: transparent; }
-    #nav-menu { position: relative; }
+    /* ==========================================
+       DRAWER LATERAL (DRAWER MENU) & OVERLAY
+       ========================================== */
+    #nav-menu-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+      z-index: 998;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease-out;
+    }
+    #nav-menu-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    #mobile-menu-dropdown {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      width: 280px;
+      max-width: 85vw;
+      z-index: 999;
+      transform: translateX(-100%);
+      transition: transform 0.25s ease-out;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      box-shadow: 10px 0 30px rgba(0, 0, 0, 0.5);
+    }
+    #mobile-menu-dropdown.open {
+      transform: translateX(0);
+    }
+
     select, input[type=text], input[type=number], input[type=email], input[type=password], textarea { -webkit-appearance: none; appearance: none; }
     ::-webkit-scrollbar { width: 4px; height: 4px; }
     ::-webkit-scrollbar-track { background: #0f172a; }
@@ -257,17 +330,23 @@
       border-color: #065f46 !important;
       color: #ffffff !important;
     }
-    html.light #btn-theme-toggle {
+    html.light #btn-theme-toggle,
+    html.light #btn-notificacoes {
       background-color: #047857 !important;
       border-color: #065f46 !important;
       color: #ffffff !important;
     }
 
-    /* Header Dropdown Menu */
-    html.light #mobile-menu-dropdown {
+    /* Header Dropdown Menu & Notifications */
+    html.light #mobile-menu-dropdown,
+    html.light #dropdown-notificacoes {
       background-color: #ffffff !important;
       border-color: #cbd5e1 !important;
       box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15) !important;
+    }
+    html.light #dropdown-notificacoes .bg-slate-950 {
+      background-color: #f8fafc !important;
+      border-color: #e2e8f0 !important;
     }
     html.light #mobile-menu-dropdown .bg-slate-950 {
       background-color: #f8fafc !important;
@@ -310,7 +389,7 @@
        ESTILOS DE IMPRESSÃO (BOLETIM LIMPO)
        ========================================== */
     @media print {
-      header, footer, #nav-menu, #btn-theme-toggle, #user-info-area, .no-print {
+      header, footer, #nav-menu, #nav-menu-overlay, #mobile-menu-dropdown, #btn-theme-toggle, #user-info-area, .no-print {
         display: none !important;
       }
       body {
@@ -363,13 +442,24 @@
           <span id="theme-icon" class="text-base">☀️</span>
         </button>
 
+        <!-- SINO DE NOTIFICAÇÕES GLOBAL -->
+        <div class="relative" id="sino-notificacoes-container">
+          <button id="btn-notificacoes" onclick="toggleDropdownNotificacoes()" class="relative bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 p-2 rounded-lg text-xs font-bold flex items-center justify-center transition shadow shrink-0" title="Central de Alertas & Notificações">
+            <span class="text-base">🔔</span>
+            <span id="notif-badge-count" class="hidden absolute -top-1.5 -right-1.5 bg-red-600 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center border-2 border-slate-900 shadow-md">0</span>
+          </button>
+          <!-- DROPDOWN DE NOTIFICAÇÕES (POPUP) -->
+          <div id="dropdown-notificacoes" class="hidden absolute right-0 top-full mt-2 w-80 sm:w-96 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl z-50 p-4 space-y-3">
+          </div>
+        </div>
+
         <button id="btn-pwa-install" class="hidden bg-amber-500 hover:bg-amber-400 text-amber-950 font-black text-xs px-2 py-1.5 rounded-lg shadow-lg animate-bounce flex items-center gap-1">
           📱 <span class="hidden sm:inline">Instalar</span>
         </button>
         <div id="user-info-area"></div>
       </div>
     </div>
-    <div id="nav-menu" class="absolute left-3 sm:left-4 top-full z-50"></div>
+    <div id="nav-menu"></div>
   </header>
 
   <main class="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 w-full flex-grow" id="main-content">

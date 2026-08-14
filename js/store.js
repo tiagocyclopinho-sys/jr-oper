@@ -89,10 +89,11 @@ class Store {
   }
 
   init() {
+    const isFirstInstall = !localStorage.getItem('jr_sac_db');
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
       const currentVersion = '6.1.0';
-      if (!localStorage.getItem('jr_sac_db')) {
+      if (isFirstInstall) {
         // Primeira vez: grava banco inicial
         try {
           localStorage.setItem('jr_sac_db', JSON.stringify(INITIAL_DATA));
@@ -166,8 +167,8 @@ class Store {
     ensureArray('retencoes_frota');
     ensureArray('reentregas');
 
-    // Seed inicial para reentregas caso vazio
-    if (this.data.reentregas.length === 0) {
+    // Seed inicial para reentregas apenas na primeiríssima instalação (não recriar após reset)
+    if (isFirstInstall && this.data.reentregas.length === 0) {
       const hojeStr = new Date().toISOString().split('T')[0];
       this.data.reentregas = [
         {
@@ -220,6 +221,28 @@ class Store {
       }
     }
     ensureArray('registro_versoes');
+
+    // Migração/Sincronia automática do Módulo Ocorrências em Rota (Etapa 1)
+    if (Array.isArray(this.data.ocorrencias_rota)) {
+      this.data.ocorrencias_rota.forEach(r => {
+        if (r.localizacao === undefined) r.localizacao = '';
+        if (r.status_chamado === undefined) {
+          r.status_chamado = (r.status === 'RESOLVIDO' || r.status_veiculo === 'Em Rota') ? 'finalizado' : 'pendente';
+        }
+        if (r.retorno_manutencao_descricao === undefined) r.retorno_manutencao_descricao = r.acao_mecanico || '';
+        if (r.retorno_manutencao_data === undefined) r.retorno_manutencao_data = r.resolvido_em || null;
+        if (r.retorno_manutencao_responsavel === undefined) r.retorno_manutencao_responsavel = null;
+        if (r.transcricao_audio_wa !== undefined) delete r.transcricao_audio_wa;
+        if (r.transcricao_audio_whatsapp !== undefined) delete r.transcricao_audio_whatsapp;
+      });
+    }
+
+    // Garantir status explícito em todas as reentregas
+    if (Array.isArray(this.data.reentregas)) {
+      this.data.reentregas.forEach(re => {
+        if (!re.status) re.status = 'PENDENTE';
+      });
+    }
 
     // Preenche motivos padrão se estiver vazio
     if (this.data.motivos_devolucao.length === 0) {
@@ -525,17 +548,17 @@ class Store {
       numero_protocolo,
       numero_devolucao,
       carga_id: cargaObj ? cargaObj.id : null,
-      carga_numero: devolucaoData.carga_numero,
+      carga_numero: String(devolucaoData.carga_numero || '').toUpperCase().trim(),
       veiculo_id: parseInt(devolucaoData.veiculo_id) || (cargaObj ? cargaObj.veiculo_id : null),
-      veiculo_placa: devolucaoData.veiculo_placa || '',
-      rota_nome: devolucaoData.rota_nome || '',
+      veiculo_placa: String(devolucaoData.veiculo_placa || '').toUpperCase().trim(),
+      rota_nome: String(devolucaoData.rota_nome || '').toUpperCase().trim(),
       motorista_id: parseInt(devolucaoData.motorista_id) || null,
       cliente_id: parseInt(devolucaoData.cliente_id) || null,
-      cliente_nome: devolucaoData.cliente_nome || '',
-      nota_fiscal: devolucaoData.nota_fiscal,
-      motivo_reclamado: devolucaoData.motivo_reclamado,
+      cliente_nome: String(devolucaoData.cliente_nome || '').toUpperCase().trim(),
+      nota_fiscal: String(devolucaoData.nota_fiscal || '').toUpperCase().trim(),
+      motivo_reclamado: String(devolucaoData.motivo_reclamado || '').toUpperCase().trim(),
       valor_reclamado: parseFloat(devolucaoData.valor_reclamado) || 0,
-      detalhamento_texto: devolucaoData.detalhamento_texto,
+      detalhamento_texto: String(devolucaoData.detalhamento_texto || '').toUpperCase().trim(),
       // ADENDO (Mídia): antes só o 1º item de cada array era salvo
       // (foto_url/video_url apontavam para [0] e o vídeo era descartado
       // — video_url ficava sempre '' aqui). Agora persistimos os arrays
@@ -548,7 +571,7 @@ class Store {
       fotos_investigacao: [],
       videos_investigacao: [],
       cliente_emite_nf: devolucaoData.cliente_emite_nf === 'sim' || devolucaoData.cliente_emite_nf === true,
-      forma_acerto: devolucaoData.forma_acerto,
+      forma_acerto: String(devolucaoData.forma_acerto || '').toUpperCase().trim(),
       motivo_real_causa_raiz: '',
       video_url: (Array.isArray(devolucaoData.videos_abertura) && devolucaoData.videos_abertura[0]) || devolucaoData.video_url || '',
       descricao_monitoramento: '',
@@ -559,7 +582,7 @@ class Store {
       destino_cd: '',
       status_fechamento: 'PENDENTE_FISICO',
       sem_itens: devolucaoData.sem_itens || false,
-      observacao_sem_itens: devolucaoData.observacao_sem_itens || '',
+      observacao_sem_itens: String(devolucaoData.observacao_sem_itens || '').toUpperCase().trim(),
       criado_por_usuario_id: this.currentUser ? this.currentUser.id : 1,
       criado_em: new Date().toISOString()
     };
@@ -576,7 +599,7 @@ class Store {
           produto_id: parseInt(item.produto_id),
           quantidade: parseInt(item.quantidade),
           valor_unitario: parseFloat(item.valor_unitario),
-          motivo_item: item.motivo_item || ''
+          motivo_item: String(item.motivo_item || '').toUpperCase().trim()
         });
       });
     }
@@ -588,9 +611,9 @@ class Store {
   updateInvestigacao(id, updateData) {
     const dev = this.data.ocorrencias_devolucao.find(d => d.id == id);
     if (dev) {
-      dev.motivo_real_causa_raiz = updateData.motivo_real_causa_raiz;
-      dev.tipo_erro = updateData.tipo_erro;
-      dev.tipo_erro_outro = updateData.tipo_erro_outro;
+      dev.motivo_real_causa_raiz = String(updateData.motivo_real_causa_raiz || '').toUpperCase().trim();
+      dev.tipo_erro = String(updateData.tipo_erro || '').toUpperCase().trim();
+      dev.tipo_erro_outro = String(updateData.tipo_erro_outro || '').toUpperCase().trim();
       dev.video_url = updateData.video_url || dev.video_url || '';
       dev.video_investigacao_url = updateData.video_investigacao_url || dev.video_investigacao_url || '';
       // ADENDO (Mídia): fotos/vídeos anexados durante a Investigação são
@@ -691,19 +714,24 @@ class Store {
   // Ocorrências de Rota
   getOcorrenciasRota() {
     return (this.data.ocorrencias_rota || []).filter(r => !r.is_deleted).map(r => {
-      const carga = this.data.cargas.find(c => c.id == r.carga_id) || {};
-      const veiculo = this.data.veiculos.find(v => v.id == r.veiculo_id) || {};
-      const motorista = this.data.motoristas.find(m => m.id == r.motorista_id) || {};
-      const mecanico = this.data.usuarios.find(u => u.id == r.mecanico_responsavel_id) || {};
+      const carga = (this.data.cargas || []).find(c => c.id == r.carga_id) || {};
+      const veiculo = (this.data.veiculos || []).find(v => v.id == r.veiculo_id) || {};
+      const motorista = (this.data.motoristas || []).find(m => m.id == r.motorista_id) || {};
+      const mecanico = (this.data.usuarios || []).find(u => u.id == r.mecanico_responsavel_id) || {};
 
       return {
         ...r,
+        localizacao: r.localizacao || '',
+        status_chamado: r.status_chamado || ((r.status === 'RESOLVIDO' || r.status_veiculo === 'Em Rota') ? 'finalizado' : 'pendente'),
+        retorno_manutencao_descricao: r.retorno_manutencao_descricao || '',
+        retorno_manutencao_data: r.retorno_manutencao_data || null,
+        retorno_manutencao_responsavel: r.retorno_manutencao_responsavel || (mecanico.nome || null),
         carga_numero: carga.numero_carga || r.carga_numero || 'N/A',
         carga_rota: carga.rota_nome || r.rota_nome || 'N/A',
         veiculo_placa: veiculo.placa || r.veiculo_placa || 'N/A',
         veiculo_modelo: veiculo.tipo || veiculo.modelo || 'N/A',
         motorista_nome: motorista.nome || r.motorista_nome || 'N/A',
-        mecanico_nome: mecanico.nome || 'Em atendimento'
+        mecanico_nome: mecanico.nome || r.retorno_manutencao_responsavel || 'Em atendimento'
       };
     });
   }
@@ -720,27 +748,41 @@ class Store {
       carga_id: parseInt(rotaData.carga_id) || null,
       carga_numero: rotaData.carga_numero || '',
       veiculo_id: parseInt(rotaData.veiculo_id) || null,
-      veiculo_placa: rotaData.veiculo_placa || '',
+      veiculo_placa: (rotaData.veiculo_placa || '').toUpperCase().trim(),
       motorista_id: parseInt(rotaData.motorista_id) || null,
+      motorista_nome: rotaData.motorista_nome || '',
       rota_nome: rotaData.rota_nome || '',
-      tipo_ocorrencia: rotaData.tipo_ocorrencia,
-      descricao: rotaData.descricao,
-      midia_fotos: rotaData.midia_fotos || [],
-      midia_videos: rotaData.midia_videos || [],
-      transcricao_audio_wa: rotaData.transcricao_audio_wa || '',
+      tipo_ocorrencia: rotaData.tipo_ocorrencia || 'MECANICA',
+      motivo_resumido: rotaData.motivo_resumido || rotaData.tipo_ocorrencia || 'AVARIA MECÂNICA',
+      localizacao: (rotaData.localizacao || '').trim(),
+      descricao: rotaData.descricao || '',
+      midia_fotos: Array.isArray(rotaData.midia_fotos) ? rotaData.midia_fotos : [],
+      midia_videos: Array.isArray(rotaData.midia_videos) ? rotaData.midia_videos : [],
       status_veiculo: statusVeic,
       status: isEmRota ? 'RESOLVIDO' : 'ABERTO',
+      status_chamado: isEmRota ? 'finalizado' : 'pendente',
       veiculo_parado: !isEmRota,
       mecanico_responsavel_id: null,
       acao_mecanico: '',
       pecas_trocadas: '',
       guincho_acionado: false,
       custo_socorro: 0,
+      retorno_manutencao_descricao: '',
+      retorno_manutencao_data: null,
+      retorno_manutencao_responsavel: null,
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
       criado_em: new Date().toISOString(),
-      resolvido_em: isEmRota ? new Date().toISOString() : null
+      resolvido_em: isEmRota ? new Date().toISOString() : null,
+      is_deleted: false
     };
 
     this.data.ocorrencias_rota.unshift(newRota);
+    this.logAudit({
+      acao: 'CRIACAO_CHAMADO_ROTA',
+      modulo: 'ocorrencias_rota',
+      registro_id: newRota.id,
+      diff: { depois: newRota }
+    });
     this.save();
     return newRota;
   }
@@ -748,29 +790,87 @@ class Store {
   updateOcorrenciaRota(id, updateData) {
     const r = this.data.ocorrencias_rota.find(x => x.id == id);
     if (r) {
+      const antes = JSON.parse(JSON.stringify(r));
+
+      // Governança: Cria snapshot da versão anterior para rollback antes de aplicar as mudanças
+      this.saveVersion('ocorrencias_rota', antes);
+
+      if (updateData.carga_numero !== undefined) r.carga_numero = updateData.carga_numero;
+      if (updateData.carga_id !== undefined) r.carga_id = parseInt(updateData.carga_id) || r.carga_id;
+      if (updateData.veiculo_id !== undefined) r.veiculo_id = parseInt(updateData.veiculo_id) || r.veiculo_id;
+      if (updateData.veiculo_placa !== undefined) r.veiculo_placa = (updateData.veiculo_placa || '').toUpperCase().trim();
+      if (updateData.motorista_id !== undefined) r.motorista_id = parseInt(updateData.motorista_id) || r.motorista_id;
+      if (updateData.motorista_nome !== undefined) r.motorista_nome = updateData.motorista_nome;
+      if (updateData.rota_nome !== undefined) r.rota_nome = updateData.rota_nome;
+      if (updateData.tipo_ocorrencia !== undefined) r.tipo_ocorrencia = updateData.tipo_ocorrencia;
+      if (updateData.motivo_resumido !== undefined) r.motivo_resumido = updateData.motivo_resumido;
+      if (updateData.descricao !== undefined) r.descricao = updateData.descricao;
+      if (updateData.midia_fotos !== undefined && Array.isArray(updateData.midia_fotos)) r.midia_fotos = updateData.midia_fotos;
+      if (updateData.midia_videos !== undefined && Array.isArray(updateData.midia_videos)) r.midia_videos = updateData.midia_videos;
+
+      if (updateData.localizacao !== undefined) {
+        r.localizacao = updateData.localizacao;
+      }
       if (updateData.status_veiculo) {
         r.status_veiculo = updateData.status_veiculo;
       }
-      const isEmRota = r.status_veiculo === 'Em Rota' || updateData.status === 'RESOLVIDO';
 
-      if (isEmRota) {
+      const isFinalizacao = updateData.status_chamado === 'finalizado' || 
+                            updateData.status === 'RESOLVIDO' || 
+                            r.status_veiculo === 'Em Rota';
+
+      if (isFinalizacao) {
         r.status = 'RESOLVIDO';
+        r.status_chamado = 'finalizado';
         r.status_veiculo = 'Em Rota';
         r.veiculo_parado = false;
         if (!r.resolvido_em) r.resolvido_em = new Date().toISOString();
+        r.retorno_manutencao_data = updateData.retorno_manutencao_data || r.retorno_manutencao_data || new Date().toISOString();
+        r.retorno_manutencao_responsavel = updateData.retorno_manutencao_responsavel || (this.currentUser ? this.currentUser.nome : 'MANUTENÇÃO');
       } else {
         r.status = updateData.status || r.status || 'EM_ATENDIMENTO';
+        r.status_chamado = updateData.status_chamado || r.status_chamado || 'pendente';
         r.veiculo_parado = true;
       }
 
-      r.mecanico_responsavel_id = this.currentUser ? this.currentUser.id : 4;
-      if (updateData.acao_mecanico !== undefined) r.acao_mecanico = updateData.acao_mecanico;
+      if (updateData.retorno_manutencao_descricao !== undefined) {
+        r.retorno_manutencao_descricao = updateData.retorno_manutencao_descricao;
+      }
+      if (updateData.retorno_manutencao_responsavel !== undefined) {
+        r.retorno_manutencao_responsavel = updateData.retorno_manutencao_responsavel;
+      }
+      if (updateData.retorno_manutencao_data !== undefined) {
+        r.retorno_manutencao_data = updateData.retorno_manutencao_data;
+      }
+
+      r.mecanico_responsavel_id = this.currentUser ? this.currentUser.id : (r.mecanico_responsavel_id || 4);
+      if (updateData.acao_mecanico !== undefined) {
+        r.acao_mecanico = updateData.acao_mecanico;
+        if (!r.retorno_manutencao_descricao) {
+          r.retorno_manutencao_descricao = updateData.acao_mecanico;
+        }
+      }
       if (updateData.pecas_trocadas !== undefined) r.pecas_trocadas = updateData.pecas_trocadas;
       if (updateData.guincho_acionado !== undefined) r.guincho_acionado = updateData.guincho_acionado === 'sim' || updateData.guincho_acionado === true;
       if (updateData.custo_socorro !== undefined) r.custo_socorro = parseFloat(updateData.custo_socorro) || 0;
+      r.atualizado_em = new Date().toISOString();
+      r.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+
+      this.logAudit({
+        acao: isFinalizacao ? 'LIBERACAO_VEICULO_ROTA' : (updateData.acao_auditoria || 'EDICAO_CHAMADO_ROTA'),
+        modulo: 'ocorrencias_rota',
+        registro_id: id,
+        diff: { antes, depois: r }
+      });
 
       this.save();
+      return r;
     }
+    return null;
+  }
+
+  deleteOcorrenciaRota(id) {
+    return this.softDelete('ocorrencias_rota', id);
   }
 
   // CRUD Cadastros Auxiliares (Dados SAC)
@@ -862,23 +962,23 @@ class Store {
     if (!this.data.controle_viagens) this.data.controle_viagens = [];
     const item = {
       id: Date.now(),
-      carga: viagemData.carga || '',
-      rota: viagemData.rota || '',
-      placa: viagemData.placa || '',
-      motorista: viagemData.motorista || '',
-      ajudante: viagemData.ajudante || '',
-      setor: viagemData.setor || 'FRIO',
+      carga: String(viagemData.carga || '').toUpperCase().trim(),
+      rota: String(viagemData.rota || '').toUpperCase().trim(),
+      placa: String(viagemData.placa || '').toUpperCase().trim(),
+      motorista: String(viagemData.motorista || '').toUpperCase().trim(),
+      ajudante: String(viagemData.ajudante || '').toUpperCase().trim(),
+      setor: String(viagemData.setor || 'FRIO').toUpperCase().trim(),
       data_saida: viagemData.data_saida || '',
       hora_saida: viagemData.hora_saida || '',
       data_entrega: viagemData.data_entrega || '',
       hora_entrega: viagemData.hora_entrega || '',
       data_retorno: viagemData.data_retorno || '',
       hora_retorno: viagemData.hora_retorno || '',
-      status_viagem: viagemData.status_viagem || 'EM ANDAMENTO',
-      fusion: viagemData.fusion || 'NÃO INICIADO',
-      checklist_saida: viagemData.checklist_saida || 'NÃO INICIADO',
-      checklist_chegada: viagemData.checklist_chegada || 'NÃO INICIADO',
-      observacao: viagemData.observacao || ''
+      status_viagem: (viagemData.status_viagem !== undefined && viagemData.status_viagem !== null ? String(viagemData.status_viagem) : '').toUpperCase().trim(),
+      fusion: (viagemData.fusion !== undefined && viagemData.fusion !== null ? String(viagemData.fusion) : '').toUpperCase().trim(),
+      checklist_saida: (viagemData.checklist_saida !== undefined && viagemData.checklist_saida !== null ? String(viagemData.checklist_saida) : '').toUpperCase().trim(),
+      checklist_chegada: (viagemData.checklist_chegada !== undefined && viagemData.checklist_chegada !== null ? String(viagemData.checklist_chegada) : '').toUpperCase().trim(),
+      observacao: String(viagemData.observacao || '').toUpperCase().trim()
     };
     this.data.controle_viagens.unshift(item);
     this.save();
@@ -911,15 +1011,15 @@ class Store {
     const item = {
       id: Date.now(),
       data: ocData.data || new Date().toISOString().split('T')[0],
-      carga: ocData.carga || '',
-      rota: ocData.rota || '',
-      placa: ocData.placa || '',
-      funcionario: ocData.funcionario || '',
-      funcao: ocData.funcao || 'MOTORISTA',
-      motivo: ocData.motivo || 'OUTRO',
-      causa: ocData.causa || '',
-      ocorrencia: ocData.ocorrencia || '',
-      acao: ocData.acao || ''
+      carga: String(ocData.carga || '').toUpperCase().trim(),
+      rota: String(ocData.rota || '').toUpperCase().trim(),
+      placa: String(ocData.placa || '').toUpperCase().trim(),
+      funcionario: String(ocData.funcionario || '').toUpperCase().trim(),
+      funcao: String(ocData.funcao || 'MOTORISTA').toUpperCase().trim(),
+      motivo: String(ocData.motivo || 'OUTRO').toUpperCase().trim(),
+      causa: String(ocData.causa || '').toUpperCase().trim(),
+      ocorrencia: String(ocData.ocorrencia || '').toUpperCase().trim(),
+      acao: String(ocData.acao || '').toUpperCase().trim()
     };
     this.data.ocorrencias_viagens.unshift(item);
     this.save();
@@ -945,14 +1045,29 @@ class Store {
   importViagens(novasViagens) {
     if (!this.data.controle_viagens) this.data.controle_viagens = [];
     let importCount = 0;
+    let duplicadosCount = 0;
+
+    const norm = s => String(s || '').trim().toUpperCase();
+    const getKey = v => `${norm(v.carga)}|${norm(v.rota)}|${norm(v.placa)}|${norm(v.motorista)}|${norm(v.ajudante)}|${norm(v.setor)}`;
+
+    // Mapear viagens já existentes no banco
+    const existingKeys = new Set(this.data.controle_viagens.map(v => getKey(v)));
+
     novasViagens.forEach(v => {
       if (v.carga) {
-        this.addViagem(v);
-        importCount++;
+        const key = getKey(v);
+        if (existingKeys.has(key)) {
+          duplicadosCount++;
+        } else {
+          this.addViagem(v);
+          existingKeys.add(key);
+          importCount++;
+        }
       }
     });
+
     this.save();
-    return importCount;
+    return { importados: importCount, duplicados: duplicadosCount };
   }
 
   // ===== RESUMO DIÁRIO CD =====
@@ -1013,12 +1128,12 @@ class Store {
     const item = {
       id: Date.now(),
       data: trocaData.data || new Date().toISOString().split('T')[0],
-      veiculo_escalado: trocaData.veiculo_escalado || '',
-      veiculo_trocado: trocaData.veiculo_trocado || '',
-      motivo_resumido: trocaData.motivo_resumido || 'PESO EXCEDIDO',
-      motivo_outro: trocaData.motivo_outro || '',
-      detalhamento: trocaData.detalhamento || '',
-      autorizado_por: trocaData.autorizado_por || 'LUIZ EDUARDO',
+      veiculo_escalado: String(trocaData.veiculo_escalado || '').toUpperCase().trim(),
+      veiculo_trocado: String(trocaData.veiculo_trocado || '').toUpperCase().trim(),
+      motivo_resumido: String(trocaData.motivo_resumido || 'PESO EXCEDIDO').toUpperCase().trim(),
+      motivo_outro: String(trocaData.motivo_outro || '').toUpperCase().trim(),
+      detalhamento: String(trocaData.detalhamento || '').toUpperCase().trim(),
+      autorizado_por: String(trocaData.autorizado_por || 'LUIZ EDUARDO').toUpperCase().trim(),
       criado_em: new Date().toISOString()
     };
     this.data.trocas_veiculos.unshift(item);
@@ -1359,8 +1474,31 @@ class Store {
     this.data.audit_logs = [];
     this.data.registro_versoes = [];
 
+    // Limpa chaves e caches locais isolados no localStorage
+    const chavesLimpeza = [
+      'jr_ocorrencias',
+      'jr_ocorrencias_rota',
+      'jr_retencoes_frota',
+      'jr_reentregas',
+      'jr_trocas_veiculos',
+      'jr_audit_logs',
+      'jr_registro_versoes',
+      'jr_cargas',
+      'jr_controle_viagens',
+      'jr_resumo_diario_cd',
+      'jr_relatorios_divergencia',
+      'jr_auditoria_produtividade'
+    ];
+    chavesLimpeza.forEach(k => {
+      try { localStorage.removeItem(k); } catch(e) {}
+    });
+
     this.save();
-    return { success: true, message: 'Reset executado com sucesso! Dados zerados para início da operação oficial.' };
+    return { success: true, message: 'Reset executado com sucesso! Dados operacionais, logs e caches zerados para início da operação oficial.' };
+  }
+
+  getOcorrenciasDevolucao() {
+    return this.getDevolucoes();
   }
 
   // ===== GERADOR DE EXTRAÇÃO SQL PARA BANCO / POWER BI =====
@@ -1379,7 +1517,7 @@ class Store {
     sql += `-- =============================================================================\n\n`;
 
     // Ocorrências de Devolução
-    const devList = this.getOcorrenciasDevolucao();
+    const devList = this.getDevolucoes();
     if (devList && devList.length > 0) {
       sql += `-- 1. OCORRÊNCIAS DE DEVOLUÇÃO (SAC INTERNO)\n`;
       devList.forEach(dev => {
@@ -1399,10 +1537,10 @@ class Store {
       sql += `-- 2. OCORRÊNCIAS EM ROTA (FROTA / MANUTENÇÃO)\n`;
       rotaList.forEach(rot => {
         sql += `INSERT INTO ocorrencias_rota (\n`;
-        sql += `  numero_protocolo, carga_id, veiculo_id, motorista_id, tipo_ocorrencia, descricao, status, veiculo_parado\n`;
+        sql += `  numero_protocolo, carga_id, veiculo_id, motorista_id, tipo_ocorrencia, localizacao, descricao, status, status_chamado, veiculo_parado, retorno_manutencao_descricao, retorno_manutencao_data, retorno_manutencao_responsavel\n`;
         sql += `) VALUES (\n`;
-        sql += `  ${esc(rot.numero_protocolo)}, 1, 1, 1, ${esc(rot.tipo_ocorrencia || 'MECANICA')}, ${esc(rot.descricao)}, ${esc(rot.status || 'ABERTO')}, ${esc(rot.veiculo_parado !== false)}\n`;
-        sql += `) ON CONFLICT (numero_protocolo) DO UPDATE SET status = EXCLUDED.status, veiculo_parado = EXCLUDED.veiculo_parado;\n\n`;
+        sql += `  ${esc(rot.numero_protocolo)}, ${rot.carga_id || 1}, ${rot.veiculo_id || 1}, ${rot.motorista_id || 1}, ${esc(rot.tipo_ocorrencia || 'MECANICA')}, ${esc(rot.localizacao || '')}, ${esc(rot.descricao)}, ${esc(rot.status || 'ABERTO')}, ${esc(rot.status_chamado || 'pendente')}, ${esc(rot.veiculo_parado !== false)}, ${esc(rot.retorno_manutencao_descricao || '')}, ${esc(rot.retorno_manutencao_data)}, ${esc(rot.retorno_manutencao_responsavel)}\n`;
+        sql += `) ON CONFLICT (numero_protocolo) DO UPDATE SET status = EXCLUDED.status, status_chamado = EXCLUDED.status_chamado, veiculo_parado = EXCLUDED.veiculo_parado, localizacao = EXCLUDED.localizacao, retorno_manutencao_descricao = EXCLUDED.retorno_manutencao_descricao, retorno_manutencao_data = EXCLUDED.retorno_manutencao_data, retorno_manutencao_responsavel = EXCLUDED.retorno_manutencao_responsavel;\n\n`;
       });
     }
 
@@ -1411,11 +1549,37 @@ class Store {
     if (trocasList && trocasList.length > 0) {
       sql += `-- 3. TROCAS DE VEÍCULOS\n`;
       trocasList.forEach(tr => {
-        sql += `INSERT INTO substituicoes_veiculos (\n`;
-        sql += `  veiculo_escalado_placa, veiculo_substituto_placa, motivo, motivo_outro, detalhamento, autorizado_por_usuario, criado_em\n`;
+        sql += `INSERT INTO trocas_veiculos (\n`;
+        sql += `  veiculo_escalado, veiculo_trocado, motivo_resumido, motivo_outro, detalhamento, autorizado_por, criado_em\n`;
         sql += `) VALUES (\n`;
         sql += `  ${esc(tr.veiculo_escalado)}, ${esc(tr.veiculo_trocado)}, ${esc(tr.motivo_resumido)}, ${esc(tr.motivo_outro)}, ${esc(tr.detalhamento)}, ${esc(tr.autorizado_por)}, ${esc(tr.criado_em)}\n`;
         sql += `);\n\n`;
+      });
+    }
+
+    // Retenções de Frota
+    const retencoesList = this.getRetencoesFrota();
+    if (retencoesList && retencoesList.length > 0) {
+      sql += `-- 4. RETENÇÕES DE FROTA\n`;
+      retencoesList.forEach(ret => {
+        sql += `INSERT INTO retencoes_frota (\n`;
+        sql += `  id, numero_retencao, veiculo_id, placa, tipo_veiculo, data_parada, motivo, tipo_os, local, data_previsao, data_liberacao, status, criado_por, criado_em\n`;
+        sql += `) VALUES (\n`;
+        sql += `  ${ret.id}, ${esc(ret.numero_retencao)}, ${ret.veiculo_id || 'NULL'}, ${esc(ret.placa)}, ${esc(ret.tipo_veiculo)}, ${esc(ret.data_parada)}, ${esc(ret.motivo)}, ${esc(ret.tipo_os || 'CORRETIVA')}, ${esc(ret.local || '')}, ${esc(ret.data_previsao)}, ${esc(ret.data_liberacao)}, ${esc(ret.status || 'RETIDO')}, ${esc(ret.criado_por || 'SISTEMA')}, ${esc(ret.criado_em)}\n`;
+        sql += `) ON CONFLICT (numero_retencao) DO UPDATE SET status = EXCLUDED.status, data_liberacao = EXCLUDED.data_liberacao;\n\n`;
+      });
+    }
+
+    // Reentregas de Rota
+    const reentregasList = this.getReentregas();
+    if (reentregasList && reentregasList.length > 0) {
+      sql += `-- 5. REENTREGAS DE ROTA\n`;
+      reentregasList.forEach(re => {
+        sql += `INSERT INTO reentregas_rota (\n`;
+        sql += `  id, data, carga_numero, rota_nome, motorista_nome, entregas_saiu, entregas_feitas, entregas_reentrega, motivo, placa, novo_motorista, status, criado_por, criado_em\n`;
+        sql += `) VALUES (\n`;
+        sql += `  ${re.id}, ${esc(re.data)}, ${esc(re.carga_numero)}, ${esc(re.rota_nome)}, ${esc(re.motorista_nome)}, ${re.entregas_saiu || 0}, ${re.entregas_feitas || 0}, ${re.entregas_reentrega || 0}, ${esc(re.motivo)}, ${esc(re.placa)}, ${esc(re.novo_motorista)}, ${esc(re.status || 'PENDENTE')}, ${esc(re.criado_por || 'SISTEMA')}, ${esc(re.criado_em)}\n`;
+        sql += `) ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, entregas_feitas = EXCLUDED.entregas_feitas, entregas_reentrega = EXCLUDED.entregas_reentrega;\n\n`;
       });
     }
 
@@ -1468,14 +1632,14 @@ class Store {
       id: Date.now(),
       numero_retencao,
       veiculo_id: parseInt(veiculo_id) || null,
-      placa: (placa || '').toUpperCase().trim(),
-      tipo_veiculo: (tipo_veiculo || '').toUpperCase().trim(),
+      placa: String(placa || '').toUpperCase().trim(),
+      tipo_veiculo: String(tipo_veiculo || '').toUpperCase().trim(),
       data_parada: data_parada || new Date().toISOString().split('T')[0],
-      motivo: motivo || '',
-      tipo_os: tipo_os || 'CORRETIVA',
-      local: local || '',
+      motivo: String(motivo || '').toUpperCase().trim(),
+      tipo_os: String(tipo_os || 'CORRETIVA').toUpperCase().trim(),
+      local: String(local || '').toUpperCase().trim(),
       data_previsao: data_previsao || null,
-      numero_os: (numero_os || '').toUpperCase().trim() || null,
+      numero_os: String(numero_os || '').toUpperCase().trim() || null,
       data_liberacao: null,
       status: 'RETIDO',
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
@@ -1502,6 +1666,10 @@ class Store {
     retencao.data_liberacao = dataLiberacao || new Date().toISOString().split('T')[0];
     this.save();
     return { success: true, retencao };
+  }
+
+  liberarRetencaoFrota(id, dataLiberacao) {
+    return this.liberarVeiculo(id, dataLiberacao);
   }
 
   /**
@@ -1643,7 +1811,10 @@ class Store {
    * @param {number|string} id
    * @returns {{ success: boolean, message?: string }}
    */
-  deleteReentrega(id) {
+  deleteReentrega(id, password) {
+    if (password !== undefined && String(password).trim() !== this.getAdminPassword()) {
+      return { success: false, message: 'Senha de administrador incorreta.' };
+    }
     if (!Array.isArray(this.data.reentregas)) return { success: false, message: 'Coleção vazia.' };
     const item = this.data.reentregas.find(x => x.id == id && !x.is_deleted);
     if (!item) {
