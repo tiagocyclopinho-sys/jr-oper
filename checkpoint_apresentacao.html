@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JR Oper & SAC — Mapa de Fluxo e Checkpoint da Apresentação</title>
+  
+  <!-- Fontes Google para máxima legibilidade corporativa -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@600;700;800;900&display=swap" rel="stylesheet">
+
+  <style>
+    /* ========================================================= */
+    /* RESET & VARIÁVEIS CORPORATIVAS JR OPER                    */
+    /* ========================================================= */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --primary: #059669;
+      --primary-dark: #064e3b;
+      --primary-light: #10b981;
+      --primary-subtle: #ecfdf5;
+      --primary-border: #a7f3d0;
+      
+      --slate-950: #020617;
+      --slate-900: #0f172a;
+      --slate-800: #1e293b;
+      --slate-700: #334155;
+      --slate-600: #475569;
+      --slate-500: #64748b;
+      --slate-400: #94a3b8;
+      --slate-300: #cbd5e1;
+      --slate-200: #e2e8f0;
+      --slate-100: #f1f5f9;
+      --slate-50: #f8fafc;
+      
+      --mod-1-header: #065f46;
+      --mod-2-header: #1e3a8a;
+      --mod-3-header: #0e7490;
+      --mod-4-header: #831843;
+      --mod-5-header: #c2410c;
+      --mod-6-header: #4c1d95;
+      --mod-7-header: #0f172a;
+      --mod-8-header: #047857;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #0b1320;
+      color: var(--slate-900);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* BARRA DE AÇÕES SUPERIOR (EM TELA) */
+    .screen-toolbar {
+      width: 100%;
+      max-width: 1350px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #1e293b;
+      border: 1px solid #334155;
+      padding: 10px 20px;
+      border-radius: 12px;
+      margin-bottom: 14px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+      color: #fff;
+    }
+
+    .toolbar-info {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .toolbar-info .badge {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 4px 10px;
+      border-radius: 20px;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .toolbar-stats {
+      font-size: 13px;
+      color: #cbd5e1;
+      font-weight: 500;
+    }
+    .toolbar-stats strong {
+      color: #34d399;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #ffffff;
+      box-shadow: 0 4px 14px rgba(5, 150, 105, 0.4);
+    }
+    .btn-primary:hover {
+      background: #047857;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: #334155;
+      color: #f1f5f9;
+      border: 1px solid #475569;
+    }
+    .btn-secondary:hover {
+      background: #475569;
+      color: #ffffff;
+    }
+
+    .btn-danger-outline {
+      background: transparent;
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+    .btn-danger-outline:hover {
+      background: rgba(239, 68, 68, 0.15);
+    }
+
+    /* ========================================================= */
+    /* PÁGINA A4 PAISAGEM (100% PREENCHIDA E PROPORCIONAL)       */
+    /* ========================================================= */
+    .sheet-page {
+      background: #ffffff;
+      width: 297mm;
+      height: 210mm;
+      max-height: 210mm;
+      padding: 8mm 9mm 7mm 9mm;
+      box-sizing: border-box;
+      border-radius: 8px;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* CABEÇALHO EXECUTIVO */
+    .header-container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2.5px solid var(--slate-900);
+      padding-bottom: 6px;
+      margin-bottom: 7px;
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-img {
+      height: 38px;
+      width: auto;
+      object-fit: contain;
+    }
+
+    .brand-badge {
+      background: linear-gradient(135deg, #064e3b 0%, #059669 100%);
+      color: white;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 900;
+      padding: 4px 9px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .header-titles h1 {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 16px;
+      font-weight: 900;
+      color: var(--slate-950);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      line-height: 1.1;
+    }
+
+    .header-titles p {
+      font-size: 9.5px;
+      font-weight: 700;
+      color: var(--primary-dark);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-top: 1px;
+    }
+
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .meta-box {
+      border: 1px solid var(--slate-300);
+      background: var(--slate-50);
+      padding: 3.5px 9px;
+      border-radius: 6px;
+      text-align: right;
+    }
+
+    .meta-label {
+      font-size: 7.5px;
+      text-transform: uppercase;
+      font-weight: 800;
+      color: var(--slate-500);
+      line-height: 1;
+    }
+
+    .meta-val {
+      font-size: 10px;
+      font-weight: 800;
+      color: var(--slate-900);
+      line-height: 1.2;
+    }
+
+    .progress-widget {
+      display: flex;
+      flex-direction: column;
+      gap: 2.5px;
+      min-width: 130px;
+      background: var(--slate-50);
+      border: 1px solid var(--slate-300);
+      padding: 3.5px 8px;
+      border-radius: 6px;
+    }
+
+    .progress-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 8px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: var(--slate-700);
+    }
+
+    .progress-bar-track {
+      height: 6.5px;
+      background: var(--slate-200);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #059669 0%, #10b981 100%);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    /* ========================================================= */
+    /* GRID DE 2 LINHAS (4 COLUNAS CADA) - PREENCHIMENTO TOTAL   */
+    /* ========================================================= */
+    .flow-main-area {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      flex-grow: 1;
+      justify-content: space-between;
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 7px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* CARD DO MÓDULO */
+    .module-card {
+      background: #ffffff;
+      border: 1.3px solid var(--slate-300);
+      border-radius: 7px;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+      height: 100%;
+    }
+
+    /* CABEÇALHO DO CARD */
+    .module-header {
+      padding: 4.5px 7px;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: relative;
+    }
+
+    .mod-left {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      overflow: hidden;
+    }
+
+    .mod-1 .module-header { background: var(--mod-1-header); border-bottom: 2px solid #047857; }
+    .mod-2 .module-header { background: var(--mod-2-header); border-bottom: 2px solid #1d4ed8; }
+    .mod-3 .module-header { background: var(--mod-3-header); border-bottom: 2px solid #0891b2; }
+    .mod-4 .module-header { background: var(--mod-4-header); border-bottom: 2px solid #be185d; }
+    .mod-5 .module-header { background: var(--mod-5-header); border-bottom: 2px solid #ea580c; }
+    .mod-6 .module-header { background: var(--mod-6-header); border-bottom: 2px solid #6d28d9; }
+    .mod-7 .module-header { background: var(--mod-7-header); border-bottom: 2px solid #334155; }
+    .mod-8 .module-header { background: var(--mod-8-header); border-bottom: 2px solid #059669; }
+
+    .mod-badge {
+      font-size: 8.5px;
+      font-weight: 900;
+      background: rgba(255, 255, 255, 0.25);
+      border-radius: 4px;
+      padding: 1.5px 4px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .mod-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 9.5px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .mod-step-tag {
+      font-size: 7.5px;
+      font-weight: 800;
+      background: rgba(0, 0, 0, 0.25);
+      padding: 1px 4.5px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      white-space: nowrap;
+    }
+
+    /* CORPO DO CARD COM DISTRIBUIÇÃO VERTICAL INTELIGENTE */
+    .module-body {
+      padding: 5px 6px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 3.5px;
+      flex-grow: 1;
+      background: #fdfdfd;
+    }
+
+    .check-item {
+      background: #ffffff;
+      border: 1px solid var(--slate-200);
+      border-radius: 4.5px;
+      padding: 3.5px 5px;
+      transition: all 0.15s ease;
+    }
+
+    .check-item:hover {
+      border-color: var(--primary-light);
+      background: #f8fafc;
+    }
+
+    .check-item.completed {
+      background: #ecfdf5;
+      border-color: #a7f3d0;
+    }
+
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* Checkbox de Alta Precisão */
+    .check-box {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      border: 1.4px solid var(--slate-400);
+      border-radius: 3px;
+      outline: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      position: relative;
+      background: #ffffff;
+      transition: all 0.15s ease;
+    }
+
+    .check-box:checked {
+      background-color: var(--primary);
+      border-color: var(--primary);
+    }
+
+    .check-box:checked::after {
+      content: '';
+      position: absolute;
+      left: 3px;
+      top: 0.5px;
+      width: 3.5px;
+      height: 6.5px;
+      border: solid white;
+      border-width: 0 1.6px 1.6px 0;
+      transform: rotate(45deg);
+    }
+
+    .check-label {
+      font-size: 8.5px;
+      font-weight: 700;
+      color: var(--slate-800);
+      line-height: 1.15;
+      flex-grow: 1;
+    }
+
+    .check-item.completed .check-label {
+      color: #065f46;
+      text-decoration: line-through;
+      text-decoration-color: rgba(5, 150, 105, 0.5);
+    }
+
+    /* Sub-itens Organizados em Pills / Linhas */
+    .sub-items-grid {
+      margin-top: 3px;
+      padding-top: 3px;
+      border-top: 1px dashed var(--slate-200);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px 6px;
+    }
+
+    .sub-item-pill {
+      display: flex;
+      align-items: center;
+      gap: 3.5px;
+      cursor: pointer;
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      padding: 1.5px 4.5px;
+      border-radius: 3px;
+    }
+
+    .sub-check-box {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 9.5px;
+      height: 9.5px;
+      border: 1.2px solid var(--slate-400);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      background: #ffffff;
+      position: relative;
+    }
+
+    .sub-check-box:checked {
+      background-color: #10b981;
+      border-color: #10b981;
+    }
+
+    .sub-check-box:checked::after {
+      content: '';
+      position: absolute;
+      left: 2.2px;
+      top: 0.2px;
+      width: 2.5px;
+      height: 5px;
+      border: solid white;
+      border-width: 0 1.3px 1.3px 0;
+      transform: rotate(45deg);
+    }
+
+    .sub-label {
+      font-size: 7.5px;
+      font-weight: 700;
+      color: var(--slate-600);
+      line-height: 1.1;
+    }
+
+    .sub-check-box:checked ~ .sub-label {
+      color: #047857;
+      text-decoration: line-through;
+    }
+
+    /* CARD 8: PAINEL DE HOMOLOGAÇÃO & PARECER EXECUTIVO */
+    .homologation-card {
+      background: linear-gradient(180deg, #f8fafc 0%, #ecfdf5 100%);
+      border: 1.3px solid #a7f3d0;
+    }
+
+    .homolog-body {
+      padding: 5px 6px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 4px;
+      height: calc(100% - 24px);
+    }
+
+    .verdict-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 3px;
+    }
+
+    .verdict-box {
+      border: 1px solid var(--slate-300);
+      background: #ffffff;
+      border-radius: 3px;
+      padding: 2.5px 3px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 7px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: var(--slate-700);
+    }
+
+    .notes-box {
+      border: 1px dashed var(--slate-300);
+      background: #ffffff;
+      border-radius: 4px;
+      padding: 3px 5px;
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .notes-header {
+      font-size: 7px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: var(--slate-500);
+      margin-bottom: 2px;
+    }
+
+    .notes-lines {
+      display: flex;
+      flex-direction: column;
+      gap: 4.5px;
+      margin-top: 2px;
+    }
+
+    .note-line {
+      border-bottom: 1px dotted var(--slate-300);
+      height: 2px;
+      width: 100%;
+    }
+
+    /* BARRA INFERIOR DO CARD (RODAPÉ DO MÓDULO) */
+    .card-footer-info {
+      font-size: 7px;
+      font-weight: 700;
+      color: var(--slate-400);
+      text-align: right;
+      padding: 1px 4px 0 0;
+      text-transform: uppercase;
+    }
+
+    /* ========================================================= */
+    /* RODAPÉ DO MAPA (ASSINATURAS E GOVERNANÇA)                */
+    /* ========================================================= */
+    .footer-container {
+      border-top: 2px solid var(--slate-900);
+      padding-top: 5px;
+      margin-top: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 10px;
+    }
+
+    .legend-box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 3.5px;
+      font-size: 8px;
+      font-weight: 700;
+      color: var(--slate-700);
+    }
+
+    .legend-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+    .dot-green { background: #10b981; }
+    .dot-blue { background: #3b82f6; }
+    .dot-purple { background: #8b5cf6; }
+
+    .signatures-group {
+      display: flex;
+      gap: 20px;
+    }
+
+    .sign-line {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 150px;
+    }
+
+    .sign-line-bar {
+      width: 100%;
+      border-bottom: 1.2px dashed var(--slate-500);
+      height: 14px;
+      margin-bottom: 2px;
+    }
+
+    .sign-role {
+      font-size: 7.5px;
+      font-weight: 800;
+      color: var(--slate-900);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .sign-sub {
+      font-size: 6.5px;
+      color: var(--slate-500);
+      font-weight: 600;
+    }
+
+    .footer-stamp {
+      font-size: 7.5px;
+      color: var(--slate-600);
+      font-weight: 600;
+      text-align: right;
+      line-height: 1.25;
+    }
+    .footer-stamp strong {
+      color: var(--slate-900);
+      font-weight: 800;
+    }
+
+    /* ========================================================= */
+    /* REGRAS CRÍTICAS DE IMPRESSÃO (EXATAMENTE 1 PÁGINA A4)     */
+    /* ========================================================= */
+    @page {
+      size: A4 landscape;
+      margin: 0;
+    }
+
+    @media print {
+      html, body {
+        background: #ffffff !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        width: 297mm !important;
+        height: 210mm !important;
+        max-height: 210mm !important;
+        overflow: hidden !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+
+      .screen-toolbar {
+        display: none !important;
+      }
+
+      .sheet-page {
+        width: 297mm !important;
+        height: 210mm !important;
+        max-height: 210mm !important;
+        padding: 7mm 8mm 6mm 8mm !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        page-break-after: avoid !important;
+        page-break-inside: avoid !important;
+      }
+
+      .module-card {
+        break-inside: avoid !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- BARRA DE CONTROLE NA TELA (NÃO SAI NA IMPRESSÃO) -->
+  <div class="screen-toolbar">
+    <div class="toolbar-info">
+      <span class="badge">Roteiro Executivo de Apresentação</span>
+      <div class="toolbar-stats">
+        Progresso da Demonstração: <strong id="tb-checked-count">0</strong> de <strong id="tb-total-count">24</strong> itens concluídos (<span id="tb-percentage">0%</span>)
+      </div>
+    </div>
+    <div class="toolbar-actions">
+      <button class="btn btn-secondary" onclick="marcarTodos(true)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+        Marcar Todos
+      </button>
+      <button class="btn btn-danger-outline" onclick="marcarTodos(false)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+        Limpar
+      </button>
+      <button class="btn btn-primary" onclick="window.print()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        Imprimir / Salvar PDF (1 Folha A4)
+      </button>
+    </div>
+  </div>
+
+  <!-- FOLHA A4 PAISAGEM (100% PREENCHIDA E PROPORCIONAL) -->
+  <main class="sheet-page" id="printable-area">
+    
+    <!-- CABEÇALHO DA APRESENTAÇÃO -->
+    <header class="header-container">
+      <div class="brand-section">
+        <!-- Logo com Fallback Elegante -->
+        <img src="public/logo_jr.png" alt="JR Logística" class="logo-img" onerror="this.onerror=null; this.src='jr-sac-corrigido/public/logo.png'; this.style.display=this.src ? 'block' : 'none';">
+        <div class="brand-badge">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          JR OPER & SAC
+        </div>
+        <div class="header-titles">
+          <h1>Mapa de Fluxo & Checkpoint da Apresentação</h1>
+          <p>Roteiro Operacional de Demonstração, Validação de Módulos & Homologação</p>
+        </div>
+      </div>
+
+      <div class="header-meta">
+        <div class="meta-box">
+          <div class="meta-label">Escopo</div>
+          <div class="meta-val">Apresentação Diretoria & Operação</div>
+        </div>
+        <div class="meta-box">
+          <div class="meta-label">Versão do Sistema</div>
+          <div class="meta-val">Agosto/2026 • v2.4 Master</div>
+        </div>
+        <div class="progress-widget">
+          <div class="progress-label-row">
+            <span>Status Geral</span>
+            <span id="page-progress-text">0% Concluído</span>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="page-progress-fill"></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ÁREA PRINCIPAL: 2 LINHAS HARMONIOSAS (4 CARDS POR LINHA) -->
+    <div class="flow-main-area">
+      
+      <!-- LINHA SUPERIOR: MÓDULOS 1, 2, 3 E 4 -->
+      <section class="flow-row">
+        
+        <!-- MÓDULO 1 -->
+        <article class="module-card mod-1">
+          <div class="module-header">
+            <div class="mod-left">
+              <span class="mod-badge">01</span>
+              <span class="mod-title">Apresentação & Base</span>
+            </div>
+            <span class="mod-step-tag">Etapa 1 ➔</span>
+          </div>
+          <div class="module-body">
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-1-1">
+                <span class="check-label">Apresentação</span>
+              </label>
+              <div class="sub-items-grid">
+                <label class="sub-item-pill">
+                  <input type="checkbox" class="sub-check-box" id="c-1-1-a">
+                  <span class="sub-label">Satisfação</span>
+                </label>
+                <label class="sub-item-pill">
+                  <input type="checkbox" class="sub-check-box" id="c-1-1-b">
+                  <span class="sub-label">Formalidade</span>
+                </label>
+                <label class="sub-item-pill">
+                  <input type="checkbox" class="sub-check-box" id="c-1-1-c">
+                  <span class="sub-label">Tem como?</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-1-2">
+                <span class="check-label">Cadastrar conta</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-1-3">
+                <span class="check-label">Painel Inicial - Breve</span>
+              </label>
+            </div>
+          </div>
+          <div class="card-footer-info">Fundamentação Inicial</div>
+        </article>
+
+        <!-- MÓDULO 2 -->
+        <article class="module-card mod-2">
+          <div class="module-header">
+            <div class="mod-left">
+              <span class="mod-badge">02</span>
+              <span class="mod-title">Operação & Rota</span>
+            </div>
+            <span class="mod-step-tag">Etapa 2 ➔</span>
+          </div>
+          <div class="module-body">
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-2-1">
+                <span class="check-label">Largada Operacional</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-2-2">
+                <span class="check-label">Oc Operacional</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-2-3">
+                <span class="check-label">Oc Rota</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-2-4">
+                <span class="check-label">Troca de veículo</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-2-5">
+                <span class="check-label">Reentrega</span>
+              </label>
+            </div>
+          </div>
+          <div class="card-footer-info">Tráfego & Entregas</div>
+        </article>
+
+        <!-- MÓDULO 3 -->
+        <article class="module-card mod-3">
+          <div class="module-header">
+            <div class="mod-left">
+              <span class="mod-badge">03</span>
+              <span class="mod-title">SAC & Monitoria</span>
+            </div>
+            <span class="mod-step-tag">Etapa 3 ➔</span>
+          </div>
+          <div class="module-body">
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-3-1">
+                <span class="check-label">Devolução SAC</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-3-2">
+                <span class="check-label">Painel Inicial - Alertas e KPI</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-3-3">
+                <span class="check-label">Análise Monitoramento</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-3-4">
+                <span class="check-label">Tratativa de Ocorrência</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-3-5">
+                <span class="check-label">Retorno Físico</span>
+              </label>
+            </div>
+          </div>
+          <div class="card-footer-info">Auditoria & SAC</div>
+        </article>
+
+        <!-- MÓDULO 4 -->
+        <article class="module-card mod-4">
+          <div class="module-header">
+            <div class="mod-left">
+              <span class="mod-badge">04</span>
+              <span class="mod-title">Gestão & Auditoria</span>
+            </div>
+            <span class="mod-step-tag">Etapa 4 ➔</span>
+          </div>
+          <div class="module-body">
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-4-1">
+                <span class="check-label">Painel Inicial - Alertas/KPI (Gestão/SAC)</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-4-2">
+                <span class="check-label">Resumo Diário</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-4-3">
+                <span class="check-label">Ocorrência CD</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-4-4">
+                <span class="check-label">Diferença de relatórios</span>
+              </label>
+              <div class="sub-items-grid">
+                <label class="sub-item-pill">
+                  <input type="checkbox" class="sub-check-box" id="c-4-4-a">
+                  <span class="sub-label">Informativo x Gerencial</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-4-5">
+                <span class="check-label">Advertência</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-4-6">
+                <span class="check-label">Suspensão</span>
+              </label>
+            </div>
+          </div>
+          <div class="card-footer-info">Controle Disciplinar</div>
+        </article>
+
+      </section>
+
+      <!-- LINHA INFERIOR: MÓDULOS 5, 6, 7 E CARD DE HOMOLOGAÇÃO -->
+      <section class="flow-row">
+        
+        <!-- MÓDULO 5 -->
+        <article class="module-card mod-5">
+          <div class="module-header">
+            <div class="mod-left">
+              <span class="mod-badge">05</span>
+              <span class="mod-title">Frota & Disponib.</span>
+            </div>
+            <span class="mod-step-tag">Etapa 5 ➔</span>
+          </div>
+          <div class="module-body">
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-5-1">
+                <span class="check-label">Disponibilidade Frota</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-5-2">
+                <span class="check-label">Painel Inicial - Alerta</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-5-3">
+                <span class="check-label">Relatório de Frota</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-5-4">
+                <span class="check-label">Liberação</span>
+              </label>
+            </div>
+          </div>
+          <div class="card-footer-info">Status de Veículos</div>
+        </article>
+
+        <!-- MÓDULO 6 -->
+        <article class="module-card mod-6">
+          <div class="module-header">
+            <div class="mod-left">
+              <span class="mod-badge">06</span>
+              <span class="mod-title">Boletim & Relat.</span>
+            </div>
+            <span class="mod-step-tag">Etapa 6 ➔</span>
+          </div>
+          <div class="module-body">
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-6-1">
+                <span class="check-label">Boletim Gerencial</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-6-2">
+                <span class="check-label">Exportação CSV</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-6-3">
+                <span class="check-label">Central de PDF's</span>
+              </label>
+            </div>
+          </div>
+          <div class="card-footer-info">Inteligência & Dados</div>
+        </article>
+
+        <!-- MÓDULO 7 -->
+        <article class="module-card mod-7">
+          <div class="module-header">
+            <div class="mod-left">
+              <span class="mod-badge">07</span>
+              <span class="mod-title">Governança & API</span>
+            </div>
+            <span class="mod-step-tag">Etapa 7 ➔</span>
+          </div>
+          <div class="module-body">
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-7-1">
+                <span class="check-label">Cadastros Mestres</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-7-2">
+                <span class="check-label">Governança</span>
+              </label>
+            </div>
+
+            <div class="check-item">
+              <label class="check-row">
+                <input type="checkbox" class="check-box" id="c-7-3">
+                <span class="check-label">Integração API</span>
+              </label>
+            </div>
+          </div>
+          <div class="card-footer-info">Arquitetura & Regras</div>
+        </article>
+
+        <!-- CARD 8: HOMOLOGAÇÃO & PARECER FINAL -->
+        <article class="module-card mod-8 homologation-card">
+          <div class="module-header">
+            <div class="mod-left">
+              <span class="mod-badge">✓</span>
+              <span class="mod-title">Parecer & Homologação</span>
+            </div>
+            <span class="mod-step-tag">Conclusão</span>
+          </div>
+          <div class="homolog-body">
+            <div class="verdict-row">
+              <label class="verdict-box">
+                <input type="checkbox" class="check-box" style="width:10px;height:10px;">
+                <span>Aprovado</span>
+              </label>
+              <label class="verdict-box">
+                <input type="checkbox" class="check-box" style="width:10px;height:10px;">
+                <span>Ressalvas</span>
+              </label>
+              <label class="verdict-box">
+                <input type="checkbox" class="check-box" style="width:10px;height:10px;">
+                <span>Pendente</span>
+              </label>
+            </div>
+
+            <div class="notes-box">
+              <div class="notes-header">Observações / Pontos de Ação:</div>
+              <div class="notes-lines">
+                <div class="note-line"></div>
+                <div class="note-line"></div>
+                <div class="note-line"></div>
+              </div>
+            </div>
+          </div>
+          <div class="card-footer-info">Validação Executiva</div>
+        </article>
+
+      </section>
+
+    </div>
+
+    <!-- RODAPÉ EXECUTIVO & ASSINATURAS -->
+    <footer class="footer-container">
+      <div class="legend-box">
+        <div class="legend-item">
+          <span class="legend-dot dot-green"></span> Concluído / Validado
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot dot-blue"></span> Em Demonstração
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot dot-purple"></span> Homologado
+        </div>
+      </div>
+
+      <div class="signatures-group">
+        <div class="sign-line">
+          <div class="sign-line-bar"></div>
+          <div class="sign-role">Apresentador Responsável</div>
+          <div class="sign-sub">Analista de Logística / Sistemas</div>
+        </div>
+        <div class="sign-line">
+          <div class="sign-line-bar"></div>
+          <div class="sign-role">Diretoria / Gestão Operacional</div>
+          <div class="sign-sub">Homologação e De Acordo</div>
+        </div>
+      </div>
+
+      <div class="footer-stamp">
+        <strong>JR Logística & Distribuição</strong> • Sistema JR SAC / OPER<br>
+        Documento Oficial de Checkpoint & Acompanhamento
+      </div>
+    </footer>
+
+  </main>
+
+  <script>
+    // Gerenciamento dos Checkboxes & Progresso
+    const STORAGE_KEY = 'jr_sac_presentation_checkpoint_state_v2';
+    const allCheckboxes = document.querySelectorAll('input[type="checkbox"]');
+    
+    function updateProgress() {
+      // Conta apenas checkboxes do roadmap (que possuem id iniciando com c-)
+      const flowBoxes = Array.from(allCheckboxes).filter(cb => cb.id && cb.id.startsWith('c-'));
+      let total = flowBoxes.length;
+      let checked = flowBoxes.filter(cb => cb.checked).length;
+      let percent = total > 0 ? Math.round((checked / total) * 100) : 0;
+
+      // Atualiza toolbar
+      const tbChecked = document.getElementById('tb-checked-count');
+      const tbTotal = document.getElementById('tb-total-count');
+      const tbPerc = document.getElementById('tb-percentage');
+      if (tbChecked) tbChecked.textContent = checked;
+      if (tbTotal) tbTotal.textContent = total;
+      if (tbPerc) tbPerc.textContent = `${percent}%`;
+
+      // Atualiza cabeçalho da página
+      const pageProgText = document.getElementById('page-progress-text');
+      const pageProgFill = document.getElementById('page-progress-fill');
+      if (pageProgText) pageProgText.textContent = `${percent}% Concluído`;
+      if (pageProgFill) pageProgFill.style.width = `${percent}%`;
+
+      // Atualiza visual dos cards/itens pais
+      flowBoxes.forEach(cb => {
+        const itemCard = cb.closest('.check-item');
+        if (itemCard) {
+          const mainCb = itemCard.querySelector('.check-box');
+          const subCbs = itemCard.querySelectorAll('.sub-check-box');
+          
+          let isComplete = false;
+          if (subCbs.length > 0) {
+            isComplete = Array.from(subCbs).every(s => s.checked) && (mainCb ? mainCb.checked : true);
+          } else if (mainCb) {
+            isComplete = mainCb.checked;
+          }
+
+          if (isComplete) {
+            itemCard.classList.add('completed');
+          } else {
+            itemCard.classList.remove('completed');
+          }
+        }
+      });
+
+      // Salva no localStorage
+      saveState();
+    }
+
+    function saveState() {
+      const state = {};
+      allCheckboxes.forEach(cb => {
+        if (cb.id) {
+          state[cb.id] = cb.checked;
+        }
+      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+
+    function loadState() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          const state = JSON.parse(saved);
+          allCheckboxes.forEach(cb => {
+            if (cb.id && state.hasOwnProperty(cb.id)) {
+              cb.checked = state[cb.id];
+            }
+          });
+        } catch (e) {
+          console.error("Erro ao carregar estado:", e);
+        }
+      }
+      updateProgress();
+    }
+
+    function marcarTodos(status) {
+      allCheckboxes.forEach(cb => {
+        cb.checked = status;
+      });
+      updateProgress();
+    }
+
+    // Event Listeners
+    allCheckboxes.forEach(cb => {
+      cb.addEventListener('change', updateProgress);
+    });
+
+    // Inicialização
+    window.addEventListener('DOMContentLoaded', loadState);
+  </script>
+</body>
+</html>

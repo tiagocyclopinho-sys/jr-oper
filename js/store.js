@@ -489,9 +489,20 @@ class Store {
       const cliente = this.data.clientes.find(cli => cli.id == d.cliente_id) || {};
       
       const itens = (this.data.itens_devolucao || []).filter(i => i.ocorrencia_devolucao_id == d.id).map(i => {
-        const prod = this.data.produtos.find(p => p.id == i.produto_id) || {};
-        const valorTotal = (parseFloat(i.quantidade) || 0) * (parseFloat(i.valor_unitario) || 0);
-        return { ...i, produto_codigo: prod.codigo_produto, produto_descricao: prod.descricao || 'Produto não encontrado', valor_total: valorTotal };
+        const prod = (this.data.produtos || []).find(p => p.id == i.produto_id || String(p.codigo_produto) === String(i.produto_id)) || {};
+        let valorUnit = (i.valor_unitario !== undefined && i.valor_unitario !== null && i.valor_unitario !== '') ? parseFloat(i.valor_unitario) : 0;
+        if ((!valorUnit || isNaN(valorUnit)) && prod) {
+          valorUnit = parseFloat(prod.valor_unitario_padrao || prod.preco || prod.valor || 0) || 0;
+        }
+        const qtd = parseFloat(i.quantidade) || 1;
+        const valorTotal = qtd * valorUnit;
+        return {
+          ...i,
+          valor_unitario: valorUnit,
+          produto_codigo: prod.codigo_produto || i.codigo || String(i.produto_id || ''),
+          produto_descricao: prod.descricao || i.descricao || 'Produto não encontrado',
+          valor_total: valorTotal
+        };
       });
       const separador = this.data.usuarios.find(u => u.id == d.separador_id) || {};
       const conferente = this.data.usuarios.find(u => u.id == d.conferente_id) || {};

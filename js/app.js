@@ -971,11 +971,23 @@ function renderApp() {
   const activeElId = (document.activeElement && document.activeElement.id) ? document.activeElement.id : null;
   const selStart = (document.activeElement && typeof document.activeElement.selectionStart === 'number') ? document.activeElement.selectionStart : null;
   const selEnd = (document.activeElement && typeof document.activeElement.selectionEnd === 'number') ? document.activeElement.selectionEnd : null;
+  const prevScrollY = window.scrollY || (document.documentElement && document.documentElement.scrollTop) || 0;
 
   container.innerHTML = html;
   updateUserHeader();
   renderNavMenu();
   atualizarSinoNotificacoes();
+
+  if (window._isSwitchingMainTab) {
+    window._isSwitchingMainTab = false;
+    scrollToTop();
+  } else if (prevScrollY > 0) {
+    try {
+      window.scrollTo({ top: prevScrollY, left: 0, behavior: 'instant' });
+    } catch(e) {
+      window.scrollTo(0, prevScrollY);
+    }
+  }
 
   if (activeElId) {
     const el = document.getElementById(activeElId);
@@ -1078,6 +1090,7 @@ function changeRole(newRole) { db.switchRole(newRole); updateUserHeader(); rende
 function handleLogout() { db.logout(); updateUserHeader(); renderApp(); }
 
 function switchTab(tab) {
+  window._isSwitchingMainTab = true;
   activeTab = tab;
   toggleMobileMenu(false);
   renderApp();
@@ -1088,49 +1101,42 @@ window.switchTab = switchTab;
 function switchInvestigacaoSubTab(sub) {
   activeInvestigacaoSubTab = sub;
   renderApp();
-  scrollToTop();
 }
 window.switchInvestigacaoSubTab = switchInvestigacaoSubTab;
 
 function switchGestorSubTab(sub) {
   window._activeGestorSubTab = sub;
   renderApp();
-  scrollToTop();
 }
 window.switchGestorSubTab = switchGestorSubTab;
 
 function switchCdSubTab(sub) {
   window._activeCdSubTab = sub;
   renderApp();
-  scrollToTop();
 }
 window.switchCdSubTab = switchCdSubTab;
 
 function switchResumoSubTab(sub) {
   activeResumoSubTab = sub;
   renderApp();
-  scrollToTop();
 }
 window.switchResumoSubTab = switchResumoSubTab;
 
 function switchBolSubTab(sub) {
   window._activeBolSubTab = sub;
   renderApp();
-  scrollToTop();
 }
 window.switchBolSubTab = switchBolSubTab;
 
 function switchLixeiraSubTab(sub) {
   window._activeLixeiraSubTab = sub;
   renderApp();
-  scrollToTop();
 }
 window.switchLixeiraSubTab = switchLixeiraSubTab;
 
 function switchDashRecorrenciaTab(sub) {
   window._dashRecorrenciaTab = sub;
   renderApp();
-  scrollToTop();
 }
 window.switchDashRecorrenciaTab = switchDashRecorrenciaTab;
 
@@ -3149,12 +3155,14 @@ function handleSacAberturaSubmit(e) {
       const prodBusca = r.querySelector('.item-prod-busca')?.value || '';
       if (prodId) {
         const info = getDadosProduto({ produto_id: prodId, descricao: prodBusca });
+        let valUnit = parseFloat(String(r.querySelector('.item-val')?.value || '0').replace(',', '.')) || 0;
+        const qtd = parseFloat(r.querySelector('.item-qtd')?.value || '1') || 1;
         itens.push({
           produto_id: prodId,
           codigo: info.codigo,
           descricao: info.descricao,
-          quantidade: r.querySelector('.item-qtd')?.value || 1,
-          valor_unitario: r.querySelector('.item-val')?.value || 0,
+          quantidade: qtd,
+          valor_unitario: valUnit,
           motivo_item: r.querySelector('.item-motivo')?.value || ''
         });
       }
@@ -3594,10 +3602,12 @@ function gerarAdiantamentoPdf(devId) {
 
       <div class="sigs">
         <div>
+          <div class="sig-space"></div>
           <div class="sig-line"></div>
           <div class="sig-lbl">${dev.ajudante_nome}<br>(AJUDANTE / COLABORADOR)</div>
         </div>
         <div>
+          <div class="sig-space"></div>
           <div class="sig-line"></div>
           <div class="sig-lbl">SUPERVISOR LOGÍSTICO / JR<br>(JR DISTRIBUIDORA)</div>
         </div>
@@ -3639,9 +3649,10 @@ function gerarAdiantamentoPdf(devId) {
     .val-lbl { font-size: 10.5px; font-weight: 900; color: #15803d; text-transform: uppercase; letter-spacing: 0.5px; }
     .val-amt { font-size: 24px; font-weight: 900; color: #166534; margin-top: 2px; }
     .termo { font-size: 10.5px; color: #334155; line-height: 1.5; text-align: justify; border: 1px solid #cbd5e1; padding: 12px 14px; background: #f8fafc; border-radius: 6px; margin-bottom: 18px; }
-    .sigs { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 20px; text-align: center; }
-    .sig-line { border-top: 1.5px solid #0f172a; margin-bottom: 5px; }
-    .sig-lbl { font-size: 9.5px; font-weight: bold; text-transform: uppercase; color: #0f172a; }
+    .sigs { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 45px; text-align: center; }
+    .sig-space { height: 45px; }
+    .sig-line { border-top: 1.5px solid #0f172a; margin-bottom: 6px; }
+    .sig-lbl { font-size: 9.5px; font-weight: bold; text-transform: uppercase; color: #0f172a; line-height: 1.35; }
   </style>
 </head>
 <body>
@@ -3693,10 +3704,12 @@ function gerarAdiantamentoPdf(devId) {
 
       <div class="sigs">
         <div>
+          <div class="sig-space"></div>
           <div class="sig-line"></div>
           <div class="sig-lbl">${dev.motorista_nome || 'ASSINATURA MOTORISTA'}<br>(MOTORISTA / PRESTADOR)</div>
         </div>
         <div>
+          <div class="sig-space"></div>
           <div class="sig-line"></div>
           <div class="sig-lbl">SUPERVISOR LOGÍSTICO / JR<br>(JR DISTRIBUIDORA)</div>
         </div>
@@ -4099,7 +4112,13 @@ function renderCdRecepcaoView() {
       <td class="p-3 text-right">
         ${showBtn
           ? `<button onclick="openCdModal('${d.id}')" class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 rounded font-bold text-xs shadow">📥 Conferência & Entrada</button>`
-          : `<span class="text-[10px] text-slate-500">${(d.criado_em||'').split('T')[0]}</span>`}
+          : `<div class="flex items-center justify-end gap-1.5">
+               ${(String(d.tipo_erro||'').toUpperCase().includes('MOTORISTA') && Array.isArray(db.data.relatorios_divergencia) && db.data.relatorios_divergencia.some(r => String(r.ocorrencia_id) === String(d.id))) ? `
+                 <button onclick="gerarAdiantamentoDivergenciaPdf('${d.id}')" class="bg-amber-500 hover:bg-amber-400 text-slate-950 px-2.5 py-1 rounded font-bold text-[11px] shadow inline-flex items-center gap-1" title="Emitir Adiantamento (PDF)">
+                   <span>📄</span> Adiantamento (PDF)
+                 </button>` : ''}
+               <span class="text-[10px] text-slate-500">${(d.data_entrada_cd||d.criado_em||'').split('T')[0]}</span>
+             </div>`}
       </td>
     </tr>`;
 
@@ -4512,6 +4531,65 @@ function toggleValidadeExigencia(idx) {
   }
 }
 
+function getValorUnitarioProduto(item, dev = null) {
+  if (!item) return 0;
+
+  // 1. Valor unitário informado diretamente no item
+  if (item.valor_unitario !== undefined && item.valor_unitario !== null && item.valor_unitario !== '') {
+    const v = parseFloat(String(item.valor_unitario).replace(',', '.'));
+    if (!isNaN(v) && v > 0) return v;
+  }
+
+  // 2. Preço ou valor informado no item
+  if (item.preco !== undefined && item.preco !== null && item.preco !== '') {
+    const v = parseFloat(String(item.preco).replace(',', '.'));
+    if (!isNaN(v) && v > 0) return v;
+  }
+
+  // 3. Valor total do item dividido pela quantidade do item
+  const qtdItem = parseFloat(item.quantidade || item.quantidade_esperada || 1) || 1;
+  if (item.valor_total !== undefined && item.valor_total !== null && item.valor_total !== '') {
+    const vt = parseFloat(String(item.valor_total).replace(',', '.'));
+    if (!isNaN(vt) && vt > 0) return vt / qtdItem;
+  }
+  if (item.valor !== undefined && item.valor !== null && item.valor !== '') {
+    const v = parseFloat(String(item.valor).replace(',', '.'));
+    if (!isNaN(v) && v > 0) return v / qtdItem;
+  }
+
+  // 4. Buscar em db.data.itens_devolucao associado
+  if (dev && dev.id && Array.isArray(db.data.itens_devolucao)) {
+    const itDev = db.data.itens_devolucao.find(x =>
+      (x.ocorrencia_devolucao_id == dev.id && (String(x.produto_id) === String(item.produto_id) || String(x.id) === String(item.id)))
+    );
+    if (itDev && itDev.valor_unitario) {
+      const v = parseFloat(String(itDev.valor_unitario).replace(',', '.'));
+      if (!isNaN(v) && v > 0) return v;
+    }
+  }
+
+  // 5. Buscar no cadastro de produtos pelo ID ou código
+  const rawId = item.produto_id || item.codigo || item.codigo_item || item.id || item.produto_codigo || '';
+  const produtos = (db.getProdutos ? db.getProdutos() : []) || (db.data && db.data.produtos) || [];
+  const pObj = produtos.find(p => String(p.id) === String(rawId) || String(p.codigo_produto) === String(rawId) || String(p.descricao).toUpperCase() === String(item.produto_descricao || item.descricao || '').toUpperCase());
+  if (pObj) {
+    const vPadrao = parseFloat(String(pObj.valor_unitario_padrao || pObj.preco || pObj.valor || 0).replace(',', '.'));
+    if (!isNaN(vPadrao) && vPadrao > 0) return vPadrao;
+  }
+
+  // 6. Rateio proporcional pelo Valor Reclamado total da ocorrência
+  if (dev && dev.valor_reclamado) {
+    const vRec = parseFloat(String(dev.valor_reclamado).replace(',', '.'));
+    if (!isNaN(vRec) && vRec > 0) {
+      const todosItens = (dev.itens && dev.itens.length > 0) ? dev.itens : (db.data.itens_devolucao || []).filter(i => i.ocorrencia_devolucao_id == dev.id);
+      const somaQtd = todosItens.reduce((acc, i) => acc + (parseFloat(i.quantidade) || 1), 0) || 1;
+      return vRec / somaQtd;
+    }
+  }
+
+  return 0;
+}
+
 function handleCdModalSubmit(e, devId) {
   e.preventDefault();
   const devs = db.getDevolucoes ? db.getDevolucoes() : [];
@@ -4543,13 +4621,16 @@ function handleCdModalSubmit(e, devId) {
         observacao: obsGeral
       });
 
-      // Divergências
+      // Divergências físicas
       const radio = document.querySelector(`input[name="item-status-${idx}"]:checked`);
       if (radio && radio.value === 'divergente') {
         const qtdEsperada = parseInt(item.quantidade) || 0;
         const qtdRecebida = parseInt(document.getElementById(`item-qtd-rec-${idx}`)?.value) || 0;
         const qtdFaltante = Math.max(0, qtdEsperada - qtdRecebida);
         const obs = document.getElementById(`item-obs-${idx}`)?.value || 'Item com divergência física no CD';
+        const vUnit = getValorUnitarioProduto(item, dev);
+        const vTot = vUnit * qtdFaltante;
+
         itensDivergentes.push({
           produto_id: item.produto_id,
           codigo_produto: item.produto_codigo || item.codigo_produto || String(item.produto_id || 'N/A'),
@@ -4557,6 +4638,8 @@ function handleCdModalSubmit(e, devId) {
           quantidade_esperada: qtdEsperada,
           quantidade_recebida: qtdRecebida,
           quantidade_faltante: qtdFaltante,
+          valor_unitario: vUnit,
+          valor_total: vTot,
           observacao: obs
         });
       }
@@ -4566,13 +4649,21 @@ function handleCdModalSubmit(e, devId) {
   db.updateDestinoCd(devId, destinoPrincipal, 'RECEBIDO_CD', itensDestinos);
 
   if (itensDivergentes.length > 0) {
-    const relatorio = gerarRelatorioDivergencia(devId, itensDivergentes, dev);
+    const valorTotalDivergencia = itensDivergentes.reduce((acc, i) => acc + (parseFloat(i.valor_total) || 0), 0);
+    const relatorio = gerarRelatorioDivergencia(devId, itensDivergentes, dev, valorTotalDivergencia);
     db.data.relatorios_divergencia = db.data.relatorios_divergencia || [];
     db.data.relatorios_divergencia.push(relatorio);
     db.save();
     closeModal();
-    alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA!\nRelatório de quantidades faltantes gerado para o Financeiro.\n\nEntrada confirmada no CD.`);
-    baixarRelatorioDivergencia(relatorio);
+
+    const tipoErroUpper = String(dev?.tipo_erro || '').toUpperCase();
+    if (tipoErroUpper.includes('MOTORISTA')) {
+      alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA em ocorrência de ERRO MOTORISTA!\nValor total apurado da falta: R$ ${valorTotalDivergencia.toLocaleString('pt-BR', {minimumFractionDigits: 2})}.\n\nGerando Recibo de Adiantamento Operacional (Rateio 50% Motorista / 50% Ajudante)...`);
+      gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes, valorTotalDivergencia);
+    } else {
+      alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA!\nRelatório de quantidades faltantes gerado para o Financeiro.\n\nEntrada confirmada no CD.`);
+      baixarRelatorioDivergencia(relatorio);
+    }
   } else {
     closeModal();
     alert(`✅ Entrada confirmada no CD!\nDestinação registrada item a item com sucesso.`);
@@ -4580,21 +4671,304 @@ function handleCdModalSubmit(e, devId) {
   renderApp();
 }
 
-function gerarRelatorioDivergencia(devId, itensDivergentes, dev) {
+function gerarRelatorioDivergencia(devId, itensDivergentes, dev, valorTotalDivergencia = 0) {
   return {
     id: Date.now(),
     ocorrencia_id: devId,
     protocolo: dev?.numero_protocolo || '',
     numero_devolucao: dev?.numero_devolucao || '',
     motorista: dev?.motorista_nome || 'N/A',
+    ajudante: dev?.ajudante_nome || '',
     veiculo: dev?.veiculo_placa || 'N/A',
     rota: dev?.carga_rota || 'N/A',
     cliente: dev?.cliente_nome || 'N/A',
+    tipo_erro: dev?.tipo_erro || '',
     itens_divergentes: itensDivergentes,
+    valor_total_divergencia: valorTotalDivergencia,
     gerado_em: new Date().toISOString(),
     tipo: 'DESCONTO_MOTORISTA'
   };
 }
+
+function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTotal = null) {
+  const devs = db.getDevolucoes ? db.getDevolucoes() : [];
+  const dev = devs.find(x => x.id == devId) || (db.data.ocorrencias_devolucao || []).find(x => x.id == devId);
+  if (!dev) {
+    alert('Ocorrência não encontrada.');
+    return;
+  }
+
+  // Buscar itens divergentes se não passados
+  let divItens = itensDivergentes;
+  if (!divItens || divItens.length === 0) {
+    const rels = db.data.relatorios_divergencia || [];
+    const rel = rels.slice().reverse().find(r => String(r.ocorrencia_id) === String(devId));
+    if (rel && rel.itens_divergentes) {
+      divItens = rel.itens_divergentes;
+    } else if (Array.isArray(dev.itens)) {
+      divItens = dev.itens;
+    } else {
+      divItens = [];
+    }
+  }
+
+  // Recalcula estritamente cada item divergente: Qtd Falta x Valor Unitário
+  let totalValor = 0;
+  if (divItens && divItens.length > 0) {
+    divItens.forEach(i => {
+      let vUnit = parseFloat(String(i.valor_unitario !== undefined ? i.valor_unitario : 0).replace(',', '.'));
+      if (isNaN(vUnit) || vUnit <= 0) {
+        vUnit = getValorUnitarioProduto(i, dev);
+      }
+      i.valor_unitario = vUnit;
+
+      const qtdEsp = parseInt(i.quantidade_esperada !== undefined ? i.quantidade_esperada : (i.quantidade || 1), 10);
+      const qtdRec = parseInt(i.quantidade_recebida !== undefined ? i.quantidade_recebida : 0, 10);
+      const qtdFalta = parseInt(i.quantidade_faltante !== undefined ? i.quantidade_faltante : (qtdEsp - qtdRec), 10);
+      i.quantidade_esperada = qtdEsp;
+      i.quantidade_recebida = qtdRec;
+      i.quantidade_faltante = qtdFalta;
+
+      const vTot = vUnit * qtdFalta;
+      i.valor_total = vTot;
+      totalValor += vTot;
+    });
+  }
+
+  if (totalValor <= 0 && valorTotal !== null && parseFloat(valorTotal) > 0) {
+    totalValor = parseFloat(valorTotal);
+  }
+
+  const dtCriacao = dev.criado_em ? new Date(dev.criado_em).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
+  const dtEntradaCd = dev.data_entrada_cd ? new Date(dev.data_entrada_cd).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
+
+  // Rateio 50/50 quando existe ajudante vinculado
+  const ajudanteNomeBruto = String(dev.ajudante_nome || '').trim();
+  const temAjudante = !!(ajudanteNomeBruto && ajudanteNomeBruto.toUpperCase() !== 'AJUDANTE' && ajudanteNomeBruto.toUpperCase() !== 'NÃO INFORMADO' && ajudanteNomeBruto.toUpperCase() !== 'SEM AJUDANTE');
+  const valorPorPessoa = (temAjudante ? (totalValor / 2) : totalValor).toFixed(2);
+  const percentualLabel = temAjudante ? '50%' : '100%';
+
+  const itensTableHtml = divItens.length === 0 ? `
+    <div style="padding: 10px; text-align: center; color: #64748b; font-style: italic; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc;">
+      Divergência física apurada no CD ${dev.obs_sem_itens ? `(${dev.obs_sem_itens})` : ''}
+    </div>` : `
+    <table style="width: 100%; border-collapse: collapse; font-size: 10.5px; margin-top: 4px;">
+      <thead>
+        <tr style="background: #e2e8f0; color: #0f172a; text-transform: uppercase; font-size: 9px; border-bottom: 1.5px solid #0f172a;">
+          <th style="padding: 5px 8px; text-align: left; border: 1px solid #cbd5e1;">Código</th>
+          <th style="padding: 5px 8px; text-align: left; border: 1px solid #cbd5e1;">Descrição do Produto (Falta / Divergência)</th>
+          <th style="padding: 5px 8px; text-align: center; border: 1px solid #cbd5e1; width: 55px;">Qtd Esperada</th>
+          <th style="padding: 5px 8px; text-align: center; border: 1px solid #cbd5e1; width: 55px;">Qtd Recebida</th>
+          <th style="padding: 5px 8px; text-align: center; border: 1px solid #cbd5e1; width: 55px; color: #b91c1c;">Qtd Falta</th>
+          <th style="padding: 5px 8px; text-align: right; border: 1px solid #cbd5e1; width: 85px;">Vlr. Unitário</th>
+          <th style="padding: 5px 8px; text-align: right; border: 1px solid #cbd5e1; width: 95px;">Vlr. Total Falta</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${divItens.map(i => {
+          const prodInfo = getDadosProduto(i);
+          const qtdEsp = parseInt(i.quantidade_esperada !== undefined ? i.quantidade_esperada : (i.quantidade || 1), 10);
+          const qtdRec = parseInt(i.quantidade_recebida !== undefined ? i.quantidade_recebida : (i.quantidade_esperada || 0), 10);
+          const qtdFalta = parseInt(i.quantidade_faltante !== undefined ? i.quantidade_faltante : (qtdEsp - qtdRec), 10);
+          const vUnit = parseFloat(i.valor_unitario || 0);
+          const vTot = parseFloat(i.valor_total || (vUnit * qtdFalta));
+          return `
+            <tr style="background: #ffffff;">
+              <td style="padding: 4px 7px; border: 1px solid #cbd5e1; font-weight: bold; color: #0f172a;">${i.codigo_produto || prodInfo.codigo}</td>
+              <td style="padding: 4px 7px; border: 1px solid #cbd5e1; font-weight: bold; text-transform: uppercase; color: #1e293b;">${i.descricao_produto || prodInfo.descricao}</td>
+              <td style="padding: 4px 7px; border: 1px solid #cbd5e1; text-align: center; color: #475569;">${qtdEsp}</td>
+              <td style="padding: 4px 7px; border: 1px solid #cbd5e1; text-align: center; color: #475569;">${qtdRec}</td>
+              <td style="padding: 4px 7px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #dc2626; background: #fef2f2;">${qtdFalta}</td>
+              <td style="padding: 4px 7px; border: 1px solid #cbd5e1; text-align: right; color: #475569;">R$ ${vUnit.toFixed(2)}</td>
+              <td style="padding: 4px 7px; border: 1px solid #cbd5e1; text-align: right; font-weight: bold; color: #dc2626;">R$ ${vTot.toFixed(2)}</td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+
+  const via2AjudanteHtml = !temAjudante ? '' : `
+  <!-- PÁGINA 2: VIA DO AJUDANTE -->
+  <div class="page-container page-break">
+    <div>
+      <div class="header">
+        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+        <div class="header-title">
+          <h2>JR DISTRIBUIDORA</h2>
+          <p>Logística Corporativa • Retorno Físico CD & Conferência</p>
+        </div>
+      </div>
+
+      <div class="badge-via">RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — VIA DO AJUDANTE (PÁGINA 2 - 50%)</div>
+
+      <div class="section-title">📋 DADOS DA OCORRÊNCIA & CONFERÊNCIA FÍSICA NO CD</div>
+      <div class="grid">
+        <div class="field"><div class="field-lbl">Colaborador / Ajudante</div><div class="field-val">${dev.ajudante_nome}</div></div>
+        <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Conferência: ${dtEntradaCd})</div></div>
+        <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
+        <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
+        <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
+        <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
+        <div class="field" style="grid-column: span 2;"><div class="field-lbl">Motorista Vinculado (Rateio 50%)</div><div class="field-val">${dev.motorista_nome}</div></div>
+      </div>
+
+      <div class="motivo-box">
+        <div class="motivo-lbl">MOTIVO & APURAÇÃO DA DIVERGÊNCIA NO CD</div>
+        <div class="motivo-txt">ERRO MOTORISTA — Divergência física/falta de produtos apurada na conferência de retorno ao CD</div>
+      </div>
+
+      <div class="products-section">
+        <div class="section-title">📦 ITENS COM DIVERGÊNCIA / FALTA APURADA NO RECEBIMENTO (${divItens.length})</div>
+        ${itensTableHtml}
+      </div>
+    </div>
+
+    <div>
+      <div class="val-highlight">
+        <div class="val-lbl">VALOR DO ADIANTAMENTO DO AJUDANTE (50% do total da divergência R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
+        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
+      </div>
+
+      <div class="termo">
+        <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO OPERACIONAL:</b><br>
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> (correspondente a 50% da divergência física de produtos apurada no retorno ao CD) referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Rota: <b>${dev.carga_rota || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
+      </div>
+
+      <div class="sigs">
+        <div>
+          <div class="sig-space"></div>
+          <div class="sig-line"></div>
+          <div class="sig-lbl">${dev.ajudante_nome}<br>(AJUDANTE / COLABORADOR)</div>
+        </div>
+        <div>
+          <div class="sig-space"></div>
+          <div class="sig-line"></div>
+          <div class="sig-lbl">SUPERVISOR CD / LOGÍSTICA<br>(JR DISTRIBUIDORA)</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — JR DISTRIBUIDORA</title>
+  <style>
+    @media print {
+      @page { margin: 8mm 10mm; size: A4 portrait; }
+      body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .page-break { page-break-before: always !important; break-before: page !important; }
+    }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 12px; color: #0f172a; background: #ffffff; }
+    .page-container { min-height: 96vh; display: flex; flex-direction: column; justify-content: space-between; border: 2.5px solid #0f172a; border-radius: 10px; padding: 20px; background: #ffffff; margin-bottom: 20px; }
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 14px; }
+    .logo { height: 48px; }
+    .header-title { text-align: right; }
+    .header-title h2 { margin: 0; font-size: 18px; color: #0f172a; font-weight: 900; letter-spacing: 0.5px; }
+    .header-title p { margin: 3px 0 0; font-size: 10.5px; color: #475569; font-weight: bold; }
+    .badge-via { background: #0f172a; color: #ffffff; font-size: 13px; font-weight: 900; padding: 8px 16px; border-radius: 6px; text-align: center; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px; }
+    .section-title { font-size: 10.5px; font-weight: 900; color: #0f172a; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-bottom: 14px; }
+    .field { border: 1px solid #cbd5e1; padding: 7px 11px; border-radius: 6px; background: #f8fafc; }
+    .field-lbl { font-size: 8.5px; font-weight: 800; color: #64748b; text-transform: uppercase; }
+    .field-val { font-size: 11.5px; font-weight: bold; color: #0f172a; margin-top: 2px; }
+    .motivo-box { border: 1px solid #cbd5e1; background: #fffbebf5; border-left: 4.5px solid #dc2626; padding: 10px 14px; border-radius: 6px; margin-bottom: 15px; }
+    .motivo-lbl { font-size: 9px; font-weight: 900; color: #b91c1c; text-transform: uppercase; }
+    .motivo-txt { font-size: 12px; font-weight: bold; color: #7f1d1d; margin-top: 3px; }
+    .products-section { margin-bottom: 15px; }
+    .val-highlight { background: #fef2f2; border: 2px solid #dc2626; padding: 14px; border-radius: 8px; text-align: right; margin-bottom: 15px; }
+    .val-lbl { font-size: 10.5px; font-weight: 900; color: #991b1b; text-transform: uppercase; letter-spacing: 0.5px; }
+    .val-amt { font-size: 24px; font-weight: 900; color: #dc2626; margin-top: 2px; }
+    .termo { font-size: 10.5px; color: #334155; line-height: 1.5; text-align: justify; border: 1px solid #cbd5e1; padding: 12px 14px; background: #f8fafc; border-radius: 6px; margin-bottom: 18px; }
+    .sigs { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 45px; text-align: center; }
+    .sig-space { height: 45px; }
+    .sig-line { border-top: 1.5px solid #0f172a; margin-bottom: 6px; }
+    .sig-lbl { font-size: 9.5px; font-weight: bold; text-transform: uppercase; color: #0f172a; line-height: 1.35; }
+  </style>
+</head>
+<body>
+  <!-- PÁGINA 1: VIA DO MOTORISTA -->
+  <div class="page-container">
+    <div>
+      <div class="header">
+        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+        <div class="header-title">
+          <h2>JR DISTRIBUIDORA</h2>
+          <p>Logística Corporativa • Retorno Físico CD & Conferência</p>
+        </div>
+      </div>
+
+      <div class="badge-via">RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — VIA DO MOTORISTA (PÁGINA 1 - ${percentualLabel})</div>
+
+      <div class="section-title">📋 DADOS DA OCORRÊNCIA & CONFERÊNCIA FÍSICA NO CD</div>
+      <div class="grid">
+        <div class="field"><div class="field-lbl">Colaborador / Motorista</div><div class="field-val">${dev.motorista_nome || 'NÃO INFORMADO'}</div></div>
+        <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Conferência: ${dtEntradaCd})</div></div>
+        <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
+        <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
+        <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
+        <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
+        ${temAjudante ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Ajudante Vinculado (Rateio 50%)</div><div class="field-val">${dev.ajudante_nome}</div></div>` : ''}
+      </div>
+
+      <div class="motivo-box">
+        <div class="motivo-lbl">MOTIVO & APURAÇÃO DA DIVERGÊNCIA NO CD</div>
+        <div class="motivo-txt">ERRO MOTORISTA — Divergência física/falta de produtos apurada na conferência de retorno ao CD</div>
+      </div>
+
+      <div class="products-section">
+        <div class="section-title">📦 ITENS COM DIVERGÊNCIA / FALTA APURADA NO RECEBIMENTO (${divItens.length})</div>
+        ${itensTableHtml}
+      </div>
+    </div>
+
+    <div>
+      <div class="val-highlight">
+        <div class="val-lbl">VALOR DO ADIANTAMENTO DO MOTORISTA (${percentualLabel} do total da divergência R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
+        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
+      </div>
+
+      <div class="termo">
+        <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO OPERACIONAL:</b><br>
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> ${temAjudante ? '(correspondente a 50% da divergência física de produtos apurada no retorno ao CD)' : '(100% integral)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Rota: <b>${dev.carga_rota || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
+      </div>
+
+      <div class="sigs">
+        <div>
+          <div class="sig-space"></div>
+          <div class="sig-line"></div>
+          <div class="sig-lbl">${dev.motorista_nome || 'ASSINATURA MOTORISTA'}<br>(MOTORISTA / PRESTADOR)</div>
+        </div>
+        <div>
+          <div class="sig-space"></div>
+          <div class="sig-line"></div>
+          <div class="sig-lbl">SUPERVISOR CD / LOGÍSTICA<br>(JR DISTRIBUIDORA)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  ${via2AjudanteHtml}
+
+  <script>
+    window.onload = function() {
+      setTimeout(function() { window.print(); }, 400);
+    }
+  </script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=900,height=950');
+  if (win) {
+    win.document.write(htmlContent);
+    win.document.close();
+  } else {
+    alert('Bloqueador de pop-up detectado. Por favor, permita pop-ups para visualizar o recibo de adiantamento.');
+  }
+}
+window.gerarAdiantamentoDivergenciaPdf = gerarAdiantamentoDivergenciaPdf;
 
 function baixarRelatorioDivergencia(relatorio) {
   const win = window.open('', '_blank');
@@ -4745,7 +5119,6 @@ let activeViagensSubTab = 'largada';
 function switchViagensSubTab(sub) {
   activeViagensSubTab = sub;
   renderApp();
-  scrollToTop();
 }
 window.switchViagensSubTab = switchViagensSubTab;
 
@@ -6267,6 +6640,7 @@ function renderViagensOcorrenciasSubTab() {
       <td class="p-2 border-r border-slate-800 text-slate-200 font-medium">${o.ocorrencia}</td>
       <td class="p-2 border-r border-slate-800 text-emerald-300 font-semibold">${o.acao||'<span class="text-amber-400 italic">Aguardando Ação</span>'}</td>
       <td class="p-2 text-right whitespace-nowrap">
+        ${o.status !== 'FINALIZADA' ? `<button onclick="editarOcViagemModal('${o.id}', 'FINALIZADA')" class="bg-emerald-700/80 hover:bg-emerald-600 text-white px-2 py-0.5 rounded text-[11px] font-bold shadow mr-1 inline-flex items-center gap-1" title="Finalizar Ocorrência"><span>✅</span> Finalizar</button>` : ''}
         <button onclick="editarOcViagemModal('${o.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-sm" title="Editar Ocorrência">✏️</button>
         <button onclick="deleteOcViagem('${o.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-sm" title="Excluir Ocorrência">🗑️</button>
       </td>
@@ -6297,7 +6671,7 @@ function renderViagensOcorrenciasSubTab() {
 
       <!-- FORMULÁRIO NOVA OCORRÊNCIA VIAGEM -->
       <div id="form-nova-oc-viagem" class="hidden bg-slate-900 border border-red-900/60 rounded-xl p-4 shadow-xl space-y-3">
-        <h3 class="font-bold text-red-400 text-xs uppercase">Registro de Ocorrência com Obrigatoriedade de Causa, Ocorrência e Ação</h3>
+        <h3 class="font-bold text-red-400 text-xs uppercase">Registro de Ocorrência Operacional</h3>
         <form onsubmit="handleNovaOcViagemSubmit(event)" class="space-y-3">
           <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div>
@@ -6332,18 +6706,21 @@ function renderViagensOcorrenciasSubTab() {
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label class="block text-[10px] text-slate-300 mb-1">Funcionário Envolvido *</label>
-              <input type="text" id="ocv-funcionario" required placeholder="Ex: PAULO DOS SANTOS RIBEIRO" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs uppercase" oninput="forcarMaiuscula(this)">
-            </div>
-            <div>
               <label class="block text-[10px] text-slate-300 mb-1">Função *</label>
-              <select id="ocv-funcao" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <select id="ocv-funcao" required onchange="onOcvFuncaoChange('ocv-funcao', 'ocv-funcionario', 'ocv-carga', 'ocv-funcionarios-list')" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
                 <option value="MOTORISTA">MOTORISTA</option>
                 <option value="AJUDANTE">AJUDANTE</option>
                 <option value="SEPARADOR">SEPARADOR</option>
                 <option value="CONFERENTE">CONFERENTE</option>
                 <option value="OUTRO">OUTRO</option>
               </select>
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-300 mb-1">Funcionário Envolvido *</label>
+              <input type="text" id="ocv-funcionario" list="ocv-funcionarios-list" required placeholder="Ex: PAULO DOS SANTOS RIBEIRO" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs uppercase" oninput="forcarMaiuscula(this)">
+              <datalist id="ocv-funcionarios-list">
+                ${getFuncionariosPorFuncao('MOTORISTA').map(nome => `<option value="${nome}"></option>`).join('')}
+              </datalist>
             </div>
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Motivo Resumido *</label>
@@ -6358,12 +6735,12 @@ function renderViagensOcorrenciasSubTab() {
               <input type="text" id="ocv-causa" required placeholder="Ex: CONSULTA MEDICA, INCOMPATIBILIDADE DE KM..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
             </div>
             <div>
-              <label class="block text-[10px] text-red-400 font-bold mb-1">Detalhamento da Ocorrência * (Obrigatório)</label>
-              <textarea id="ocv-ocorrencia" required rows="2" placeholder="Ex: FALTA DO AJUDANTE NA ROTA / MOTORISTA NÃO REALIZOU O CHECKLIST..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+              <label class="block text-[10px] text-red-400 font-bold mb-1">Detalhamento da Ocorrência <span class="text-amber-300 font-normal">(Obrigatório ao Finalizar)</span></label>
+              <textarea id="ocv-ocorrencia" rows="2" placeholder="Ex: FALTA DO AJUDANTE NA ROTA / MOTORISTA NÃO REALIZOU O CHECKLIST..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
             </div>
             <div>
-              <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ação Tomada * (Obrigatório)</label>
-              <textarea id="ocv-acao" required rows="2" placeholder="Ex: JOSE PAIXAO SUBSTITUTO / FEITO PROCEDIMENTO PARA REGULARIZAR..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+              <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ação Tomada <span class="text-emerald-300 font-normal">(Obrigatório ao Finalizar)</span></label>
+              <textarea id="ocv-acao" rows="2" placeholder="Ex: JOSE PAIXAO SUBSTITUTO / FEITO PROCEDIMENTO PARA REGULARIZAR..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
             </div>
           </div>
           <div class="flex justify-end gap-2 pt-2">
@@ -6490,6 +6867,74 @@ function renderViagensOcorrenciasSubTab() {
 }
 
 // ===== AUTOPREENCHIMENTO INTELIGENTE DE CARGAS (OCORRÊNCIAS DE VIAGEM) =====
+function getFuncionariosPorFuncao(funcao) {
+  const f = String(funcao || '').toUpperCase().trim();
+  let list = [];
+  if (f === 'MOTORISTA') {
+    list = (db.data && db.data.motoristas ? db.data.motoristas : []).map(m => (typeof m === 'object' ? (m.nome || '') : m)).filter(Boolean);
+  } else if (f === 'AJUDANTE') {
+    list = (db.data && db.data.ajudantes ? db.data.ajudantes : []).map(a => (typeof a === 'object' ? (a.nome || '') : a)).filter(Boolean);
+  } else if (f === 'SEPARADOR') {
+    list = (typeof db.getSeparadores === 'function' ? db.getSeparadores() : (db.data && db.data.separadores_conferentes ? db.data.separadores_conferentes : []));
+  } else if (f === 'CONFERENTE') {
+    list = (typeof db.getConferentes === 'function' ? db.getConferentes() : (db.data && db.data.separadores_conferentes ? db.data.separadores_conferentes : []));
+  } else {
+    // OUTRO ou qualquer outra função: busca pela tabela de Separador - Conferente do cadastro geral
+    list = (db.data && db.data.separadores_conferentes) ? db.data.separadores_conferentes : [];
+    if (list.length === 0 && typeof getListaTodosColaboradores === 'function') {
+      list = getListaTodosColaboradores();
+    }
+  }
+
+  const set = new Set();
+  (list || []).forEach(nome => {
+    const n = String(nome || '').trim().toUpperCase();
+    if (n) set.add(n);
+  });
+  return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function atualizarDatalistOcvFuncionario(datalistId = 'ocv-funcionarios-list', funcaoId = 'ocv-funcao') {
+  const dl = document.getElementById(datalistId);
+  const funcaoSel = document.getElementById(funcaoId);
+  if (!dl || !funcaoSel) return;
+
+  const funcao = funcaoSel.value;
+  const nomes = getFuncionariosPorFuncao(funcao);
+  dl.innerHTML = nomes.map(nome => `<option value="${nome}"></option>`).join('');
+}
+
+function onOcvFuncaoChange(funcaoId = 'ocv-funcao', funcId = 'ocv-funcionario', cargaId = 'ocv-carga', datalistId = 'ocv-funcionarios-list') {
+  const funcaoSel = document.getElementById(funcaoId);
+  const funcInput = document.getElementById(funcId);
+  const cargaInput = document.getElementById(cargaId);
+  if (!funcaoSel || !funcInput) return;
+
+  const funcao = funcaoSel.value;
+  const cargaNum = cargaInput ? cargaInput.value.trim() : '';
+
+  if (funcao === 'MOTORISTA') {
+    if (cargaNum) {
+      const info = buscarCargaInfo(cargaNum);
+      funcInput.value = (info && info.motoristaName) ? info.motoristaName : '';
+    } else {
+      funcInput.value = '';
+    }
+  } else if (funcao === 'AJUDANTE') {
+    if (cargaNum) {
+      const info = buscarCargaInfo(cargaNum);
+      funcInput.value = (info && info.ajudanteName) ? info.ajudanteName : '';
+    } else {
+      funcInput.value = '';
+    }
+  } else {
+    // Ao selecionar outra opção que não seja motorista ou ajudante, o campo fica limpo
+    funcInput.value = '';
+  }
+
+  atualizarDatalistOcvFuncionario(datalistId, funcaoId);
+}
+
 function onOcvCargaSelect(cargaNum) {
   const cNum = String(cargaNum || '').trim();
   const aviso = document.getElementById('ocv-carga-aviso');
@@ -6538,11 +6983,28 @@ function onOcvCargaSelect(cargaNum) {
         placaSel.appendChild(newOpt);
       }
     }
+
+    // Auto-selecionar Funcionário conforme a Função selecionada
+    const funcaoSel = document.getElementById('ocv-funcao');
+    const funcInput = document.getElementById('ocv-funcionario');
+    const funcao = (funcaoSel && funcaoSel.value) ? funcaoSel.value : 'MOTORISTA';
+
+    if (funcInput) {
+      if (funcao === 'MOTORISTA') {
+        funcInput.value = info.motoristaName || '';
+      } else if (funcao === 'AJUDANTE') {
+        funcInput.value = info.ajudanteName || '';
+      } else {
+        funcInput.value = '';
+      }
+    }
   } else {
     // Se não encontrada, exibir aviso sutil sem travar o preenchimento manual
     if (aviso) aviso.classList.remove('hidden');
   }
-  // Preservar #ocv-funcionario e #ocv-funcao para livre digitação
+
+  // Atualizar datalist com opções da função
+  atualizarDatalistOcvFuncionario('ocv-funcionarios-list', 'ocv-funcao');
 }
 
 function toggleFormNovaOcViagem() {
@@ -6551,6 +7013,10 @@ function toggleFormNovaOcViagem() {
 
 function handleNovaOcViagemSubmit(e) {
   e.preventDefault();
+  const ocorrencia = (document.getElementById('ocv-ocorrencia')?.value || '').trim();
+  const acao = (document.getElementById('ocv-acao')?.value || '').trim();
+  const status = (ocorrencia && acao) ? 'FINALIZADA' : 'PENDENTE';
+
   db.addOcorrenciaViagem({
     data: document.getElementById('ocv-data').value,
     carga: document.getElementById('ocv-carga').value,
@@ -6560,20 +7026,21 @@ function handleNovaOcViagemSubmit(e) {
     funcao: document.getElementById('ocv-funcao').value,
     motivo: document.getElementById('ocv-motivo').value,
     causa: document.getElementById('ocv-causa').value,
-    ocorrencia: document.getElementById('ocv-ocorrencia').value,
-    acao: document.getElementById('ocv-acao').value,
-    status: document.getElementById('ocv-acao').value ? 'FINALIZADA' : 'PENDENTE'
+    ocorrencia: ocorrencia,
+    acao: acao,
+    status: status
   });
-  alert('✅ Ocorrência operacional registrada!');
+  alert(status === 'FINALIZADA' ? '✅ Ocorrência operacional registrada e finalizada!' : '⚠️ Ocorrência operacional registrada como PENDENTE!');
   renderApp();
 }
 
-function editarOcViagemModal(id) {
+function editarOcViagemModal(id, forceStatus = null) {
   const o = db.getOcorrenciasViagens().find(x => x.id == id);
   if (!o) return;
 
+  const currentStatus = forceStatus || o.status || 'PENDENTE';
   const motivos = db.data.motivos_ocorrencia || [];
-  const veiculos = db.data.veiculos;
+  const veiculos = db.data.veiculos || [];
 
   const modalContainer = document.getElementById('modal-container');
   if (!modalContainer) return;
@@ -6581,7 +7048,7 @@ function editarOcViagemModal(id) {
   modalContainer.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl space-y-4">
       <div class="flex justify-between items-center border-b border-slate-800 pb-2">
-        <h3 class="font-bold text-white text-sm">Editar Ocorrência Operacional — Carga ${o.carga}</h3>
+        <h3 class="font-bold text-white text-sm">Tratamento / Edição de Ocorrência — Carga ${o.carga}</h3>
         <button onclick="closeModal()" class="text-slate-400 hover:text-white text-sm">✕</button>
       </div>
 
@@ -6590,8 +7057,8 @@ function editarOcViagemModal(id) {
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Status do Registro</label>
             <select id="ed-ocv-status" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1.5">
-              <option value="PENDENTE" ${o.status!=='FINALIZADA'?'selected':''}>⚠️ PENDENTE</option>
-              <option value="FINALIZADA" ${o.status==='FINALIZADA'?'selected':''}>✅ FINALIZADA</option>
+              <option value="PENDENTE" ${currentStatus!=='FINALIZADA'?'selected':''}>⚠️ PENDENTE</option>
+              <option value="FINALIZADA" ${currentStatus==='FINALIZADA'?'selected':''}>✅ FINALIZADA</option>
             </select>
           </div>
           <div>
@@ -6603,7 +7070,7 @@ function editarOcViagemModal(id) {
         <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Nº Carga</label>
-            <input type="text" id="ed-ocv-carga" value="${o.carga}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5" oninput="forcarMaiuscula(this)">
+            <input type="text" id="ed-ocv-carga" value="${o.carga}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5" oninput="forcarMaiuscula(this); onOcvFuncaoChange('ed-ocv-funcao', 'ed-ocv-func', 'ed-ocv-carga', 'ed-ocv-func-list')">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Placa</label>
@@ -6615,18 +7082,21 @@ function editarOcViagemModal(id) {
 
         <div class="grid grid-cols-2 gap-2">
           <div>
-            <label class="block text-[10px] text-slate-400 mb-1">Funcionário Envolvido</label>
-            <input type="text" id="ed-ocv-func" value="${o.funcionario}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 uppercase" oninput="forcarMaiuscula(this)">
-          </div>
-          <div>
             <label class="block text-[10px] text-slate-400 mb-1">Função</label>
-            <select id="ed-ocv-funcao" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+            <select id="ed-ocv-funcao" onchange="onOcvFuncaoChange('ed-ocv-funcao', 'ed-ocv-func', 'ed-ocv-carga', 'ed-ocv-func-list')" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
               <option value="MOTORISTA" ${o.funcao==='MOTORISTA'?'selected':''}>MOTORISTA</option>
               <option value="AJUDANTE" ${o.funcao==='AJUDANTE'?'selected':''}>AJUDANTE</option>
               <option value="SEPARADOR" ${o.funcao==='SEPARADOR'?'selected':''}>SEPARADOR</option>
               <option value="CONFERENTE" ${o.funcao==='CONFERENTE'?'selected':''}>CONFERENTE</option>
               <option value="OUTRO" ${o.funcao==='OUTRO'?'selected':''}>OUTRO</option>
             </select>
+          </div>
+          <div>
+            <label class="block text-[10px] text-slate-400 mb-1">Funcionário Envolvido</label>
+            <input type="text" id="ed-ocv-func" list="ed-ocv-func-list" value="${o.funcionario}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 uppercase" oninput="forcarMaiuscula(this)">
+            <datalist id="ed-ocv-func-list">
+              ${getFuncionariosPorFuncao(o.funcao || 'MOTORISTA').map(nome => `<option value="${nome}"></option>`).join('')}
+            </datalist>
           </div>
         </div>
 
@@ -6638,18 +7108,18 @@ function editarOcViagemModal(id) {
         </div>
 
         <div>
-          <label class="block text-[10px] text-amber-400 font-bold mb-1">Causa da Ocorrência *</label>
+          <label class="block text-[10px] text-amber-400 font-bold mb-1">Causa da Ocorrência * (Obrigatório)</label>
           <input type="text" id="ed-ocv-causa" value="${o.causa}" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">
         </div>
 
         <div>
-          <label class="block text-[10px] text-red-400 font-bold mb-1">Detalhamento da Ocorrência *</label>
-          <textarea id="ed-ocv-ocorrencia" required rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${o.ocorrencia}</textarea>
+          <label class="block text-[10px] text-red-400 font-bold mb-1">Detalhamento da Ocorrência <span class="text-amber-300 font-normal">(Obrigatório para Finalizar)</span></label>
+          <textarea id="ed-ocv-ocorrencia" rows="2" placeholder="Descreva o que ocorreu..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${o.ocorrencia||''}</textarea>
         </div>
 
         <div>
-          <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ação Tomada *</label>
-          <textarea id="ed-ocv-acao" required rows="2" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${o.acao||''}</textarea>
+          <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ação Tomada <span class="text-emerald-300 font-normal">(Obrigatório para Finalizar)</span></label>
+          <textarea id="ed-ocv-acao" rows="2" placeholder="Descreva a ação corretiva/adotada..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${o.acao||''}</textarea>
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
@@ -6663,8 +7133,26 @@ function editarOcViagemModal(id) {
 
 function handleSalvarEdicaoOcViagem(e, id) {
   e.preventDefault();
+  const status = document.getElementById('ed-ocv-status').value;
+  const ocorrencia = (document.getElementById('ed-ocv-ocorrencia')?.value || '').trim();
+  const acao = (document.getElementById('ed-ocv-acao')?.value || '').trim();
+
+  // Validação: Obrigatório preencher Detalhamento e Ação Tomada somente ao Finalizar
+  if (status === 'FINALIZADA') {
+    if (!ocorrencia) {
+      alert('⚠️ Para finalizar a ocorrência, é obrigatório preencher o Detalhamento da Ocorrência.');
+      document.getElementById('ed-ocv-ocorrencia')?.focus();
+      return;
+    }
+    if (!acao) {
+      alert('⚠️ Para finalizar a ocorrência, é obrigatório preencher a Ação Tomada.');
+      document.getElementById('ed-ocv-acao')?.focus();
+      return;
+    }
+  }
+
   db.updateOcorrenciaViagem(id, {
-    status: document.getElementById('ed-ocv-status').value,
+    status: status,
     data: document.getElementById('ed-ocv-data').value,
     carga: document.getElementById('ed-ocv-carga').value,
     placa: document.getElementById('ed-ocv-placa').value,
@@ -6672,11 +7160,11 @@ function handleSalvarEdicaoOcViagem(e, id) {
     funcao: document.getElementById('ed-ocv-funcao').value,
     motivo: document.getElementById('ed-ocv-motivo').value,
     causa: document.getElementById('ed-ocv-causa').value,
-    ocorrencia: document.getElementById('ed-ocv-ocorrencia').value,
-    acao: document.getElementById('ed-ocv-acao').value
+    ocorrencia: ocorrencia,
+    acao: acao
   });
   closeModal();
-  alert('✅ Ocorrência operacional atualizada!');
+  alert(status === 'FINALIZADA' ? '✅ Ocorrência finalizada e movida para as Finalizadas!' : '✅ Ocorrência operacional atualizada!');
   renderApp();
 }
 
@@ -9453,7 +9941,7 @@ function renderCadastrosDadosView() {
     </div>`;
 }
 
-function switchCadSubTab(tab) { activeCadSubTab = tab; renderApp(); scrollToTop(); }
+function switchCadSubTab(tab) { activeCadSubTab = tab; renderApp(); }
 window.switchCadSubTab = switchCadSubTab;
 
 function handleCadColaboradorCDSubmit(e) {
@@ -10516,7 +11004,6 @@ function gerarRelatorioOcorrenciasPdf() {
 function switchFrotaSubTab(tab) {
   activeFrotaSubTab = tab;
   renderApp();
-  scrollToTop();
 }
 window.switchFrotaSubTab = switchFrotaSubTab;
 
@@ -13916,7 +14403,7 @@ function imprimirBoletimGerencialExecutivo() {
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <title>BOLETIM GERENCIAL MASTER (D-1) — JR DISTRIBUIDORA</title>
+  <title>BOLETIM GERENCIAL — JR DISTRIBUIDORA</title>
   <style>
     @media print {
       @page { margin: 8mm; size: A4 portrait; }
@@ -13969,12 +14456,12 @@ function imprimirBoletimGerencialExecutivo() {
     <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
     <div class="header-info">
       <h2>JR DISTRIBUIDORA</h2>
-      <p>Boletim Gerencial Master Executivo — Consolidação Diária D-1</p>
+      <p>Boletim Gerencial Executivo — Consolidação Diária</p>
     </div>
   </div>
 
   <div class="doc-banner">
-    <span>BOLETIM GERENCIAL MASTER (D-1)</span>
+    <span>BOLETIM GERENCIAL</span>
     <span>Período Fechado: ${fDe === fAte ? (formatarData(fDe) || 'Ontem D-1') : `${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'}`}</span>
     <span>Emissão: ${formatarDataHora(new Date())}</span>
   </div>
@@ -14131,7 +14618,7 @@ function imprimirBoletimGerencialExecutivo() {
     </div>
   </div>
 
-  <div class="footer-note">JR Distribuidora 2026 — Boletim Gerencial Master Executivo (D-1) • Single Source of Truth Operacional</div>
+  <div class="footer-note">JR Distribuidora 2026 — Boletim Gerencial Executivo • Single Source of Truth Operacional</div>
   <script>
     window.onload = function() { setTimeout(function(){ window.print(); }, 500); }
   </script>
@@ -17368,42 +17855,48 @@ function gerarPdfDisciplinarOficial(dados) {
       <title>${isSuspensao ? 'TERMO DE SUSPENSÃO DISCIPLINAR' : 'TERMO DE ADVERTÊNCIA DISCIPLINAR'} — CSA SERVICES LTDA</title>
       <style>
         @media print {
-          @page { size: A4 portrait; margin: 10mm 12mm; }
-          body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          @page { size: A4 portrait; margin: 10mm 14mm; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
         * { box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; padding: 15px; color: #0f172a; background: #fff; line-height: 1.5; font-size: 11.5px; }
+        body { font-family: Arial, Helvetica, sans-serif; padding: 4px 6px; color: #0f172a; background: #fff; line-height: 1.48; font-size: 11px; }
         
-        .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #1e293b; padding-bottom: 10px; margin-bottom: 14px; }
+        .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2.5px solid #1e293b; padding-bottom: 8px; margin-bottom: 12px; }
         .logo-group { display: flex; align-items: center; gap: 12px; }
-        .logo-img { height: 50px; max-width: 160px; object-fit: contain; }
-        .company-name { font-size: 16px; font-weight: 900; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px; }
-        .company-sub { font-size: 10px; color: #475569; font-weight: 700; }
-        .company-cnpj { font-size: 10px; font-weight: 800; color: #1e293b; text-align: right; }
+        .logo-img { height: 48px; max-width: 160px; object-fit: contain; }
+        .company-name { font-size: 15px; font-weight: 900; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px; }
+        .company-sub { font-size: 9px; color: #475569; font-weight: 700; }
+        .company-cnpj { font-size: 9.5px; font-weight: 800; color: #1e293b; text-align: right; line-height: 1.35; }
 
-        .doc-title { text-align: center; background: ${isSuspensao ? '#991b1b' : '#1e293b'}; color: #ffffff; padding: 8px 12px; font-size: 14px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; border-radius: 4px; margin-bottom: 14px; }
+        .doc-title { text-align: center; background: ${isSuspensao ? '#991b1b' : '#1e293b'}; color: #ffffff; padding: 7px 14px; font-size: 13.5px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; border-radius: 4px; margin-bottom: 12px; }
         
-        .box-colab { border: 1.5px solid #cbd5e1; background: #ffffff; border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; }
-        .grid-colab { display: grid; grid-template-columns: 1fr 2fr 1.5fr; gap: 8px 12px; }
-        .lbl { font-size: 9px; font-weight: 800; color: #475569; text-transform: uppercase; }
+        .box-colab { border: 1.5px solid #cbd5e1; background: #ffffff; border-radius: 6px; padding: 9px 14px; margin-bottom: 12px; }
+        .grid-colab { display: grid; grid-template-columns: 0.8fr 2fr 1.3fr; gap: 7px 14px; }
+        .lbl { font-size: 8.5px; font-weight: 800; color: #475569; text-transform: uppercase; }
         .val { font-size: 11px; font-weight: 900; color: #0f172a; }
 
-        .fatos-box { background: #f1f5f9; border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 4px; font-weight: 800; font-size: 11px; text-transform: uppercase; color: #0f172a; margin: 10px 0; text-align: justify; white-space: pre-wrap; line-height: 1.45; }
+        .fatos-box { background: #f8fafc; border: 1.5px solid #cbd5e1; padding: 14px 16px; border-radius: 6px; min-height: 65px; display: flex; align-items: center; font-weight: 900; font-size: 11px; text-transform: uppercase; color: #0f172a; margin: 12px 0; text-align: justify; white-space: pre-wrap; line-height: 1.45; }
         
-        .alineas-box { background: #f8fafc; border-left: 4px solid #475569; padding: 10px 14px; margin: 10px 0; font-size: 11px; border-radius: 4px; }
+        .alineas-box { background: #f8fafc; border-left: 4px solid #334155; padding: 9px 14px; margin: 12px 0; font-size: 10.5px; border-radius: 4px; line-height: 1.45; }
 
-        .suspensao-periodo { border: 1.5px solid #b91c1c; background: #fef2f2; padding: 10px 12px; border-radius: 5px; margin: 12px 0; text-align: center; }
+        .suspensao-periodo { border: 1.5px solid #b91c1c; background: #fef2f2; padding: 9px 14px; border-radius: 6px; margin: 12px 0; text-align: center; }
         .suspensao-title { font-size: 11.5px; font-weight: 900; color: #991b1b; text-transform: uppercase; }
         .suspensao-dates { font-size: 11px; font-weight: 800; color: #1e293b; margin-top: 3px; }
 
-        .sigs-container { margin-top: 22px; }
-        .sigs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; text-align: center; }
-        .sig-line { border-top: 1.5px solid #0f172a; margin-bottom: 4px; margin-top: 30px; }
-        .sig-lbl { font-size: 9.5px; font-weight: 800; text-transform: uppercase; color: #0f172a; }
+        .p-text { margin: 11px 0; text-align: justify; font-size: 11px; line-height: 1.5; color: #0f172a; }
 
-        .recusa-box { margin-top: 16px; border: 1.5px dashed #64748b; background: #f8fafc; padding: 10px 12px; border-radius: 6px; }
-        .recusa-title { font-size: 10px; font-weight: 900; color: #334155; text-transform: uppercase; text-align: center; margin-bottom: 4px; }
-        .recusa-text { font-size: 9.5px; color: #475569; text-align: justify; margin-bottom: 8px; line-height: 1.35; }
+        .sigs-container { margin-top: 22px; margin-bottom: 12px; }
+        .sigs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; text-align: center; }
+        .sig-space-main { height: 45px; }
+        .sig-line { border-top: 1.5px solid #0f172a; margin-bottom: 4px; }
+        .sig-lbl { font-size: 9.5px; font-weight: 800; text-transform: uppercase; color: #0f172a; line-height: 1.35; }
+
+        .recusa-box { margin-top: 14px; border: 1.2px dashed #64748b; background: #f8fafc; padding: 9px 14px; border-radius: 6px; }
+        .recusa-title { font-size: 9.5px; font-weight: 900; color: #334155; text-transform: uppercase; text-align: center; margin-bottom: 4px; }
+        .recusa-text { font-size: 9px; color: #475569; text-align: justify; margin-bottom: 6px; line-height: 1.35; }
+        .sig-space-test { height: 40px; }
+        .sig-line-test { border-top: 1.2px solid #0f172a; margin-bottom: 3px; }
+        .sig-lbl-test { font-size: 9px; font-weight: 800; text-transform: uppercase; color: #0f172a; line-height: 1.3; }
       </style>
     </head>
     <body onload="window.print()">
@@ -17418,7 +17911,7 @@ function gerarPdfDisciplinarOficial(dados) {
         </div>
         <div class="company-cnpj">
           CNPJ: 50.699.226/0001-09<br>
-          <span style="font-size:9.5px; font-weight:bold; color:#64748b;">Emissão: ${formatarData(new Date())}</span>
+          <span style="font-size:9px; font-weight:bold; color:#64748b;">Emissão: ${formatarData(new Date())}</span>
         </div>
       </div>
 
@@ -17440,33 +17933,33 @@ function gerarPdfDisciplinarOficial(dados) {
       </div>
 
       <!-- CORPO DO RELATÓRIO JURÍDICO -->
-      <p style="margin: 10px 0; text-align: justify; font-size: 11.5px;">
+      <p class="p-text">
         Foi apurado que, Vossa Senhoria cometeu uma falta considerada grave pela legislação, conforme descrito a seguir:
       </p>
 
-      <!-- CAMPO DO RELATÓRIO DO MOTIVO -->
+      <!-- CAMPO DO RELATÓRIO DO MOTIVO (EXPANDIDO E COM PRESENÇA FORMAL) -->
       <div class="fatos-box">
 ${dados.motivo}
       </div>
 
-      <p style="text-align: justify; margin: 9px 0; font-size: 11.5px;">
+      <p class="p-text">
         Tal falha contraria os procedimentos internos da empresa e compromete a eficiência das operações, além de causar prejuízos ao desempenho das atividades.
       </p>
 
-      <p style="text-align: justify; margin: 9px 0; font-size: 11.5px;">
+      <p class="p-text">
         Este ocorrido é considerado falta grave conforme artigo 482 da CLT nas alínea(s) descrita(s) abaixo:
       </p>
 
       <!-- AS ALÍNEAS SELECIONADAS -->
       <div class="alineas-box">
         ${alineasObjetos.map(a => `
-          <div style="margin: 4px 0; color: #0f172a; font-size: 11px;">
+          <div style="margin: 3px 0; color: #0f172a; font-size: 10.5px;">
             <b>Alínea "${a.alinea.toUpperCase()}"</b> &nbsp;&nbsp; ${a.descCompleta}
           </div>
         `).join('')}
       </div>
 
-      <p style="text-align: justify; margin: 9px 0; font-size: 11.5px;">
+      <p class="p-text">
         Na intenção de evitar a repetição desta conduta, decidimos lhe aplicar a pena de <b>${isSuspensao ? `SUSPENSÃO DISCIPLINAR PELO PERÍODO DE ${dias} DIA(S)` : 'ADVERTÊNCIA'}</b>.
       </p>
 
@@ -17483,7 +17976,7 @@ ${dados.motivo}
         </div>
       </div>` : ''}
 
-      <p style="text-align: justify; margin: 10px 0 16px 0; font-size: 11.5px; line-height: 1.45;">
+      <p class="p-text" style="margin-top: 11px; margin-bottom: 14px;">
         Esclarecemos que a reincidência em tal atitude poderá ensejar uma suspensão disciplinar ou até mesmo extinção do contrato de trabalho por justa causa. Assim, evite a reincidência da prática de seu ato, o que, se ocorrer, nos obrigará a tomar outras medidas cabíveis de acordo com a legislação em vigor.
       </p>
 
@@ -17491,10 +17984,12 @@ ${dados.motivo}
       <div class="sigs-container">
         <div class="sigs-grid">
           <div>
+            <div class="sig-space-main"></div>
             <div class="sig-line"></div>
             <div class="sig-lbl">CSA SERVICES LTDA<br><span style="font-size:9px; color:#475569;">${dados.gestor || 'SUPERVISÃO CD / RECURSOS HUMANOS'}</span></div>
           </div>
           <div>
+            <div class="sig-space-main"></div>
             <div class="sig-line"></div>
             <div class="sig-lbl">${dados.nome}<br><span style="font-size:9px; color:#475569;">ASSINATURA DO EMPREGADO (CIENTE EM ___/___/____)</span></div>
           </div>
@@ -17507,14 +18002,16 @@ ${dados.motivo}
         <div class="recusa-text">
           Declaramos para os devidos fins que o colaborador acima identificado tomou conhecimento do presente Termo Disciplinar na data estipulada, porém <b>RECUSOU-SE</b> a apor sua assinatura. Em razão disso, o documento foi lido integralmente em sua presença pelas testemunhas abaixo qualificadas:
         </div>
-        <div class="sigs-grid" style="margin-top:8px;">
+        <div class="sigs-grid" style="margin-top:6px;">
           <div>
-            <div class="sig-line" style="margin-top:22px;"></div>
-            <div class="sig-lbl">TESTEMUNHA 1<br><span style="font-size:8.5px; color:#475569;">NOME: ______________________ | CPF/RG: __________________</span></div>
+            <div class="sig-space-test"></div>
+            <div class="sig-line-test"></div>
+            <div class="sig-lbl-test">TESTEMUNHA 1<br><span style="font-size:8.5px; color:#475569;">NOME: ______________________ | CPF/RG: __________________</span></div>
           </div>
           <div>
-            <div class="sig-line" style="margin-top:22px;"></div>
-            <div class="sig-lbl">TESTEMUNHA 2<br><span style="font-size:8.5px; color:#475569;">NOME: ______________________ | CPF/RG: __________________</span></div>
+            <div class="sig-space-test"></div>
+            <div class="sig-line-test"></div>
+            <div class="sig-lbl-test">TESTEMUNHA 2<br><span style="font-size:8.5px; color:#475569;">NOME: ______________________ | CPF/RG: __________________</span></div>
           </div>
         </div>
       </div>
