@@ -10784,7 +10784,9 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
               <option value="ERRO DE RECEBIMENTO">ERRO DE RECEBIMENTO</option>
               <option value="ERRO DE SEPARAÇÃO">ERRO DE SEPARAÇÃO</option>
               <option value="ERRO DE CONFERÊNCIA">ERRO DE CONFERÊNCIA</option>
-              <option value="FALTA DE ATENÇÃO">FALTA DE ATENÇÃO</option>
+              <option value="FALTA INJUSTIFICADA">FALTA INJUSTIFICADA</option>
+              <option value="SAÍDA ANTECIPADA">SAÍDA ANTECIPADA</option>
+              <option value="ATRASO NA CHEGADA">ATRASO NA CHEGADA</option>
               <option value="DESVIO DE CONDUTA">DESVIO DE CONDUTA</option>
               <option value="AVARIA NO MANUSEIO">AVARIA NO MANUSEIO</option>
               <option value="OUTRO">OUTRO</option>
@@ -13542,8 +13544,12 @@ function adicionarFaltaResumo(data, turno) {
         </div>
 
         <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência</label>
-          <input type="text" id="md-fl-conduta" placeholder="ex: FALTA, ATRASO OPERACIONAL, SAÍDA ANTECIPADA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência *</label>
+          <select id="md-fl-conduta" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+            <option value="FALTA INJUSTIFICADA">FALTA INJUSTIFICADA</option>
+            <option value="SAÍDA ANTECIPADA">SAÍDA ANTECIPADA</option>
+            <option value="ATRASO NA CHEGADA">ATRASO NA CHEGADA</option>
+          </select>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -13582,7 +13588,7 @@ function adicionarFaltaResumo(data, turno) {
 function confirmarSalvarFaltaResumo(data, turno) {
   const nome = document.getElementById('md-fl-nome')?.value;
   if (!nome) { alert('Selecione o colaborador!'); return; }
-  const conduta = document.getElementById('md-fl-conduta')?.value || 'FALTA';
+  const conduta = document.getElementById('md-fl-conduta')?.value || 'FALTA INJUSTIFICADA';
   const avisado = document.getElementById('md-fl-avisado')?.value || 'SIM';
   const periodo = document.getElementById('md-fl-periodo')?.value || 'Integral';
   const compensar = document.getElementById('md-fl-compensar')?.value || 'SIM';
@@ -13641,7 +13647,12 @@ function editarFaltaResumoModal(data, turno, index) {
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência *</label>
-          <input type="text" id="md-fl-conduta" value="${item.conduta || 'FALTA'}" placeholder="ex: FALTA, ATESTADO MÉDICO, ATRASO OPERACIONAL" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
+          <select id="md-fl-conduta" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase">
+            <option value="FALTA INJUSTIFICADA" ${item.conduta === 'FALTA INJUSTIFICADA' ? 'selected' : ''}>FALTA INJUSTIFICADA</option>
+            <option value="SAÍDA ANTECIPADA" ${item.conduta === 'SAÍDA ANTECIPADA' ? 'selected' : ''}>SAÍDA ANTECIPADA</option>
+            <option value="ATRASO NA CHEGADA" ${item.conduta === 'ATRASO NA CHEGADA' ? 'selected' : ''}>ATRASO NA CHEGADA</option>
+            ${!['FALTA INJUSTIFICADA', 'SAÍDA ANTECIPADA', 'ATRASO NA CHEGADA'].includes(item.conduta) && item.conduta ? `<option value="${item.conduta}" selected>${item.conduta}</option>` : ''}
+          </select>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -14018,7 +14029,9 @@ function adicionarOcorrenciaColaboradorResumo(data, turno) {
               <option value="ERRO DE RECEBIMENTO">ERRO DE RECEBIMENTO</option>
               <option value="ERRO DE SEPARAÇÃO">ERRO DE SEPARAÇÃO</option>
               <option value="ERRO DE CONFERÊNCIA">ERRO DE CONFERÊNCIA</option>
-              <option value="FALTA DE ATENÇÃO">FALTA DE ATENÇÃO</option>
+              <option value="FALTA INJUSTIFICADA">FALTA INJUSTIFICADA</option>
+              <option value="SAÍDA ANTECIPADA">SAÍDA ANTECIPADA</option>
+              <option value="ATRASO NA CHEGADA">ATRASO NA CHEGADA</option>
               <option value="DESVIO DE CONDUTA">DESVIO DE CONDUTA</option>
               <option value="AVARIA NO MANUSEIO">AVARIA NO MANUSEIO</option>
               <option value="OUTRO">OUTRO</option>
@@ -17653,12 +17666,12 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
           <div class="bg-slate-950 p-3 rounded-xl border border-purple-800/80 space-y-2">
             <div class="flex items-center justify-between">
               <label class="block text-[10px] font-black text-purple-400 uppercase">2. Alínea(s) do Artigo 482 da CLT (Seleção Múltipla) *</label>
-              <span class="text-[9px] text-purple-300 font-bold">Marque uma ou mais alíneas</span>
+              <span class="text-[9px] text-purple-300 font-bold">Marque uma ou mais alíneas (Obrigatório)</span>
             </div>
             <div class="max-h-48 overflow-y-auto space-y-1.5 p-2 bg-slate-900 border border-slate-700 rounded text-xs">
               ${ALINEAS_CLT_482.map(a => `
                 <label class="flex items-start gap-2.5 p-2 rounded hover:bg-slate-800/80 cursor-pointer transition border border-transparent hover:border-slate-700">
-                  <input type="checkbox" name="disc-alinea-check" value="${a.alinea}" ${a.alinea==='e'?'checked':''} class="mt-0.5 w-4 h-4 text-purple-600 rounded bg-slate-950 border-slate-700 focus:ring-purple-500 shrink-0">
+                  <input type="checkbox" name="disc-alinea-check" value="${a.alinea}" ${(options.alineasKeys && options.alineasKeys.includes(a.alinea)) ? 'checked' : ''} class="mt-0.5 w-4 h-4 text-purple-600 rounded bg-slate-950 border-slate-700 focus:ring-purple-500 shrink-0">
                   <div>
                     <div class="text-amber-300 font-bold text-xs">Alínea "${a.alinea.toUpperCase()}" — ${a.titulo}</div>
                     <div class="text-[10px] text-slate-400 italic mt-0.5">${a.descCompleta}</div>
