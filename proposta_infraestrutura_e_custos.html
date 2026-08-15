@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proposta Técnica — Infraestrutura, Capacidade e Custos em Nuvem | JR Oper</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    /* RESET & BASE */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --primary: #047857;
+      --primary-dark: #064e3b;
+      --primary-light: #10b981;
+      --primary-subtle: #ecfdf5;
+      --slate-900: #0f172a;
+      --slate-800: #1e293b;
+      --slate-700: #334155;
+      --slate-600: #475569;
+      --slate-500: #64748b;
+      --slate-200: #e2e8f0;
+      --slate-100: #f1f5f9;
+      --slate-50: #f8fafc;
+      --amber-600: #d97706;
+      --amber-50: #fffbeb;
+      --blue-600: #2563eb;
+      --blue-50: #eff6ff;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #0b131b;
+      color: var(--slate-800);
+      line-height: 1.55;
+      padding: 30px 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* BARRA SUPERIOR DE AÇÕES (NÃO IMPRIME) */
+    .action-bar {
+      max-width: 900px;
+      margin: 0 auto 20px auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid #1e293b;
+      padding: 12px 20px;
+      border-radius: 12px;
+      box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
+    }
+    .action-bar-title {
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .action-bar-title span {
+      background: #047857;
+      color: #fff;
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 800;
+    }
+    .btn-print {
+      background: linear-gradient(135deg, #059669, #047857);
+      color: #ffffff;
+      border: none;
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+      transition: all 0.2s ease;
+    }
+    .btn-print:hover {
+      background: linear-gradient(135deg, #10b981, #059669);
+      transform: translateY(-1px);
+    }
+
+    /* FOLHA A4 SIMULADA NA TELA */
+    .document-page {
+      max-width: 900px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 45px 50px;
+      border-radius: 14px;
+      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.6);
+      color: var(--slate-800);
+      position: relative;
+    }
+
+    /* CABEÇALHO DO DOCUMENTO */
+    .doc-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid var(--slate-900);
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+    }
+    .brand-area {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .brand-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 24px;
+      font-weight: 900;
+      color: #064e3b;
+      letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-subtitle {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--slate-500);
+    }
+    .meta-box {
+      text-align: right;
+      font-size: 11px;
+      color: var(--slate-600);
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      padding: 8px 14px;
+      border-radius: 8px;
+    }
+    .meta-box strong {
+      color: var(--slate-900);
+    }
+
+    /* TÍTULO PRINCIPAL */
+    .doc-title-block {
+      margin-bottom: 24px;
+    }
+    .doc-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      background: var(--primary-subtle);
+      color: var(--primary);
+      border: 1px solid #a7f3d0;
+      padding: 3px 10px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    .doc-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--slate-900);
+      line-height: 1.3;
+      margin-bottom: 4px;
+    }
+    .doc-lead {
+      font-size: 12.5px;
+      color: var(--slate-600);
+    }
+
+    /* KPI CARDS (RESUMO EXECUTIVO) */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .kpi-card {
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      border-radius: 10px;
+      padding: 12px 14px;
+      border-top: 3px solid var(--primary);
+    }
+    .kpi-card.highlight {
+      background: var(--primary-subtle);
+      border-color: #a7f3d0;
+      border-top-color: var(--primary);
+    }
+    .kpi-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--slate-500);
+      margin-bottom: 4px;
+    }
+    .kpi-card.highlight .kpi-label {
+      color: #065f46;
+    }
+    .kpi-value {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--slate-900);
+      line-height: 1.1;
+      margin-bottom: 2px;
+    }
+    .kpi-card.highlight .kpi-value {
+      color: #047857;
+    }
+    .kpi-desc {
+      font-size: 10.5px;
+      color: var(--slate-600);
+    }
+
+    /* SEÇÕES E CONTEÚDO */
+    .section {
+      margin-bottom: 22px;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .section-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--slate-900);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1.5px solid var(--slate-200);
+      padding-bottom: 6px;
+      margin-bottom: 12px;
+    }
+    .section-title .sec-num {
+      background: var(--slate-900);
+      color: #ffffff;
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 900;
+    }
+    p {
+      font-size: 12px;
+      color: var(--slate-700);
+      margin-bottom: 8px;
+      text-align: justify;
+    }
+
+    /* TABELAS PROFISSIONAIS */
+    .table-container {
+      margin: 10px 0 14px 0;
+      border: 1px solid var(--slate-200);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11.5px;
+    }
+    thead th {
+      background: var(--slate-900);
+      color: #ffffff;
+      text-align: left;
+      padding: 8px 12px;
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    tbody td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--slate-200);
+      color: var(--slate-800);
+    }
+    tbody tr:nth-child(even) {
+      background-color: var(--slate-50);
+    }
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .badge-green {
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #86efac;
+    }
+    .badge-blue {
+      background: #dbeafe;
+      color: #1d4ed8;
+      border: 1px solid #93c5fd;
+    }
+    .badge-amber {
+      background: #fef3c7;
+      color: #b45309;
+      border: 1px solid #fde68a;
+    }
+
+    /* CARDS DE GOVERNANÇA */
+    .gov-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .gov-card {
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      border-left: 3.5px solid var(--primary);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .gov-card h4 {
+      font-size: 11.5px;
+      font-weight: 800;
+      color: var(--slate-900);
+      margin-bottom: 3px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .gov-card p {
+      font-size: 11px;
+      color: var(--slate-600);
+      margin-bottom: 0;
+      text-align: left;
+    }
+
+    /* BOX DE DESTAQUE / ROI */
+    .roi-box {
+      background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+      border: 1px solid #cbd5e1;
+      border-left: 4px solid #0f172a;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 12px 0;
+    }
+    .roi-box h4 {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--slate-900);
+      margin-bottom: 4px;
+    }
+    .roi-box p {
+      font-size: 11px;
+      color: var(--slate-700);
+      margin-bottom: 0;
+    }
+
+    /* ASSINATURAS */
+    .signatures-block {
+      margin-top: 30px;
+      padding-top: 20px;
+      border-top: 1.5px solid var(--slate-300);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .signature-item {
+      text-align: center;
+    }
+    .signature-line {
+      border-bottom: 1px solid var(--slate-400);
+      margin-bottom: 6px;
+      height: 35px;
+    }
+    .signature-name {
+      font-size: 11.5px;
+      font-weight: 800;
+      color: var(--slate-900);
+    }
+    .signature-role {
+      font-size: 10px;
+      color: var(--slate-500);
+      text-transform: uppercase;
+    }
+
+    /* FOOTER */
+    .doc-footer {
+      margin-top: 25px;
+      border-top: 1px solid var(--slate-200);
+      padding-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 9.5px;
+      color: var(--slate-400);
+    }
+
+    /* REGRAS EXCLUSIVAS DE IMPRESSÃO (A4 / PDF) */
+    @media print {
+      body {
+        background: #ffffff !important;
+        padding: 0 !important;
+        color: #0f172a !important;
+      }
+      .action-bar {
+        display: none !important;
+      }
+      .document-page {
+        box-shadow: none !important;
+        padding: 0 !important;
+        max-width: 100% !important;
+        border-radius: 0 !important;
+      }
+      @page {
+        size: A4 portrait;
+        margin: 12mm 15mm 12mm 15mm;
+      }
+      .section {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      .signatures-block {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      thead th {
+        background: #1e293b !important;
+        color: #ffffff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .kpi-card, .gov-card, .roi-box, .badge {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- BARRA DE AÇÃO SUPERIOR (NÃO IMPRIME) -->
+  <div class="action-bar">
+    <div class="action-bar-title">
+      📄 <strong>Proposta de Infraestrutura & Custos</strong>
+      <span>JR OPER v6.1</span>
+    </div>
+    <button class="btn-print" onclick="window.print()">
+      🖨️ Imprimir / Salvar em PDF
+    </button>
+  </div>
+
+  <!-- DOCUMENTO FORMATO FOLHA A4 -->
+  <div class="document-page">
+
+    <!-- CABEÇALHO EXECUTIVO -->
+    <header class="doc-header">
+      <div class="brand-area">
+        <div class="brand-title">
+          <span>🟢</span> JR DISTRIBUIDORA
+        </div>
+        <div class="brand-subtitle">Departamento de Logística & Operações Integradas</div>
+      </div>
+      <div class="meta-box">
+        <div><strong>Documento:</strong> PROP-INFRA-2026/01</div>
+        <div><strong>Data:</strong> 14 de Agosto de 2026</div>
+        <div><strong>Confidencialidade:</strong> Uso Interno</div>
+      </div>
+    </header>
+
+    <!-- TÍTULO DA PROPOSTA -->
+    <div class="doc-title-block">
+      <div class="doc-badge">Proposta Técnica de Implantação</div>
+      <h1 class="doc-title">Dimensionamento de Infraestrutura, Armazenamento em Nuvem e Custos Operacionais</h1>
+      <div class="doc-lead">Mapeamento de viabilidade de dados em nuvem, gestão de mídias (fotos/vídeos) e projeção financeira para o <strong>JR Oper</strong>.</div>
+    </div>
+
+    <!-- CARDS DE RESUMO EXECUTIVO (KPIS) -->
+    <div class="kpi-grid">
+      <div class="kpi-card highlight">
+        <div class="kpi-label">Custo Inicial</div>
+        <div class="kpi-value">R$ 0,00</div>
+        <div class="kpi-desc">Operação completa em Plano Free</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Capacidade Texto</div>
+        <div class="kpi-value">+300 mil</div>
+        <div class="kpi-desc">Ocorrências tabulares no banco</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Armazenamento Fotos</div>
+        <div class="kpi-value">~10.000</div>
+        <div class="kpi-desc">Com compressão HD automática</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Plano Pro (Opcional)</div>
+        <div class="kpi-value">~R$ 140/m</div>
+        <div class="kpi-desc">100 GB se houver expansão futura</div>
+      </div>
+    </div>
+
+    <!-- SEÇÃO 1: RESUMO EXECUTIVO & OBJETIVO -->
+    <div class="section">
+      <div class="section-title">
+        <span class="sec-num">1</span>
+        <span>Resumo Executivo & Arquitetura de Nuvem</span>
+      </div>
+      <p>
+        O <strong>JR Oper</strong> foi desenvolvido como uma solução corporativa unificada para integrar os fluxos de <strong>SAC / Operações, CD (Galpão), Financeiro e Manutenção de Frota</strong>. A infraestrutura foi desenhada sobre plataformas líderes de mercado que garantem estabilidade de 99.9%, criptografia em trânsito (SSL/HTTPS) e compatibilidade total com o Microsoft Power BI.
+      </p>
+      
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Camada</th>
+              <th>Plataforma</th>
+              <th>Finalidade na Operação</th>
+              <th>Custo</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Aplicação Web / PWA</strong></td>
+              <td>Vercel Cloud</td>
+              <td>Acesso instantâneo em tempo real via computador e celular</td>
+              <td><span class="badge badge-green">R$ 0,00</span></td>
+            </tr>
+            <tr>
+              <td><strong>Banco de Dados & Storage</strong></td>
+              <td>Supabase (PostgreSQL)</td>
+              <td>Armazenamento relacional 3FN e guarda de fotos/vídeos</td>
+              <td><span class="badge badge-green">Plano Free</span></td>
+            </tr>
+            <tr>
+              <td><strong>Repositório & Versionamento</strong></td>
+              <td>GitHub Corporativo</td>
+              <td>Auditoria de código-fonte e deploy automatizado</td>
+              <td><span class="badge badge-green">R$ 0,00</span></td>
+            </tr>
+            <tr>
+              <td><strong>Inteligência & BI</strong></td>
+              <td>Microsoft Power BI</td>
+              <td>Leitura direta das 6 Views SQL prontas no PostgreSQL</td>
+              <td><span class="badge badge-green">Incluso</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SEÇÃO 2: CAPACIDADE E GESTÃO DE MÍDIAS -->
+    <div class="section">
+      <div class="section-title">
+        <span class="sec-num">2</span>
+        <span>Capacidade de Armazenamento & Gestão de Fotos e Vídeos</span>
+      </div>
+      <p>
+        No ecossistema logístico, as evidências visuais (fotos de canhotos, avarias de produtos no CD e vídeos de socorro mecânico) são fundamentais. A tabela abaixo detalha o comportamento do sistema no <strong>Plano Gratuito</strong> versus a necessidade de expansão:
+      </p>
+
+      <div class="gov-grid">
+        <div class="gov-card">
+          <h4>🗄️ Dados em Texto (500 MB)</h4>
+          <p>Dados de cadastros, rotas e ocorrências pesam menos de 2 KB por linha. O limite suporta mais de <strong>300.000 chamados</strong>, garantindo autonomia de <strong>3 a 5 anos</strong> sem qualquer necessidade de upgrade.</p>
+        </div>
+        <div class="gov-card">
+          <h4>📸 Fotos com Compressão HD (1 GB)</h4>
+          <p>O sistema aplica compressão automática no navegador antes do upload, reduzindo fotos de 5 MB para ~100 KB. Isso viabiliza a guarda de <strong>7.000 a 10.000 fotos de avarias</strong> com custo zero.</p>
+        </div>
+        <div class="gov-card">
+          <h4>🎥 Vídeos de Ocorrências em Rota</h4>
+          <p>Vídeos curtos (até 15s) para veículos parados e socorro mecânico. Recomenda-se anexar mídias pesadas apenas em sinistros ou ocorrências críticas de manutenção.</p>
+        </div>
+        <div class="gov-card">
+          <h4>💾 Governança & Arquivamento</h4>
+          <p>O sistema disponibiliza rotinas de exportação SQL, JSON e Excel, permitindo a extração periódica para arquivamento frio de ocorrências concluídas há mais de 12 meses.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- SEÇÃO 3: PLANO DE ESCALABILIDADE -->
+    <div class="section">
+      <div class="section-title">
+        <span class="sec-num">3</span>
+        <span>Comparativo de Custos & Plano de Expansão (Supabase)</span>
+      </div>
+      <p>
+        Caso a empresa opte futuramente por armazenar volumes massivos de vídeos em alta resolução ou dispensar qualquer rotina de expurgo, o upgrade para o <strong>Plano Pro</strong> é imediato e de baixo impacto orçamentário:
+      </p>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Recurso Técnico</th>
+              <th>Plano Free (Atual)</th>
+              <th>Plano Pro (Expansão Futura)</th>
+              <th>Vantagem Operacional</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Custo Mensal</strong></td>
+              <td><span class="badge badge-green">R$ 0,00</span></td>
+              <td><span class="badge badge-blue">US$ 25 / mês (~R$ 140)</span></td>
+              <td>Previsibilidade e valor fixo</td>
+            </tr>
+            <tr>
+              <td><strong>Banco de Dados (Tabelas)</strong></td>
+              <td>500 MB</td>
+              <td><strong>8 GB (16x mais)</strong></td>
+              <td>Milhões de registros históricos</td>
+            </tr>
+            <tr>
+              <td><strong>Storage de Mídias (Fotos/Vídeos)</strong></td>
+              <td>1 GB</td>
+              <td><strong>100 GB (100x mais)</strong></td>
+              <td>+1 milhão de fotos ou centenas de vídeos</td>
+            </tr>
+            <tr>
+              <td><strong>Transferência Mensal</strong></td>
+              <td>2 GB / mês</td>
+              <td><strong>250 GB / mês</strong></td>
+              <td>Acesso massivo simultâneo da equipe</td>
+            </tr>
+            <tr>
+              <td><strong>Backups Automáticos</strong></td>
+              <td>Manuais via App / SQL</td>
+              <td><strong>Diários automáticos (7 dias)</strong></td>
+              <td>Restauração em 1 clique em desastres</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SEÇÃO 4: ROI E RECOMENDAÇÃO FINAL -->
+    <div class="section">
+      <div class="section-title">
+        <span class="sec-num">4</span>
+        <span>Análise de Custo-Benefício (ROI) & Conclusão</span>
+      </div>
+
+      <div class="roi-box">
+        <h4>💰 Retorno Imediato sobre o Investimento</h4>
+        <p>
+          Em médias conservadoras do mercado corporativo, soluções equivalentes exigem custos de implantação em torno de <strong>R$ 20.000 a R$ 25.000</strong> com mensalidades de suporte de <strong>R$ 1.500 a R$ 2.000 / mês</strong>. O JR Oper atende integralmente os 4 setores logísticos da JR Distribuidora a <strong>custo de licença zero (R$ 0,00)</strong>, gerando uma economia direta de mais de <strong>R$ 45.000 no primeiro ano</strong>.
+        </p>
+      </div>
+
+      <p style="margin-top: 10px;">
+        <strong>Recomendação da Área Técnica:</strong> Iniciar a operação em ambiente de produção no <strong>Plano Gratuito (R$ 0,00)</strong>. A equipe de logística realizará o monitoramento quinzenal do uso de storage pelo painel do Supabase. O upgrade para o plano Pro só será solicitado caso a volumetria ultrapasse 80% da capacidade ou mediante decisão estratégica da Diretoria.
+      </p>
+    </div>
+
+    <!-- ASSINATURAS -->
+    <div class="signatures-block">
+      <div class="signature-item">
+        <div class="signature-line"></div>
+        <div class="signature-name">Analista de Logística & Operações</div>
+        <div class="signature-role">Responsável Técnico pelo Projeto</div>
+      </div>
+      <div class="signature-item">
+        <div class="signature-line"></div>
+        <div class="signature-name">Diretoria de Operações & Logística</div>
+        <div class="signature-role">Aprovação Executiva</div>
+      </div>
+    </div>
+
+    <!-- RODAPÉ -->
+    <footer class="doc-footer">
+      <div>JR Oper — Sistema Integrado de Operações Logísticas | JR Distribuidora</div>
+      <div>Página 1 de 1</div>
+    </footer>
+
+  </div>
+
+</body>
+</html>

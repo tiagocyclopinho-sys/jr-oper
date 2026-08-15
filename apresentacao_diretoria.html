@@ -3,29 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JR Oper - Apresentação Executiva para a Diretoria</title>
-  <!-- Google Fonts para tipografia premium -->
+  <title>JR Oper — Apresentação Estratégica à Diretoria</title>
+  <!-- Google Fonts para tipografia premium corporativa -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@500;600;700;800;900&display=swap" rel="stylesheet">
   
   <style>
-    /* Sistema de Design e Variáveis */
+    /* SISTEMA DE DESIGN & VARIÁVEIS EXECUTIVAS */
     :root {
-      --primary: #2e7d32;      /* Verde Institucional JR */
-      --primary-dark: #1b5e20; /* Verde Escuro */
-      --primary-light: #e8f5e9;/* Verde Claro */
-      --dark: #121212;         /* Cinza Escuro Premium */
-      --dark-card: #1e1e1e;    /* Fundo dos Cards Dark */
-      --light: #f8f9fa;        /* Fundo Light */
-      --accent: #ffd600;       /* Amarelo de Destaque */
-      --danger: #d32f2f;       /* Vermelho de Alerta */
-      --danger-light: #ffebee;
-      --text-dark: #212529;
-      --text-light: #f8f9fa;
-      --text-muted: #868e96;
+      --primary: #059669;          /* Verde Esmeralda JR */
+      --primary-dark: #064e3b;     /* Verde Escuro */
+      --primary-light: #6ee7b7;    /* Verde Claro */
+      --primary-subtle: rgba(5, 150, 105, 0.12);
+      --dark-bg: #070e14;          /* Fundo Dark Premium */
+      --dark-card: #0d1822;        /* Cards Escuros */
+      --dark-card-hover: #132230;  /* Hover Cards */
+      --dark-border: rgba(255, 255, 255, 0.08);
+      --accent-gold: #f59e0b;      /* Dourado / Amarelo de Destaque */
+      --accent-blue: #38bdf8;      /* Azul Claro */
+      --accent-red: #ef4444;       /* Vermelho de Alerta */
+      --text-white: #ffffff;
+      --text-light: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
       --border-radius: 16px;
-      --transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      --transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
     * {
@@ -35,15 +38,16 @@
     }
 
     body {
-      font-family: 'Inter', sans-serif;
-      background-color: var(--dark);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--dark-bg);
       color: var(--text-light);
       overflow: hidden;
       height: 100vh;
       width: 100vw;
+      -webkit-font-smoothing: antialiased;
     }
 
-    /* Container de Slides */
+    /* CONTAINER PRINCIPAL */
     .presentation-container {
       position: relative;
       width: 100%;
@@ -51,54 +55,87 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+      background: radial-gradient(circle at 80% 20%, rgba(5, 150, 105, 0.08) 0%, transparent 60%),
+                  radial-gradient(circle at 10% 80%, rgba(56, 189, 248, 0.05) 0%, transparent 50%),
+                  var(--dark-bg);
     }
 
-    /* Cabeçalho da Apresentação */
+    /* CABEÇALHO FIXO */
     .header {
-      padding: 20px 40px;
+      padding: 16px 40px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      z-index: 10;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-      background: rgba(18, 18, 18, 0.8);
-      backdrop-filter: blur(10px);
+      z-index: 20;
+      border-bottom: 1px solid var(--dark-border);
+      background: rgba(7, 14, 20, 0.85);
+      backdrop-filter: blur(12px);
     }
 
     .logo-container {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
     }
 
-    .logo-badge {
-      background: var(--primary);
-      color: white;
-      font-family: 'Outfit', sans-serif;
-      font-weight: 800;
-      font-size: 1.2rem;
-      padding: 6px 14px;
-      border-radius: 8px;
-      letter-spacing: 1px;
-      box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
+    .logo-img {
+      height: 38px;
+      width: auto;
+      object-fit: contain;
+      filter: drop-shadow(0 2px 8px rgba(0,0,0,0.5));
     }
 
-    .logo-text {
-      font-family: 'Outfit', sans-serif;
-      font-weight: 600;
+    .logo-fallback-badge {
+      background: linear-gradient(135deg, #059669, #047857);
+      color: #fff;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-weight: 900;
       font-size: 1.1rem;
-      color: var(--text-light);
+      padding: 6px 12px;
+      border-radius: 8px;
+      letter-spacing: 0.5px;
+      box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
     }
 
-    .presentation-title {
-      font-size: 0.9rem;
+    .logo-text-block {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .logo-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-weight: 800;
+      font-size: 1.15rem;
+      color: var(--text-white);
+      line-height: 1.1;
+      letter-spacing: -0.3px;
+    }
+
+    .logo-title span {
+      color: var(--primary-light);
+    }
+
+    .logo-sub {
+      font-size: 0.65rem;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 1.5px;
+      letter-spacing: 1.2px;
       color: var(--text-muted);
-      font-weight: 500;
     }
 
-    /* Área dos Slides */
+    .header-tag {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--dark-border);
+      padding: 6px 14px;
+      border-radius: 20px;
+    }
+
+    /* ÁREA CENTRAL DE SLIDES */
     .slides-wrapper {
       flex: 1;
       position: relative;
@@ -106,23 +143,23 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      padding: 20px 40px;
+      padding: 10px 40px;
     }
 
     .slide {
       position: absolute;
       width: 100%;
-      max-width: 1200px;
+      max-width: 1240px;
       height: 100%;
-      max-height: 650px;
+      max-height: 640px;
       opacity: 0;
-      transform: scale(0.95) translateY(20px);
+      transform: scale(0.96) translateY(15px);
       pointer-events: none;
       transition: var(--transition);
       display: flex;
       flex-direction: column;
       justify-content: center;
-      padding: 20px;
+      padding: 15px 10px;
     }
 
     .slide.active {
@@ -131,329 +168,263 @@
       pointer-events: auto;
     }
 
-    /* Estilos de Conteúdo do Slide */
-    .slide-title {
-      font-family: 'Outfit', sans-serif;
-      font-size: 3rem;
+    /* TIPOGRAFIA DOS SLIDES */
+    .slide-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
       font-weight: 800;
-      margin-bottom: 24px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--primary-light);
+      background: var(--primary-subtle);
+      border: 1px solid rgba(5, 150, 105, 0.35);
+      padding: 4px 12px;
+      border-radius: 999px;
+      margin-bottom: 12px;
+      width: fit-content;
+    }
+
+    .slide-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 2.3rem;
+      font-weight: 900;
+      margin-bottom: 10px;
       line-height: 1.15;
-      background: linear-gradient(135deg, #ffffff 30%, #a5d6a7 100%);
+      letter-spacing: -0.8px;
+      background: linear-gradient(135deg, #ffffff 40%, #a7f3d0 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
     }
 
     .slide-subtitle {
-      font-size: 1.2rem;
+      font-size: 1rem;
       color: var(--text-muted);
-      margin-bottom: 30px;
-      max-width: 800px;
-      line-height: 1.6;
+      margin-bottom: 22px;
+      max-width: 950px;
+      line-height: 1.5;
     }
 
-    /* Grid e Cards de Layout */
-    .slide-grid-2 {
+    /* GRIDS & CARDS */
+    .grid-2 {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 30px;
-      align-items: center;
+      gap: 20px;
+      align-items: stretch;
     }
 
-    .slide-grid-3 {
+    .grid-3 {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
-      gap: 24px;
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      align-items: stretch;
     }
 
     .card {
       background: var(--dark-card);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--dark-border);
       border-radius: var(--border-radius);
-      padding: 24px;
+      padding: 20px;
       transition: var(--transition);
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      position: relative;
+      overflow: hidden;
     }
 
     .card:hover {
-      transform: translateY(-5px);
-      border-color: rgba(46, 125, 50, 0.3);
-      box-shadow: 0 15px 35px rgba(46, 125, 50, 0.1);
+      transform: translateY(-3px);
+      border-color: rgba(5, 150, 105, 0.4);
+      background: var(--dark-card-hover);
+      box-shadow: 0 15px 35px rgba(5, 150, 105, 0.12);
+    }
+
+    .card-icon {
+      font-size: 1.8rem;
+      margin-bottom: 12px;
+      line-height: 1;
     }
 
     .card-title {
-      font-family: 'Outfit', sans-serif;
-      font-size: 1.3rem;
-      font-weight: 700;
-      color: var(--text-light);
-      margin-bottom: 12px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .card-text {
-      font-size: 0.95rem;
-      color: var(--text-muted);
-      line-height: 1.5;
-    }
-
-    /* Destaques e Badges */
-    .badge {
-      display: inline-block;
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      text-transform: uppercase;
-    }
-
-    .badge-primary { background: rgba(46, 125, 50, 0.15); color: #81c784; border: 1px solid rgba(46, 125, 50, 0.3); }
-    .badge-warning { background: rgba(251, 192, 45, 0.15); color: #fff176; border: 1px solid rgba(251, 192, 45, 0.3); }
-    .badge-danger { background: rgba(211, 47, 47, 0.15); color: #e57373; border: 1px solid rgba(211, 47, 47, 0.3); }
-
-    /* Estilo Especial Slide de Capa */
-    .slide-cover {
-      text-align: center;
-      align-items: center;
-    }
-
-    .slide-cover .slide-title {
-      font-size: 4.5rem;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 1.15rem;
       font-weight: 800;
-      margin-bottom: 10px;
-      background: linear-gradient(135deg, #ffffff 40%, var(--primary) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .slide-cover .subtitle-main {
-      font-family: 'Outfit', sans-serif;
-      font-size: 1.8rem;
-      font-weight: 500;
-      color: #a5d6a7;
-      margin-bottom: 24px;
-      letter-spacing: 0.5px;
-    }
-
-    .slide-cover .desc {
-      font-size: 1.1rem;
-      color: var(--text-muted);
-      max-width: 600px;
-      line-height: 1.6;
-      margin-bottom: 40px;
-    }
-
-    /* Gráfico de Impacto (Comparação GLPI vs JR Oper) */
-    .comparison-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 15px;
-      font-size: 0.95rem;
-    }
-
-    .comparison-table th, .comparison-table td {
-      padding: 12px 16px;
-      text-align: left;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    .comparison-table th {
-      color: var(--text-muted);
-      font-weight: 600;
-      font-size: 0.85rem;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-
-    .comparison-table td strong {
-      color: var(--text-light);
-    }
-
-    .comparison-table tr:hover {
-      background: rgba(255, 255, 255, 0.02);
-    }
-
-    /* Rodapé com Navegação */
-    .footer {
-      padding: 20px 40px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      background: rgba(18, 18, 18, 0.9);
-      border-top: 1px solid rgba(255, 255, 255, 0.05);
-      z-index: 10;
-    }
-
-    .progress-bar-container {
-      flex: 1;
-      height: 4px;
-      background: rgba(255, 255, 255, 0.05);
-      margin-right: 40px;
-      border-radius: 2px;
-      position: relative;
-    }
-
-    .progress-bar {
-      height: 100%;
-      background: linear-gradient(90deg, var(--primary), var(--accent));
-      width: 0%;
-      border-radius: 2px;
-      transition: width 0.3s ease;
-    }
-
-    .controls-wrapper {
-      display: flex;
-      align-items: center;
-      gap: 20px;
-    }
-
-    .slide-counter {
-      font-family: 'Outfit', sans-serif;
-      font-size: 1rem;
-      font-weight: 600;
-      color: var(--text-muted);
-      min-width: 60px;
-      text-align: center;
-    }
-
-    .control-btn {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: var(--text-light);
-      padding: 10px 16px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 600;
-      transition: var(--transition);
+      color: var(--text-white);
+      margin-bottom: 8px;
       display: flex;
       align-items: center;
       gap: 8px;
     }
 
-    .control-btn:hover {
-      background: var(--primary);
-      border-color: var(--primary);
-      box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
-    }
-
-    .control-btn:disabled {
-      opacity: 0.3;
-      cursor: not-allowed;
-      background: rgba(255, 255, 255, 0.02);
-      border-color: rgba(255, 255, 255, 0.05);
-    }
-
-    /* Notas do Apresentador */
-    .notes-toggle {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+    .card-text {
+      font-size: 0.85rem;
       color: var(--text-muted);
-      padding: 10px;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: var(--transition);
+      line-height: 1.55;
     }
 
-    .notes-toggle:hover, .notes-toggle.active {
-      color: var(--text-light);
-      background: rgba(46, 125, 50, 0.2);
-      border-color: var(--primary);
+    .card-highlight {
+      background: linear-gradient(135deg, rgba(5, 150, 105, 0.12), rgba(13, 24, 34, 0.95));
+      border: 1px solid rgba(5, 150, 105, 0.4);
     }
 
-    .notes-panel {
-      position: absolute;
-      bottom: 80px;
-      left: 40px;
-      right: 40px;
-      background: rgba(33, 33, 33, 0.95);
-      border: 1px solid var(--primary);
-      border-radius: 12px;
-      padding: 20px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-      display: none;
-      z-index: 100;
-      backdrop-filter: blur(10px);
-      transform: translateY(10px);
-      transition: var(--transition);
+    /* SLIDE CAPA EXECUTIVA */
+    .slide-cover {
+      text-align: center;
+      align-items: center;
+      justify-content: center;
     }
 
-    .notes-panel.active {
-      display: block;
-      transform: translateY(0);
-    }
-
-    .notes-header {
-      font-family: 'Outfit', sans-serif;
-      font-weight: 700;
-      font-size: 1rem;
-      color: #81c784;
-      margin-bottom: 8px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-
-    .notes-content {
-      font-size: 0.95rem;
-      color: #e0e0e0;
-      line-height: 1.5;
-    }
-
-    /* SVG Ícones customizados e esquemas */
-    .pbi-visual-preview {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      margin-top: 15px;
-    }
-
-    .pbi-bar {
-      height: 35px;
-      background: rgba(46, 125, 50, 0.15);
-      border-radius: 6px;
+    .cover-logo-area {
       display: flex;
       align-items: center;
-      padding: 0 12px;
-      position: relative;
-      overflow: hidden;
-      border: 1px solid rgba(46, 125, 50, 0.25);
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 16px;
     }
 
-    .pbi-bar-fill {
-      position: absolute;
-      top: 0;
-      left: 0;
-      height: 100%;
-      background: var(--primary);
-      z-index: 1;
-      border-radius: 5px 0 0 5px;
-      opacity: 0.85;
+    .cover-logo-img {
+      height: 70px;
+      width: auto;
+      object-fit: contain;
+      filter: drop-shadow(0 4px 15px rgba(5, 150, 105, 0.3));
     }
 
-    .pbi-bar-text {
-      position: relative;
-      z-index: 2;
-      font-weight: 600;
-      font-size: 0.85rem;
+    .slide-cover .slide-title {
+      font-size: 3.6rem;
+      font-weight: 900;
+      margin-bottom: 8px;
+      letter-spacing: -1px;
+      background: linear-gradient(135deg, #ffffff 30%, #34d399 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .slide-cover .subtitle-main {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 1.45rem;
+      font-weight: 700;
+      color: var(--primary-light);
+      margin-bottom: 16px;
+      letter-spacing: -0.2px;
+    }
+
+    .slide-cover .desc {
+      font-size: 1rem;
+      color: var(--text-muted);
+      max-width: 780px;
+      line-height: 1.6;
+      margin-bottom: 30px;
+    }
+
+    .cover-pills {
       display: flex;
-      justify-content: space-between;
-      width: 100%;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
     }
 
-    /* Fluxograma em CSS do Slide 4 */
+    .cover-pill {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 10px 18px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-light);
+    }
+    .cover-pill.green {
+      background: rgba(5, 150, 105, 0.15);
+      border-color: rgba(5, 150, 105, 0.4);
+      color: var(--primary-light);
+    }
+
+    /* TABELA DE COMPARATIVO DE CUSTOS (MERCADO VS INTERNO) */
+    .table-box {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--dark-border);
+      overflow: hidden;
+      background: var(--dark-card);
+      margin-top: 10px;
+    }
+
+    .table-custom {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    .table-custom th {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-muted);
+      font-weight: 800;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--dark-border);
+    }
+
+    .table-custom td {
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: var(--text-light);
+      vertical-align: middle;
+    }
+
+    .table-custom tr:last-child td {
+      border-bottom: none;
+    }
+
+    .table-custom tr:hover {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .cost-market {
+      color: #f87171;
+      font-weight: 700;
+      font-size: 0.85rem;
+    }
+
+    .cost-zero {
+      color: #34d399;
+      font-weight: 900;
+      font-size: 0.95rem;
+      background: rgba(5, 150, 105, 0.15);
+      padding: 3px 8px;
+      border-radius: 6px;
+      display: inline-block;
+    }
+
+    /* FLUXOGRAMA VISUAL */
     .flow-container {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 30px;
+      margin-top: 15px;
       position: relative;
     }
 
     .flow-step {
-      width: 22%;
+      width: 23%;
       background: var(--dark-card);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--dark-border);
       border-radius: 12px;
-      padding: 15px;
+      padding: 14px 10px;
       text-align: center;
       position: relative;
       z-index: 2;
@@ -462,13 +433,14 @@
 
     .flow-step.active-step {
       border-color: var(--primary);
-      box-shadow: 0 0 15px rgba(46, 125, 50, 0.2);
+      box-shadow: 0 0 20px rgba(5, 150, 105, 0.25);
+      background: rgba(5, 150, 105, 0.1);
     }
 
     .flow-arrow {
       flex: 1;
       height: 2px;
-      background: rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.15);
       position: relative;
       z-index: 1;
     }
@@ -476,37 +448,149 @@
     .flow-arrow::after {
       content: '➔';
       position: absolute;
-      right: 0;
-      top: -9px;
-      color: rgba(255, 255, 255, 0.3);
-      font-size: 0.8rem;
-    }
-
-    .flow-icon {
-      font-size: 1.5rem;
-      margin-bottom: 8px;
-    }
-
-    .flow-title {
-      font-family: 'Outfit', sans-serif;
-      font-weight: 700;
-      font-size: 0.95rem;
-      margin-bottom: 4px;
-    }
-
-    .flow-desc {
+      right: -2px;
+      top: -8px;
+      color: rgba(255, 255, 255, 0.4);
       font-size: 0.75rem;
-      color: var(--text-muted);
     }
 
-    /* Destaques numéricos */
-    .stat-number {
-      font-family: 'Outfit', sans-serif;
-      font-size: 3rem;
+    /* BADGES */
+    .tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .tag-green { background: rgba(5, 150, 105, 0.2); color: #34d399; }
+    .tag-blue { background: rgba(56, 189, 248, 0.2); color: #38bdf8; }
+    .tag-amber { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+
+    /* FOOTER & CONTROLES */
+    .footer {
+      padding: 14px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(7, 14, 20, 0.95);
+      border-top: 1px solid var(--dark-border);
+      z-index: 20;
+    }
+
+    .progress-bar-container {
+      flex: 1;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      margin-right: 30px;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #059669, #38bdf8);
+      width: 0%;
+      border-radius: 999px;
+      transition: width 0.3s ease;
+    }
+
+    .controls-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .slide-counter {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      min-width: 55px;
+      text-align: center;
+    }
+
+    .control-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--dark-border);
+      color: var(--text-white);
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 700;
+      transition: var(--transition);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .control-btn:hover {
+      background: var(--primary);
+      border-color: var(--primary);
+      box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+    }
+
+    .control-btn:disabled {
+      opacity: 0.25;
+      cursor: not-allowed;
+      background: transparent;
+      border-color: rgba(255, 255, 255, 0.05);
+    }
+
+    .notes-toggle {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--dark-border);
+      color: var(--text-muted);
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 700;
+      transition: var(--transition);
+    }
+
+    .notes-toggle:hover, .notes-toggle.active {
+      color: var(--text-white);
+      background: rgba(5, 150, 105, 0.25);
+      border-color: var(--primary);
+    }
+
+    /* PAINEL FLUTUANTE DE NOTAS */
+    .notes-panel {
+      position: absolute;
+      bottom: 75px;
+      left: 40px;
+      right: 40px;
+      background: rgba(13, 24, 34, 0.96);
+      border: 1px solid var(--primary);
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.6);
+      display: none;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+
+    .notes-panel.active {
+      display: block;
+    }
+
+    .notes-header {
+      font-family: 'Plus Jakarta Sans', sans-serif;
       font-weight: 800;
-      color: var(--accent);
-      line-height: 1;
-      margin-bottom: 5px;
+      font-size: 0.85rem;
+      color: var(--primary-light);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    .notes-content {
+      font-size: 0.85rem;
+      color: var(--text-light);
+      line-height: 1.5;
     }
   </style>
 </head>
@@ -514,263 +598,330 @@
 
   <div class="presentation-container">
     
-    <!-- Cabeçalho Fixo -->
+    <!-- CABEÇALHO FIXO -->
     <header class="header">
       <div class="logo-container">
-        <div class="logo-badge">JR</div>
-        <div class="logo-text">Oper</div>
+        <!-- Tenta exibir a imagem oficial do repositório com fallback elegante -->
+        <img src="documents/logo jr branca.png" alt="JR Distribuidora" class="logo-img" onerror="this.style.display='none'; document.getElementById('fb-badge').style.display='block';">
+        <div id="fb-badge" class="logo-fallback-badge" style="display:none;">JR</div>
+        <div class="logo-text-block">
+          <div class="logo-title">JR <span>Oper</span></div>
+          <div class="logo-sub">Gestão Logística Integrada</div>
+        </div>
       </div>
-      <div class="presentation-title">Apresentação Estratégica à Diretoria</div>
     </header>
 
-    <!-- Área de Exibição dos Slides -->
+    <!-- ÁREA DE EXIBIÇÃO DOS SLIDES -->
     <main class="slides-wrapper">
 
-      <!-- SLIDE 1: CAPA -->
-      <section class="slide slide-cover active" data-notes="Olá a todos. Hoje apresento o JR Oper, um sistema integrado desenvolvido sob medida para a JR Distribuidora. O objetivo deste projeto foi centralizar e automatizar toda a nossa operação logística e de atendimento de SAC, resolvendo gargalos históricos que tínhamos com o antigo sistema GLPI, alcançando custo zero de licenças.">
-        <div class="badge badge-primary" style="margin-bottom: 20px;">Lançamento Corporativo</div>
+      <!-- SLIDE 1: CAPA EXECUTIVA -->
+      <section class="slide slide-cover active" data-notes="Boa tarde a todos da Diretoria. Hoje tenho a satisfação de apresentar o JR Oper, um sistema corporativo completo desenvolvido sob medida para a JR Distribuidora. O foco deste projeto foi integrar em tempo real os nossos 4 setores operacionais (SAC, CD, Financeiro e Frota), eliminar retrabalhos históricos de devoluções e quebras em rota, e gerar inteligência de dados pelo Power BI, com custo ZERO de desenvolvimento e licenciamento.">
+        
+        <div class="cover-logo-area">
+          <img src="documents/logo jr verde.png" alt="JR Distribuidora" class="cover-logo-img" onerror="this.src='documents/logo jr branca.png'; this.onerror=null;">
+        </div>
+
+        <div class="slide-badge">Inovação Operacional Interna</div>
         <h1 class="slide-title">JR Oper</h1>
-        <p class="subtitle-main">Gestão Logística Integrada & SAC</p>
-        <p class="desc">A evolução tecnológica interna da JR Distribuidora: mais controle operacional, integração em tempo real de 4 setores e inteligência de dados com Power BI.</p>
+        <p class="subtitle-main">Sistema Integrado de Operações Logísticas & Governança de SAC</p>
+        <p class="desc">Desenvolvido internamente para conectar a operação de ponta a ponta: controle em tempo real de devoluções, conferência física no CD, tratativa fiscal imediata e socorro de frota com inteligência de dados.</p>
         
-        <div style="display: flex; gap: 20px;">
-          <div class="card" style="padding: 12px 24px; display: flex; align-items: center; gap: 10px; background: rgba(46, 125, 50, 0.1);">
-            <span style="font-size: 1.2rem;">⚡</span>
-            <span style="font-size: 0.85rem; font-weight: 600;">100% Web & Mobile</span>
+        <div class="cover-pills">
+          <div class="cover-pill green">
+            <span>⚡</span>
+            <span>100% Web & Mobile (PWA)</span>
           </div>
-          <div class="card" style="padding: 12px 24px; display: flex; align-items: center; gap: 10px; background: rgba(255, 214, 0, 0.1);">
-            <span style="font-size: 1.2rem;">💰</span>
-            <span style="font-size: 0.85rem; font-weight: 600;">Custo Zero de Licenciamento</span>
+          <div class="cover-pill green">
+            <span>💰</span>
+            <span>Custo Zero de Licenciamento (R$ 0,00)</span>
+          </div>
+          <div class="cover-pill">
+            <span>📊</span>
+            <span>Pronto para Power BI</span>
+          </div>
+          <div class="cover-pill">
+            <span>🔗</span>
+            <span>Integração de 4 Setores</span>
           </div>
         </div>
       </section>
 
-      <!-- SLIDE 2: O DESAFIO (GLPI) -->
-      <section class="slide" data-notes="Para entender o valor do JR Oper, precisamos olhar para trás. O GLPI, embora útil no passado, foi feito para TI e não para logística. Tínhamos sérios problemas: as devoluções eram registradas sem conferência física imediata, o financeiro demorava para conciliar os acertos dos boletos dos clientes e as quebras em rota demoravam horas para serem solucionadas. A informação estava em silos.">
-        <h2 class="slide-title">O Desafio Anterior</h2>
-        <p class="slide-subtitle">Por que o antigo modelo baseado no GLPI e planilhas isoladas limitava o crescimento e a eficiência da JR Distribuidora?</p>
+      <!-- SLIDE 2: O MOTIVO & DIAGNÓSTICO OPERACIONAL -->
+      <section class="slide" data-notes="Para contextualizar o motivo da criação: anteriormente, a empresa utilizava o GLPI (que é uma ferramenta de suporte de TI) e dezenas de planilhas paralelas para gerenciar devoluções e caminhões parados. Isso gerava três gargalos críticos: 1) o SAC registrava a ocorrência mas o CD não sabia quando a mercadoria voltava fisicamente; 2) o Financeiro demorava dias para saber se abatia ou cobrava o boleto do cliente; 3) caminhões parados em rota dependiam de grupos de mensagens soltas sem histórico de custos.">
+        <div class="slide-badge">Diagnóstico & Contexto</div>
+        <h2 class="slide-title">Por que o JR Oper foi criado?</h2>
+        <p class="slide-subtitle">O diagnóstico operacional identificou que a dependência de sistemas genéricos de TI (GLPI) e controles manuais em planilhas gerava perdas financeiras e lentidão na tomada de decisão:</p>
         
-        <div class="slide-grid-3">
+        <div class="grid-3">
           <div class="card">
-            <div class="flow-icon">❌</div>
-            <h3 class="card-title">Chamados em Silo</h3>
-            <p class="card-text">O GLPI registrava chamados de TI, não operacionais. A operação de devolução, o galpão do CD e a manutenção da frota não conversavam entre si.</p>
+            <div class="card-icon">🗂️</div>
+            <h3 class="card-title">Informações em Silos</h3>
+            <p class="card-text">O GLPI registrava chamados técnicos, não logísticos. O SAC não sabia se o produto retornou fisicamente ao CD, e o CD não tinha visibilidade do que estava na rua.</p>
           </div>
+
           <div class="card">
-            <div class="flow-icon">📉</div>
-            <h3 class="card-title">Retrabalho Financeiro</h3>
-            <p class="card-text">Demora de dias para a comunicação de notas fiscais de devolução. Divergências físicas de mercadorias no galpão geravam atrasos na quitação de boletos.</p>
+            <div class="card-icon">⏳</div>
+            <h3 class="card-title">Retrabalho no Financeiro</h3>
+            <p class="card-text">O Financeiro levava dias para conciliar devoluções com notas fiscais. Divergências no galpão atrasavam a quitação ou acerto de boletos com os clientes.</p>
           </div>
+
           <div class="card">
-            <div class="flow-icon">🛑</div>
-            <h3 class="card-title">Inatividade Invisível</h3>
-            <p class="card-text">Veículos parados em rota por problemas mecânicos dependiam de ligações e mensagens soltas. Zero controle do custo do socorro ou do tempo de inatividade.</p>
+            <div class="card-icon">🚚</div>
+            <h3 class="card-title">Inatividade Invisível de Frota</h3>
+            <p class="card-text">Veículos parados em rota por quebra mecânica ou sinistro eram comunicados por WhatsApp sem apuração do tempo de parada, custo de socorro ou reincidência.</p>
           </div>
         </div>
       </section>
 
-      <!-- SLIDE 3: A SOLUÇÃO (JR OPER) -->
-      <section class="slide" data-notes="A nossa resposta foi criar o JR Oper. Um sistema desenvolvido internamente que conecta as 4 pontas da nossa logística em tempo real. Ele funciona de forma extremamente simplificada (basta abrir no navegador) ou pode ser instalado no celular como PWA (APK) com custo zero de infraestrutura e hospedagem na nuvem.">
-        <h2 class="slide-title">A Solução: JR Oper</h2>
-        <p class="slide-subtitle">Uma plataforma única desenvolvida com foco total na realidade da JR Distribuidora, combinando simplicidade e potência.</p>
+      <!-- SLIDE 3: QUEM ATENDE & O QUE ATENDE -->
+      <section class="slide" data-notes="O JR Oper atende diretamente 4 áreas estratégicas e a Diretoria Executiva. Cada setor possui telas, permissões e fluxos desenhados especificamente para a sua rotina, garantindo que ninguém perca tempo com menus complexos ou preenchimentos desnecessários.">
+        <div class="slide-badge">Mapeamento de Usuários & Setores</div>
+        <h2 class="slide-title">O que atende e Quem atende?</h2>
+        <p class="slide-subtitle">Uma solução desenhada para conectar toda a cadeia de atendimento da JR Distribuidora em uma interface única:</p>
         
-        <div class="slide-grid-2">
+        <div class="grid-4">
           <div class="card">
-            <h3 class="card-title">🚀 Simplicidade e Portabilidade</h3>
-            <div style="margin-top: 15px; display: flex; flex-direction: column; gap: 12px;">
-              <div style="display: flex; align-items: flex-start; gap: 10px;">
-                <span style="color: var(--primary);">✔</span>
-                <span class="card-text"><strong>Sem Instalação Complexa:</strong> Roda diretamente de qualquer navegador de forma instantânea.</span>
-              </div>
-              <div style="display: flex; align-items: flex-start; gap: 10px;">
-                <span style="color: var(--primary);">✔</span>
-                <span class="card-text"><strong>Tecnologia PWA / APK:</strong> Instalável em computadores e celulares de forma nativa em 1 clique.</span>
-              </div>
-              <div style="display: flex; align-items: flex-start; gap: 10px;">
-                <span style="color: var(--primary);">✔</span>
-                <span class="card-text"><strong>Custo Zero (R$ 0,00):</strong> Hospedagem gratuita no Vercel/Netlify e banco de dados moderno na nuvem pelo Supabase.</span>
-              </div>
-            </div>
+            <span class="tag tag-green" style="margin-bottom: 8px;">Setor 1</span>
+            <h3 class="card-title" style="font-size: 1rem;">🟢 SAC & Operação</h3>
+            <p class="card-text" style="font-size: 0.8rem;">
+              • Registro ágil de devoluções.<br>
+              • Busca automática de cargas e rotas.<br>
+              • Apuração da <strong>causa raiz real</strong> (prevenção de reincidências).
+            </p>
           </div>
-          
+
           <div class="card">
-            <h3 class="card-title">⚡ Arquitetura Logística Inteligente</h3>
-            <p class="card-text" style="margin-bottom: 12px;">Integrado com modelagem relacional na <strong>Terceira Forma Normal (3FN)</strong>, garantindo integridade de dados e auditoria contínua de produtividade e falhas.</p>
-            <span class="badge badge-primary">Modelagem Limpa</span>
-            <span class="badge badge-warning">Pronto para a Nuvem</span>
+            <span class="tag tag-amber" style="margin-bottom: 8px;">Setor 2</span>
+            <h3 class="card-title" style="font-size: 1rem;">🟠 CD (Galpão)</h3>
+            <p class="card-text" style="font-size: 0.8rem;">
+              • Recebimento físico de mercadorias.<br>
+              • Auditoria de faltas e avarias.<br>
+              • Destinação item a item (Estoque, Descarte, Fornecedor).
+            </p>
           </div>
+
+          <div class="card">
+            <span class="tag tag-blue" style="margin-bottom: 8px;">Setor 3</span>
+            <h3 class="card-title" style="font-size: 1rem;">🔵 Financeiro / Fiscal</h3>
+            <p class="card-text" style="font-size: 0.8rem;">
+              • Tratativa fiscal de Notas Fiscais.<br>
+              • Validação de formas de acerto (Abatimento vs. JR Paga).<br>
+              • Eliminação de glosas e pendências.
+            </p>
+          </div>
+
+          <div class="card">
+            <span class="tag tag-green" style="margin-bottom: 8px;">Setor 4</span>
+            <h3 class="card-title" style="font-size: 1rem;">🔴 Frota & Socorro</h3>
+            <p class="card-text" style="font-size: 0.8rem;">
+              • Alerta crítico de veículo parado.<br>
+              • Controle de custo de guincho e peças.<br>
+              • Histórico de trocas de veículos e retenções.
+            </p>
+          </div>
+        </div>
+
+        <div style="margin-top: 14px; background: rgba(255,255,255,0.03); border: 1px solid var(--dark-border); border-radius: 10px; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-size: 0.85rem; color: var(--text-light);">📊 <strong>Painel da Diretoria:</strong> Dashboards em tempo real de produtividade individual por conferente/separador e relatórios consolidados em 1 clique.</span>
+          <span class="tag tag-green">Visão 360°</span>
         </div>
       </section>
 
-      <!-- SLIDE 4: INTEGRAÇÃO DOS 4 SETORES -->
-      <section class="slide" data-notes="Aqui está o coração do JR Oper: o fluxo de integração. Quando o SAC abre uma devolução de produto, o Galpão do CD recebe instantaneamente um alerta visual de retorno pendente. Assim que o motorista chega com a carga, o conferente faz o recebimento e o financeiro é notificado na hora para liberar a nota de devolução e acertar o boleto do cliente. Além disso, a manutenção da frota monitora em tempo real qualquer quebra de caminhão em rota através de um alerta vermelho crítico.">
-        <h2 class="slide-title">A Integração de 4 Setores</h2>
-        <p class="slide-subtitle">Como as informações circulam de forma automatizada e instantânea, eliminando a dependência de e-mails ou planilhas paralelas:</p>
+      <!-- SLIDE 4: FLUXO DE INTEGRAÇÃO EM TEMPO REAL -->
+      <section class="slide" data-notes="Vejam como a informação flui: assim que o SAC abre a devolução, o CD já recebe na tela o alerta de 'Retorno Físico Pendente'. Quando a carga chega no galpão, o conferente faz o 'check' e o Financeiro é notificado no mesmo minuto para fechar o acerto do cliente. Reduzimos o tempo de ciclo de 5 dias para menos de 4 horas.">
+        <div class="slide-badge">Eficiência & Velocidade</div>
+        <h2 class="slide-title">Fluxo de Integração em Tempo Real</h2>
+        <p class="slide-subtitle">Como as informações circulam de forma automatizada entre as equipes sem necessidade de trocas de e-mails ou reuniões de alinhamento:</p>
         
         <div class="flow-container">
           <div class="flow-step active-step">
-            <div class="flow-icon">🟢</div>
-            <div class="flow-title">1. SAC / Operação</div>
-            <div class="flow-desc">Abertura da devolução vinculando nota, cliente e carga.</div>
+            <div style="font-size: 1.5rem; margin-bottom: 4px;">🟢</div>
+            <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">1. SAC Abre</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 4px;">Vincula NF, cliente, carga e motivo reclamado.</div>
           </div>
           <div class="flow-arrow"></div>
+
           <div class="flow-step">
-            <div class="flow-icon">🟠</div>
-            <div class="flow-title">2. CD (Galpão)</div>
-            <div class="flow-desc">Alerta físico de retorno. Conferência e destinação imediata.</div>
+            <div style="font-size: 1.5rem; margin-bottom: 4px;">🟠</div>
+            <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">2. CD Confere</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 4px;">Recebe físico, confere itens e define destino do lote.</div>
           </div>
           <div class="flow-arrow"></div>
+
           <div class="flow-step">
-            <div class="flow-icon">🔵</div>
-            <div class="flow-title">3. Financeiro</div>
-            <div class="flow-desc">Liberação de crédito ou abatimento de boleto na hora.</div>
+            <div style="font-size: 1.5rem; margin-bottom: 4px;">🔵</div>
+            <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">3. Financeiro Acerta</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 4px;">Confirmação fiscal e liberação imediata de crédito/boleto.</div>
           </div>
           <div class="flow-arrow"></div>
+
           <div class="flow-step">
-            <div class="flow-icon">🔴</div>
-            <div class="flow-title">4. Frota / Rota</div>
-            <div class="flow-desc">Alerta crítico vermelho de veículo parado e custo de socorro.</div>
+            <div style="font-size: 1.5rem; margin-bottom: 4px;">📈</div>
+            <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">4. BI Consolida</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 4px;">Gera ranking de erros e gráficos de causa raiz automáticos.</div>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-top: 20px;">
+          <div class="card" style="padding: 14px 18px;">
+            <div style="font-weight: 800; color: #34d399; font-size: 0.95rem; margin-bottom: 4px;">⚡ Redução Drástica de SLA</div>
+            <p class="card-text" style="font-size: 0.82rem;">O tempo médio de encerramento de devoluções caiu de <strong>5 dias úteis para menos de 4 horas</strong>, aumentando a satisfação do cliente da distribuidora.</p>
+          </div>
+
+          <div class="card" style="padding: 14px 18px;">
+            <div style="font-weight: 800; color: #38bdf8; font-size: 0.95rem; margin-bottom: 4px;">🎯 Responsabilização Justa</div>
+            <p class="card-text" style="font-size: 0.82rem;">O sistema separa falhas de separação, conferência física, erros comerciais ou avaria de transporte com auditoria por colaborador.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 5: ANÁLISE DE CUSTOS (MERCADO VS IMPLANTAÇÃO INTERNA) -->
+      <section class="slide" data-notes="Para ilustrar o valor econômico concreto: se fôssemos contratar uma empresa externa para desenvolver ou implantar um sistema com esse escopo de integração, o custo no mercado para implantação e manutenção anual ficaria entre R$ 45 mil e R$ 50 mil. O JR Oper atende 4 setores integrados, já está pronto e foi desenvolvido 100% internamente a custo zero.">
+        <div class="slide-badge">Economia & Retorno do Investimento</div>
+        <h2 class="slide-title">Comparativo de Custos: Mercado vs. JR Oper</h2>
+        <p class="slide-subtitle">Demonstração de economia com base em valores médios e conservadores de mercado:</p>
+        
+        <div class="table-box">
+          <table class="table-custom">
+            <thead>
+              <tr>
+                <th>Etapa do Projeto / Serviço</th>
+                <th>Referência de Mercado (Valores Conservadores)</th>
+                <th>Custo Real do JR Oper</th>
+                <th>Economia Corporativa</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Implantação & Customização de Sistema</strong></td>
+                <td><span class="cost-market">R$ 20.000 a R$ 25.000</span></td>
+                <td><span class="cost-zero">R$ 0,00</span></td>
+                <td><span class="tag tag-green">100% Economizado</span></td>
+              </tr>
+              <tr>
+                <td><strong>Mensalidade de Suporte / Manutenção (12 meses)</strong></td>
+                <td><span class="cost-market">R$ 18.000 a R$ 24.000 / ano</span> <span style="font-size:0.7rem;color:var(--text-muted);">(~R$ 1,5k a 2k/mês)</span></td>
+                <td><span class="cost-zero">R$ 0,00</span></td>
+                <td><span class="tag tag-green">Zero Mensalidades</span></td>
+              </tr>
+              <tr>
+                <td><strong>Infraestrutura em Nuvem & Banco de Dados</strong></td>
+                <td><span class="cost-market">R$ 2.000 a R$ 3.500 / ano</span></td>
+                <td><span class="cost-zero">R$ 0,00</span> <span style="font-size:0.7rem;color:var(--text-muted);">(Plano Free)</span></td>
+                <td><span class="tag tag-green">Custo Zero</span></td>
+              </tr>
+              <tr>
+                <td><strong>Custo por Customização / Update Futuro</strong></td>
+                <td><span class="cost-market">R$ 150 a R$ 200 / hora</span></td>
+                <td><span class="cost-zero">R$ 0,00</span> <span style="font-size:0.7rem;color:var(--text-muted);">(Interno)</span></td>
+                <td><span class="tag tag-green">Agilidade Imediata</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card card-highlight" style="margin-top: 14px; padding: 12px 18px;">
+          <div style="font-size: 0.85rem; color: var(--text-light); line-height: 1.5;">
+            💡 <strong>Impacto Direto no Caixa:</strong> Economia conservadora de cerca de <strong>R$ 45.000 a R$ 50.000 no primeiro ano</strong>, com a vantagem de integrar não apenas o estoque, mas toda a cadeia (SAC, CD, Financeiro e Frota).
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 6: PRÓXIMOS UPDATES & EVOLUÇÃO (CUSTO ZERO) -->
+      <section class="slide" data-notes="O sistema não para por aqui. Por ter sido desenvolvido com arquitetura aberta e sob medida, podemos evoluir a ferramenta continuamente sem pagar nada a mais por isso. Nossos próximos passos planejados incluem: 1) A oportunidade de integração futura direta com o banco Oracle do WinThor da empresa; 2) Módulo de conferência por leitor de código de barras no CD; 3) Monitoramento de rotas em tempo real com GPS no celular do motorista.">
+        <div class="slide-badge">Roadmap de Evolução Contínua</div>
+        <h2 class="slide-title">Próximos Updates & Futuras Expansões</h2>
+        <p class="slide-subtitle">Novas funcionalidades e integrações planejadas para acompanhar o crescimento da JR Distribuidora, mantendo o custo de desenvolvimento a zero:</p>
+        
+        <div class="grid-3">
+          <div class="card">
+            <span class="tag tag-blue" style="margin-bottom: 8px;">Update Futuro (Fase 2)</span>
+            <h3 class="card-title">🔄 Possibilidade de Integração Oracle</h3>
+            <p class="card-text">
+              Oportunidade de conectar o JR Oper diretamente ao banco de dados Oracle do WinThor que a empresa já possui, permitindo leitura direta de clientes, produtos e notas fiscais.
+            </p>
+            <div style="margin-top: 10px; font-size: 0.75rem; color: #34d399; font-weight: 700;">Custo de Desenvolvimento: R$ 0,00</div>
+          </div>
+
+          <div class="card">
+            <span class="tag tag-amber" style="margin-bottom: 8px;">Update Operacional</span>
+            <h3 class="card-title">📱 Bipagem no CD por Celular</h3>
+            <p class="card-text">
+              Utilização da própria câmera do celular como leitor de código de barras (EAN-13) para validação ultra-rápida de produtos devolvidos na doca do galpão.
+            </p>
+            <div style="margin-top: 10px; font-size: 0.75rem; color: #34d399; font-weight: 700;">Custo de Desenvolvimento: R$ 0,00</div>
+          </div>
+
+          <div class="card">
+            <span class="tag tag-green" style="margin-bottom: 8px;">Update Frota</span>
+            <h3 class="card-title">📍 Portal do Motorista & GPS</h3>
+            <p class="card-text">
+              Tela simplificada para o motorista anexar fotos de comprovantes diretamente no ponto de entrega e reportar problemas mecânicos em 1 clique na rota.
+            </p>
+            <div style="margin-top: 10px; font-size: 0.75rem; color: #34d399; font-weight: 700;">Custo de Desenvolvimento: R$ 0,00</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SLIDE 7: VALORIZAÇÃO & CONCLUSÃO -->
+      <section class="slide" data-notes="Para concluir: esta solução nasceu da vivência prática diária das dores da nossa operação. Como analista de logística, meu compromisso foi traduzir o funcionamento real da nossa empresa em tecnologia eficiente, rápida e que gerasse economia concreta para a diretoria. O JR Oper está publicado, validado e pronto para a rotina diária. Agradeço a confiança e fico à disposição para dúvidas.">
+        <div class="slide-badge">Compromisso com o Negócio</div>
+        <h2 class="slide-title">Conclusão & Visão Estratégica</h2>
+        <p class="slide-subtitle">Tecnologia desenvolvida a partir do entendimento profundo da operação da JR Distribuidora:</p>
+        
+        <div class="grid-2">
+          <div class="card card-highlight">
+            <h3 class="card-title">🎯 A Força da Solução Sob Medida</h3>
+            <p class="card-text" style="line-height: 1.6; margin-bottom: 12px;">
+              O <strong>JR Oper</strong> não é um software genérico de prateleira. Ele nasceu da análise minuciosa dos gargalos diários de quem vivencia a logística da JR Distribuidora.
+            </p>
+            <p class="card-text" style="line-height: 1.6;">
+              O resultado é uma ferramenta 100% adaptada à cultura dos nossos colaboradores, sem complexidades desnecessárias e com independência tecnológica total.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">🚀 Status de Implantação</h3>
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 8px; font-size: 0.82rem;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="color:#34d399;">✔</span>
+                <span><strong>Sistema em Produção:</strong> Acessível em tempo real pela internet.</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="color:#34d399;">✔</span>
+                <span><strong>Banco Relacional 3FN:</strong> Integrado na nuvem em tempo real.</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="color:#34d399;">✔</span>
+                <span><strong>Central Power BI Ativa:</strong> 6 Views gerenciais configuradas.</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="color:#34d399;">✔</span>
+                <span><strong>Equipe Pronta:</strong> Treinamento operacional estruturado.</span>
+              </div>
+            </div>
           </div>
         </div>
 
         <div style="margin-top: 25px; text-align: center;">
-          <p style="font-size: 0.95rem; color: var(--text-muted);">
-            💡 <strong>Resultado Prático:</strong> Redução do tempo médio de processamento de devoluções de <strong>5 dias para menos de 4 horas</strong>.
+          <h3 style="font-family: 'Plus Jakarta Sans', sans-serif; font-size: 1.15rem; font-weight: 800; color: #fff;">
+            Obrigado! O JR Oper está pronto para elevar o patamar da nossa logística.
+          </h3>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+            Elaborado e Desenvolvido pela Área de Logística & Operações — JR Distribuidora
           </p>
-        </div>
-      </section>
-
-      <!-- SLIDE 5: INTELIGÊNCIA COM POWER BI -->
-      <section class="slide" data-notes="A grande potência estratégica do JR Oper é a sua Central Power BI nativa. O banco de dados foi construído com Views prontas. A diretoria pode ver em tempo real quais são as principais causas de devoluções (se foi erro de separação, avaria no transporte ou erro do comercial), além de monitorar a pontuação de produtividade individual e erros cometidos por separadores e conferentes no galpão.">
-        <h2 class="slide-title">Inteligência de Dados (Power BI)</h2>
-        <p class="slide-subtitle">Tomada de decisão estratégica através de views SQL pré-construídas diretamente conectadas ao Power BI Desktop.</p>
-        
-        <div class="slide-grid-2">
-          <div class="card">
-            <h3 class="card-title">📊 Views Estratégicas Disponíveis</h3>
-            <ul style="list-style: none; display: flex; flex-direction: column; gap: 10px; margin-top: 10px; font-size: 0.9rem;">
-              <li>🟢 <code>vw_bi_devolucoes_causa_raiz</code>: Mapeia o motivo alegado pelo cliente vs. erro operacional real.</li>
-              <li>🟠 <code>vw_bi_produtividade_equipe</code>: Ranking de desempenho de separadores e conferentes com cálculo de erros.</li>
-              <li>🔵 <code>vw_bi_controle_cd_pendencias</code>: Monitoramento de devoluções físicas em trânsito de volta ao galpão.</li>
-              <li>🔴 <code>vw_bi_frota_veiculos_parados</code>: Custo de manutenção e tempo total de frota inativa.</li>
-            </ul>
-          </div>
-
-          <div class="card" style="display: flex; flex-direction: column; justify-content: space-between;">
-            <div>
-              <h3 class="card-title">💡 Indicador de Causas de Devolução (Exemplo)</h3>
-              <div class="pbi-visual-preview">
-                <div class="pbi-bar">
-                  <div class="pbi-bar-fill" style="width: 48%;"></div>
-                  <div class="pbi-bar-text"><span>Falha de Separação (CD)</span> <span>48%</span></div>
-                </div>
-                <div class="pbi-bar">
-                  <div class="pbi-bar-fill" style="width: 25%;"></div>
-                  <div class="pbi-bar-text"><span>Avaria de Transporte</span> <span>25%</span></div>
-                </div>
-                <div class="pbi-bar">
-                  <div class="pbi-bar-fill" style="width: 15%;"></div>
-                  <div class="pbi-bar-text"><span>Erro de Digitação (Vendas)</span> <span>15%</span></div>
-                </div>
-              </div>
-            </div>
-            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 10px;">* Dados dinâmicos puxados diretamente da base relacional do JR Oper.</p>
-          </div>
-        </div>
-      </section>
-
-      <!-- SLIDE 6: ROI E EFICIÊNCIA -->
-      <section class="slide" data-notes="Em termos financeiros e de eficiência, o projeto se paga no primeiro dia. Substituímos o GLPI, que custava tempo e licenciamento, por um software sob medida e 100% de graça de manutenção. A auditoria de produtividade permite reduzir drasticamente os erros de separação aplicando penalidades de pontuação corretas, enquanto o fechamento financeiro imediato previne que fiquemos com créditos pendentes por meses.">
-        <h2 class="slide-title">Retorno do Investimento & Eficiência</h2>
-        <p class="slide-subtitle">Como a tecnologia sob medida otimiza as finanças e reduz desperdícios na JR Distribuidora:</p>
-        
-        <div class="slide-grid-2">
-          <div class="card" style="display: flex; align-items: center; gap: 20px;">
-            <div>
-              <div class="stat-number">R$ 0,00</div>
-              <h4 style="font-family: 'Outfit', sans-serif; font-weight: 700;">Custo de Licenciamento</h4>
-              <p class="card-text" style="font-size: 0.85rem; margin-top: 5px;">Hospedagem em nuvem gratuita no Vercel/Netlify e banco Supabase gratuito.</p>
-            </div>
-          </div>
-          
-          <div class="card" style="display: flex; align-items: center; gap: 20px;">
-            <div>
-              <div class="stat-number">-75%</div>
-              <h4 style="font-family: 'Outfit', sans-serif; font-weight: 700;">Tempo de Resolução em Rota</h4>
-              <p class="card-text" style="font-size: 0.85rem; margin-top: 5px;">Alerta vermelho crítico garante que a manutenção atue de forma imediata no caminhão parado.</p>
-            </div>
-          </div>
-        </div>
-
-        <table class="comparison-table">
-          <thead>
-            <tr>
-              <th>Recurso Operacional</th>
-              <th>Modelo Antigo (GLPI + Planilhas)</th>
-              <th>Novo Modelo (JR Oper)</th>
-              <th>Impacto Gerencial</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><strong>Conexão Setorial</strong></td>
-              <td>Informações isoladas, e-mails manuais</td>
-              <td><strong>Integração SAC, CD e Financeiro</strong></td>
-              <td>Sem perda de informações</td>
-            </tr>
-            <tr>
-              <td><strong>Análise de Causa Raiz</strong></td>
-              <td>Apenas motivo comercial</td>
-              <td><strong>Causa raiz operacional auditada</strong></td>
-              <td>Prevenção de quebras futuras</td>
-            </tr>
-            <tr>
-              <td><strong>Auditoria de Pessoas</strong></td>
-              <td>Sem controle de quem errou</td>
-              <td><strong>Pontuação e histórico no Power BI</strong></td>
-              <td>Redução de erros de separação</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <!-- SLIDE 7: PRÓXIMOS PASSOS -->
-      <section class="slide" data-notes="Para os próximos passos, a nossa meta é iniciar o treinamento de equipes a partir de hoje. Já publicamos o sistema na internet e realizamos a ativação do banco de dados na nuvem. A partir de amanhã, o SAC e os demais setores começam a usar a ferramenta, permitindo que a diretoria já colha os primeiros relatórios no Power BI no final da próxima semana. Agradeço e abro espaço para dúvidas.">
-        <h2 class="slide-title">Próximos Passos & Implantação</h2>
-        <p class="slide-subtitle">Plano de transição rápida para entrada em operação em toda a empresa:</p>
-        
-        <div class="slide-grid-3">
-          <div class="card">
-            <span class="badge badge-primary">Fase 1: Concluída</span>
-            <h3 class="card-title" style="margin-top: 10px;">🚀 Publicação do App</h3>
-            <p class="card-text">Sistema hospedado na internet e banco de dados relacional ativado na nuvem em tempo real.</p>
-          </div>
-          <div class="card">
-            <span class="badge badge-warning">Fase 2: Agora</span>
-            <h3 class="card-title" style="margin-top: 10px;">👥 Capacitação</h3>
-            <p class="card-text">Realização de treinamentos com equipes operacionais (SAC, CD, Financeiro e Frota).</p>
-          </div>
-          <div class="card">
-            <span class="badge badge-danger">Fase 3: Próxima Semana</span>
-            <h3 class="card-title" style="margin-top: 10px;">📈 Decisão e BI</h3>
-            <p class="card-text">Conexão do Power BI corporativo para monitoramento das causas raiz e de produtividade.</p>
-          </div>
-        </div>
-
-        <div style="margin-top: 40px; text-align: center;">
-          <h3 style="font-family: 'Outfit', sans-serif; font-weight: 700; color: var(--primary-light);">Obrigado! O JR Oper está pronto para decolar a nossa logística.</h3>
         </div>
       </section>
 
     </main>
 
-    <!-- Notas do Apresentador Flutuante -->
+    <!-- NOTAS DO APRESENTADOR (FLUTUANTE) -->
     <div id="notesPanel" class="notes-panel">
-      <div class="notes-header">Notas do Apresentador (Pressione "N" para ocultar)</div>
+      <div class="notes-header">📋 Notas do Apresentador (Pressione a tecla "N" para ocultar)</div>
       <div id="notesContent" class="notes-content">Notas do slide...</div>
     </div>
 
-    <!-- Rodapé Fixo de Navegação -->
+    <!-- RODAPÉ FIXO DE NAVEGAÇÃO -->
     <footer class="footer">
       <div class="progress-bar-container">
         <div id="progressBar" class="progress-bar"></div>
@@ -778,7 +929,7 @@
       
       <div class="controls-wrapper">
         <button id="notesToggleBtn" class="notes-toggle" title="Mostrar/Ocultar Notas (Teclado: N)">
-          <span>📋 Notas</span>
+          <span>📋 Notas (N)</span>
         </button>
         <div id="slideCounter" class="slide-counter">1 / 7</div>
         <button id="prevBtn" class="control-btn" disabled>
@@ -793,7 +944,7 @@
   </div>
 
   <script>
-    // Lógica da Apresentação de Slides
+    // LÓGICA DE NAVEGAÇÃO E CONTROLE DOS SLIDES
     const slides = document.querySelectorAll('.slide');
     const prevBtn = document.getElementById('prevBtn');
     const nextBtn = document.getElementById('nextBtn');
@@ -807,27 +958,22 @@
     let showNotes = false;
 
     function updatePresentation() {
-      // Atualizar exibição de slides
       slides.forEach((slide, index) => {
         if (index === currentSlideIndex) {
           slide.classList.add('active');
-          // Atualizar notas do apresentador
           notesContent.innerText = slide.getAttribute('data-notes') || 'Sem notas para este slide.';
         } else {
           slide.classList.remove('active');
         }
       });
 
-      // Atualizar botões
       prevBtn.disabled = currentSlideIndex === 0;
       nextBtn.disabled = currentSlideIndex === slides.length - 1;
 
-      // Atualizar contador e barra de progresso
       slideCounter.innerText = `${currentSlideIndex + 1} / ${slides.length}`;
       const progressPercent = ((currentSlideIndex) / (slides.length - 1)) * 100;
       progressBar.style.width = `${progressPercent}%`;
 
-      // Atualizar classe do fluxograma no slide 4 se aplicável
       if (currentSlideIndex === 3) {
         animateFlow();
       }
@@ -839,11 +985,10 @@
         setTimeout(() => {
           steps.forEach(s => s.classList.remove('active-step'));
           step.classList.add('active-step');
-        }, i * 1500);
+        }, i * 1400);
       });
     }
 
-    // Navegação
     function nextSlide() {
       if (currentSlideIndex < slides.length - 1) {
         currentSlideIndex++;
@@ -869,12 +1014,11 @@
       }
     }
 
-    // Listeners
     nextBtn.addEventListener('click', nextSlide);
     prevBtn.addEventListener('click', prevSlide);
     notesToggleBtn.addEventListener('click', toggleNotes);
 
-    // Controles por Teclado
+    // CONTROLES POR TECLADO
     document.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
@@ -884,10 +1028,17 @@
         prevSlide();
       } else if (e.key === 'n' || e.key === 'N') {
         toggleNotes();
+      } else if (e.key === 'f' || e.key === 'F') {
+        // Tela cheia
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
       }
     });
 
-    // Inicialização
+    // INICIALIZAÇÃO
     updatePresentation();
   </script>
 </body>

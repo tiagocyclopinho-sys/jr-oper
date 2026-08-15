@@ -1415,6 +1415,20 @@ function dataNoPeriodo(dStr, de, ate) {
 }
 
 // ===== DASHBOARD =====
+function getSlaBreakdown(list, dateField) {
+  const agora = Date.now();
+  let critico = 0, alerta = 0, ok = 0;
+  (list || []).forEach(item => {
+    const dataRef = item ? item[dateField] : null;
+    if (!dataRef) { ok++; return; }
+    const horas = (agora - new Date(dataRef).getTime()) / 36e5;
+    if (horas > 48) critico++;
+    else if (horas >= 24) alerta++;
+    else ok++;
+  });
+  return { critico, alerta, ok };
+}
+
 function renderDashboardView() {
   const fDe = window._dashFiltroDe || '';
   const fAte = window._dashFiltroAte || '';
@@ -1461,6 +1475,8 @@ function renderDashboardView() {
   const retencoes = allRetencoes.filter(r => r.status === 'RETIDO');
   const veicRetidos = retencoes.length;
   const abertasCausaRaiz = devs.filter(d => !d.motivo_real_causa_raiz || !d.acao_tomada);
+  const slaAnalise = getSlaBreakdown(abertasCausaRaiz, 'criado_em');
+  const slaPendCd = getSlaBreakdown(devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO'), 'criado_em');
   const totDescontosGestor = devs.filter(d => d.desconto_produtividade_gestor).length;
   const totalCortesValor = cortesList.reduce((a, c) => a + (parseFloat(c.valor)||0), 0);
   const totalCustoSocorro = rotas.reduce((a, r) => a + (parseFloat(r.custo_socorro)||0), 0);
@@ -1890,6 +1906,11 @@ function renderDashboardView() {
             <div class="text-[10px] text-slate-400 font-bold uppercase">Retornos Pendentes CD</div>
             <div class="text-xl font-black text-amber-400 mt-1">${pendCd}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Aguardando entrada física</div>
+            <div class="flex items-center gap-2 mt-1.5 text-[10px] font-bold">
+              <span class="text-red-400" title="Mais de 48h">🔴 ${slaPendCd.critico}</span>
+              <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaPendCd.alerta}</span>
+              <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaPendCd.ok}</span>
+            </div>
           </div>
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Peso Expedição (Saída)</div>
@@ -1978,6 +1999,11 @@ function renderDashboardView() {
             <div class="text-[10px] text-slate-400 font-bold uppercase">Análises Pendentes</div>
             <div class="text-xl font-black text-orange-400 mt-1">${abertasCausaRaiz.length}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Causa raiz pendente</div>
+            <div class="flex items-center gap-2 mt-1.5 text-[10px] font-bold">
+              <span class="text-red-400" title="Mais de 48h">🔴 ${slaAnalise.critico}</span>
+              <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaAnalise.alerta}</span>
+              <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaAnalise.ok}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -3192,6 +3218,7 @@ function renderSacInvestigacaoView() {
 
   const fDataDe = window._invFiltroDataDe || '';
   const fDataAte = window._invFiltroDataAte || '';
+  const fTexto = window._invFiltroTexto || '';
 
   let devsFiltrados = todosDevs;
   if (fDataDe) {
@@ -3199,6 +3226,15 @@ function renderSacInvestigacaoView() {
   }
   if (fDataAte) {
     devsFiltrados = devsFiltrados.filter(d => (d.criado_em||'').split('T')[0] <= fDataAte);
+  }
+  if (fTexto) {
+    const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
+    const q = norm(fTexto);
+    devsFiltrados = devsFiltrados.filter(d =>
+      norm(d.numero_devolucao || d.numero_protocolo).includes(q) ||
+      norm(d.cliente_nome).includes(q) ||
+      norm(d.nota_fiscal).includes(q)
+    );
   }
 
   const pendentes = devsFiltrados.filter(d => !d.motivo_real_causa_raiz || d.motivo_real_causa_raiz.trim() === '');
@@ -3217,6 +3253,14 @@ function renderSacInvestigacaoView() {
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
+          <!-- Busca por Protocolo/Cliente/NF -->
+          <div class="flex items-center gap-2 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
+            <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">🔎 Buscar:</span>
+            <input type="text" id="inv-busca-texto" value="${fTexto}" placeholder="Protocolo, cliente ou NF"
+              oninput="window._invFiltroTexto=this.value; renderApp(); setTimeout(()=>{ const el=document.getElementById('inv-busca-texto'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0);"
+              class="bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs w-40 sm:w-56">
+            ${fTexto ? `<button onclick="window._invFiltroTexto=''; renderApp()" class="text-slate-400 hover:text-white text-xs font-bold" title="Limpar busca">✕</button>` : ''}
+          </div>
           <!-- Filtro de datas -->
           <div class="flex items-center gap-2 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
             <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">Data De:</span>
@@ -9926,7 +9970,17 @@ function handleCadVeiculoSubmit(e) { e.preventDefault(); db.addVeiculo(document.
 function handleCadClienteSubmit(e) { e.preventDefault(); const res = db.addCliente({ codigo: document.getElementById('cad-cli-cod')?.value, nome: document.getElementById('cad-cli-nome')?.value, cidade: document.getElementById('cad-cli-cidade')?.value, cnpj_cpf: document.getElementById('cad-cli-cnpj')?.value }); if (res) { showToast('Cliente cadastrado com sucesso!'); renderApp(); } }
 function handleCadRotaSubmit(e) { e.preventDefault(); const r=db.addRota(document.getElementById('cad-rota-nome').value); if(r) alert('✅ Rota cadastrada!'); renderApp(); }
 function handleCadCargaSubmit(e) { e.preventDefault(); db.addCargaRota(document.getElementById('cad-car-num').value,document.getElementById('cad-car-rota').value,document.getElementById('cad-car-mot').value,document.getElementById('cad-car-aju').value,document.getElementById('cad-car-veic').value); alert('✅ Carga cadastrada!'); renderApp(); }
-function deleteCad(col, id) { if(confirm('Excluir este item?')){ db.deleteCadItem(col,id); renderApp(); } }
+function deleteCad(col, id) {
+  if (confirm('Mover este item para a Lixeira? Ele poderá ser restaurado, ou excluído definitivamente com senha de administrador, na tela de Lixeira.')) {
+    const ok = db.softDelete(col, id);
+    if (ok) {
+      showToast('Item movido para a Lixeira.', 'success');
+      renderApp();
+    } else {
+      showToast('Não foi possível mover este item para a Lixeira.', 'error');
+    }
+  }
+}
 function deleteRota(nome) { if(confirm(`Excluir rota "${nome}"?`)){ db.deleteRota(nome); renderApp(); } }
 
 // ===== MÓDULO: CONECTOR DE DADOS (ANALISTA & POWER BI) =====
