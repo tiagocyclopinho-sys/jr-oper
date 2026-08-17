@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documentação Técnica de Arquitetura & Stack — JR Oper / SAC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* RESET & VARS */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --primary: #047857;
+      --primary-dark: #064e3b;
+      --primary-light: #10b981;
+      --primary-subtle: #ecfdf5;
+      --slate-900: #0f172a;
+      --slate-800: #1e293b;
+      --slate-700: #334155;
+      --slate-600: #475569;
+      --slate-500: #64748b;
+      --slate-300: #cbd5e1;
+      --slate-200: #e2e8f0;
+      --slate-100: #f1f5f9;
+      --slate-50: #f8fafc;
+      --blue-700: #1d4ed8;
+      --blue-50: #eff6ff;
+      --amber-700: #b45309;
+      --amber-50: #fffbeb;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #0f172a;
+      color: var(--slate-800);
+      line-height: 1.45;
+      padding: 24px 12px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* BARRA SUPERIOR DE AÇÕES (NÃO IMPRIME) */
+    .action-bar {
+      max-width: 900px;
+      margin: 0 auto 16px auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(30, 41, 59, 0.95);
+      border: 1px solid #334155;
+      padding: 12px 20px;
+      border-radius: 12px;
+      box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
+    }
+    .action-bar-title {
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .action-bar-title span {
+      background: #047857;
+      color: #fff;
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .action-bar-btns {
+      display: flex;
+      gap: 10px;
+    }
+    .btn-action {
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      text-decoration: none;
+    }
+    .btn-print {
+      background: linear-gradient(135deg, #10b981, #047857);
+      color: #ffffff;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    }
+    .btn-print:hover {
+      background: linear-gradient(135deg, #059669, #064e3b);
+      transform: translateY(-1px);
+    }
+    .btn-back {
+      background: #334155;
+      color: #f8fafc;
+    }
+    .btn-back:hover {
+      background: #475569;
+    }
+
+    /* FOLHA A4 / CONTAINER */
+    .document-page {
+      max-width: 900px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 40px 48px;
+      border-radius: 12px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+      color: var(--slate-800);
+    }
+
+    /* HEADER DO DOCUMENTO */
+    .doc-header {
+      border-bottom: 2px solid var(--primary);
+      padding-bottom: 18px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .doc-brand {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .doc-tag {
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: var(--primary);
+      background: var(--primary-subtle);
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      width: fit-content;
+    }
+    .doc-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--slate-900);
+      letter-spacing: -0.5px;
+    }
+    .doc-subtitle {
+      font-size: 12.5px;
+      color: var(--slate-600);
+    }
+    .doc-meta {
+      text-align: right;
+      font-size: 11px;
+      color: var(--slate-500);
+      line-height: 1.5;
+    }
+    .doc-meta strong {
+      color: var(--slate-800);
+    }
+
+    /* SEÇÕES */
+    .section {
+      margin-bottom: 24px;
+      page-break-inside: avoid;
+    }
+    .section-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--slate-900);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--slate-200);
+    }
+    .section-title span.badge {
+      background: var(--slate-100);
+      color: var(--slate-700);
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    p, li {
+      font-size: 12.5px;
+      color: var(--slate-700);
+    }
+    p {
+      margin-bottom: 10px;
+    }
+    ul {
+      margin-left: 18px;
+      margin-bottom: 12px;
+    }
+    li {
+      margin-bottom: 4px;
+    }
+
+    /* CARDS & GRIDS */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .card {
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .card-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--slate-900);
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .card-text {
+      font-size: 11.5px;
+      color: var(--slate-600);
+      line-height: 1.4;
+    }
+
+    /* TABELA TÉCNICA */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin-bottom: 14px;
+    }
+    th {
+      background: var(--slate-100);
+      color: var(--slate-800);
+      font-weight: 700;
+      text-align: left;
+      padding: 8px 10px;
+      border: 1px solid var(--slate-200);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    td {
+      padding: 8px 10px;
+      border: 1px solid var(--slate-200);
+      color: var(--slate-700);
+      vertical-align: top;
+    }
+    tr:nth-child(even) td {
+      background: #fafcff;
+    }
+    td strong {
+      color: var(--slate-900);
+    }
+    code {
+      font-family: 'JetBrains Mono', Consolas, monospace;
+      font-size: 11px;
+      background: #f1f5f9;
+      color: #0f766e;
+      padding: 2px 5px;
+      border-radius: 4px;
+      border: 1px solid #e2e8f0;
+    }
+
+    /* CALLOUT BOXES */
+    .callout {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 14px;
+      font-size: 12px;
+      border-left: 4px solid;
+    }
+    .callout-success {
+      background: var(--primary-subtle);
+      border-color: var(--primary);
+      color: var(--primary-dark);
+    }
+    .callout-blue {
+      background: var(--blue-50);
+      border-color: var(--blue-700);
+      color: #1e3a8a;
+    }
+    .callout-amber {
+      background: var(--amber-50);
+      border-color: var(--amber-700);
+      color: #78350f;
+    }
+
+    /* FOOTER */
+    .doc-footer {
+      margin-top: 30px;
+      padding-top: 14px;
+      border-top: 1px solid var(--slate-200);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10.5px;
+      color: var(--slate-500);
+    }
+
+    /* REGRAS DE IMPRESSÃO (PRINT) */
+    @media print {
+      body {
+        background: #ffffff !important;
+        padding: 0 !important;
+        color: #000000 !important;
+      }
+      .action-bar {
+        display: none !important;
+      }
+      .document-page {
+        max-width: 100% !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+      }
+      .section {
+        page-break-inside: avoid;
+      }
+      a {
+        text-decoration: none;
+        color: inherit;
+      }
+      code {
+        border-color: #ccc;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- BARRA DE AÇÃO SUPERIOR (NÃO IMPRESSA) -->
+  <div class="action-bar">
+    <div class="action-bar-title">
+      📄 <strong>Documentação para a Equipe de T.I.</strong>
+      <span>JR OPER v4.7.0</span>
+    </div>
+    <div class="action-bar-btns">
+      <a href="index.html" class="btn-action btn-back">⬅ Voltar ao Sistema</a>
+      <button onclick="window.print()" class="btn-action btn-print">🖨️ Imprimir / Salvar em PDF</button>
+    </div>
+  </div>
+
+  <!-- PÁGINA DO DOCUMENTO (FORMATO A4 / IMPRESSÃO) -->
+  <div class="document-page">
+
+    <!-- CABEÇALHO CORPORATIVO -->
+    <header class="doc-header">
+      <div class="doc-brand">
+        <div class="doc-tag">Especificação Técnica de Software</div>
+        <h1 class="doc-title">JR Oper & Gestão Logística Integrada</h1>
+        <div class="doc-subtitle">Arquitetura de Software, Stack Tecnológica, Banco de Dados & Integrações</div>
+      </div>
+      <div class="doc-meta">
+        <div><strong>Empresa:</strong> JR Distribuidora</div>
+        <div><strong>Versão:</strong> v4.7.0 (Produção)</div>
+        <div><strong>Data do Laudo:</strong> 17 de Agosto de 2026</div>
+        <div><strong>Responsável:</strong> Analista de Logística</div>
+      </div>
+    </header>
+
+    <!-- 1. RESUMO EXECUTIVO -->
+    <section class="section">
+      <h2 class="section-title">1. Resumo Executivo para a Equipe de T.I. <span class="badge">Visão Geral</span></h2>
+      <p>
+        O <strong>JR Oper</strong> é uma plataforma corporativa desenvolvida para a centralização e auditoria de processos logísticos críticos (SAC de Devoluções, Investigação de Causa Raiz, Conferência no CD, Ocorrências de Frota em Rota e Gestão de Reentregas).
+      </p>
+      <div class="callout callout-success">
+        <strong>Definição Arquitetural:</strong> O sistema é uma <strong>Single Page Application (SPA)</strong> e <strong>Progressive Web App (PWA)</strong> construída no modelo <em>Jamstack / Client-Side First</em>. Foi concebido para ter **zero tempo de compilação**, altíssima performance, execução offline imediata e total desacoplamento entre a camada de apresentação e a camada de persistência em banco relacional.
+      </div>
+    </section>
+
+    <!-- 2. STACK TECNOLÓGICA -->
+    <section class="section">
+      <h2 class="section-title">2. Matriz da Stack Tecnológica <span class="badge">Linguagens & Frameworks</span></h2>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 24%;">Camada</th>
+            <th style="width: 26%;">Tecnologia / Padrão</th>
+            <th>Detalhamento Técnico</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Linguagem Principal</strong></td>
+            <td><code>JavaScript (ES6+ Vanilla)</code></td>
+            <td>Utiliza JavaScript moderno sem dependência de transpiladores pesados. Lógica modular desacoplada entre controladores de interface (<code>app.js</code>), estado e persistência (<code>store.js</code>) e conectores de nuvem (<code>cloudStore.js</code>).</td>
+          </tr>
+          <tr>
+            <td><strong>Estrutura & Interface</strong></td>
+            <td><code>HTML5 Semântico + DOM API</code></td>
+            <td>Renderização dinâmica baseada em componentes reativos nativos, controle de eventos delegados e isolamento de viewport para telas industriais e mobile.</td>
+          </tr>
+          <tr>
+            <td><strong>Estilização & Design</strong></td>
+            <td><code>Tailwind CSS + CSS3 Vanilla</code></td>
+            <td>Design System corporativo completo com suporte nativo a <em>Dark Mode</em>, responsividade <em>Mobile-First</em> e tipografia otimizada (<em>Plus Jakarta Sans</em>).</td>
+          </tr>
+          <tr>
+            <td><strong>Arquitetura PWA</strong></td>
+            <td><code>Service Workers + Manifest</code></td>
+            <td>Registro via <code>sw.js</code> com estratégias de cache para execução offline e empacotamento instalável em estações Windows (Edge/Chrome) e celulares Android/iOS.</td>
+          </tr>
+          <tr>
+            <td><strong>Manipulação de Dados</strong></td>
+            <td><code>SheetJS (xlsx.full.min.js)</code></td>
+            <td>Motor de ingestão e geração de planilhas Excel (<code>.xlsx</code> / <code>.csv</code>) executado diretamente na thread do navegador, sem onerar o servidor.</td>
+          </tr>
+          <tr>
+            <td><strong>Persistência Local</strong></td>
+            <td><code>Web Storage API (LocalStorage)</code></td>
+            <td>Camada de armazenamento no cliente com índices relacionais, controle transacional, rotinas de integridade de schema e backup de emergência em <code>.JSON</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>Banco de Dados (Nuvem)</strong></td>
+            <td><code>PostgreSQL / Supabase (3FN)</code></td>
+            <td>Modelagem relacional completa na Terceira Forma Normal contida em <code>database/schema.sql</code>, com chaves estrangeiras, constraints e triggers.</td>
+          </tr>
+          <tr>
+            <td><strong>Analytics & BI</strong></td>
+            <td><code>SQL Views para Power BI</code></td>
+            <td>Views de alta performance prontas para ingestão via DirectQuery ou Import no Power BI Desktop / Service.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 3. TOPOLOGIA & BANCO DE DADOS -->
+    <section class="section">
+      <h2 class="section-title">3. Modelagem de Dados & Integração com Power BI <span class="badge">Relacional 3FN</span></h2>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">🗄️ Estrutura de Tabelas (PostgreSQL)</div>
+          <div class="card-text">
+            <ul>
+              <li><code>usuarios</code> & <code>setores</code>: Autenticação e RBAC.</li>
+              <li><code>ocorrencias_devolucao</code> (1:N) <code>itens_devolucao</code>.</li>
+              <li><code>ocorrencias_rota</code>: Socorro mecânico e inatividade.</li>
+              <li><code>auditoria_produtividade</code>: Matriz de falhas operacionais.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">📊 Views Prontas para Power BI</div>
+          <div class="card-text">
+            <ul>
+              <li><code>vw_bi_produtividade_equipe</code> (Ranking Separação/Conferência).</li>
+              <li><code>vw_bi_devolucoes_causa_raiz</code> (Análise Causa Real vs. SAC).</li>
+              <li><code>vw_bi_frota_veiculos_parados</code> (MTTR e Custos de Rota).</li>
+              <li><code>vw_bi_controle_cd_pendencias</code> (SLA de Retorno Físico).</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. SEGURANÇA E GOVERNANÇA -->
+    <section class="section">
+      <h2 class="section-title">4. Segurança, Governança & Governança de TI <span class="badge">Segurança</span></h2>
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-title">🛡️ Controle de Acesso (RBAC)</div>
+          <div class="card-text">Isolamento estrito de permissões por departamento (SAC, CD, Financeiro, Manutenção de Frota e Admin).</div>
+        </div>
+        <div class="card">
+          <div class="card-title">🗑️ Soft Delete & Auditoria</div>
+          <div class="card-text">Nenhum dado é destruído em tempo de operação; registros utilizam soft delete com logs de data/hora e autor.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">💾 Backup e Recuperação</div>
+          <div class="card-text">Download automático de dumps de emergência em JSON e exportação de DDL/DML em SQL estruturado.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. OPÇÕES DE HOSPEDAGEM E DEPLOY -->
+    <section class="section">
+      <h2 class="section-title">5. Métodos de Implantação e Hospedagem Homologados <span class="badge">Infraestrutura</span></h2>
+      <p>Por ser uma aplicação baseada em artefatos estáticos padrão web, a equipe de T.I. tem total flexibilidade para publicar o sistema:</p>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">🏢 No Ambiente On-Premise / Servidor Local</div>
+          <div class="card-text">
+            Basta apontar a pasta para um site no <strong>Microsoft IIS</strong>, <strong>Nginx</strong> ou <strong>Apache</strong>. Não requer runtime de Node.js, Python ou compilações no servidor.
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">☁️ Em Nuvem (Cloud / Serverless)</div>
+          <div class="card-text">
+            Deploy instantâneo em <strong>Vercel</strong>, <strong>Netlify</strong>, <strong>AWS S3 + CloudFront</strong> ou <strong>Azure Static Web Apps</strong> com custo zero de infraestrutura computacional.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. PERGUNTAS FREQUENTES (FAQ) DO T.I. -->
+    <section class="section">
+      <h2 class="section-title">6. Perguntas Frequentes da Equipe de T.I. (FAQ) <span class="badge">Q&A</span></h2>
+      <div class="card" style="margin-bottom: 8px;">
+        <div class="card-title">❓ Precisa de servidor Node.js ou compilação (npm run build) para rodar?</div>
+        <div class="card-text"><strong>Não.</strong> O código roda de forma nativa e pura no navegador dos usuários. Isso elimina riscos de quebras de dependências (npm drift) e simplifica o deploy para apenas transferir os arquivos para qualquer servidor web.</div>
+      </div>
+      <div class="card" style="margin-bottom: 8px;">
+        <div class="card-title">❓ Como é feita a persistência de múltiplos usuários simultâneos?</div>
+        <div class="card-text">O sistema possui o módulo <code>js/cloudStore.js</code> já configurado para sincronizar em tempo real com instâncias <strong>PostgreSQL via Supabase</strong> através de API REST / WebSockets, bastando preencher a URL e a chave no arquivo <code>js/config.js</code>.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">❓ Como conectar o Power BI da empresa aos dados do sistema?</div>
+        <div class="card-text">Basta apontar o conector nativo do Power BI Desktop para a instância PostgreSQL informando as credenciais do banco e selecionar as <em>views</em> prefixadas como <code>vw_bi_*</code>.</div>
+      </div>
+    </section>
+
+    <!-- RODAPÉ DE AUTENTICAÇÃO -->
+    <footer class="doc-footer">
+      <div><strong>JR Distribuidora de Alimentos</strong> • Documento Técnico de Arquitetura de Software</div>
+      <div>Página 1 de 1 • Gerado em 17/08/2026</div>
+    </footer>
+
+  </div>
+
+</body>
+</html>

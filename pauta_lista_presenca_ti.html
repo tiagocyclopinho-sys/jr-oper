@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pauta e Lista de Presença — Treinamento Operacional | JR Distribuidora</title>
+  <style>
+    /* =========================================================
+       RESET & PRECISÃO DE IMPRESSÃO (FULL A4 EXPANDIDO)
+       ========================================================= */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #000000;
+      background-color: #334155;
+      padding: 20px 0;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    /* BARRA SUPERIOR DE AÇÕES (NÃO IMPRIME) */
+    .action-bar {
+      width: 95%;
+      max-width: 820px;
+      margin: 0 auto 16px auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #0f172a;
+      border: 1px solid #334155;
+      padding: 12px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+    }
+    .action-bar-title {
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: bold;
+    }
+    .btn-print {
+      background: #059669;
+      color: #ffffff;
+      border: none;
+      padding: 9px 20px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: bold;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.2s;
+    }
+    .btn-print:hover {
+      background: #047857;
+    }
+    .btn-back {
+      background: #475569;
+      color: #ffffff;
+      text-decoration: none;
+      padding: 9px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: bold;
+    }
+    .btn-back:hover {
+      background: #64748b;
+    }
+
+    /* FOLHA PADRÃO A4 */
+    .sheet-a4 {
+      width: 794px;
+      height: 1120px; /* Altura exata da folha A4 a 96DPI */
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 20px 24px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* QUADRO PRINCIPAL QUE PREENCHE A FOLHA TODA */
+    .main-frame {
+      width: 100%;
+      height: 100%;
+      border: 2px solid #000000;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* TABELA SUPERIOR: CABEÇALHO E METADADOS */
+    .table-top {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .table-top td, .table-top th {
+      border: 1px solid #000000;
+      padding: 6px 10px;
+      font-size: 11.5px;
+      vertical-align: middle;
+    }
+
+    /* CABEÇALHO */
+    .header-logo-box {
+      width: 140px;
+      text-align: center;
+      padding: 6px 8px !important;
+      border-right: 2px solid #000000 !important;
+      border-top: none !important;
+      border-left: none !important;
+    }
+    .header-logo-img {
+      max-height: 48px;
+      max-width: 125px;
+      object-fit: contain;
+      display: block;
+      margin: 0 auto;
+    }
+    .header-title-box {
+      text-align: center;
+      font-size: 19px !important;
+      font-weight: 900;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      font-family: Arial, sans-serif;
+      border-top: none !important;
+      border-right: none !important;
+    }
+
+    .meta-row {
+      font-weight: bold;
+      font-size: 11.5px;
+      border-left: none !important;
+      border-right: none !important;
+    }
+    .objective-row {
+      color: #c00000;
+      font-weight: bold;
+      font-size: 11px;
+      line-height: 1.35;
+      padding: 7px 10px !important;
+      text-align: justify;
+      border-left: none !important;
+      border-right: none !important;
+    }
+
+    /* ÁREA AMPLA DE DESCRIÇÃO / PAUTA */
+    .pauta-area {
+      flex: 1; /* Ocupa todo o espaço vertical disponível proporcionalmente */
+      padding: 10px 14px;
+      border-top: 1px solid #000000;
+      border-bottom: 1.5px solid #000000;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-around;
+      background-color: #ffffff;
+    }
+    .pauta-item {
+      font-size: 10.5px;
+      line-height: 1.35;
+      text-align: justify;
+      color: #000000;
+    }
+    .pauta-item strong {
+      font-weight: bold;
+      color: #000000;
+    }
+
+    /* TABELA DE PRESENÇA (17 LINHAS ESPAÇOSAS) */
+    .presence-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .presence-table th {
+      background-color: #b0b0b0;
+      color: #000000;
+      font-size: 11px;
+      font-weight: bold;
+      text-align: center;
+      padding: 4px 8px;
+      border-top: none;
+      border-left: none;
+      border-right: none;
+      border-bottom: 1px solid #000000;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .presence-table td {
+      height: 23px; /* Altura confortável para assinatura */
+      padding: 2px 10px;
+      font-size: 10.5px;
+      border: 1px solid #000000;
+      border-left: none;
+      border-right: none;
+      vertical-align: middle;
+    }
+    .col-num {
+      width: 32px;
+      text-align: right;
+      font-weight: bold;
+      padding-right: 4px !important;
+      border-right: 1px solid #000000 !important;
+    }
+    .col-name {
+      width: 440px;
+      font-weight: bold;
+      color: #000000;
+      text-transform: uppercase;
+      letter-spacing: 0.2px;
+      border-right: 1px solid #000000 !important;
+    }
+    .col-sign {
+      width: 250px;
+      text-align: center;
+    }
+
+    /* RODAPÉ DO QUADRO */
+    .footer-row {
+      border-top: 1.5px solid #000000;
+      padding: 8px 16px 6px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      min-height: 52px;
+      background: #ffffff;
+    }
+    .instructor-text {
+      font-size: 11px;
+      font-weight: bold;
+    }
+    .instructor-text span {
+      font-weight: normal;
+    }
+    .signature-block {
+      width: 260px;
+      text-align: center;
+    }
+    .signature-line {
+      border-top: 1px solid #000000;
+      margin-bottom: 3px;
+    }
+    .signature-label {
+      font-size: 11px;
+      font-weight: bold;
+    }
+
+    /* =========================================================
+       REGRAS DE IMPRESSÃO A4 (PREENCHIMENTO 100% DA FOLHA)
+       ========================================================= */
+    @media print {
+      @page {
+        size: A4 portrait;
+        margin: 6mm 6mm 6mm 6mm;
+      }
+      body {
+        background-color: #ffffff !important;
+        padding: 0 !important;
+        margin: 0 !important;
+      }
+      .action-bar {
+        display: none !important;
+      }
+      .sheet-a4 {
+        width: 100% !important;
+        height: 100vh !important;
+        max-height: 284mm !important; /* Altura máxima A4 com margens */
+        padding: 0 !important;
+        box-shadow: none !important;
+        margin: 0 !important;
+      }
+      .main-frame {
+        border: 2px solid #000000 !important;
+        height: 100% !important;
+      }
+      .presence-table th {
+        background-color: #b0b0b0 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- BARRA DE AÇÕES (SOMENTE NA TELA) -->
+  <div class="action-bar">
+    <div class="action-bar-title">
+      📋 <strong>JR Distribuidora</strong> — Pauta e Lista de Presença (Treinamento Operacional)
+    </div>
+    <div style="display: flex; gap: 10px;">
+      <a href="index.html" class="btn-back">⬅ Voltar ao Sistema</a>
+      <button onclick="window.print()" class="btn-print">🖨️ Imprimir Formulário</button>
+    </div>
+  </div>
+
+  <!-- FOLHA A4 COMPLETA -->
+  <div class="sheet-a4">
+    <div class="main-frame">
+
+      <!-- PARTE SUPERIOR: CABEÇALHO E IDENTIFICAÇÃO -->
+      <table class="table-top">
+        <tr>
+          <td class="header-logo-box">
+            <img src="./public/logo.png" alt="JR Distribuidora" class="header-logo-img" onerror="this.onerror=null; this.src='./public/logo_jr_verde.png';">
+          </td>
+          <td colspan="2" class="header-title-box">
+            PAUTA E LISTA DE PRESENÇA
+          </td>
+        </tr>
+
+        <tr>
+          <td colspan="3" class="meta-row">
+            <strong>Atividade:</strong> TREINAMENTO OPERACIONAL — SISTEMA JR OPER / SAC
+          </td>
+        </tr>
+
+        <tr>
+          <td colspan="3" class="objective-row">
+            Capacitar a equipe operacional nos procedimentos de abertura e tratativa de SAC, conferência e destinação física de devoluções no CD, gestão de reentregas e apontamento correto de causa raiz para melhoria dos indicadores logísticos.
+          </td>
+        </tr>
+
+        <tr>
+          <td colspan="3" class="meta-row">
+            <strong>Empresa:</strong> JR Distribuidora
+          </td>
+        </tr>
+
+        <tr>
+          <td style="width: 60%; border-left: none !important; border-right: 1px solid #000000 !important;" class="meta-row">
+            <strong>Carga Horária:</strong> 01:00h
+          </td>
+          <td style="width: 40%; border-right: none !important;" class="meta-row">
+            <strong>Data:</strong> 17/08/2026
+          </td>
+        </tr>
+      </table>
+
+      <!-- ÁREA AMPLA E ESPAÇOSA DE DESCRIÇÃO DA PAUTA DE TREINAMENTO -->
+      <div class="pauta-area">
+        <div class="pauta-item">
+          <strong>1. Abertura de Chamados & SAC (Devoluções):</strong> Treinamento prático no fluxo de abertura de ocorrências, localização de cargas por nota fiscal/motorista, inclusão correta da grade de produtos e preenchimento detalhado das informações do cliente.
+        </div>
+
+        <div class="pauta-item">
+          <strong>2. Conferência Física & Recebimento no CD:</strong> Procedimento de conferência cega no retorno das mercadorias ao Centro de Distribuição, classificação de destinação física (Retorno ao Estoque, Avaria, Retrabalho ou Devolução ao Fornecedor) e conferência de lote/validade.
+        </div>
+
+        <div class="pauta-item">
+          <strong>3. Gestão e Baixa de Reentregas:</strong> Operação do painel de reentregas, identificação de alertas de carga pendente, monitoramento de prazos operacionais e realização de baixas com atualização imediata dos indicadores.
+        </div>
+
+        <div class="pauta-item">
+          <strong>4. Investigação e Apontamento de Causa Raiz:</strong> Alinhamento sobre a correta identificação da causa real da devolução (Falha de Separação, Falha de Conferência, Avaria em Transporte ou Inconsistência Comercial) para evitar reincidências.
+        </div>
+
+        <div class="pauta-item">
+          <strong>5. Boas Práticas, Governança & Prazos:</strong> Orientação quanto à pontualidade nos registros, responsabilidade individual nos lançamentos do sistema, integridade dos dados e cumprimento dos SLAs operacionais da JR Distribuidora.
+        </div>
+      </div>
+
+      <!-- TABELA DE ASSINATURAS (12 NOMES + 5 ESPAÇOS MANUAIS = 17 LINHAS) -->
+      <table class="presence-table">
+        <thead>
+          <tr>
+            <th colspan="2" style="width: 62%;">Nome dos Participantes</th>
+            <th style="width: 38%;">Visto / Assinatura</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-num">1.</td>
+            <td class="col-name">ADRIANA RODRIGUES BARBOSA</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">2.</td>
+            <td class="col-name">VICTOR HUGO DE SOUSA SILVA</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">3.</td>
+            <td class="col-name">GUSTAVO CAMARA CARDOSO</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">4.</td>
+            <td class="col-name">MELQUIADES NUNES DE SOUSA NETO</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">5.</td>
+            <td class="col-name">MARCOS ADRIANO BARBOSA ALENCAR</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">6.</td>
+            <td class="col-name">ROBSON PINHEIRO DA SILVA</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">7.</td>
+            <td class="col-name">ITAJACI MARTINS DE SOUSA</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">8.</td>
+            <td class="col-name">CLAUDIONOR DA SILVA ARAUJO</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">9.</td>
+            <td class="col-name">BRENO SANTOS LIMA</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">10.</td>
+            <td class="col-name">LEONARDO SOUSA MACHADO</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">11.</td>
+            <td class="col-name">LUIZ EDUARDO FERNANDES VALADARES</td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">12.</td>
+            <td class="col-name">LUCAS MATEUS DA SILVA FERREIRA</td>
+            <td class="col-sign"></td>
+          </tr>
+          <!-- 5 ESPAÇOS PARA PREENCHIMENTO MANUAL -->
+          <tr>
+            <td class="col-num">13.</td>
+            <td class="col-name"></td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">14.</td>
+            <td class="col-name"></td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">15.</td>
+            <td class="col-name"></td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">16.</td>
+            <td class="col-name"></td>
+            <td class="col-sign"></td>
+          </tr>
+          <tr>
+            <td class="col-num">17.</td>
+            <td class="col-name"></td>
+            <td class="col-sign"></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- RODAPÉ COM ASSINATURA -->
+      <div class="footer-row">
+        <div class="instructor-text">
+          Instrutor (s): <span>Tiago Ferreira Alves / Analista de Logística</span>
+        </div>
+        <div class="signature-block">
+          <div class="signature-line"></div>
+          <div class="signature-label">Gerente de Logística</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</body>
+</html>
