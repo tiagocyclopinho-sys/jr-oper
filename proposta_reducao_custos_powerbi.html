@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proposta de Redução de Custos — Otimização Power BI | JR Distribuidora</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    /* RESET & BASE */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --primary: #047857;
+      --primary-dark: #064e3b;
+      --primary-light: #10b981;
+      --primary-subtle: #ecfdf5;
+      --slate-900: #0f172a;
+      --slate-800: #1e293b;
+      --slate-700: #334155;
+      --slate-600: #475569;
+      --slate-500: #64748b;
+      --slate-300: #cbd5e1;
+      --slate-200: #e2e8f0;
+      --slate-100: #f1f5f9;
+      --slate-50: #f8fafc;
+      --emerald-600: #059669;
+      --emerald-50: #ecfdf5;
+      --red-600: #dc2626;
+      --red-50: #fef2f2;
+      --blue-600: #2563eb;
+      --blue-50: #eff6ff;
+      --amber-600: #d97706;
+      --amber-50: #fffbeb;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #0b131b;
+      color: var(--slate-800);
+      line-height: 1.35;
+      padding: 20px 10px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* BARRA SUPERIOR DE AÇÕES (NÃO IMPRIME) */
+    .action-bar {
+      max-width: 860px;
+      margin: 0 auto 16px auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid #1e293b;
+      padding: 10px 18px;
+      border-radius: 10px;
+      box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
+    }
+    .action-bar-title {
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .action-bar-title span {
+      background: #047857;
+      color: #fff;
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 800;
+    }
+    .btn-print {
+      background: linear-gradient(135deg, #059669, #047857);
+      color: #ffffff;
+      border: none;
+      padding: 9px 18px;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+      transition: all 0.2s ease;
+    }
+    .btn-print:hover {
+      background: linear-gradient(135deg, #10b981, #059669);
+      transform: translateY(-1px);
+    }
+
+    /* ESTRUTURA DA PÁGINA A4 */
+    .page-container {
+      max-width: 860px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .document-page {
+      background: #ffffff;
+      padding: 28px 34px;
+      border-radius: 10px;
+      box-shadow: 0 15px 35px -10px rgba(0, 0, 0, 0.6);
+      color: var(--slate-800);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      box-sizing: border-box;
+    }
+
+    /* CABEÇALHO COM LOGOTIPO OFICIAL */
+    .doc-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #0f172a;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+    }
+    .brand-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-logo {
+      height: 44px;
+      width: auto;
+      object-fit: contain;
+    }
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+    }
+    .brand-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 17px;
+      font-weight: 900;
+      color: #064e3b;
+      letter-spacing: -0.3px;
+      line-height: 1.1;
+    }
+    .brand-subtitle {
+      font-size: 9.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--slate-500);
+      margin-top: 2px;
+    }
+    .meta-box {
+      text-align: right;
+      font-size: 9.5px;
+      color: var(--slate-600);
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      padding: 5px 10px;
+      border-radius: 6px;
+      line-height: 1.45;
+    }
+    .meta-box strong {
+      color: var(--slate-900);
+    }
+
+    /* TÍTULO PRINCIPAL */
+    .doc-title-block {
+      margin-bottom: 12px;
+    }
+    .doc-badge {
+      display: inline-block;
+      font-size: 8.5px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      background: var(--primary-subtle);
+      color: var(--primary);
+      border: 1px solid #a7f3d0;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+    }
+    .doc-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 16.5px;
+      font-weight: 900;
+      color: var(--slate-900);
+      line-height: 1.2;
+      margin-bottom: 3px;
+      letter-spacing: -0.3px;
+    }
+    .doc-lead {
+      font-size: 10px;
+      color: var(--slate-600);
+      line-height: 1.35;
+      text-align: justify;
+    }
+
+    /* CARDS DE DESTAQUE / KPIS */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .kpi-card {
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      border-radius: 7px;
+      padding: 8px 12px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--slate-400);
+    }
+    .kpi-card.highlight {
+      background: #f0fdf4;
+      border-color: #86efac;
+    }
+    .kpi-card.highlight::before {
+      background: #059669;
+    }
+    .kpi-card.alert {
+      background: #fef2f2;
+      border-color: #fca5a5;
+    }
+    .kpi-card.alert::before {
+      background: #dc2626;
+    }
+    .kpi-label {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--slate-500);
+      margin-bottom: 2px;
+    }
+    .kpi-value {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 16px;
+      font-weight: 900;
+      color: var(--slate-900);
+      line-height: 1.1;
+    }
+    .kpi-card.highlight .kpi-value {
+      color: #047857;
+    }
+    .kpi-card.alert .kpi-value {
+      color: #b91c1c;
+    }
+    .kpi-sub {
+      font-size: 8.5px;
+      font-weight: 600;
+      color: var(--slate-500);
+      margin-top: 1px;
+    }
+
+    /* SEÇÕES E TABELAS */
+    .section-title {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 11.5px;
+      font-weight: 800;
+      color: var(--slate-900);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+      padding-bottom: 3px;
+      border-bottom: 1px solid var(--slate-200);
+    }
+    .section-title span.num {
+      background: #047857;
+      color: #fff;
+      font-size: 8.5px;
+      font-weight: 900;
+      width: 17px;
+      height: 17px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .table-container {
+      margin-bottom: 11px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 9.2px;
+    }
+    th {
+      background: #1e293b;
+      color: #ffffff;
+      text-transform: uppercase;
+      font-size: 8.2px;
+      letter-spacing: 0.5px;
+      padding: 5px 8px;
+      text-align: left;
+      font-weight: 700;
+    }
+    th.text-center, td.text-center {
+      text-align: center;
+    }
+    th.text-right, td.text-right {
+      text-align: right;
+    }
+    td {
+      padding: 4.5px 8px;
+      border-bottom: 1px solid #e2e8f0;
+      color: var(--slate-700);
+      vertical-align: middle;
+    }
+    tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+    tr.highlight-row td {
+      background: #f0fdf4 !important;
+      font-weight: 600;
+    }
+
+    .tag-badge {
+      display: inline-block;
+      padding: 1.5px 6px;
+      border-radius: 4px;
+      font-size: 8px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .tag-keep {
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #86efac;
+    }
+    .tag-cancel {
+      background: #fee2e2;
+      color: #b91c1c;
+      border: 1px solid #fca5a5;
+    }
+    .tag-free {
+      background: #e0e7ff;
+      color: #4338ca;
+      border: 1px solid #c7d2fe;
+    }
+
+    /* GRID DO PLANO DE EXECUÇÃO & DIRETRIZES */
+    .exec-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 7px;
+      margin-bottom: 11px;
+    }
+    .exec-card {
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      border-radius: 5px;
+      padding: 6px 8px;
+      border-top: 2.5px solid var(--primary);
+    }
+    .exec-step {
+      font-size: 8px;
+      font-weight: 800;
+      color: var(--primary);
+      text-transform: uppercase;
+      margin-bottom: 1px;
+    }
+    .exec-title {
+      font-size: 9.5px;
+      font-weight: 800;
+      color: var(--slate-900);
+      margin-bottom: 2px;
+      line-height: 1.2;
+    }
+    .exec-desc {
+      font-size: 8.5px;
+      color: var(--slate-600);
+      line-height: 1.3;
+    }
+
+    /* CARDS DE GOVERNANÇA / CALLOUT */
+    .policy-box {
+      background: #f8fafc;
+      border: 1px solid var(--slate-200);
+      border-left: 3.5px solid #2563eb;
+      border-radius: 5px;
+      padding: 6px 10px;
+      margin-bottom: 12px;
+      font-size: 9px;
+      color: var(--slate-700);
+      line-height: 1.35;
+    }
+    .policy-box strong {
+      color: var(--slate-900);
+    }
+
+    /* ASSINATURAS */
+    .signatures-block {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1.5px solid var(--slate-300);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+    }
+    .signature-item {
+      text-align: center;
+    }
+    .signature-line {
+      border-bottom: 1px solid var(--slate-400);
+      margin-bottom: 3px;
+      height: 22px;
+    }
+    .signature-name {
+      font-size: 9.5px;
+      font-weight: 800;
+      color: var(--slate-900);
+    }
+    .signature-role {
+      font-size: 8.5px;
+      color: var(--slate-500);
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    /* FOOTER */
+    .doc-footer {
+      margin-top: 8px;
+      border-top: 1px solid var(--slate-200);
+      padding-top: 4px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 8px;
+      color: var(--slate-400);
+    }
+
+    /* REGRAS EXCLUSIVAS DE IMPRESSÃO (A4 - 1 FOLHA PERFEITA SEM QUEBRAS) */
+    @page {
+      size: A4 portrait;
+      margin: 7mm 8mm 7mm 8mm;
+    }
+
+    @media print {
+      body {
+        background: #ffffff !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        color: #0f172a !important;
+      }
+      .action-bar {
+        display: none !important;
+      }
+      .page-container {
+        gap: 0 !important;
+        max-width: 100% !important;
+      }
+      .document-page {
+        box-shadow: none !important;
+        padding: 0 !important;
+        max-width: 100% !important;
+        border-radius: 0 !important;
+        min-height: auto !important;
+        height: auto !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        page-break-after: avoid !important;
+        break-after: avoid !important;
+      }
+      thead th {
+        background: #1e293b !important;
+        color: #ffffff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .kpi-card, .exec-card, .policy-box, .tag-badge, .doc-badge {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- BARRA DE AÇÃO SUPERIOR (NÃO IMPRIME) -->
+  <div class="action-bar">
+    <div class="action-bar-title">
+      📊 <strong>Proposta Executiva: Otimização de Custos Power BI</strong>
+      <span>ECONOMIA 79,4%</span>
+    </div>
+    <button class="btn-print" onclick="window.print()">
+      🖨️ Imprimir / Salvar em PDF
+    </button>
+  </div>
+
+  <div class="page-container">
+
+    <!-- PÁGINA ÚNICA EXECUTIVA A4 -->
+    <div class="document-page">
+      <div>
+        <!-- CABEÇALHO COM LOGOTIPO OFICIAL DA JR -->
+        <header class="doc-header">
+          <div class="brand-area">
+            <img src="documents/logo jr verde.png" onerror="this.onerror=null; this.src='public/logo_jr_verde.png';" alt="JR Distribuidora" class="brand-logo">
+            <div class="brand-text">
+              <div class="brand-title">JR DISTRIBUIDORA</div>
+              <div class="brand-subtitle">Planejamento Estratégico & Gestão de Custos Operacionais</div>
+            </div>
+          </div>
+          <div class="meta-box">
+            <div><strong>Documento:</strong> PROP-BI-2026/01</div>
+            <div><strong>Data:</strong> 17 de Agosto de 2026</div>
+            <div><strong>Finalidade:</strong> Redução de Custos / Otimização M365</div>
+          </div>
+        </header>
+
+        <!-- TÍTULO DA PROPOSTA -->
+        <div class="doc-title-block">
+          <span class="doc-badge">Otimização de Licenciamento Cloud</span>
+          <h1 class="doc-title">Proposta de Redução de Custos: Centralização de Licenças Power BI</h1>
+          <p class="doc-lead">
+            <strong>Objetivo:</strong> Reduzir o custo operacional mensal recorrente com assinaturas Power BI, centralizando todo o ciclo de desenvolvimento, publicação, atualização automática de Gateway e gestão analítica em <strong>1 única licença Premium Per User (PPU)</strong>. A visualização pelos demais usuários permanece 100% garantida via links diretos e contas gratuitas <em>Microsoft Fabric (Free)</em>, adotando recontratação pontual sob demanda.
+          </p>
+        </div>
+
+        <!-- CARDS DE IMPACTO FINANCEIRO -->
+        <div class="kpi-row">
+          <div class="kpi-card alert">
+            <div class="kpi-label">Custo Atual (Mensal / Anual)</div>
+            <div class="kpi-value">R$ 652,80 <span style="font-size:10px; font-weight:600;">/mês</span></div>
+            <div class="kpi-sub">R$ 7.833,60 / ano (3 PPU + 3 Pro)</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Cenário Proposto Otimizado</div>
+            <div class="kpi-value">R$ 137,40 <span style="font-size:10px; font-weight:600;">/mês</span></div>
+            <div class="kpi-sub">R$ 1.648,80 / ano (1 PPU Central)</div>
+          </div>
+          <div class="kpi-card highlight">
+            <div class="kpi-label">Economia Líquida Gerada</div>
+            <div class="kpi-value">- R$ 6.184,80 <span style="font-size:10px; font-weight:700;">/ano</span></div>
+            <div class="kpi-sub">🟢 <strong>-79,4% de Redução</strong> (- R$ 515,40/mês)</div>
+          </div>
+        </div>
+
+        <!-- SEÇÃO 1: MAPEAMENTO E AÇÕES -->
+        <div class="section-title">
+          <span class="num">1</span>
+          <span>Mapeamento Atual de Contas e Ações Recomendadas</span>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Usuário / E-mail</th>
+                <th>Área / Setor</th>
+                <th>Licença Atual</th>
+                <th class="text-center">Ação Proposta</th>
+                <th>Novo Modelo de Acesso</th>
+                <th class="text-right">Impacto</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="highlight-row">
+                <td><strong>João Paulo</strong> (<code>tecnologia@</code>)</td>
+                <td>TI / Desenvolvimento</td>
+                <td>Power BI Premium (PPU)</td>
+                <td class="text-center"><span class="tag-badge tag-keep">🟢 Manter</span></td>
+                <td><strong>Power BI PPU</strong> (Dev & Gateway)</td>
+                <td class="text-right">R$ 137,40/mês</td>
+              </tr>
+              <tr>
+                <td><strong>Tiago Ferreira</strong> (<code>assistente.log@</code>)</td>
+                <td>Logística & SAC</td>
+                <td>Power BI Premium (PPU)</td>
+                <td class="text-center"><span class="tag-badge tag-cancel">🔴 Remover</span></td>
+                <td><span class="tag-badge tag-free">Microsoft Fabric (Free) / Link</span></td>
+                <td class="text-right" style="color:#b91c1c;">- R$ 137,40/mês</td>
+              </tr>
+              <tr>
+                <td><strong>Vitor Vieira</strong> (<code>analistacomercial@</code>)</td>
+                <td>Comercial</td>
+                <td>Power BI Premium (PPU)</td>
+                <td class="text-center"><span class="tag-badge tag-cancel">🔴 Remover</span></td>
+                <td><span class="tag-badge tag-free">Acesso Gratuito / Link</span></td>
+                <td class="text-right" style="color:#b91c1c;">- R$ 137,40/mês</td>
+              </tr>
+              <tr>
+                <td><strong>Paula Contabilidade</strong> (<code>contabilidade@</code>)</td>
+                <td>Contabilidade</td>
+                <td>Power BI Pro</td>
+                <td class="text-center"><span class="tag-badge tag-cancel">🔴 Remover</span></td>
+                <td><span class="tag-badge tag-free">Acesso Gratuito / Link</span></td>
+                <td class="text-right" style="color:#b91c1c;">- R$ 80,20/mês</td>
+              </tr>
+              <tr>
+                <td><strong>Paulo Silva</strong> (<code>operacoes.log@</code>)</td>
+                <td>Operações Logísticas</td>
+                <td>Power BI Pro</td>
+                <td class="text-center"><span class="tag-badge tag-cancel">🔴 Remover</span></td>
+                <td><span class="tag-badge tag-free">Acesso Gratuito / Link</span></td>
+                <td class="text-right" style="color:#b91c1c;">- R$ 80,20/mês</td>
+              </tr>
+              <tr>
+                <td><strong>Thiago Cardoso</strong> (<code>thiago@</code>)</td>
+                <td>Gestão / Operação</td>
+                <td>Power BI Pro</td>
+                <td class="text-center"><span class="tag-badge tag-cancel">🔴 Remover</span></td>
+                <td><span class="tag-badge tag-free">Acesso Gratuito / Link</span></td>
+                <td class="text-right" style="color:#b91c1c;">- R$ 80,20/mês</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- SEÇÃO 2: PLANO DE EXECUÇÃO -->
+        <div class="section-title">
+          <span class="num">2</span>
+          <span>Plano de Execução Imediato</span>
+        </div>
+        <div class="exec-grid">
+          <div class="exec-card">
+            <div class="exec-step">Fase 1</div>
+            <div class="exec-title">Centralização Técnica</div>
+            <div class="exec-desc">Centralização dos Workspaces, fontes de dados e rotinas automáticas de atualização via Gateway na conta <code>tecnologia@</code>.</div>
+          </div>
+          <div class="exec-card">
+            <div class="exec-step">Fase 2</div>
+            <div class="exec-title">Distribuição de Links</div>
+            <div class="exec-desc">Geração e envio dos links diretos de visualização para as equipes de Logística, Contabilidade e Comercial.</div>
+          </div>
+          <div class="exec-card">
+            <div class="exec-step">Fase 3</div>
+            <div class="exec-title">Ajuste M365 Admin</div>
+            <div class="exec-desc">Desatribuição das licenças pagas dos 5 usuários e redução da quantidade contratada para interromper cobranças.</div>
+          </div>
+          <div class="exec-card">
+            <div class="exec-step">Fase 4</div>
+            <div class="exec-title">Validação dos Painéis</div>
+            <div class="exec-desc">Homologação do acesso contínuo aos relatórios sem interrupção nas rotinas dos setores impactados.</div>
+          </div>
+        </div>
+
+        <!-- DIRETRIZ / POLÍTICA SOB DEMANDA -->
+        <div class="policy-box">
+          🛡️ <strong>Política de Flexibilidade Sob Demanda:</strong> A visualização, filtros e consulta a dados permanecem 100% disponíveis. Caso surja demanda futura específica de desenvolvimento analítico por algum usuário, a reativação da licença é realizada no portal Microsoft em poucos cliques.
+        </div>
+
+      </div>
+
+      <!-- ASSINATURAS E RODAPÉ -->
+      <div>
+        <div class="signatures-block">
+          <div class="signature-item">
+            <div class="signature-line"></div>
+            <div class="signature-name">Área Técnica / Proponente</div>
+            <div class="signature-role">Tecnologia & Logística Integrada</div>
+          </div>
+          <div class="signature-item">
+            <div class="signature-line"></div>
+            <div class="signature-name">Diretoria / Gestão Financeira</div>
+            <div class="signature-role">Aprovação de Otimização Orçamentária</div>
+          </div>
+        </div>
+
+        <footer class="doc-footer">
+          <div>JR Distribuidora © 2026 · Documento Interno de Otimização e Eficiência Orçamentária</div>
+          <div>Página 1 de 1 · Impresso via Sistema Corporativo</div>
+        </footer>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>

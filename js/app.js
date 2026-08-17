@@ -283,19 +283,19 @@ function updateUserHeader() {
     const firstName = user.nome.split('(')[0].trim();
     const dept = user.departamento || user.role || 'LOGÍSTICA';
     el.innerHTML = `
-      <div class="flex items-center gap-2">
-        <div class="flex items-center gap-2 bg-emerald-950/60 border border-emerald-800/60 px-2.5 py-1.5 rounded-lg text-xs">
-          <div class="w-7 h-7 rounded-full bg-emerald-700 text-white font-bold flex items-center justify-center text-sm shadow shrink-0">${user.nome.charAt(0)}</div>
-          <div class="hidden sm:block">
+      <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <div class="flex items-center gap-1.5 sm:gap-2 bg-emerald-950/60 border border-emerald-800/60 p-1 sm:px-2.5 sm:py-1.5 rounded-lg text-xs" title="${user.nome} (${dept})">
+          <div class="w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-emerald-700 text-white font-bold flex items-center justify-center text-xs sm:text-sm shadow shrink-0">${user.nome.charAt(0).toUpperCase()}</div>
+          <div class="hidden md:block">
             <div class="font-bold text-emerald-100 text-xs leading-none">${firstName}</div>
             <div class="text-emerald-400 text-[10px] uppercase font-semibold leading-none mt-0.5">${dept}</div>
           </div>
         </div>
-        <button onclick="handleLogout()" class="text-[10px] bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 px-2.5 py-1.5 rounded-lg font-bold transition">Sair</button>
+        <button onclick="handleLogout()" class="hidden sm:inline-block text-[10px] bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 px-2 sm:px-2.5 py-1.5 rounded-lg font-bold transition shrink-0" title="Sair do sistema">Sair</button>
       </div>`;
   } else {
     el.innerHTML = `
-      <button onclick="switchTab('login')" class="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold shadow">Entrar no Sistema</button>`;
+      <button onclick="switchTab('login')" class="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold shadow shrink-0">Entrar</button>`;
   }
 }
 
@@ -977,6 +977,7 @@ function renderApp() {
   updateUserHeader();
   renderNavMenu();
   atualizarSinoNotificacoes();
+  decorarTabelasOrdenaveis();
 
   if (window._isSwitchingMainTab) {
     window._isSwitchingMainTab = false;
@@ -1016,6 +1017,263 @@ function atualizarModoBadge() {
   el.innerHTML = emProducao
     ? `<span class="bg-emerald-800 text-emerald-200 text-[9px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase" title="Sistema em uso real desde ${dataInicioProducao.toLocaleDateString('pt-BR')}">✅ Modo Produção</span>`
     : `<span class="bg-amber-800 text-amber-200 text-[9px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase" title="Produção inicia em ${dataInicioProducao.toLocaleDateString('pt-BR')}">🧪 Modo Treinamento</span>`;
+}
+
+/* =========================================================================
+   SISTEMA UNIVERSAL DE ORDENAÇÃO DE TABELAS E PAINÉIS (JR OPER)
+   ========================================================================= */
+
+function normalizarTextoParaComparacao(val) {
+  if (val === null || val === undefined) return '';
+  return String(val)
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function extrairValorCelulaParaOrdenacao(cell) {
+  if (!cell) return { type: 'empty', val: '' };
+  
+  if (cell.hasAttribute('data-sort-value')) {
+    const raw = cell.getAttribute('data-sort-value').trim();
+    if (raw === '') return { type: 'empty', val: '' };
+    const num = parseFloat(raw);
+    if (!isNaN(num) && /^-?\d+(\.\d+)?$/.test(raw)) {
+      return { type: 'number', val: num };
+    }
+    return { type: 'string', val: normalizarTextoParaComparacao(raw) };
+  }
+
+  let text = (cell.innerText || cell.textContent || '').trim();
+  if (!text || text === '—' || text === '-' || text === 'N/A' || text === 'null') {
+    return { type: 'empty', val: '' };
+  }
+
+  // 1. Data e Hora no formato brasileiro: DD/MM/YYYY ou DD/MM/YYYY HH:mm ou DD/MM/YYYY HH:mm:ss
+  const brDateMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (brDateMatch) {
+    const dia = parseInt(brDateMatch[1], 10);
+    const mes = parseInt(brDateMatch[2], 10) - 1;
+    const ano = parseInt(brDateMatch[3], 10);
+    const hora = brDateMatch[4] ? parseInt(brDateMatch[4], 10) : 0;
+    const min = brDateMatch[5] ? parseInt(brDateMatch[5], 10) : 0;
+    const seg = brDateMatch[6] ? parseInt(brDateMatch[6], 10) : 0;
+    const dt = new Date(ano, mes, dia, hora, min, seg);
+    if (!isNaN(dt.getTime())) {
+      return { type: 'date', val: dt.getTime() };
+    }
+  }
+
+  // 2. Data no formato ISO: YYYY-MM-DD ou YYYY-MM-DDTHH:mm:ss
+  const isoDateMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T]+(\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (isoDateMatch) {
+    const dt = new Date(text);
+    if (!isNaN(dt.getTime())) {
+      return { type: 'date', val: dt.getTime() };
+    }
+  }
+
+  // 3. Formato monetário (R$ 1.234,56 ou -R$ 50,00) ou Percentual (50,5%) ou Numérico puro
+  const cleanCurrency = text.replace(/R\$\s*/gi, '').replace(/\s+/g, '').replace(/%/g, '');
+  if (/^[-+]?[\d.]+(?:,\d+)?$/.test(cleanCurrency) && /\d/.test(cleanCurrency)) {
+    let numStr = cleanCurrency;
+    if (numStr.includes(',') && numStr.includes('.')) {
+      numStr = numStr.replace(/\./g, '').replace(',', '.');
+    } else if (numStr.includes(',')) {
+      numStr = numStr.replace(',', '.');
+    }
+    const numVal = parseFloat(numStr);
+    if (!isNaN(numVal)) {
+      return { type: 'number', val: numVal };
+    }
+  }
+
+  // 4. Formato de Duração HH:MM:SS ou HH:MM
+  const timeMatch = text.match(/^(\d{1,3}):(\d{2})(?::(\d{2}))?$/);
+  if (timeMatch) {
+    const h = parseInt(timeMatch[1], 10);
+    const m = parseInt(timeMatch[2], 10);
+    const s = timeMatch[3] ? parseInt(timeMatch[3], 10) : 0;
+    return { type: 'number', val: h * 3600 + m * 60 + s };
+  }
+
+  // 5. Dias / Horas (Ex: "5 dias", "12 horas", "1 dia restante")
+  const diasMatch = text.match(/^(\d+)\s+dia/i);
+  if (diasMatch) {
+    return { type: 'number', val: parseInt(diasMatch[1], 10) };
+  }
+
+  // 6. Texto geral
+  return { type: 'string', val: normalizarTextoParaComparacao(text) };
+}
+
+function ordenarTabelaPorColuna(thElement, direcaoForcada = null) {
+  if (!thElement) return;
+  const table = thElement.closest('table');
+  if (!table) return;
+
+  const thead = table.querySelector('thead');
+  const tbody = table.querySelector('tbody') || table;
+  if (!thead) return;
+
+  const headerRow = thElement.parentElement;
+  const allHeaders = Array.from(headerRow.children).filter(el => el.tagName === 'TH' || el.tagName === 'TD');
+  const colIndex = allHeaders.indexOf(thElement);
+  if (colIndex === -1) return;
+
+  let currentDir = table.getAttribute('data-sort-col') === String(colIndex) ? table.getAttribute('data-sort-dir') : null;
+  let newDir = direcaoForcada || (currentDir === 'asc' ? 'desc' : 'asc');
+
+  table.setAttribute('data-sort-col', colIndex);
+  table.setAttribute('data-sort-dir', newDir);
+
+  const rows = Array.from(tbody.querySelectorAll('tr')).filter(tr => {
+    if (tr.parentElement && tr.parentElement.tagName === 'THEAD') return false;
+    if (tr.parentElement && tr.parentElement.tagName === 'TFOOT') return false;
+    return true;
+  });
+
+  const rowGroups = [];
+  let currentGroup = null;
+
+  rows.forEach(tr => {
+    const isColspanAll = tr.children.length === 1 && tr.children[0].hasAttribute('colspan') && !(tr.id && tr.id.includes('detail'));
+    if (isColspanAll) {
+      rowGroups.push({ main: tr, details: [], isPlaceholder: true });
+      return;
+    }
+
+    const isDetailRow = (tr.id && tr.id.includes('detail')) || tr.classList.contains('accordion-detail-row') || tr.classList.contains('detail-row');
+    if (isDetailRow && currentGroup) {
+      currentGroup.details.push(tr);
+    } else {
+      currentGroup = { main: tr, details: [], isPlaceholder: false };
+      rowGroups.push(currentGroup);
+    }
+  });
+
+  const dataGroups = rowGroups.filter(g => !g.isPlaceholder);
+  const placeholderGroups = rowGroups.filter(g => g.isPlaceholder);
+
+  dataGroups.sort((groupA, groupB) => {
+    const cellA = groupA.main.children[colIndex];
+    const cellB = groupB.main.children[colIndex];
+
+    const parsedA = extrairValorCelulaParaOrdenacao(cellA);
+    const parsedB = extrairValorCelulaParaOrdenacao(cellB);
+
+    if (parsedA.type === 'empty' && parsedB.type === 'empty') return 0;
+    if (parsedA.type === 'empty') return 1;
+    if (parsedB.type === 'empty') return -1;
+
+    let res = 0;
+    if ((parsedA.type === 'number' || parsedA.type === 'date') && (parsedB.type === 'number' || parsedB.type === 'date')) {
+      res = parsedA.val - parsedB.val;
+    } else {
+      res = String(parsedA.val).localeCompare(String(parsedB.val), 'pt-BR', { numeric: true, sensitivity: 'base' });
+    }
+
+    return newDir === 'asc' ? res : -res;
+  });
+
+  const allSortedGroups = [...dataGroups, ...placeholderGroups];
+  allSortedGroups.forEach(group => {
+    tbody.appendChild(group.main);
+    group.details.forEach(detailTr => tbody.appendChild(detailTr));
+  });
+
+  allHeaders.forEach((th, idx) => {
+    th.classList.remove('sort-active-asc', 'sort-active-desc');
+    const existingIcon = th.querySelector('.th-sort-icon');
+    if (idx === colIndex) {
+      th.classList.add(newDir === 'asc' ? 'sort-active-asc' : 'sort-active-desc');
+      if (existingIcon) {
+        existingIcon.textContent = newDir === 'asc' ? ' ▲' : ' ▼';
+        existingIcon.className = 'th-sort-icon font-black ' + (newDir === 'asc' ? 'text-emerald-400' : 'text-amber-400');
+      }
+    } else if (existingIcon) {
+      existingIcon.textContent = ' ⇅';
+      existingIcon.className = 'th-sort-icon opacity-40 hover:opacity-80 text-slate-400';
+    }
+  });
+}
+
+function ehCabecalhoNaoOrdenavel(th) {
+  if (!th) return true;
+  if (th.classList.contains('no-sort') || th.hasAttribute('data-no-sort')) return true;
+  
+  const text = (th.innerText || th.textContent || '').trim().toLowerCase();
+  if (text === 'ação' || text === 'ações' || text === 'acoes' || text === 'acao' || 
+      text === 'opções' || text === 'opcoes' || text === 'ver' || text === 'detalhes' ||
+      text === 'excluir' || text === 'restaurar' || text === 'status / ação') {
+    return true;
+  }
+  if (th.children.length === 1 && (th.children[0].tagName === 'INPUT' || th.children[0].tagName === 'BUTTON') && text === '') {
+    return true;
+  }
+  return false;
+}
+
+function decorarTabelasOrdenaveis() {
+  const tables = document.querySelectorAll('table:not(.no-auto-sort)');
+  tables.forEach(table => {
+    const thead = table.querySelector('thead');
+    if (!thead) return;
+
+    const headers = thead.querySelectorAll('th, tr:first-child td');
+    const currentSortCol = table.getAttribute('data-sort-col');
+    const currentSortDir = table.getAttribute('data-sort-dir');
+
+    headers.forEach((th, idx) => {
+      if (ehCabecalhoNaoOrdenavel(th)) {
+        th.classList.remove('sortable-th');
+        return;
+      }
+
+      th.classList.add('sortable-th');
+      th.setAttribute('title', 'Clique para ordenar por esta coluna');
+      th.style.cursor = 'pointer';
+
+      let icon = th.querySelector('.th-sort-icon');
+      if (!icon) {
+        icon = document.createElement('span');
+        icon.className = 'th-sort-icon opacity-40 hover:opacity-80 text-slate-400';
+        icon.textContent = ' ⇅';
+        th.appendChild(icon);
+      }
+
+      if (currentSortCol === String(idx)) {
+        th.classList.add(currentSortDir === 'asc' ? 'sort-active-asc' : 'sort-active-desc');
+        icon.textContent = currentSortDir === 'asc' ? ' ▲' : ' ▼';
+        icon.className = 'th-sort-icon font-black ' + (currentSortDir === 'asc' ? 'text-emerald-400' : 'text-amber-400');
+      }
+    });
+  });
+}
+
+function inicializarOrdenacaoUniversalDeTabelas() {
+  if (window._universalTableSortingInitialized) return;
+  window._universalTableSortingInitialized = true;
+
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('button, input, select, a, textarea, label')) return;
+
+    const th = e.target.closest('th, thead td');
+    if (!th) return;
+
+    const table = th.closest('table');
+    if (!table || table.classList.contains('no-auto-sort')) return;
+
+    if (ehCabecalhoNaoOrdenavel(th)) return;
+
+    ordenarTabelaPorColuna(th);
+  });
+}
+
+// Inicializa o interceptador universal
+if (typeof document !== 'undefined') {
+  inicializarOrdenacaoUniversalDeTabelas();
 }
 
 function closeModal() {
@@ -1133,6 +1391,482 @@ function switchLixeiraSubTab(sub) {
   renderApp();
 }
 window.switchLixeiraSubTab = switchLixeiraSubTab;
+
+window._expandedRecRows = window._expandedRecRows || {};
+
+function toggleGuiaGravidade() {
+  const el = document.getElementById('card-guia-gravidade');
+  const btn = document.getElementById('btn-toggle-guia-gravidade');
+  if (!el) return;
+  const isHidden = el.classList.contains('hidden');
+  if (isHidden) {
+    el.classList.remove('hidden');
+    if (btn) btn.innerHTML = '<span>✕</span> Fechar Guia Visual';
+  } else {
+    el.classList.add('hidden');
+    if (btn) btn.innerHTML = '<span>💡</span> Entenda a Regra de Gravidade (Guia Visual)';
+  }
+}
+window.toggleGuiaGravidade = toggleGuiaGravidade;
+
+function toggleDashRecRow(rowId) {
+  const detailEl = document.getElementById('rec-detail-' + rowId);
+  const iconEl = document.getElementById('rec-icon-' + rowId);
+  const btnEl = document.getElementById('rec-btn-' + rowId);
+  if (!detailEl) return;
+  const isHidden = detailEl.classList.contains('hidden');
+  if (isHidden) {
+    detailEl.classList.remove('hidden');
+    if (iconEl) iconEl.textContent = '➖';
+    if (btnEl) btnEl.classList.add('bg-amber-600', 'text-white');
+    window._expandedRecRows[rowId] = true;
+  } else {
+    detailEl.classList.add('hidden');
+    if (iconEl) iconEl.textContent = '➕';
+    if (btnEl) btnEl.classList.remove('bg-amber-600', 'text-white');
+    window._expandedRecRows[rowId] = false;
+  }
+}
+window.toggleDashRecRow = toggleDashRecRow;
+
+function calcularGravidadeOcorrencia(item) {
+  if (!item) return { nivel: 'BAIXA', label: 'Baixa', badgeClass: 'bg-emerald-950 text-emerald-300 border-emerald-700 font-semibold', corTexto: 'text-emerald-400', icone: '🟢', ordem: 1 };
+  
+  const motivo = (item.motivo_reclamado || item.motivo || item.problema || item.descricao || '').toUpperCase();
+  const causa = (item.motivo_real_causa_raiz || item.causa_raiz || item.tipo_problema || '').toUpperCase();
+  const erro = (item.tipo_erro || '').toUpperCase();
+
+  // 1. Crítica (Severidade Operacional Extrema):
+  // Quebra mecânica com socorro/guincho, veículo paralisado na rota, acidente, extravio/furto confirmado, avaria grave de carga, falta disciplinar grave
+  if (item.socorro_prestado || item.veiculo_parado || motivo.includes('GUINCHO') || motivo.includes('ACIDENTE') || motivo.includes('EXTRAVIO') || motivo.includes('FURTO') || motivo.includes('ROUBO') || causa.includes('AVARIA GRAVE') || erro.includes('CRITIC')) {
+    return {
+      nivel: 'CRITICA',
+      label: 'Crítica',
+      badgeClass: 'bg-red-950 text-red-300 border-red-700 font-black',
+      corTexto: 'text-red-400',
+      icone: '🚨',
+      ordem: 4
+    };
+  }
+  
+  // 2. Alta (Impacto Operacional Relevante):
+  // Erro operacional grave (erro motorista com devolução total, erro carregamento), reentrega com atraso severo, avaria física de produto
+  if (erro.includes('ERRO MOTORISTA') || erro.includes('ERRO CARREGAMENTO') || erro.includes('ERRO LOGISTICO') || motivo.includes('AVARIA') || motivo.includes('SOBRA') || motivo.includes('QUEBRA')) {
+    return {
+      nivel: 'ALTA',
+      label: 'Alta',
+      badgeClass: 'bg-orange-950 text-orange-300 border-orange-700 font-bold',
+      corTexto: 'text-orange-400',
+      icone: '🔴',
+      ordem: 3
+    };
+  }
+  
+  // 3. Média (Desvio Moderado):
+  // Atrasos de rota, divergências de pedido/conferência, devolução comercial parcial
+  if (motivo.includes('ATRASO') || motivo.includes('DIVERGENCIA') || motivo.includes('VALIDADE') || erro.includes('COMERCIAL') || motivo.includes('DESACORDO')) {
+    return {
+      nivel: 'MEDIA',
+      label: 'Média',
+      badgeClass: 'bg-amber-950 text-amber-300 border-amber-700 font-bold',
+      corTexto: 'text-amber-400',
+      icone: '🟡',
+      ordem: 2
+    };
+  }
+  
+  // 4. Baixa (Pontual / Leve):
+  return {
+    nivel: 'BAIXA',
+    label: 'Baixa',
+    badgeClass: 'bg-emerald-950 text-emerald-300 border-emerald-700 font-semibold',
+    corTexto: 'text-emerald-400',
+    icone: '🟢',
+    ordem: 1
+  };
+}
+window.calcularGravidadeOcorrencia = calcularGravidadeOcorrencia;
+
+function calcularGravidadeMatriz(itemGroup) {
+  const itens = Array.isArray(itemGroup.itens) ? itemGroup.itens : [];
+  const qtd = itens.length;
+
+  if (qtd === 0) {
+    return {
+      nivel: 'BAIXA',
+      label: 'Baixa',
+      tempoDescricao: 'Sem ocorrências',
+      badge: `<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 font-medium px-2.5 py-1 rounded-lg text-[10px] inline-flex items-center gap-1.5">🟢 Baixa (0x)</span>`,
+      ordem: 1
+    };
+  }
+
+  // Extrai datas válidas ordenadas cronologicamente
+  const datas = [];
+  itens.forEach(it => {
+    const rawData = it.data || (it.raw && (it.raw.data_abertura || it.raw.data_chamado || it.raw.data || it.raw.criado_em));
+    if (rawData) {
+      const d = new Date(rawData.includes('T') ? rawData : rawData + 'T08:00:00');
+      if (!isNaN(d.getTime())) datas.push(d);
+    }
+  });
+  datas.sort((a, b) => a.getTime() - b.getTime());
+
+  let diasIntervalo = 0;
+  let tempoDescricao = 'Ocorrência única (Pontual)';
+
+  if (datas.length >= 2) {
+    const minD = datas[0];
+    const maxD = datas[datas.length - 1];
+    diasIntervalo = Math.max(1, Math.round((maxD.getTime() - minD.getTime()) / (1000 * 60 * 60 * 24)));
+    
+    if (diasIntervalo <= 30) {
+      tempoDescricao = `${qtd}x em ${diasIntervalo}d (Curto prazo / Alta densidade)`;
+    } else if (diasIntervalo <= 90) {
+      const meses = Math.max(1, Math.round(diasIntervalo / 30));
+      tempoDescricao = `${qtd}x em ~${meses}m (Médio prazo)`;
+    } else {
+      const meses = Math.max(1, Math.round(diasIntervalo / 30));
+      tempoDescricao = `${qtd}x em ~${meses}m (Espaçado no tempo)`;
+    }
+  } else if (qtd > 1) {
+    tempoDescricao = `${qtd}x no período`;
+  }
+
+  const temCritica = itens.some(i => i.gravidade && i.gravidade.nivel === 'CRITICA');
+  const temAlta = itens.some(i => i.gravidade && i.gravidade.nivel === 'ALTA');
+
+  // REGRA DE GRAVIDADE MATRIZ (Ponderação Temporal + Severidade):
+  // 1. CRÍTICA (🚨):
+  // - Ocorrência intrinsecamente severa (acidente, socorro com guincho, quebra que parou veículo, extravio) OU
+  // - Reincidência de alta densidade: >= 3 ocorrências em até 35 dias (1 mês) OU
+  // - >= 4 ocorrências em até 60 dias (2 meses) OU
+  // - >= 6 ocorrências no período
+  if (temCritica || (qtd >= 3 && diasIntervalo > 0 && diasIntervalo <= 35) || (qtd >= 4 && diasIntervalo > 0 && diasIntervalo <= 60) || qtd >= 6) {
+    return {
+      nivel: 'CRITICA',
+      label: 'Crítica',
+      diasIntervalo,
+      tempoDescricao,
+      badge: `<span class="bg-red-950 text-red-300 border border-red-700 font-black px-2.5 py-1 rounded-lg text-[10px] shadow inline-flex items-center gap-1.5"><span class="animate-pulse">🚨</span> Gravidade Crítica</span>`,
+      ordem: 4
+    };
+  }
+
+  // 2. ALTA (🔴):
+  // - 2 ocorrências em até 15 dias (reincidência rápida recente) OU
+  // - 3 ocorrências em até 60 dias (2 meses) OU
+  // - Contém pelo menos 1 ocorrência de severidade Alta OU
+  // - >= 4 ocorrências em até 120 dias
+  if ((qtd >= 2 && diasIntervalo > 0 && diasIntervalo <= 15) || (qtd >= 3 && diasIntervalo > 0 && diasIntervalo <= 60) || temAlta || (qtd >= 4 && diasIntervalo <= 120)) {
+    return {
+      nivel: 'ALTA',
+      label: 'Alta',
+      diasIntervalo,
+      tempoDescricao,
+      badge: `<span class="bg-orange-950 text-orange-300 border border-orange-700 font-bold px-2.5 py-1 rounded-lg text-[10px] shadow inline-flex items-center gap-1.5">🔴 Gravidade Alta</span>`,
+      ordem: 3
+    };
+  }
+
+  // 3. MÉDIA (🟡):
+  // - 2 ocorrências em até 45 dias OU
+  // - 3 ocorrências em até 120 dias (4 meses) OU
+  // - Ocorrência única com impacto moderado
+  if ((qtd >= 2 && diasIntervalo > 0 && diasIntervalo <= 45) || (qtd >= 3 && diasIntervalo > 0 && diasIntervalo <= 120) || (qtd === 1 && itens[0]?.gravidade?.nivel === 'MEDIA')) {
+    return {
+      nivel: 'MEDIA',
+      label: 'Média',
+      diasIntervalo,
+      tempoDescricao,
+      badge: `<span class="bg-amber-950 text-amber-300 border border-amber-700 font-bold px-2.5 py-1 rounded-lg text-[10px] inline-flex items-center gap-1.5">🟡 Gravidade Média</span>`,
+      ordem: 2
+    };
+  }
+
+  // 4. BAIXA (🟢):
+  // - Ocorrência pontual leve OU
+  // - Ocorrências espaçadas no tempo (ex: 2 ocorrências separadas por mais de 60 dias, ou 3 ocorrências em mais de 120 dias/1 ano)
+  return {
+    nivel: 'BAIXA',
+    label: 'Baixa',
+    diasIntervalo,
+    tempoDescricao,
+    badge: `<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 font-medium px-2.5 py-1 rounded-lg text-[10px] inline-flex items-center gap-1.5">🟢 Gravidade Baixa</span>`,
+    ordem: 1
+  };
+}
+window.calcularGravidadeMatriz = calcularGravidadeMatriz;
+
+function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
+  const modalContainer = document.getElementById('modal-container');
+  if (!modalContainer) return;
+
+  let registro = null;
+  let tipoTitulo = 'Ocorrência';
+  let icone = '📋';
+  let tabDestino = 'dashboard';
+  let subTabDestino = null;
+
+  if (tipoRegistro === 'DEV_SAC') {
+    tipoTitulo = 'Devolução SAC';
+    icone = '📝';
+    tabDestino = 'sac_investigacao';
+    const devs = (typeof db !== 'undefined' && db.getDevolucoes) ? db.getDevolucoes() : [];
+    registro = devs.find(d => String(d.id) === String(id));
+  } else if (tipoRegistro === 'OC_ROTA') {
+    tipoTitulo = 'Ocorrência em Rota (Frota)';
+    icone = '🚨';
+    tabDestino = 'controle_viagens';
+    subTabDestino = 'frota_rota';
+    const rotas = (typeof db !== 'undefined' && db.getOcorrenciasRota) ? db.getOcorrenciasRota() : [];
+    registro = rotas.find(r => String(r.id) === String(id));
+  } else if (tipoRegistro === 'REENTREGA') {
+    tipoTitulo = 'Registro de Reentrega';
+    icone = '🔄';
+    tabDestino = 'controle_viagens';
+    subTabDestino = 'reentregas';
+    const reentregas = (typeof db !== 'undefined' && db.getReentregas) ? db.getReentregas() : [];
+    registro = reentregas.find(r => String(r.id) === String(id));
+  } else if (tipoRegistro === 'OC_OPERACIONAL') {
+    tipoTitulo = 'Ocorrência Operacional';
+    icone = '⚠️';
+    tabDestino = 'controle_viagens';
+    subTabDestino = 'operacional';
+    const lista = (db && db.data && Array.isArray(db.data.transporte_oc_operacionais)) ? db.data.transporte_oc_operacionais : [];
+    registro = lista.find(o => String(o.id) === String(id));
+  } else {
+    const devs = (typeof db !== 'undefined' && db.getDevolucoes) ? db.getDevolucoes() : [];
+    registro = devs.find(d => String(d.id) === String(id));
+    if (!registro) {
+      const rotas = (typeof db !== 'undefined' && db.getOcorrenciasRota) ? db.getOcorrenciasRota() : [];
+      registro = rotas.find(r => String(r.id) === String(id));
+    }
+  }
+
+  if (!registro) {
+    alert('Detalhes da ocorrência não encontrados no banco de dados.');
+    return;
+  }
+
+  const grav = calcularGravidadeOcorrencia(registro);
+  const dataFormatada = registro.data_abertura || registro.data_chamado || registro.data || registro.criado_em || '—';
+  const valorFormatado = (parseFloat(registro.valor_reclamado || registro.valor || registro.custo_socorro || 0) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+  // Coleta todas as mídias (fotos e vídeos)
+  const fotos = [];
+  const videos = [];
+  if (registro.foto_url) fotos.push(registro.foto_url);
+  if (registro.video_url) videos.push(registro.video_url);
+  if (registro.video_investigacao_url) videos.push(registro.video_investigacao_url);
+  if (Array.isArray(registro.fotos)) fotos.push(...registro.fotos);
+  if (Array.isArray(registro.videos)) videos.push(...registro.videos);
+  if (Array.isArray(registro.midia_fotos)) fotos.push(...registro.midia_fotos);
+  if (Array.isArray(registro.midia_videos)) videos.push(...registro.midia_videos);
+  if (Array.isArray(registro.anexos)) {
+    registro.anexos.forEach(a => {
+      if (typeof a === 'string' && (a.startsWith('data:image') || a.match(/\.(jpeg|jpg|png|webp|gif)/i))) fotos.push(a);
+      else if (typeof a === 'string' && (a.startsWith('data:video') || a.match(/\.(mp4|webm|mov)/i))) videos.push(a);
+    });
+  }
+
+  // Lista de Itens / Produtos se for Devolução
+  const temProdutos = Array.isArray(registro.itens) && registro.itens.length > 0;
+
+  modalContainer.innerHTML = `
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-fadeIn" onclick="event.stopPropagation()">
+      <!-- HEADER DO MODAL -->
+      <div class="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 shrink-0">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-emerald-950 border border-emerald-700 text-emerald-300 flex items-center justify-center text-xl shrink-0 shadow">
+            ${icone}
+          </div>
+          <div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-base font-black text-white">${tipoTitulo} #${registro.id || 'N/A'}</span>
+              <span class="px-2 py-0.5 rounded text-[10px] border ${grav.badgeClass}">
+                ${grav.icone} Gravidade ${grav.label}
+              </span>
+              ${registro.status || registro.status_fechamento || registro.status_chamado ? `
+                <span class="bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded text-[10px] font-bold">
+                  Status: ${registro.status_fechamento || registro.status_chamado || registro.status || 'REGISTRADO'}
+                </span>` : ''}
+            </div>
+            <div class="text-xs text-slate-400">Data do Registro: <b class="text-slate-200">${dataFormatada}</b></div>
+          </div>
+        </div>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-xl text-sm font-bold transition shrink-0" title="Fechar">✕</button>
+      </div>
+
+      <!-- CORPO DO MODAL (ROLÁVEL) -->
+      <div class="p-5 overflow-y-auto space-y-4 flex-grow text-xs">
+        
+        <!-- CARD 1: DADOS OPERACIONAIS -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+          <div class="font-black text-amber-400 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+            <span>📋</span> Identificação Operacional
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Cliente</div>
+              <div class="font-bold text-white text-xs truncate">${registro.cliente_nome || registro.cliente || 'Não Informado'}</div>
+              ${registro.cliente_id ? `<div class="text-[10px] text-slate-500 font-mono">Cód: ${registro.cliente_id}</div>` : ''}
+            </div>
+            <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Nota Fiscal & Carga</div>
+              <div class="font-bold text-emerald-300 text-xs">NF: ${registro.nota_fiscal || registro.nf || '—'}</div>
+              <div class="text-[10px] text-slate-400">Carga: ${registro.carga_numero || registro.carga || registro.carga_rota || '—'}</div>
+            </div>
+            <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Rota / Região</div>
+              <div class="font-bold text-white text-xs">${registro.carga_rota || registro.rota_nome || registro.rota || '—'}</div>
+            </div>
+            <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Veículo / Placa</div>
+              <div class="font-bold text-amber-300 text-xs font-mono">${registro.veiculo_placa || registro.placa || '—'}</div>
+              ${registro.veiculo_modelo ? `<div class="text-[10px] text-slate-400">${registro.veiculo_modelo}</div>` : ''}
+            </div>
+            <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Equipe de Rota</div>
+              <div class="font-bold text-white text-xs">Mot: ${registro.motorista_nome || registro.motorista || 'N/A'}</div>
+              <div class="text-[10px] text-slate-400">Ajud: ${registro.ajudante_nome || registro.ajudante || 'N/A'}</div>
+            </div>
+            <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Situação do Registro</div>
+              <div class="font-bold text-emerald-400 text-xs">${registro.status_fechamento || registro.status_chamado || registro.status || 'CONCLUÍDO'}</div>
+              <div class="text-[10px] text-slate-400">Reg: #${registro.id || 'N/A'}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CARD 2: MOTIVO, APURAÇÃO & CAUSA RAIZ -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+          <div class="font-black text-blue-400 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+            <span>🔍</span> Diagnóstico, Apuração & Causa Raiz
+          </div>
+          <div class="space-y-2.5">
+            <div class="bg-slate-900 p-3 rounded-lg border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Motivo Reclamado / Informado Inicialmente</div>
+              <div class="text-xs text-white font-medium mt-0.5">${registro.motivo_reclamado || registro.motivo || registro.problema || registro.descricao || 'Sem descrição detalhada'}</div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div class="bg-slate-900 p-3 rounded-lg border border-slate-800">
+                <div class="text-[10px] text-slate-400 uppercase font-semibold">Causa Raiz Apurada</div>
+                <div class="text-xs font-bold text-amber-300 mt-0.5">${registro.motivo_real_causa_raiz || registro.causa_raiz || 'Em análise / Não definida'}</div>
+              </div>
+              <div class="bg-slate-900 p-3 rounded-lg border border-slate-800">
+                <div class="text-[10px] text-slate-400 uppercase font-semibold">Classificação de Erro</div>
+                <div class="text-xs font-bold text-purple-300 mt-0.5">${registro.tipo_erro || registro.tipo_problema || 'NÃO CLASSIFICADO'}</div>
+              </div>
+            </div>
+            ${(registro.separador_apurado || registro.conferente_apurado) ? `
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-900 p-3 rounded-lg border border-slate-800">
+                <div>
+                  <div class="text-[10px] text-slate-400 uppercase font-semibold">Separador CD Apurado</div>
+                  <div class="text-xs font-bold text-white">${registro.separador_apurado || '—'}</div>
+                </div>
+                <div>
+                  <div class="text-[10px] text-slate-400 uppercase font-semibold">Conferente CD Apurado</div>
+                  <div class="text-xs font-bold text-white">${registro.conferente_apurado || '—'}</div>
+                </div>
+              </div>` : ''}
+          </div>
+        </div>
+
+        <!-- CARD 3: GESTÃO & TRATATIVAS -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+          <div class="font-black text-emerald-400 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+            <span>👔</span> Parecer do Gestor & Ações Corretivas
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="bg-slate-900 p-3 rounded-lg border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Ação Corretiva / Gestão</div>
+              <div class="text-xs font-bold text-white mt-0.5">${registro.acao_gestor || registro.acao_tomada || registro.acao_corretiva || 'Pendente de ação do gestor'}</div>
+            </div>
+            <div class="bg-slate-900 p-3 rounded-lg border border-slate-800">
+              <div class="text-[10px] text-slate-400 uppercase font-semibold">Destino Físico no CD / Conclusão</div>
+              <div class="text-xs font-bold text-emerald-300 mt-0.5">${registro.destino_cd || registro.status_fechamento || 'Pendente'}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CARD 4: PRODUTOS ITEM A ITEM (SE HOUVER) -->
+        ${temProdutos ? `
+          <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+            <div class="font-black text-amber-400 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+              <span>📦</span> Itens / Produtos Reclamados (${registro.itens.length})
+            </div>
+            <div class="overflow-x-auto rounded-lg border border-slate-800">
+              <table class="w-full text-left text-xs border-collapse">
+                <thead class="bg-slate-900 text-slate-400 text-[10px] uppercase border-b border-slate-800">
+                  <tr>
+                    <th class="p-2">Cód.</th>
+                    <th class="p-2">Descrição</th>
+                    <th class="p-2 text-center">Qtd</th>
+                    <th class="p-2 text-right">Valor Unit.</th>
+                    <th class="p-2 text-right">Total</th>
+                    <th class="p-2">Motivo</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800 text-[11px]">
+                  ${registro.itens.map(it => `
+                    <tr class="hover:bg-slate-900/60">
+                      <td class="p-2 font-mono text-emerald-400">${it.produto_codigo || '—'}</td>
+                      <td class="p-2 font-semibold text-white">${it.produto_descricao || 'Produto'}</td>
+                      <td class="p-2 text-center font-bold text-amber-300">${it.quantidade || 1}</td>
+                      <td class="p-2 text-right text-slate-300">${(parseFloat(it.valor_unitario)||0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                      <td class="p-2 text-right font-black text-emerald-300">${((parseFloat(it.valor_unitario)||0) * (parseInt(it.quantidade)||1)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                      <td class="p-2 text-slate-400">${it.motivo_item || it.motivo || '—'}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>` : ''}
+
+        <!-- CARD 5: MÍDIAS & EVIDÊNCIAS -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+          <div class="font-black text-purple-400 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+            <span>📸</span> Evidências & Mídias Anexadas (${fotos.length + videos.length})
+          </div>
+          ${(fotos.length === 0 && videos.length === 0) ? `
+            <div class="p-4 bg-slate-900 rounded-lg text-center text-slate-500 text-xs">
+              Nenhuma foto ou vídeo anexado a este registro.
+            </div>` : `
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
+              ${fotos.map((f, i) => `
+                <div onclick="abrirMidiaLightbox('${f}', 'foto')" class="relative group cursor-pointer aspect-square rounded-lg overflow-hidden border border-slate-800 bg-slate-900 hover:border-emerald-500 transition shadow">
+                  <img src="${f}" alt="Foto ${i+1}" class="w-full h-full object-cover group-hover:scale-105 transition duration-200">
+                  <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-bold transition">🔍 Ampliar</div>
+                </div>
+              `).join('')}
+              ${videos.map((v, i) => `
+                <div onclick="abrirMidiaLightbox('${v}', 'video')" class="relative group cursor-pointer aspect-square rounded-lg overflow-hidden border border-slate-800 bg-slate-900 hover:border-emerald-500 transition shadow flex flex-col items-center justify-center p-2 text-center">
+                  <div class="text-2xl mb-1">▶️</div>
+                  <div class="text-[10px] font-bold text-white">Vídeo ${i+1}</div>
+                  <div class="text-[9px] text-slate-400">Clique para reproduzir</div>
+                </div>
+              `).join('')}
+            </div>`}
+        </div>
+
+      </div>
+
+      <!-- FOOTER DO MODAL -->
+      <div class="px-5 py-3.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3 shrink-0">
+        <button onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded-xl text-xs transition">
+          Fechar
+        </button>
+        <button onclick="closeModal(); switchTab('${tabDestino}'); ${subTabDestino ? `switchViagensSubTab('${subTabDestino}');` : ''}" class="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-4 py-2 rounded-xl text-xs shadow-lg flex items-center gap-1.5 transition hover:scale-105">
+          <span>🚀</span> Abrir no Módulo ${tipoTitulo}
+        </button>
+      </div>
+    </div>`;
+
+  modalContainer.classList.remove('hidden');
+  modalContainer.onclick = closeModal;
+}
+window.abrirModalDetalhesOcorrenciaCompleta = abrirModalDetalhesOcorrenciaCompleta;
 
 function switchDashRecorrenciaTab(sub) {
   window._dashRecorrenciaTab = sub;
@@ -1620,61 +2354,88 @@ function renderDashboardView() {
   // ===== RECORRÊNCIAS & REINCIDÊNCIAS =====
   const activeRecTab = window._dashRecorrenciaTab || 'veiculo';
 
-  // Agrupamento integrado
+  // Agrupamento integrado da Matriz de Recorrências
   const recDataMap = {};
+  
+  function pushItemRec(key, tipoLabel, tipoReg, itemRaw, valorItem) {
+    if (!key || key === 'N/A' || key === '—' || key === 'PENDENTE') return;
+    const cleanKey = String(key).toUpperCase().trim();
+    if (!cleanKey) return;
+    
+    if (!recDataMap[cleanKey]) {
+      recDataMap[cleanKey] = { key: cleanKey, qtd: 0, valor: 0, tipo: tipoLabel, itens: [] };
+    }
+    recDataMap[cleanKey].qtd++;
+    recDataMap[cleanKey].valor += (parseFloat(valorItem) || 0);
+    
+    const gravItem = calcularGravidadeOcorrencia(itemRaw);
+    recDataMap[cleanKey].itens.push({
+      tipoRegistro: tipoReg,
+      id: itemRaw.id || 'N/A',
+      protocolo: tipoReg === 'DEV_SAC' ? `SAC #${itemRaw.id || 'N/A'}` : (tipoReg === 'OC_ROTA' ? `ROTA #${itemRaw.id || 'N/A'}` : (tipoReg === 'REENTREGA' ? `REEN #${itemRaw.id || 'N/A'}` : `OC #${itemRaw.id || 'N/A'}`)),
+      data: itemRaw.data_abertura || itemRaw.data_chamado || itemRaw.data || itemRaw.criado_em || '—',
+      cliente: itemRaw.cliente_nome || itemRaw.cliente || '—',
+      nf: itemRaw.nota_fiscal || itemRaw.nf || '—',
+      carga: itemRaw.carga_numero || itemRaw.carga || itemRaw.carga_rota || '—',
+      rota: itemRaw.carga_rota || itemRaw.rota_nome || itemRaw.rota || '—',
+      veiculo: itemRaw.veiculo_placa || itemRaw.placa || '—',
+      motorista: itemRaw.motorista_nome || itemRaw.motorista || itemRaw.motorista_original || '—',
+      ajudante: itemRaw.ajudante_nome || itemRaw.ajudante || '—',
+      motivo: itemRaw.motivo_reclamado || itemRaw.motivo || itemRaw.problema || itemRaw.descricao || '—',
+      causaRaiz: itemRaw.motivo_real_causa_raiz || itemRaw.causa_raiz || itemRaw.tipo_problema || '—',
+      tipoErro: itemRaw.tipo_erro || 'NÃO CLASSIFICADO',
+      acao: itemRaw.acao_gestor || itemRaw.acao_tomada || itemRaw.acao_corretiva || '—',
+      valor: parseFloat(valorItem) || 0,
+      gravidade: gravItem,
+      raw: itemRaw
+    });
+  }
+
   if (activeRecTab === 'veiculo') {
-    devs.forEach(d => {
-      const key = (d.veiculo_placa || 'N/A').toUpperCase().trim();
-      if (!recDataMap[key]) recDataMap[key] = { key, qtd: 0, valor: 0, tipo: 'Veículo (Placa)', itens: [] };
-      recDataMap[key].qtd++;
-      recDataMap[key].valor += parseFloat(d.valor_reclamado) || 0;
-      recDataMap[key].itens.push(d);
-    });
-    rotas.forEach(r => {
-      const key = (r.veiculo_placa || 'N/A').toUpperCase().trim();
-      if (!recDataMap[key]) recDataMap[key] = { key, qtd: 0, valor: 0, tipo: 'Veículo (Placa)', itens: [] };
-      recDataMap[key].qtd++;
-    });
+    devs.forEach(d => pushItemRec(d.veiculo_placa, 'Veículo (Placa)', 'DEV_SAC', d, d.valor_reclamado));
+    rotas.forEach(r => pushItemRec(r.veiculo_placa, 'Veículo (Placa)', 'OC_ROTA', r, r.custo_socorro));
+    ocViagens.forEach(o => pushItemRec(o.veiculo_placa || o.placa, 'Veículo (Placa)', 'OC_OPERACIONAL', o, o.custo || 0));
+    reentregasPeriodo.forEach(re => pushItemRec(re.placa, 'Veículo (Placa)', 'REENTREGA', re, re.valor_mercadoria || 0));
   } else if (activeRecTab === 'rota') {
-    devs.forEach(d => {
-      const key = (d.carga_rota || d.rota_nome || 'N/A').toUpperCase().trim();
-      if (!recDataMap[key]) recDataMap[key] = { key, qtd: 0, valor: 0, tipo: 'Rota', itens: [] };
-      recDataMap[key].qtd++;
-      recDataMap[key].valor += parseFloat(d.valor_reclamado) || 0;
-    });
+    devs.forEach(d => pushItemRec(d.carga_rota || d.rota_nome, 'Rota', 'DEV_SAC', d, d.valor_reclamado));
+    rotas.forEach(r => pushItemRec(r.rota_nome || r.rota, 'Rota', 'OC_ROTA', r, r.custo_socorro));
+    reentregasPeriodo.forEach(re => pushItemRec(re.rota_nome || re.rota, 'Rota', 'REENTREGA', re, re.valor_mercadoria || 0));
   } else if (activeRecTab === 'colaborador') {
     devs.forEach(d => {
       const sep = (d.separador_apurado || d.separador_nome || '').toUpperCase().trim();
       const conf = (d.conferente_apurado || d.conferente_nome || '').toUpperCase().trim();
-      if (sep && sep !== 'PENDENTE' && sep !== '—') {
-        if (!recDataMap[sep]) recDataMap[sep] = { key: `${sep} (Separador)`, qtd: 0, valor: 0, tipo: 'Colaborador CD', itens: [] };
-        recDataMap[sep].qtd++;
-        recDataMap[sep].valor += parseFloat(d.valor_reclamado) || 0;
-      }
-      if (conf && conf !== 'PENDENTE' && conf !== '—') {
-        if (!recDataMap[conf]) recDataMap[conf] = { key: `${conf} (Conferente)`, qtd: 0, valor: 0, tipo: 'Colaborador CD', itens: [] };
-        recDataMap[conf].qtd++;
-        recDataMap[conf].valor += parseFloat(d.valor_reclamado) || 0;
-      }
+      if (sep && sep !== 'PENDENTE' && sep !== '—') pushItemRec(`${sep} (Separador)`, 'Colaborador CD', 'DEV_SAC', d, d.valor_reclamado);
+      if (conf && conf !== 'PENDENTE' && conf !== '—') pushItemRec(`${conf} (Conferente)`, 'Colaborador CD', 'DEV_SAC', d, d.valor_reclamado);
+    });
+    faltasColabList.forEach(f => {
+      if (f && f.colaborador) pushItemRec(`${f.colaborador} (Operacional CD)`, 'Colaborador CD', 'CONDUTA_CD', f, 0);
+    });
+    ocorrenciasCdList.forEach(o => {
+      if (o && o.colaborador) pushItemRec(`${o.colaborador} (Operacional CD)`, 'Colaborador CD', 'CONDUTA_CD', o, o.valor_prejuizo || 0);
     });
   } else if (activeRecTab === 'prestador') {
     devs.forEach(d => {
       const mot = (d.motorista_nome || '').toUpperCase().trim();
       const aju = (d.ajudante_nome || '').toUpperCase().trim();
-      if (mot && mot !== 'N/A') {
-        if (!recDataMap[mot]) recDataMap[mot] = { key: `${mot} (Motorista)`, qtd: 0, valor: 0, tipo: 'Prestador / Equipe Rota', itens: [] };
-        recDataMap[mot].qtd++;
-        recDataMap[mot].valor += parseFloat(d.valor_reclamado) || 0;
-      }
-      if (aju && aju !== 'N/A') {
-        if (!recDataMap[aju]) recDataMap[aju] = { key: `${aju} (Ajudante)`, qtd: 0, valor: 0, tipo: 'Prestador / Equipe Rota', itens: [] };
-        recDataMap[aju].qtd++;
-        recDataMap[aju].valor += parseFloat(d.valor_reclamado) || 0;
-      }
+      if (mot && mot !== 'N/A' && mot !== '—') pushItemRec(`${mot} (Motorista)`, 'Prestador / Equipe Rota', 'DEV_SAC', d, d.valor_reclamado);
+      if (aju && aju !== 'N/A' && aju !== '—') pushItemRec(`${aju} (Ajudante)`, 'Prestador / Equipe Rota', 'DEV_SAC', d, d.valor_reclamado);
+    });
+    rotas.forEach(r => {
+      const mot = (r.motorista_nome || '').toUpperCase().trim();
+      if (mot && mot !== 'N/A' && mot !== '—') pushItemRec(`${mot} (Motorista)`, 'Prestador / Equipe Rota', 'OC_ROTA', r, r.custo_socorro);
+    });
+    reentregasPeriodo.forEach(re => {
+      const motOrig = (re.motorista_original || '').toUpperCase().trim();
+      const motNovo = (re.motorista_novo || '').toUpperCase().trim();
+      if (motOrig && motOrig !== 'N/A' && motOrig !== '—') pushItemRec(`${motOrig} (Motorista)`, 'Prestador / Equipe Rota', 'REENTREGA', re, re.valor_mercadoria || 0);
+      if (motNovo && motNovo !== 'N/A' && motNovo !== '—' && motNovo !== motOrig) pushItemRec(`${motNovo} (Novo Motorista)`, 'Prestador / Equipe Rota', 'REENTREGA', re, re.valor_mercadoria || 0);
     });
   }
 
-  const recList = Object.values(recDataMap).sort((a,b) => b.qtd - a.qtd);
+  const recList = Object.values(recDataMap).map(item => {
+    item.gravidadeMatriz = calcularGravidadeMatriz(item);
+    return item;
+  }).sort((a,b) => (b.gravidadeMatriz.ordem - a.gravidadeMatriz.ordem) || (b.qtd - a.qtd) || (b.valor - a.valor));
 
   const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParados > 0 || veicRetidos > 0 || pendCd > 0 || abertasCausaRaiz.length > 0);
 
@@ -2014,50 +2775,239 @@ function renderDashboardView() {
         </div>
       </div>
 
-      <!-- ==================== PAINEL INTEGRADO DE RECORRÊNCIAS E REINCIDÊNCIAS ==================== -->
-      <div class="bg-slate-900 border border-amber-900/70 rounded-2xl p-5 shadow-2xl space-y-4">
+      <!-- ==================== PAINEL EM FORMATO DE MATRIZ DE RECORRÊNCIAS & RISCO OPERACIONAL ==================== -->
+      <div class="bg-slate-900 border border-amber-900/70 rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-800/60 pb-3">
           <div>
-            <h2 class="text-sm font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
-              <span>⚠️</span> Recorrências
-            </h2>
-            <p class="text-xs text-slate-400">Mapeamento por veículo, rota e colaboradores</p>
+            <div class="flex items-center gap-2 flex-wrap">
+              <h2 class="text-sm sm:text-base font-black text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                <span>⚠️</span> Matriz de Recorrências & Gravidade
+              </h2>
+              <span class="bg-amber-950 text-amber-300 border border-amber-700 text-[10px] font-black px-2 py-0.5 rounded-full">
+                ${recList.length} mapeados
+              </span>
+            </div>
+            <p class="text-xs text-slate-400 mt-0.5">Identificação de frequência, apontamento de gravidade e detalhamento individual com acesso direto à ocorrência</p>
           </div>
 
-          <!-- BOTÕES DE SUBABAS DE RECORRÊNCIA -->
-          <div class="flex gap-1 bg-slate-950 p-1.5 rounded-xl border border-slate-800 shrink-0">
-            <button onclick="switchDashRecorrenciaTab('veiculo')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'veiculo' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">🚛 Veículo</button>
-            <button onclick="switchDashRecorrenciaTab('rota')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'rota' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">📍 Rota</button>
-            <button onclick="switchDashRecorrenciaTab('colaborador')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'colaborador' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">🏭 Colaborador (CD)</button>
-            <button onclick="switchDashRecorrenciaTab('prestador')" class="px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${activeRecTab === 'prestador' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'}">👤 Prestador (Rota)</button>
+          <div class="flex items-center gap-2 flex-wrap shrink-0">
+            <!-- BOTÃO PARA ABRIR O GUIA VISUAL -->
+            <button id="btn-toggle-guia-gravidade" onclick="toggleGuiaGravidade()" class="text-xs bg-slate-950 hover:bg-slate-800 text-amber-300 hover:text-amber-200 border border-amber-800/80 px-3 py-1.5 rounded-xl font-bold transition flex items-center gap-1.5 shadow">
+              <span>💡</span> Entenda a Regra de Gravidade (Guia Visual)
+            </button>
+
+            <!-- BOTÕES DE SUBABAS DE RECORRÊNCIA -->
+            <div class="flex flex-wrap gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0">
+              <button onclick="switchDashRecorrenciaTab('veiculo')" class="px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${activeRecTab === 'veiculo' ? 'bg-amber-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}">🚛 Veículo</button>
+              <button onclick="switchDashRecorrenciaTab('rota')" class="px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${activeRecTab === 'rota' ? 'bg-amber-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}">📍 Rota</button>
+              <button onclick="switchDashRecorrenciaTab('colaborador')" class="px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${activeRecTab === 'colaborador' ? 'bg-amber-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}">🏭 Colaborador (CD)</button>
+              <button onclick="switchDashRecorrenciaTab('prestador')" class="px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${activeRecTab === 'prestador' ? 'bg-amber-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}">👤 Prestador (Rota)</button>
+            </div>
           </div>
         </div>
 
+        <!-- CARD EXPLICATIVO VISUAL PARA LEIGOS -->
+        <div id="card-guia-gravidade" class="hidden bg-slate-950 border-2 border-amber-600/70 rounded-2xl p-4 sm:p-5 space-y-4 animate-fadeIn shadow-2xl">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-lg bg-amber-600/20 border border-amber-500/30 text-amber-400 flex items-center justify-center text-base font-bold">💡</div>
+              <div>
+                <h3 class="text-xs sm:text-sm font-black text-white uppercase tracking-wider">Como o Sistema Calcula a Gravidade das Ocorrências?</h3>
+                <p class="text-[11px] text-slate-400">Guia prático: Não olhamos apenas o número de falhas, mas a <b>relação entre quantidade e tempo</b>.</p>
+              </div>
+            </div>
+            <button onclick="toggleGuiaGravidade()" class="text-slate-400 hover:text-white text-xs font-bold bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 hover:bg-slate-800 transition">✕ Fechar</button>
+          </div>
+
+          <!-- COMPARAÇÃO DIRETA (O EXEMPLO QUE VOCÊ CITOU) -->
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <!-- CENÁRIO 1: CURTO PRAZO -->
+            <div class="bg-red-950/40 border border-red-800/80 rounded-xl p-3.5 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-black text-red-300 uppercase flex items-center gap-1.5">
+                  <span>🚨</span> Caso 1: Curto Prazo (Alerta Crítico)
+                </span>
+                <span class="bg-red-900/80 text-red-200 text-[10px] font-black px-2 py-0.5 rounded border border-red-700">CRÍTICO</span>
+              </div>
+              <div class="bg-slate-950 p-2.5 rounded-lg border border-red-900/40 text-xs text-slate-200 font-semibold">
+                3 ocorrências em 20 dias (intervalo de ~6 dias entre uma e outra).
+              </div>
+              <p class="text-[11px] text-red-300/90 leading-relaxed">
+                👉 <b>Por que é Crítico?</b> Porque o problema está acontecendo em sequência rápida, indicando falha operacional crônica que precisa de intervenção imediata da gestão.
+              </p>
+            </div>
+
+            <!-- CENÁRIO 2: LONGO PRAZO -->
+            <div class="bg-emerald-950/40 border border-emerald-800/80 rounded-xl p-3.5 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-black text-emerald-300 uppercase flex items-center gap-1.5">
+                  <span>🟢</span> Caso 2: Longo Prazo (Operação Normal)
+                </span>
+                <span class="bg-emerald-900/80 text-emerald-200 text-[10px] font-black px-2 py-0.5 rounded border border-emerald-700">NORMAL</span>
+              </div>
+              <div class="bg-slate-950 p-2.5 rounded-lg border border-emerald-900/40 text-xs text-slate-200 font-semibold">
+                3 ocorrências em 1 ano (365 dias) (média de 1 a cada 4 meses).
+              </div>
+              <p class="text-[11px] text-emerald-300/90 leading-relaxed">
+                👉 <b>Por que é Baixo?</b> Porque são episódios isolados e espaçados no tempo, perfeitamente normais em uma operação logística de alto volume diário.
+              </p>
+            </div>
+          </div>
+
+          <!-- OS 4 NÍVEIS EXPLICADOS -->
+          <div class="space-y-2 pt-1">
+            <div class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Regras de Classificação em 4 Níveis:</div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+              <div class="bg-slate-900 p-3 rounded-xl border border-red-900/80 space-y-1">
+                <div class="font-black text-red-400 flex items-center gap-1"><span>🚨</span> 1. Crítica</div>
+                <p class="text-[10px] text-slate-400">Falha severa imediata (quebra com guincho, parada de rota, acidente, extravio) <b>OU</b> ≥ 3 ocorrências em menos de 35 dias.</p>
+              </div>
+              <div class="bg-slate-900 p-3 rounded-xl border border-orange-900/80 space-y-1">
+                <div class="font-black text-orange-400 flex items-center gap-1"><span>🔴</span> 2. Alta</div>
+                <p class="text-[10px] text-slate-400">2 ocorrências em até 15 dias (reincidência recente) <b>OU</b> erro grave de carregamento/rota.</p>
+              </div>
+              <div class="bg-slate-900 p-3 rounded-xl border border-amber-900/80 space-y-1">
+                <div class="font-black text-amber-400 flex items-center gap-1"><span>🟡</span> 3. Média</div>
+                <p class="text-[10px] text-slate-400">2 ocorrências em até 45 dias <b>OU</b> 3 em até 4 meses <b>OU</b> atrasos e divergências moderadas.</p>
+              </div>
+              <div class="bg-slate-900 p-3 rounded-xl border border-emerald-900/80 space-y-1">
+                <div class="font-black text-emerald-400 flex items-center gap-1"><span>🟢</span> 4. Baixa / Normal</div>
+                <p class="text-[10px] text-slate-400">Ocorrência única pontual <b>OU</b> ocorrências espaçadas em intervalos longos de tempo (> 4 meses a 1 ano).</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RESUMO / KPIS DA MATRIZ -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+          <div class="bg-slate-950 p-3 rounded-xl border border-red-900/60 flex items-center justify-between shadow">
+            <div>
+              <div class="text-[10px] text-red-400 font-bold uppercase">🚨 Críticas (>=3x ou Grav.)</div>
+              <div class="text-lg font-black text-red-300">${recList.filter(r => r.gravidadeMatriz.nivel === 'CRITICA').length}</div>
+            </div>
+            <span class="text-xl">🚨</span>
+          </div>
+          <div class="bg-slate-950 p-3 rounded-xl border border-orange-900/60 flex items-center justify-between shadow">
+            <div>
+              <div class="text-[10px] text-orange-400 font-bold uppercase">🔴 Alta Gravidade</div>
+              <div class="text-lg font-black text-orange-300">${recList.filter(r => r.gravidadeMatriz.nivel === 'ALTA').length}</div>
+            </div>
+            <span class="text-xl">🔴</span>
+          </div>
+          <div class="bg-slate-950 p-3 rounded-xl border border-amber-900/60 flex items-center justify-between shadow">
+            <div>
+              <div class="text-[10px] text-amber-400 font-bold uppercase">🟡 Média Gravidade</div>
+              <div class="text-lg font-black text-amber-300">${recList.filter(r => r.gravidadeMatriz.nivel === 'MEDIA').length}</div>
+            </div>
+            <span class="text-xl">🟡</span>
+          </div>
+          <div class="bg-slate-950 p-3 rounded-xl border border-emerald-900/60 flex items-center justify-between shadow">
+            <div>
+              <div class="text-[10px] text-emerald-400 font-bold uppercase">🟢 Baixa Gravidade</div>
+              <div class="text-lg font-black text-emerald-300">${recList.filter(r => r.gravidadeMatriz.nivel === 'BAIXA').length}</div>
+            </div>
+            <span class="text-xl">🟢</span>
+          </div>
+        </div>
+
+        <!-- TABELA MATRIZ COM EXPANSÃO SANFONA (+) -->
         <div class="overflow-x-auto rounded-xl border border-slate-800">
           <table class="w-full text-left text-xs border-collapse">
-            <thead class="bg-slate-950 text-slate-300 text-[10px] uppercase border-b border-slate-800">
+            <thead class="bg-slate-950 text-slate-300 text-[10px] uppercase border-b border-slate-800 tracking-wider">
               <tr>
-                <th class="p-3">Identificação / Item</th>
+                <th class="p-3 text-center w-12">Ver</th>
+                <th class="p-3">Nome / Identificação</th>
                 <th class="p-3">Categoria</th>
-                <th class="p-3 text-center">Ocorrências Acumuladas</th>
-                <th class="p-3 text-center">Classificação de Risco</th>
+                <th class="p-3 text-center">Ocorrências</th>
+                <th class="p-3">Frequência Temporal</th>
+                <th class="p-3 text-center">Gravidade</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-slate-800 text-xs">
-              ${recList.length === 0 ? `<tr><td colspan="4" class="p-6 text-center text-slate-500">Nenhuma recorrência identificada na categoria selecionada.</td></tr>` :
-              recList.map(item => {
-                const badge = item.qtd >= 3
-                  ? `<span class="bg-red-950 text-red-300 border border-red-700 font-extrabold px-2.5 py-1 rounded text-[10px] shadow">🚨 Crítico (${item.qtd}x)</span>`
-                  : item.qtd === 2
-                  ? `<span class="bg-amber-950 text-amber-300 border border-amber-700 font-bold px-2.5 py-1 rounded text-[10px]">⚠️ Atenção (2x)</span>`
-                  : `<span class="bg-slate-800 text-slate-300 border border-slate-700 font-medium px-2 py-0.5 rounded text-[10px]">Normal (1x)</span>`;
+            <tbody class="divide-y divide-slate-800/80 text-xs">
+              ${recList.length === 0 ? `<tr><td colspan="6" class="p-8 text-center text-slate-500 font-medium">Nenhuma recorrência identificada na categoria selecionada para o período.</td></tr>` :
+              recList.map((item, idx) => {
+                const isExp = !!window._expandedRecRows[idx];
+                const iconeTab = activeRecTab === 'veiculo' ? '🚛' : activeRecTab === 'rota' ? '📍' : activeRecTab === 'colaborador' ? '🏭' : '👤';
 
                 return `
-                  <tr class="hover:bg-slate-800/40">
-                    <td class="p-3 font-bold text-white">${item.key}</td>
-                    <td class="p-3 text-slate-400">${item.tipo}</td>
-                    <td class="p-3 text-center font-black text-amber-400 text-sm">${item.qtd}</td>
-                    <td class="p-3 text-center">${badge}</td>
+                  <tr class="hover:bg-slate-800/50 transition cursor-pointer ${isExp ? 'bg-slate-800/40' : ''}" onclick="toggleDashRecRow('${idx}')">
+                    <td class="p-3 text-center" onclick="event.stopPropagation(); toggleDashRecRow('${idx}')">
+                      <button id="rec-btn-${idx}" class="w-7 h-7 rounded-lg bg-slate-800 hover:bg-amber-600 text-amber-400 hover:text-white font-black text-xs flex items-center justify-center transition shadow ${isExp ? 'bg-amber-600 text-white' : ''}" title="Expandir / Recolher">
+                        <span id="rec-icon-${idx}">${isExp ? '➖' : '➕'}</span>
+                      </button>
+                    </td>
+                    <td class="p-3 font-bold text-white">
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm">${iconeTab}</span>
+                        <span class="text-xs font-black text-white">${item.key}</span>
+                      </div>
+                    </td>
+                    <td class="p-3 text-slate-400 font-medium">${item.tipo}</td>
+                    <td class="p-3 text-center">
+                      <span class="bg-amber-950 text-amber-300 border border-amber-800 px-3 py-1 rounded-lg font-black text-xs shadow inline-block">
+                        ${item.qtd} ${item.qtd === 1 ? 'ocorrência' : 'ocorrências'}
+                      </span>
+                    </td>
+                    <td class="p-3 text-slate-300 font-medium">
+                      <div class="flex items-center gap-1.5 text-xs">
+                        <span class="text-slate-500">⏱️</span>
+                        <span>${item.gravidadeMatriz.tempoDescricao}</span>
+                      </div>
+                    </td>
+                    <td class="p-3 text-center">
+                      ${item.gravidadeMatriz.badge}
+                    </td>
+                  </tr>
+
+                  <!-- LINHA EXPANSÍVEL: OCORRÊNCIAS DETALHADAS -->
+                  <tr id="rec-detail-${idx}" class="${isExp ? '' : 'hidden'} bg-slate-950/90 border-b-2 border-amber-800/40">
+                    <td colspan="6" class="p-3 sm:p-4">
+                      <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 sm:p-4 space-y-3 shadow-inner">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                          <div class="flex items-center gap-2 font-bold text-amber-400 text-xs">
+                            <span>📌</span> Ocorrências Detalhadas de: <span class="text-white font-black">${item.key}</span> (${item.qtd} registro(s))
+                          </div>
+                          <span class="text-[10px] text-slate-400">Clique em <b>"Ver Ocorrência Completa"</b> para auditar os dados integrais</span>
+                        </div>
+
+                        <div class="space-y-2.5">
+                          ${item.itens.map((oc) => `
+                            <div class="bg-slate-950 p-3 rounded-xl border border-slate-800/90 hover:border-slate-700 transition flex flex-col md:flex-row md:items-center justify-between gap-3 shadow">
+                              <div class="flex-1 space-y-1.5">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                  <span class="bg-slate-800 text-slate-200 px-2 py-0.5 rounded font-black text-[10px] font-mono border border-slate-700">
+                                    ${oc.protocolo}
+                                  </span>
+                                  <span class="px-2 py-0.5 rounded text-[10px] border ${oc.gravidade.badgeClass}">
+                                    ${oc.gravidade.icone} Gravidade ${oc.gravidade.label}
+                                  </span>
+                                  <span class="text-slate-400 text-[11px]">📅 ${oc.data}</span>
+                                  ${oc.nf && oc.nf !== '—' ? `<span class="text-emerald-400 text-[11px] font-semibold">📄 NF: ${oc.nf}</span>` : ''}
+                                  ${oc.carga && oc.carga !== '—' ? `<span class="text-slate-300 text-[11px]">📦 Carga: ${oc.carga}</span>` : ''}
+                                  ${oc.cliente && oc.cliente !== '—' ? `<span class="text-slate-400 text-[11px] truncate max-w-xs">🏢 ${oc.cliente}</span>` : ''}
+                                </div>
+
+                                <div class="text-xs text-slate-200 font-medium">
+                                  <b class="text-amber-300">Motivo:</b> ${oc.motivo}
+                                </div>
+
+                                ${(oc.causaRaiz && oc.causaRaiz !== '—' && oc.causaRaiz !== 'PENDENTE') || (oc.acao && oc.acao !== '—' && oc.acao !== 'PENDENTE') ? `
+                                  <div class="text-[11px] text-slate-400 flex flex-wrap gap-x-4 gap-y-1">
+                                    ${oc.causaRaiz && oc.causaRaiz !== '—' ? `<div><b class="text-blue-400">Causa Raiz:</b> ${oc.causaRaiz}</div>` : ''}
+                                    ${oc.acao && oc.acao !== '—' ? `<div><b class="text-emerald-400">Ação / Tratativa:</b> ${oc.acao}</div>` : ''}
+                                  </div>` : ''}
+                              </div>
+
+                              <div class="flex items-center gap-3 shrink-0 self-end md:self-center">
+                                <button onclick="abrirModalDetalhesOcorrenciaCompleta('${oc.tipoRegistro}', '${oc.id}')" class="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs px-3.5 py-2 rounded-xl shadow-lg flex items-center gap-1.5 transition hover:scale-105" title="Ver todos os detalhes desta ocorrência">
+                                  <span>🔗</span> Ver Ocorrência Completa
+                                </button>
+                              </div>
+                            </div>
+                          `).join('')}
+                        </div>
+                      </div>
+                    </td>
                   </tr>`;
               }).join('')}
             </tbody>
@@ -3248,7 +4198,35 @@ function renderSacInvestigacaoView() {
   const pendentes = devsFiltrados.filter(d => !d.motivo_real_causa_raiz || d.motivo_real_causa_raiz.trim() === '');
   const monitorados = devsFiltrados.filter(d => d.motivo_real_causa_raiz && d.motivo_real_causa_raiz.trim() !== '');
 
-  const exibidos = activeInvestigacaoSubTab === 'pendentes' ? pendentes : monitorados;
+  const sortCampo = window._invSortCampo || 'data_desc';
+  let exibidos = activeInvestigacaoSubTab === 'pendentes' ? [...pendentes] : [...monitorados];
+
+  exibidos.sort((a, b) => {
+    switch (sortCampo) {
+      case 'data_asc':
+        return new Date(a.criado_em || a.data || 0) - new Date(b.criado_em || b.data || 0);
+      case 'data_desc':
+        return new Date(b.criado_em || b.data || 0) - new Date(a.criado_em || a.data || 0);
+      case 'protocolo_asc':
+        return String(a.numero_devolucao || a.numero_protocolo || '').localeCompare(String(b.numero_devolucao || b.numero_protocolo || ''), 'pt-BR', { numeric: true });
+      case 'protocolo_desc':
+        return String(b.numero_devolucao || b.numero_protocolo || '').localeCompare(String(a.numero_devolucao || a.numero_protocolo || ''), 'pt-BR', { numeric: true });
+      case 'cliente_asc':
+        return String(a.cliente_nome || '').localeCompare(String(b.cliente_nome || ''), 'pt-BR');
+      case 'cliente_desc':
+        return String(b.cliente_nome || '').localeCompare(String(a.cliente_nome || ''), 'pt-BR');
+      case 'motorista_asc':
+        return String(a.motorista_nome || '').localeCompare(String(b.motorista_nome || ''), 'pt-BR');
+      case 'rota_asc':
+        return String(a.carga_rota || '').localeCompare(String(b.carga_rota || ''), 'pt-BR');
+      case 'valor_desc':
+        return (parseFloat(b.valor_reclamado || b.valor_total || 0)) - (parseFloat(a.valor_reclamado || a.valor_total || 0));
+      case 'valor_asc':
+        return (parseFloat(a.valor_reclamado || a.valor_total || 0)) - (parseFloat(b.valor_reclamado || b.valor_total || 0));
+      default:
+        return new Date(b.criado_em || b.data || 0) - new Date(a.criado_em || a.data || 0);
+    }
+  });
 
   return `
     <div class="space-y-5">
@@ -3268,6 +4246,22 @@ function renderSacInvestigacaoView() {
               oninput="window._invFiltroTexto=this.value; renderApp(); setTimeout(()=>{ const el=document.getElementById('inv-busca-texto'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0);"
               class="bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs w-40 sm:w-56">
             ${fTexto ? `<button onclick="window._invFiltroTexto=''; renderApp()" class="text-slate-400 hover:text-white text-xs font-bold" title="Limpar busca">✕</button>` : ''}
+          </div>
+          <!-- Ordenação por campo -->
+          <div class="flex items-center gap-1.5 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
+            <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">🔃 Ordenar:</span>
+            <select id="inv-sort-campo" onchange="window._invSortCampo=this.value; renderApp();" class="bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs font-semibold">
+              <option value="data_desc" ${sortCampo==='data_desc'?'selected':''}>📅 Data (Mais recente)</option>
+              <option value="data_asc" ${sortCampo==='data_asc'?'selected':''}>📅 Data (Mais antiga)</option>
+              <option value="protocolo_asc" ${sortCampo==='protocolo_asc'?'selected':''}>🔢 Protocolo (A-Z)</option>
+              <option value="protocolo_desc" ${sortCampo==='protocolo_desc'?'selected':''}>🔢 Protocolo (Z-A)</option>
+              <option value="cliente_asc" ${sortCampo==='cliente_asc'?'selected':''}>🏢 Cliente (A-Z)</option>
+              <option value="cliente_desc" ${sortCampo==='cliente_desc'?'selected':''}>🏢 Cliente (Z-A)</option>
+              <option value="motorista_asc" ${sortCampo==='motorista_asc'?'selected':''}>👤 Motorista (A-Z)</option>
+              <option value="rota_asc" ${sortCampo==='rota_asc'?'selected':''}>📍 Rota (A-Z)</option>
+              <option value="valor_desc" ${sortCampo==='valor_desc'?'selected':''}>💰 Maior Valor</option>
+              <option value="valor_asc" ${sortCampo==='valor_asc'?'selected':''}>💰 Menor Valor</option>
+            </select>
           </div>
           <!-- Filtro de datas -->
           <div class="flex items-center gap-2 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
@@ -3812,6 +4806,7 @@ function renderGestaoGestorView() {
   const filtroDataAte = window._filtroGestorDataAte || '';
   const filtroCarga = window._filtroGestorCarga || '';
 
+  const filtroSort = window._filtroGestorSort || 'data_desc';
   const todosPendentes = todosDevs.filter(d => d.status_gestao !== 'CONCLUIDO');
   const todosConcluidos = todosDevs.filter(d => d.status_gestao === 'CONCLUIDO');
 
@@ -3836,6 +4831,36 @@ function renderGestaoGestorView() {
       return criado <= filtroDataAte;
     });
   }
+
+  // Ordenação dinâmica pelo campo selecionado
+  devsExibidos = [...devsExibidos].sort((a, b) => {
+    switch (filtroSort) {
+      case 'data_asc':
+        return new Date(a.criado_em || a.data || 0) - new Date(b.criado_em || b.data || 0);
+      case 'data_desc':
+        return new Date(b.criado_em || b.data || 0) - new Date(a.criado_em || a.data || 0);
+      case 'protocolo_asc':
+        return String(a.numero_devolucao || a.numero_protocolo || '').localeCompare(String(b.numero_devolucao || b.numero_protocolo || ''), 'pt-BR', { numeric: true });
+      case 'protocolo_desc':
+        return String(b.numero_devolucao || b.numero_protocolo || '').localeCompare(String(a.numero_devolucao || a.numero_protocolo || ''), 'pt-BR', { numeric: true });
+      case 'cliente_asc':
+        return String(a.cliente_nome || '').localeCompare(String(b.cliente_nome || ''), 'pt-BR');
+      case 'cliente_desc':
+        return String(b.cliente_nome || '').localeCompare(String(a.cliente_nome || ''), 'pt-BR');
+      case 'carga_asc':
+        return String(a.carga_numero || a.carga_rota || '').localeCompare(String(b.carga_numero || b.carga_rota || ''), 'pt-BR', { numeric: true });
+      case 'motorista_asc':
+        return String(a.motorista_nome || '').localeCompare(String(b.motorista_nome || ''), 'pt-BR');
+      case 'tipo_erro_asc':
+        return String(a.tipo_erro || '').localeCompare(String(b.tipo_erro || ''), 'pt-BR');
+      case 'valor_desc':
+        return (parseFloat(b.valor_reclamado || b.valor_total || 0)) - (parseFloat(a.valor_reclamado || a.valor_total || 0));
+      case 'valor_asc':
+        return (parseFloat(a.valor_reclamado || a.valor_total || 0)) - (parseFloat(b.valor_reclamado || b.valor_total || 0));
+      default:
+        return new Date(b.criado_em || b.data || 0) - new Date(a.criado_em || a.data || 0);
+    }
+  });
 
   const totDesconto = todosDevs.filter(d => d.desconto_produtividade_gestor).length;
   const separadores = db.data.separadores_conferentes || [];
@@ -3885,10 +4910,26 @@ function renderGestaoGestorView() {
           </span>
           <span class="text-[10px] text-slate-400">${devsExibidos.length} ocorrência(s) encontrada(s)</span>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end pt-1">
+        <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end pt-1">
           <div>
             <label class="block text-[10px] text-cyan-400 font-bold mb-1">Nº da Carga</label>
             <input type="text" id="filtro-gestor-carga" value="${filtroCarga}" placeholder="Ex: 43125..." oninput="forcarMaiuscula(this); aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
+          </div>
+          <div>
+            <label class="block text-[10px] text-emerald-400 font-bold mb-1">🔃 Ordenar Por</label>
+            <select id="filtro-gestor-sort" onchange="aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-white font-bold rounded-lg p-2 text-xs">
+              <option value="data_desc" ${filtroSort==='data_desc'?'selected':''}>📅 Data (Mais recente)</option>
+              <option value="data_asc" ${filtroSort==='data_asc'?'selected':''}>📅 Data (Mais antiga)</option>
+              <option value="protocolo_asc" ${filtroSort==='protocolo_asc'?'selected':''}>🔢 Protocolo (A-Z)</option>
+              <option value="protocolo_desc" ${filtroSort==='protocolo_desc'?'selected':''}>🔢 Protocolo (Z-A)</option>
+              <option value="cliente_asc" ${filtroSort==='cliente_asc'?'selected':''}>🏢 Cliente (A-Z)</option>
+              <option value="cliente_desc" ${filtroSort==='cliente_desc'?'selected':''}>🏢 Cliente (Z-A)</option>
+              <option value="carga_asc" ${filtroSort==='carga_asc'?'selected':''}>📍 Rota / Carga (A-Z)</option>
+              <option value="motorista_asc" ${filtroSort==='motorista_asc'?'selected':''}>👤 Motorista (A-Z)</option>
+              <option value="tipo_erro_asc" ${filtroSort==='tipo_erro_asc'?'selected':''}>⚠️ Tipo de Erro (A-Z)</option>
+              <option value="valor_desc" ${filtroSort==='valor_desc'?'selected':''}>💰 Maior Valor</option>
+              <option value="valor_asc" ${filtroSort==='valor_asc'?'selected':''}>💰 Menor Valor</option>
+            </select>
           </div>
           <div>
             <label class="block text-[10px] text-amber-400 font-bold mb-1">Filtro: Tipo de Erro</label>
@@ -3906,7 +4947,7 @@ function renderGestaoGestorView() {
               <label class="block text-[10px] text-slate-400 font-semibold mb-1">Data Até</label>
               <input type="date" id="filtro-gestor-data-ate" value="${filtroDataAte}" onchange="aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
             </div>
-            <button onclick="limparFiltroGestor()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2 rounded-lg text-xs shrink-0 mt-5">Limpar Filtros</button>
+            <button onclick="limparFiltroGestor()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2 rounded-lg text-xs shrink-0 mt-5">Limpar</button>
           </div>
         </div>
       </div>
@@ -4010,6 +5051,7 @@ function aplicarFiltroGestor() {
   window._filtroGestorDataDe = document.getElementById('filtro-gestor-data-de')?.value || '';
   window._filtroGestorDataAte = document.getElementById('filtro-gestor-data-ate')?.value || '';
   window._filtroGestorCarga = document.getElementById('filtro-gestor-carga')?.value || '';
+  window._filtroGestorSort = document.getElementById('filtro-gestor-sort')?.value || window._filtroGestorSort || 'data_desc';
   renderApp();
 }
 
@@ -4019,6 +5061,7 @@ function limparFiltroGestor() {
   window._filtroGestorDataDe = '';
   window._filtroGestorDataAte = '';
   window._filtroGestorCarga = '';
+  window._filtroGestorSort = 'data_desc';
   renderApp();
 }
 

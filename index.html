@@ -95,6 +95,45 @@
   </script>
   <style>
     /* ==========================================
+       RESET E CONTENÇÃO DE VIEWPORT (MOBILE FIRST)
+       ========================================== */
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+    html {
+      max-width: 100vw;
+      width: 100%;
+      overflow-x: hidden !important;
+      -webkit-text-size-adjust: 100%;
+    }
+    body {
+      max-width: 100vw;
+      width: 100%;
+      overflow-x: hidden !important;
+      position: relative;
+      margin: 0;
+      padding: 0;
+    }
+    main {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+    .overflow-x-auto, [class*="overflow-x-auto"] {
+      max-width: 100%;
+      -webkit-overflow-scrolling: touch;
+    }
+    img, svg, video, canvas {
+      max-width: 100%;
+      height: auto;
+    }
+    pre, code {
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-width: 100%;
+    }
+
+    /* ==========================================
        DRAWER LATERAL (DRAWER MENU) & OVERLAY
        ========================================== */
     #nav-menu-overlay {
@@ -118,11 +157,14 @@
       top: 0;
       left: 0;
       height: 100vh;
+      height: 100dvh;
       width: 280px;
       max-width: 85vw;
       z-index: 999;
       transform: translateX(-100%);
-      transition: transform 0.25s ease-out;
+      visibility: hidden;
+      pointer-events: none;
+      transition: transform 0.25s ease-out, visibility 0.25s ease-out;
       display: flex;
       flex-direction: column;
       overflow-y: auto;
@@ -130,9 +172,11 @@
     }
     #mobile-menu-dropdown.open {
       transform: translateX(0);
+      visibility: visible;
+      pointer-events: auto;
     }
 
-    select, input[type=text], input[type=number], input[type=email], input[type=password], textarea { -webkit-appearance: none; appearance: none; }
+    select, input[type=text], input[type=number], input[type=email], input[type=password], textarea { -webkit-appearance: none; appearance: none; max-width: 100%; }
     ::-webkit-scrollbar { width: 4px; height: 4px; }
     ::-webkit-scrollbar-track { background: #0f172a; }
     ::-webkit-scrollbar-thumb { background: #1e3a2f; border-radius: 4px; }
@@ -414,49 +458,86 @@
         color: #475569 !important;
       }
     }
+
+    /* ==========================================
+       ESTILOS DE CABEÇALHOS ORDENÁVEIS (TABLE SORTING)
+       ========================================== */
+    th.sortable-th,
+    table:not(.no-auto-sort) thead th:not(.no-sort) {
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    th.sortable-th:hover,
+    table:not(.no-auto-sort) thead th:not(.no-sort):hover {
+      background-color: rgba(16, 185, 129, 0.15) !important;
+      color: #34d399 !important;
+    }
+    html.light th.sortable-th:hover,
+    html.light table:not(.no-auto-sort) thead th:not(.no-sort):hover {
+      background-color: rgba(5, 150, 105, 0.15) !important;
+      color: #047857 !important;
+    }
+    .th-sort-icon {
+      display: inline-block;
+      margin-left: 4px;
+      font-size: 10px;
+      line-height: 1;
+      vertical-align: middle;
+      opacity: 0.4;
+      transition: opacity 0.15s, color 0.15s, transform 0.15s;
+    }
+    th:hover .th-sort-icon {
+      opacity: 0.9;
+    }
+    th.sort-active-asc .th-sort-icon,
+    th.sort-active-desc .th-sort-icon {
+      opacity: 1 !important;
+      font-weight: 900 !important;
+    }
   </style>
 </head>
 <body class="min-h-screen flex flex-col bg-slate-950 text-slate-100 antialiased selection:bg-emerald-500 selection:text-white">
 
-  <header class="bg-emerald-950 border-b border-emerald-800/80 sticky top-0 z-50 shadow-xl">
-    <div class="max-w-7xl mx-auto px-3 sm:px-4 py-2.5 flex items-center justify-between gap-3 relative">
-      <div class="flex items-center gap-2.5 shrink-0">
-        <button onclick="toggleMobileMenu()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white p-2 rounded-lg transition" id="hamburger-btn" title="Menu de Navegação">
+  <header class="bg-emerald-950 border-b border-emerald-800/80 sticky top-0 z-50 shadow-xl w-full">
+    <div class="max-w-7xl mx-auto px-2.5 sm:px-4 py-2 sm:py-2.5 flex items-center justify-between gap-2 relative w-full">
+      <div class="flex items-center gap-2 min-w-0 shrink">
+        <button onclick="toggleMobileMenu()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white p-1.5 sm:p-2 rounded-lg transition shrink-0" id="hamburger-btn" title="Menu de Navegação" aria-label="Abrir Menu">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
-        <div class="flex items-center gap-2 cursor-pointer" onclick="switchTab('dashboard')">
-          <img src="./public/logo_jr_branca.png" alt="JR Oper Logo" class="h-9 w-auto rounded-lg object-contain shadow-sm" style="height: 36px; mix-blend-mode: screen;" onerror="this.style.display='none'">
-          <div>
-            <div class="flex items-center gap-1.5">
-              <span class="font-extrabold text-lg text-white tracking-wide leading-none">JR</span>
-              <span class="bg-emerald-800 text-emerald-200 text-[10px] font-black px-1.5 py-0.5 rounded tracking-widest uppercase">OPER</span>
+        <div class="flex items-center gap-1.5 sm:gap-2 cursor-pointer min-w-0 shrink" onclick="switchTab('dashboard')">
+          <img src="./public/logo_jr_branca.png" alt="JR Oper Logo" class="h-8 sm:h-9 w-auto rounded-lg object-contain shadow-sm shrink-0" style="mix-blend-mode: screen;" onerror="this.style.display='none'">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1">
+              <span class="font-extrabold text-base sm:text-lg text-white tracking-wide leading-none">JR</span>
+              <span class="bg-emerald-800 text-emerald-200 text-[9px] sm:text-[10px] font-black px-1 sm:px-1.5 py-0.5 rounded tracking-widest uppercase">OPER</span>
             </div>
-            <div class="text-[10px] text-emerald-300/70 font-medium leading-none">Operações Logísticas Integradas</div>
+            <div class="text-[9px] sm:text-[10px] text-emerald-300/70 font-medium leading-none hidden md:block truncate">Operações Logísticas Integradas</div>
           </div>
         </div>
-        <span id="modo-treinamento-badge"></span>
+        <span id="modo-treinamento-badge" class="shrink-0"></span>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
         <!-- BOTÃO DE MODO CLARO / ESCURO (SOL / LUA) -->
-        <button id="btn-theme-toggle" onclick="toggleTheme()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 p-2 rounded-lg text-xs font-bold flex items-center justify-center transition shadow shrink-0" title="Alternar Modo Claro / Escuro">
-          <span id="theme-icon" class="text-base">☀️</span>
+        <button id="btn-theme-toggle" onclick="toggleTheme()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 p-1.5 sm:p-2 rounded-lg text-xs font-bold flex items-center justify-center transition shadow shrink-0" title="Alternar Modo Claro / Escuro">
+          <span id="theme-icon" class="text-base leading-none">☀️</span>
         </button>
 
         <!-- SINO DE NOTIFICAÇÕES GLOBAL -->
         <div class="relative" id="sino-notificacoes-container">
-          <button id="btn-notificacoes" onclick="toggleDropdownNotificacoes()" class="relative bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 p-2 rounded-lg text-xs font-bold flex items-center justify-center transition shadow shrink-0" title="Central de Alertas & Notificações">
-            <span class="text-base">🔔</span>
-            <span id="notif-badge-count" class="hidden absolute -top-1.5 -right-1.5 bg-red-600 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center border-2 border-slate-900 shadow-md">0</span>
+          <button id="btn-notificacoes" onclick="toggleDropdownNotificacoes()" class="relative bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 p-1.5 sm:p-2 rounded-lg text-xs font-bold flex items-center justify-center transition shadow shrink-0" title="Central de Alertas & Notificações">
+            <span class="text-base leading-none">🔔</span>
+            <span id="notif-badge-count" class="hidden absolute -top-1.5 -right-1.5 bg-red-600 text-white font-black text-[10px] w-4 h-4 sm:w-5 sm:h-5 rounded-full flex items-center justify-center border-2 border-slate-900 shadow-md">0</span>
           </button>
           <!-- DROPDOWN DE NOTIFICAÇÕES (POPUP) -->
-          <div id="dropdown-notificacoes" class="hidden absolute right-0 top-full mt-2 w-80 sm:w-96 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl z-50 p-4 space-y-3">
+          <div id="dropdown-notificacoes" class="hidden absolute right-0 top-full mt-2 w-[calc(100vw-24px)] max-w-sm sm:w-96 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl z-50 p-3 sm:p-4 space-y-3">
           </div>
         </div>
 
-        <button id="btn-pwa-install" class="hidden bg-amber-500 hover:bg-amber-400 text-amber-950 font-black text-xs px-2 py-1.5 rounded-lg shadow-lg animate-bounce flex items-center gap-1">
+        <button id="btn-pwa-install" class="hidden bg-amber-500 hover:bg-amber-400 text-amber-950 font-black text-xs px-2 py-1.5 rounded-lg shadow-lg animate-bounce flex items-center gap-1 shrink-0">
           📱 <span class="hidden sm:inline">Instalar</span>
         </button>
-        <div id="user-info-area"></div>
+        <div id="user-info-area" class="shrink-0"></div>
       </div>
     </div>
     <div id="nav-menu"></div>

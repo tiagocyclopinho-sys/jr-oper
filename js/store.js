@@ -358,6 +358,28 @@ class Store {
     if (Array.isArray(this.data.clientes_full)) {
       this.data.clientes_full.sort((a, b) => String(a?.[1] || '').localeCompare(String(b?.[1] || ''), 'pt-BR'));
     }
+    // Ordenação padrão cronológica (mais recente para o mais antigo) em todas as bases operacionais
+    if (Array.isArray(this.data.ocorrencias_devolucao)) {
+      this.data.ocorrencias_devolucao.sort((a, b) => new Date(b.criado_em || b.data_abertura || b.data || 0) - new Date(a.criado_em || a.data_abertura || a.data || 0));
+    }
+    if (Array.isArray(this.data.ocorrencias_rota)) {
+      this.data.ocorrencias_rota.sort((a, b) => new Date(b.data_chamado || b.criado_em || b.data || 0) - new Date(a.data_chamado || a.criado_em || a.data || 0));
+    }
+    if (Array.isArray(this.data.controle_viagens)) {
+      this.data.controle_viagens.sort((a, b) => new Date(b.data_saida || b.data_viagem || b.data || b.criado_em || 0) - new Date(a.data_saida || a.data_viagem || a.data || a.criado_em || 0));
+    }
+    if (Array.isArray(this.data.ocorrencias_viagens)) {
+      this.data.ocorrencias_viagens.sort((a, b) => new Date(b.data || b.criado_em || 0) - new Date(a.data || a.criado_em || 0));
+    }
+    if (Array.isArray(this.data.trocas_veiculos)) {
+      this.data.trocas_veiculos.sort((a, b) => new Date(b.data || b.data_troca || b.criado_em || 0) - new Date(a.data || a.data_troca || a.criado_em || 0));
+    }
+    if (Array.isArray(this.data.reentregas)) {
+      this.data.reentregas.sort((a, b) => new Date(b.data || b.criado_em || 0) - new Date(a.data || a.criado_em || 0));
+    }
+    if (Array.isArray(this.data.retencoes_frota)) {
+      this.data.retencoes_frota.sort((a, b) => new Date(b.criado_em || b.data_parada || 0) - new Date(a.criado_em || a.data_parada || 0));
+    }
   }
 
   resetData() {
@@ -523,7 +545,7 @@ class Store {
         conferente_nome: conferente.nome || 'Pendente',
         setor_encaminhado_nome: setor.nome || 'Pendente'
       };
-    });
+    }).sort((a, b) => new Date(b.criado_em || b.data_abertura || b.data || 0) - new Date(a.criado_em || a.data_abertura || a.data || 0));
   }
 
   addDevolucao(devolucaoData, itens) {
@@ -744,7 +766,7 @@ class Store {
         motorista_nome: motorista.nome || r.motorista_nome || 'N/A',
         mecanico_nome: mecanico.nome || r.retorno_manutencao_responsavel || 'Em atendimento'
       };
-    });
+    }).sort((a, b) => new Date(b.data_chamado || b.criado_em || b.data || 0) - new Date(a.data_chamado || a.criado_em || a.data || 0));
   }
 
   addOcorrenciaRota(rotaData) {
@@ -966,7 +988,9 @@ class Store {
 
   // ===== CRUD CONTROLE DE VIAGENS (LARGADAS) =====
   getControleViagens() {
-    return (this.data.controle_viagens || []).filter(x => !x.is_deleted);
+    return (this.data.controle_viagens || [])
+      .filter(x => !x.is_deleted)
+      .sort((a, b) => new Date(b.data_saida || b.data_viagem || b.data || b.criado_em || 0) - new Date(a.data_saida || a.data_viagem || a.data || a.criado_em || 0));
   }
 
   addViagem(viagemData) {
@@ -1014,7 +1038,9 @@ class Store {
 
   // ===== CRUD OCORRÊNCIAS OPERACIONAIS DE VIAGEM =====
   getOcorrenciasViagens() {
-    return (this.data.ocorrencias_viagens || []).filter(x => !x.is_deleted);
+    return (this.data.ocorrencias_viagens || [])
+      .filter(x => !x.is_deleted)
+      .sort((a, b) => new Date(b.data || b.criado_em || 0) - new Date(a.data || a.criado_em || 0));
   }
 
   addOcorrenciaViagem(ocData) {
@@ -1129,9 +1155,18 @@ class Store {
     return resumoData;
   }
 
+  getResumosDiariosCD() {
+    const list = Array.isArray(this.data.resumo_diario_cd)
+      ? this.data.resumo_diario_cd
+      : Object.values(this.data.resumo_diario_cd || this.data.resumos_cd || {});
+    return list.filter(r => r && !r.is_deleted).sort((a, b) => new Date(b.data || b.criado_em || 0) - new Date(a.data || a.criado_em || 0));
+  }
+
   // ===== CRUD TROCAS DE VEÍCULOS =====
   getTrocasVeiculos() {
-    return (this.data.trocas_veiculos || []).filter(x => !x.is_deleted);
+    return (this.data.trocas_veiculos || [])
+      .filter(x => !x.is_deleted)
+      .sort((a, b) => new Date(b.data || b.data_troca || b.criado_em || 0) - new Date(a.data || a.data_troca || a.criado_em || 0));
   }
 
   addTrocaVeiculo(trocaData) {
