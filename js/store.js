@@ -89,17 +89,35 @@ class Store {
   }
 
   init() {
+    // ARMAZENAMENTO DIVIDIDO EM DUAS CHAVES (correção da causa raiz do risco
+    // de estouro de cota no localStorage — ver auditoria de 17/08/2026):
+    //   'jr_sac_static' → clientes + produtos (catálogos pesados, ~3MB,
+    //                      praticamente estáticos, gravados raramente)
+    //   'jr_sac_db'      → todo o resto (dados operacionais, pequenos e que
+    //                      mudam a cada ação do usuário)
+    // Isso reduz o tamanho de cada gravação normal de ~3MB para poucas
+    // dezenas de KB. Instalações antigas (formato monolítico, com
+    // clientes/produtos dentro de 'jr_sac_db') são migradas automaticamente
+    // na primeira carga com este código, sem perda de dados.
     const isFirstInstall = !localStorage.getItem('jr_sac_db');
+    let legacyMonolithic = null;
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
       const currentVersion = '6.1.0';
       if (isFirstInstall) {
-        // Primeira vez: grava banco inicial
+        // Primeira vez: grava banco inicial já dividido
         try {
-          localStorage.setItem('jr_sac_db', JSON.stringify(INITIAL_DATA));
+          localStorage.setItem('jr_sac_static', JSON.stringify({
+            clientes: (typeof INITIAL_DATA !== 'undefined') ? INITIAL_DATA.clientes : [],
+            produtos: (typeof INITIAL_DATA !== 'undefined') ? INITIAL_DATA.produtos : []
+          }));
+          const opInicial = (typeof INITIAL_DATA !== 'undefined') ? { ...INITIAL_DATA } : {};
+          delete opInicial.clientes;
+          delete opInicial.produtos;
+          localStorage.setItem('jr_sac_db', JSON.stringify(opInicial));
           localStorage.setItem('jr_sac_version', currentVersion);
         } catch(eSet) {
-          console.warn("Nao foi possivel gravar jr_sac_db inicial no localStorage:", eSet);
+          console.warn("Nao foi possivel gravar dados iniciais no localStorage:", eSet);
         }
       } else if (storedVersion !== currentVersion) {
         // Migração: preserva dados existentes e atualiza versão
@@ -111,7 +129,20 @@ class Store {
         }
       }
       const rawDb = localStorage.getItem('jr_sac_db');
+      const rawStatic = localStorage.getItem('jr_sac_static');
       this.data = rawDb ? JSON.parse(rawDb) : null;
+      const staticData = rawStatic ? JSON.parse(rawStatic) : null;
+
+      if (this.data && (Array.isArray(this.data.clientes) || Array.isArray(this.data.produtos)) && !staticData) {
+        // Instalação antiga (formato monolítico): extrai clientes/produtos
+        // para a chave estática antes de continuar, sem perder nada.
+        legacyMonolithic = { clientes: this.data.clientes || [], produtos: this.data.produtos || [] };
+        console.info('[Store] Migrando instalação existente para armazenamento dividido (jr_sac_static + jr_sac_db)...');
+      } else if (staticData) {
+        this.data = this.data || {};
+        this.data.clientes = staticData.clientes || [];
+        this.data.produtos = staticData.produtos || [];
+      }
     } catch(e) {
       console.warn("Usando INITIAL_DATA devido a exceção no localStorage:", e);
       this.data = null;
@@ -121,14 +152,28 @@ class Store {
       this.data = (typeof INITIAL_DATA !== 'undefined') ? JSON.parse(JSON.stringify(INITIAL_DATA)) : {};
     }
 
+    if (legacyMonolithic) {
+      this.data.clientes = legacyMonolithic.clientes;
+      this.data.produtos = legacyMonolithic.produtos;
+    }
+
     // Garantir sincronia com bases mestres completas (15.139 Clientes e 4.010 Produtos da planilha Dados SAC.xlsx)
     if (typeof INITIAL_DATA !== 'undefined') {
       if (!Array.isArray(this.data.clientes) || (INITIAL_DATA.clientes && this.data.clientes.length < INITIAL_DATA.clientes.length)) {
         this.data.clientes = JSON.parse(JSON.stringify(INITIAL_DATA.clientes));
+        legacyMonolithic = legacyMonolithic || {}; // força regravação da chave estática abaixo
       }
       if (!Array.isArray(this.data.produtos) || (INITIAL_DATA.produtos && this.data.produtos.length < INITIAL_DATA.produtos.length)) {
         this.data.produtos = JSON.parse(JSON.stringify(INITIAL_DATA.produtos));
+        legacyMonolithic = legacyMonolithic || {};
       }
+    }
+
+    if (legacyMonolithic) {
+      // Concluir a migração/sincronia: grava a chave estática separadamente
+      // e regrava o bloco operacional já sem clientes/produtos dentro.
+      this.saveStaticCatalog();
+      this.save();
     }
 
     const ensureArray = (key) => {
@@ -166,6 +211,48 @@ class Store {
     ensureArray('audit_logs');
     ensureArray('retencoes_frota');
     ensureArray('reentregas');
+
+    // Migração leve, roda uma única vez por dispositivo (idempotente):
+    // 1) garante um 'id' único em cada item de devolução — sem isso, o
+    //    botão "Editar" do Retorno Físico não localiza o item (achado da
+    //    auditoria de 17/08/2026, item 1.2).
+    // 2) corrige códigos de destino gravados com erro de digitação em
+    //    versões anteriores do formulário, para os rótulos voltarem a
+    //    aparecer corretamente em telas e relatórios (item 1.3).
+    let precisaSalvarMigracaoItens = false;
+    (this.data.ocorrencias_devolucao || []).forEach(d => {
+      if (Array.isArray(d.itens)) {
+        d.itens.forEach((item, idx) => {
+          if (!item.id) {
+            item.id = `item_${d.id || Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`;
+            precisaSalvarMigracaoItens = true;
+          }
+          if (item.destino_item === 'RETABALHO_REEMBALAGEM') {
+            item.destino_item = 'RETRABALHO_REEMBALAGEM';
+            precisaSalvarMigracaoItens = true;
+          }
+          if (item.destino_item === 'DESCARTE_AVARIA') {
+            item.destino_item = 'AVARIA_DESCARTE';
+            precisaSalvarMigracaoItens = true;
+          }
+          // Preenche produto_codigo/produto_descricao (nomes lidos pelas
+          // telas de Destinação de Itens e Recepção no CD) a partir de
+          // codigo/descricao em registros salvos antes desta correção —
+          // sem isso, a coluna "Produto" dessas telas aparecia em branco.
+          if (!item.produto_codigo && item.codigo) {
+            item.produto_codigo = item.codigo;
+            precisaSalvarMigracaoItens = true;
+          }
+          if (!item.produto_descricao && item.descricao) {
+            item.produto_descricao = item.descricao;
+            precisaSalvarMigracaoItens = true;
+          }
+        });
+      }
+    });
+    if (precisaSalvarMigracaoItens) {
+      this.save();
+    }
 
     // Seed inicial para reentregas apenas na primeiríssima instalação (não recriar após reset)
     if (isFirstInstall && this.data.reentregas.length === 0) {
@@ -286,11 +373,7 @@ class Store {
           }
         });
         if (updated) {
-          try {
-            localStorage.setItem('jr_sac_db', JSON.stringify(this.data));
-          } catch(eSave) {
-            console.warn("Nao foi possivel salvar db apos migracao de senhas:", eSave);
-          }
+          this.save();
         }
       }
     } catch(e) {
@@ -298,13 +381,109 @@ class Store {
     }
   }
 
+  // Monta o "fatia operacional" de this.data — tudo MENOS clientes/produtos,
+  // que ficam na chave separada 'jr_sac_static' (ver init()). É essa fatia
+  // que save() grava a cada operação; por isso cada gravação passou de
+  // ~3MB para poucas dezenas de KB.
+  _getOperationalSlice() {
+    const slice = { ...this.data };
+    delete slice.clientes;
+    delete slice.produtos;
+    return slice;
+  }
+
+  // Grava o catálogo estático (clientes/produtos) — chamado raramente:
+  // na primeira instalação, na migração de instalações antigas, e nas
+  // (futuras) telas de edição de cadastro de cliente/produto, se vierem
+  // a existir.
+  saveStaticCatalog() {
+    try {
+      localStorage.setItem('jr_sac_static', JSON.stringify({
+        clientes: this.data.clientes || [],
+        produtos: this.data.produtos || []
+      }));
+      return true;
+    } catch(e) {
+      console.error("[Store] Falha ao gravar catálogo estático (clientes/produtos):", e);
+      return false;
+    }
+  }
+
+  // Rede de segurança para quando, mesmo com a fatia operacional pequena,
+  // uma gravação ainda assim estourar a cota do dispositivo: libera espaço
+  // reduzindo o histórico de auditoria/versões (dados de log, não registros
+  // de negócio) e tenta de novo. NÃO mexe em nenhum dado operacional real
+  // (devoluções, ocorrências, viagens, retenções, lixeira etc.).
+  pruneOldAuditData() {
+    let liberoualgo = false;
+    try {
+      if (Array.isArray(this.data.audit_logs) && this.data.audit_logs.length > 300) {
+        this.data.audit_logs = this.data.audit_logs.slice(0, 300);
+        liberoualgo = true;
+      }
+      if (Array.isArray(this.data.registro_versoes) && this.data.registro_versoes.length > 500) {
+        this.data.registro_versoes = this.data.registro_versoes
+          .sort((a, b) => new Date(b.criado_em || 0) - new Date(a.criado_em || 0))
+          .slice(0, 500);
+        liberoualgo = true;
+      }
+    } catch(e) {
+      console.warn("[Store] Erro ao tentar liberar espaço automaticamente:", e);
+    }
+    return liberoualgo;
+  }
+
+  // Retorna true/false indicando se a gravação foi bem-sucedida. Em caso de
+  // falha (incluindo estouro de cota), tenta liberar espaço automaticamente
+  // e grava de novo antes de desistir — ver auditoria de 17/08/2026, item 0.1.
   save() {
     try {
       this.sortAll();
-      localStorage.setItem('jr_sac_db', JSON.stringify(this.data));
-    } catch(e) {
-      console.warn("Nao foi possivel salvar no localStorage:", e);
+    } catch(eSort) {
+      console.warn("Erro ao ordenar dados antes de salvar:", eSort);
     }
+    const payload = JSON.stringify(this._getOperationalSlice());
+    try {
+      localStorage.setItem('jr_sac_db', payload);
+      return true;
+    } catch(e) {
+      console.error("[Store] Falha ao salvar dados operacionais no localStorage (tentativa 1):", e);
+      const liberou = this.pruneOldAuditData();
+      if (liberou) {
+        try {
+          localStorage.setItem('jr_sac_db', JSON.stringify(this._getOperationalSlice()));
+          console.info("[Store] Gravação bem-sucedida após liberar espaço automaticamente (histórico de auditoria/versões reduzido).");
+          return true;
+        } catch(e2) {
+          console.error("[Store] Falha ao salvar mesmo após liberar espaço:", e2);
+          return false;
+        }
+      }
+      return false;
+    }
+  }
+
+  // Tamanho aproximado (KB) do que está salvo hoje, para o painel de
+  // Configurações/Governança acompanhar o crescimento dos dados ao longo
+  // do tempo (item 0.1 da auditoria de 17/08/2026).
+  getStorageUsageInfo() {
+    const LIMITE_ESTIMADO_MB = 5; // cota conservadora comum em navegadores mobile
+    let operacionalKB = 0;
+    let estaticoKB = 0;
+    try { operacionalKB = (localStorage.getItem('jr_sac_db') || '').length / 1024; } catch(e) {}
+    try { estaticoKB = (localStorage.getItem('jr_sac_static') || '').length / 1024; } catch(e) {}
+    const totalKB = operacionalKB + estaticoKB;
+    const percentual = (totalKB / 1024 / LIMITE_ESTIMADO_MB) * 100;
+    let nivel = 'green';
+    if (percentual >= 90) nivel = 'red';
+    else if (percentual >= 70) nivel = 'amber';
+    return {
+      operacionalKB: Math.round(operacionalKB),
+      estaticoKB: Math.round(estaticoKB),
+      totalKB: Math.round(totalKB),
+      percentual: Math.round(percentual),
+      nivel
+    };
   }
 
   // Gerador de sequência segura (P2 - Prevenção de colisões)
@@ -384,11 +563,11 @@ class Store {
 
   resetData() {
     try {
-      localStorage.setItem('jr_sac_db', JSON.stringify(INITIAL_DATA));
-      const rawDb = localStorage.getItem('jr_sac_db');
-      this.data = rawDb ? JSON.parse(rawDb) : JSON.parse(JSON.stringify(INITIAL_DATA));
+      this.data = JSON.parse(JSON.stringify(INITIAL_DATA));
+      this.saveStaticCatalog();
+      this.save();
     } catch(e) {
-      console.warn("Erro ao resetar no localStorage, usando INITIAL_DATA:", e);
+      console.warn("Erro ao resetar no localStorage, usando INITIAL_DATA em memória:", e);
       this.data = JSON.parse(JSON.stringify(INITIAL_DATA));
     }
     this.migratePasswords();
@@ -404,6 +583,9 @@ class Store {
       ? this.data.usuarios.find(u => (u.email && u.email.toLowerCase() === term) || (u.nome && u.nome.toLowerCase() === term) || (u.nome && u.nome.toLowerCase().startsWith(term)))
       : null;
     if (user) {
+      if (user.ativo === false) {
+        return { success: false, message: 'Usuário desativado. Contate o administrador.' };
+      }
       if (user.senha_hash !== hashed && user.senha_hash !== senha) {
         return { success: false, message: 'Senha incorreta' };
       }
@@ -463,7 +645,18 @@ class Store {
       criado_em: new Date().toISOString()
     };
     this.data.usuarios.push(newUser);
-    this.save();
+    const salvou = this.save();
+    if (!salvou) {
+      // O usuário continua disponível em memória para a sessão atual, mas
+      // avisamos que a gravação em disco falhou — sem isso, o cadastro
+      // "some" silenciosamente na próxima vez que o app for aberto
+      // (achado da auditoria de 17/08/2026, item 0.1).
+      return {
+        success: false,
+        user: newUser,
+        message: 'Não foi possível salvar os dados neste dispositivo mesmo após liberar espaço automaticamente. O cadastro pode não persistir ao fechar o navegador — tente novamente ou use outro dispositivo/navegador.'
+      };
+    }
     return { success: true, user: newUser };
   }
 
@@ -1433,6 +1626,12 @@ class Store {
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
       criado_em: new Date().toISOString()
     });
+    // Limita o histórico de versões a 1500 registros no total (este array
+    // não tinha nenhum limite antes — achado da auditoria de 17/08/2026,
+    // uma das causas do crescimento descontrolado do banco).
+    if (this.data.registro_versoes.length > 1500) {
+      this.data.registro_versoes = this.data.registro_versoes.slice(0, 1500);
+    }
   }
 
   rollbackVersion(collection, recordId, versionId, password) {
@@ -1663,7 +1862,7 @@ class Store {
    * @param {Object} dados - { veiculo_id, placa, tipo_veiculo, data_parada, motivo, tipo_os, local, data_previsao }
    * @returns {{ success: boolean, retencao: Object }}
    */
-  addRetencaoFrota({ veiculo_id, placa, tipo_veiculo, data_parada, motivo, tipo_os, local, data_previsao, numero_os }) {
+  addRetencaoFrota({ veiculo_id, placa, tipo_veiculo, data_parada, motivo, tipo_os, local, data_previsao, numero_os, link_os }) {
     if (!Array.isArray(this.data.retencoes_frota)) {
       this.data.retencoes_frota = [];
     }
@@ -1686,6 +1885,7 @@ class Store {
       local: String(local || '').toUpperCase().trim(),
       data_previsao: data_previsao || null,
       numero_os: String(numero_os || '').toUpperCase().trim() || null,
+      link_os: String(link_os || '').trim() || null,
       data_liberacao: null,
       status: 'RETIDO',
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
@@ -1703,19 +1903,31 @@ class Store {
    * @param {string} dataLiberacao - Data de liberação (YYYY-MM-DD)
    * @returns {{ success: boolean, retencao?: Object, message?: string }}
    */
-  liberarVeiculo(id, dataLiberacao) {
+  /**
+   * Altera status do registro para LIBERADO e registra a data de liberação.
+   * @param {number|string} id - ID da retenção
+   * @param {string} dataLiberacao - Data de liberação (YYYY-MM-DD)
+   * @param {string} [descricaoAcao] - Ação de manutenção realizada (obrigatória
+   *   desde a auditoria de 17/08/2026, item 0.2 — a validação em si é feita
+   *   na camada de UI antes de chamar este método, mas o valor é gravado aqui).
+   * @returns {{ success: boolean, retencao?: Object, message?: string }}
+   */
+  liberarVeiculo(id, dataLiberacao, descricaoAcao) {
     const retencao = (this.data.retencoes_frota || []).find(r => r.id == id && !r.is_deleted);
     if (!retencao) {
       return { success: false, message: `Retenção ID ${id} não encontrada.` };
     }
     retencao.status = 'LIBERADO';
     retencao.data_liberacao = dataLiberacao || new Date().toISOString().split('T')[0];
+    if (descricaoAcao !== undefined) {
+      retencao.descricao_acao_liberacao = descricaoAcao;
+    }
     this.save();
     return { success: true, retencao };
   }
 
-  liberarRetencaoFrota(id, dataLiberacao) {
-    return this.liberarVeiculo(id, dataLiberacao);
+  liberarRetencaoFrota(id, dataLiberacao, descricaoAcao) {
+    return this.liberarVeiculo(id, dataLiberacao, descricaoAcao);
   }
 
   /**
@@ -1746,7 +1958,7 @@ class Store {
     if (!retencao) {
       return { success: false, message: `Retenção ID ${id} não encontrada.` };
     }
-    const campos = ['placa', 'data_parada', 'motivo', 'tipo_os', 'numero_os', 'local', 'data_previsao', 'data_liberacao', 'status'];
+    const campos = ['placa', 'data_parada', 'motivo', 'tipo_os', 'numero_os', 'link_os', 'local', 'data_previsao', 'data_liberacao', 'status'];
     campos.forEach(c => {
       if (Object.prototype.hasOwnProperty.call(dados, c)) {
         retencao[c] = dados[c];

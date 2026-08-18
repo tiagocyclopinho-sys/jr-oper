@@ -560,6 +560,38 @@ function showToast(message, type = 'success') {
   }, 4000);
 }
 
+// Painel de acompanhamento de uso do armazenamento local (item 0.1 da
+// auditoria de 17/08/2026) — complementa a correção estrutural (separação
+// de clientes/produtos em chave própria), servindo para a equipe acompanhar
+// o crescimento dos dados operacionais ao longo do tempo.
+function renderStorageUsagePanel() {
+  if (!db || typeof db.getStorageUsageInfo !== 'function') return '';
+  const info = db.getStorageUsageInfo();
+  const corMap = {
+    green: { bg: 'bg-emerald-950/30', border: 'border-emerald-900/60', text: 'text-emerald-400', bar: 'bg-emerald-500' },
+    amber: { bg: 'bg-amber-950/30', border: 'border-amber-900/60', text: 'text-amber-400', bar: 'bg-amber-500' },
+    red:   { bg: 'bg-red-950/30', border: 'border-red-900/60', text: 'text-red-400', bar: 'bg-red-500' }
+  };
+  const cor = corMap[info.nivel] || corMap.green;
+  const mensagem = info.nivel === 'red'
+    ? 'Uso elevado — risco de falha ao salvar dados neste dispositivo. Considere liberar espaço.'
+    : (info.nivel === 'amber' ? 'Uso moderado — acompanhe o crescimento dos dados.' : 'Uso normal.');
+
+  return `
+    <div class="${cor.bg} border ${cor.border} p-5 rounded-2xl text-xs shadow-2xl">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
+        <div class="font-bold ${cor.text} text-sm flex items-center gap-2">
+          <span>💾</span> Uso do Armazenamento Local (Dados Operacionais)
+        </div>
+        <span class="text-slate-400">${info.operacionalKB} KB usados de ~5.120 KB estimados (${info.percentual}%)</span>
+      </div>
+      <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden mb-2">
+        <div class="${cor.bar} h-2 rounded-full transition-all" style="width:${Math.min(info.percentual, 100)}%"></div>
+      </div>
+      <p class="text-slate-400 leading-relaxed">${mensagem} O catálogo de clientes e produtos (~${info.estaticoKB} KB) fica em um armazenamento separado e não conta para este limite.</p>
+    </div>`;
+}
+
 // ===== MÓDULO: LIXEIRA DO SISTEMA (GOVERNANÇA, AUDITORIA & RETENÇÃO) =====
 function renderLixeiraView() {
   const activeSub = window._activeLixeiraSubTab || 'lixeira';
@@ -595,6 +627,8 @@ function renderLixeiraView() {
         </div>
       </div>
 
+      ${renderStorageUsagePanel()}
+
       ${activeSub === 'lixeira' ? renderLixeiraItemsContent(items) : (activeSub === 'auditoria' ? renderAuditLogsContent(logs) : renderVersoesContent(versoes))}
 
       <!-- PAINEL DE MANUTENÇÃO & RESET GLOBAL DE TREINAMENTO -->
@@ -623,6 +657,255 @@ function diasParaExpurgo(deletedAt) {
   if (isNaN(deletadoEm)) return null;
   const diasDecorridos = (Date.now() - deletadoEm) / (1000 * 60 * 60 * 24);
   return Math.ceil(JANELA_RETENCAO_LIXEIRA_DIAS - diasDecorridos);
+}
+
+// ===== MÓDULO: GESTÃO DE LOGINS E SENHAS (Prioridade 3 da auditoria de
+// 17/08/2026) — protegido por senha admin, reaproveitando o modal padrão
+// abrirModalConfirmacaoAdmin() já usado em Rollback/Expurgo/Reset Global. =====
+
+function renderGestaoUsuariosView() {
+  if (!window._gestaoUsuariosDesbloqueado) {
+    return `
+      <div class="max-w-md mx-auto mt-16 text-center space-y-4">
+        <div class="text-5xl">🔒</div>
+        <h2 class="text-lg font-black text-white">Logins e Senhas</h2>
+        <p class="text-sm text-slate-400 leading-relaxed">Esta área requer autorização do administrador. Aqui é possível editar cadastros de usuário, redefinir senhas e ativar/desativar acessos.</p>
+        <button onclick="desbloquearGestaoUsuarios()" class="bg-red-700 hover:bg-red-600 text-white font-bold px-5 py-2.5 rounded-xl text-sm shadow inline-flex items-center gap-2 transition">
+          🔑 Desbloquear com Senha Admin
+        </button>
+      </div>`;
+  }
+
+  const usuarios = (db.data.usuarios || []).slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
+
+  return `
+    <div class="max-w-6xl mx-auto space-y-4">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 class="text-lg font-black text-white flex items-center gap-2">🔐 Logins e Senhas</h2>
+          <p class="text-xs text-slate-400">Cadastro de usuários do sistema — visível apenas para administradores autorizados nesta sessão.</p>
+        </div>
+        <button onclick="window._gestaoUsuariosDesbloqueado=false; renderApp();" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded-lg text-xs transition">🔒 Bloquear novamente</button>
+      </div>
+
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-xs text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+            <tr>
+              <th class="p-3">Nome</th>
+              <th class="p-3">E-mail</th>
+              <th class="p-3">Departamento</th>
+              <th class="p-3">Cargo</th>
+              <th class="p-3">Role</th>
+              <th class="p-3 text-center">Status</th>
+              <th class="p-3 text-center">Ações</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            ${usuarios.length === 0
+              ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">Nenhum usuário cadastrado.</td></tr>`
+              : usuarios.map(u => `
+                <tr class="hover:bg-slate-800/40">
+                  <td class="p-3 font-bold text-white">${u.nome || '—'}</td>
+                  <td class="p-3 text-slate-400 font-mono text-[11px]">${u.email || '—'}</td>
+                  <td class="p-3">${u.departamento || '—'}</td>
+                  <td class="p-3">${u.cargo || '—'}</td>
+                  <td class="p-3"><span class="bg-slate-800 border border-slate-700 px-2 py-0.5 rounded text-[10px] font-bold">${u.role || '—'}</span></td>
+                  <td class="p-3 text-center">
+                    ${u.ativo === false
+                      ? '<span class="bg-red-950 text-red-300 border border-red-700 px-2 py-0.5 rounded text-[10px] font-bold">Inativo</span>'
+                      : '<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold">Ativo</span>'}
+                  </td>
+                  <td class="p-3 text-center">
+                    <div class="flex items-center justify-center gap-1.5 flex-wrap">
+                      <button onclick="abrirModalEditarUsuario('${u.id}')" class="bg-blue-900/60 hover:bg-blue-800 text-blue-200 border border-blue-700 px-2 py-1 rounded text-[10px] font-bold transition">✏️ Editar</button>
+                      <button onclick="abrirModalRedefinirSenha('${u.id}')" class="bg-amber-900/60 hover:bg-amber-800 text-amber-200 border border-amber-700 px-2 py-1 rounded text-[10px] font-bold transition">🔑 Redefinir Senha</button>
+                      <button onclick="toggleAtivoUsuario('${u.id}')" class="${u.ativo === false ? 'bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 border-emerald-700' : 'bg-red-900/60 hover:bg-red-800 text-red-200 border-red-700'} border px-2 py-1 rounded text-[10px] font-bold transition">${u.ativo === false ? '✅ Ativar' : '⛔ Desativar'}</button>
+                    </div>
+                  </td>
+                </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function desbloquearGestaoUsuarios() {
+  abrirModalConfirmacaoAdmin({
+    titulo: 'Acesso a Logins e Senhas',
+    mensagem: 'Informe a senha de administrador para editar cadastros de usuário, redefinir senhas e ativar/desativar acessos.',
+    onConfirm: (pwd) => {
+      if (pwd !== db.getAdminPassword()) {
+        alert('❌ Senha de administrador incorreta.');
+        return;
+      }
+      window._gestaoUsuariosDesbloqueado = true;
+      renderApp();
+    }
+  });
+}
+
+function abrirModalEditarUsuario(userId) {
+  const u = (db.data.usuarios || []).find(x => String(x.id) === String(userId));
+  if (!u) { alert('Usuário não encontrado.'); return; }
+
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+
+  const departamentos = db.data.departamentos || [];
+  const roles = db.data.roles_disponiveis || [];
+
+  modal.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-3 animate-fadeIn">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-sm font-extrabold text-white flex items-center gap-2">✏️ Editar Usuário</h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+        </div>
+        <form onsubmit="handleSalvarEdicaoUsuario(event, '${userId}')" class="space-y-3 text-xs">
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Nome *</label>
+            <input type="text" id="edit-usr-nome" required value="${u.nome || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold" oninput="forcarMaiuscula(this)">
+          </div>
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">E-mail (não editável)</label>
+            <input type="text" value="${u.email || ''}" disabled class="w-full bg-slate-950 border border-slate-800 text-slate-500 rounded p-2">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Departamento</label>
+              <select id="edit-usr-departamento" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+                ${departamentos.map(d => `<option value="${d.nome || d}" ${(u.departamento === (d.nome || d)) ? 'selected' : ''}>${d.nome || d}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Role</label>
+              <select id="edit-usr-role" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+                ${roles.map(r => `<option value="${r.value || r}" ${(u.role === (r.value || r)) ? 'selected' : ''}>${r.label || r.value || r}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Cargo</label>
+            <input type="text" id="edit-usr-cargo" value="${u.cargo || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
+          </div>
+          <div class="pt-2 flex gap-2">
+            <button type="button" onclick="closeModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg">Cancelar</button>
+            <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg shadow">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+
+function handleSalvarEdicaoUsuario(e, userId) {
+  e.preventDefault();
+  const u = (db.data.usuarios || []).find(x => String(x.id) === String(userId));
+  if (!u) return;
+
+  const nome = document.getElementById('edit-usr-nome')?.value?.trim();
+  if (!nome) { alert('⚠️ O nome não pode ficar vazio.'); return; }
+
+  u.nome = nome;
+  u.departamento = document.getElementById('edit-usr-departamento')?.value || u.departamento;
+  u.role = document.getElementById('edit-usr-role')?.value || u.role;
+  u.cargo = document.getElementById('edit-usr-cargo')?.value?.trim() || '';
+
+  const salvou = db.save();
+  closeModal();
+  if (!salvou) {
+    showToast('Não foi possível salvar os dados neste dispositivo. Tente novamente.', 'error');
+  } else {
+    showToast(`Usuário ${u.nome} atualizado com sucesso!`);
+  }
+  renderApp();
+}
+
+function abrirModalRedefinirSenha(userId) {
+  const u = (db.data.usuarios || []).find(x => String(x.id) === String(userId));
+  if (!u) { alert('Usuário não encontrado.'); return; }
+
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+
+  modal.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-3 animate-fadeIn">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-sm font-extrabold text-white flex items-center gap-2">🔑 Redefinir Senha</h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+        </div>
+        <p class="text-xs text-slate-400">Usuário: <span class="font-bold text-white">${u.nome}</span></p>
+        <form onsubmit="handleRedefinirSenha(event, '${userId}')" class="space-y-3 text-xs">
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Nova Senha *</label>
+            <input type="password" id="redef-senha-nova" required minlength="4" autocomplete="new-password" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+          </div>
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Confirmar Nova Senha *</label>
+            <input type="password" id="redef-senha-confirma" required minlength="4" autocomplete="new-password" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+          </div>
+          <div id="redef-senha-erro" class="hidden text-[11px] text-red-400 font-semibold"></div>
+          <div class="pt-2 flex gap-2">
+            <button type="button" onclick="closeModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg">Cancelar</button>
+            <button type="submit" class="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2 rounded-lg shadow">Redefinir</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+
+function handleRedefinirSenha(e, userId) {
+  e.preventDefault();
+  const u = (db.data.usuarios || []).find(x => String(x.id) === String(userId));
+  if (!u) return;
+
+  const nova = document.getElementById('redef-senha-nova')?.value || '';
+  const confirma = document.getElementById('redef-senha-confirma')?.value || '';
+  const erroEl = document.getElementById('redef-senha-erro');
+
+  if (nova.length < 4) {
+    if (erroEl) { erroEl.textContent = 'A senha deve ter ao menos 4 caracteres.'; erroEl.classList.remove('hidden'); }
+    return;
+  }
+  if (nova !== confirma) {
+    if (erroEl) { erroEl.textContent = 'As senhas não coincidem.'; erroEl.classList.remove('hidden'); }
+    return;
+  }
+
+  // Mesmo padrão de hash já usado em addUsuario/login (sha256Sync).
+  u.senha_hash = sha256Sync(nova);
+  const salvou = db.save();
+  closeModal();
+  if (!salvou) {
+    showToast('Não foi possível salvar a nova senha neste dispositivo. Tente novamente.', 'error');
+  } else {
+    showToast(`Senha de ${u.nome} redefinida com sucesso!`);
+  }
+  renderApp();
+}
+
+function toggleAtivoUsuario(userId) {
+  const u = (db.data.usuarios || []).find(x => String(x.id) === String(userId));
+  if (!u) return;
+
+  const vaiDesativar = u.ativo !== false;
+  if (vaiDesativar && db.currentUser && String(db.currentUser.id) === String(u.id)) {
+    alert('⚠️ Você não pode desativar o próprio usuário logado no momento.');
+    return;
+  }
+  if (!confirm(vaiDesativar ? `Desativar o acesso de ${u.nome}? O usuário não conseguirá mais fazer login.` : `Reativar o acesso de ${u.nome}?`)) return;
+
+  u.ativo = vaiDesativar ? false : true;
+  const salvou = db.save();
+  if (!salvou) {
+    showToast('Não foi possível salvar a alteração neste dispositivo. Tente novamente.', 'error');
+  } else {
+    showToast(`Usuário ${u.nome} ${vaiDesativar ? 'desativado' : 'reativado'} com sucesso!`);
+  }
+  renderApp();
 }
 
 function renderLixeiraItemsContent(items) {
@@ -846,6 +1129,7 @@ function renderNavMenu() {
     { tab: 'boletim_gerencial', icon: '📄', label: 'Boletim Gerencial' },
     { tab: 'cadastros_dados', icon: '⚙️', label: 'Cadastros Mestres' },
     { tab: 'lixeira', icon: '🛡️', label: 'Governança & Lixeira' },
+    { tab: 'gestao_usuarios', icon: '🔐', label: 'Logins e Senhas' },
     { tab: 'power_bi', icon: '🔌', label: 'Conector Power BI' }
   ];
 
@@ -942,6 +1226,9 @@ function renderApp() {
         break;
       case 'lixeira':
         html = renderLixeiraView();
+        break;
+      case 'gestao_usuarios':
+        html = renderGestaoUsuariosView();
         break;
       case 'resumo_diario_cd':
         html = renderResumoDiarioCdView();
@@ -1345,7 +1632,7 @@ function scrollToTop(smooth = true) {
 window.scrollToTop = scrollToTop;
 
 function changeRole(newRole) { db.switchRole(newRole); updateUserHeader(); renderApp(); }
-function handleLogout() { db.logout(); updateUserHeader(); renderApp(); }
+function handleLogout() { db.logout(); window._gestaoUsuariosDesbloqueado = false; updateUserHeader(); renderApp(); }
 
 function switchTab(tab) {
   window._isSwitchingMainTab = true;
@@ -2077,7 +2364,11 @@ function handleCadastroUsuarioSubmit(e) {
     updateUserHeader();
     switchTab('dashboard');
   } else {
-    alert(`❌ ${res.message}`);
+    // Não mostra sucesso nem faz login automático quando a persistência
+    // falhou (res.success === false vindo de addUsuario) — evita o cenário
+    // em que o cadastro "parece" ter funcionado mas some ao reabrir o app
+    // (achado da auditoria de 17/08/2026, item 0.1).
+    showToast(res.message, 'error');
   }
 }
 
@@ -2169,6 +2460,27 @@ function getSlaBreakdown(list, dateField) {
   return { critico, alerta, ok };
 }
 
+// Encontra a ocorrência pendente mais antiga de uma lista (maior tempo
+// decorrido desde dateField) e formata sua idade de forma legível — usado
+// nos painéis de alerta do Dashboard Executivo para mostrar não só a
+// contagem de pendências, mas a idade da mais crítica delas.
+function getMaisAntigaPendente(list, dateField) {
+  const agora = Date.now();
+  let maxHoras = -1;
+  let maisAntiga = null;
+  (list || []).forEach(item => {
+    const dataRef = item ? item[dateField] : null;
+    if (!dataRef) return;
+    const horas = (agora - new Date(dataRef).getTime()) / 36e5;
+    if (horas > maxHoras) { maxHoras = horas; maisAntiga = item; }
+  });
+  if (!maisAntiga || maxHoras < 0) return { horas: 0, texto: '—', item: null };
+  const dias = Math.floor(maxHoras / 24);
+  const horasResto = Math.floor(maxHoras % 24);
+  const texto = dias > 0 ? `${dias}d ${horasResto}h` : `${horasResto}h`;
+  return { horas: maxHoras, texto, item: maisAntiga };
+}
+
 function renderDashboardView() {
   const fDe = window._dashFiltroDe || '';
   const fAte = window._dashFiltroAte || '';
@@ -2217,6 +2529,11 @@ function renderDashboardView() {
   const abertasCausaRaiz = devs.filter(d => !d.motivo_real_causa_raiz || !d.acao_tomada);
   const slaAnalise = getSlaBreakdown(abertasCausaRaiz, 'criado_em');
   const slaPendCd = getSlaBreakdown(devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO'), 'criado_em');
+  // Idade da ocorrência pendente mais antiga em cada painel de alerta —
+  // complementa a contagem por faixa (🔴🟡🟢) com "há quanto tempo está
+  // parado o pior caso", que é o que mais importa para priorização.
+  const maisAntigaPendCd = getMaisAntigaPendente(devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO'), 'criado_em');
+  const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaiz, 'criado_em');
   const totDescontosGestor = devs.filter(d => d.desconto_produtividade_gestor).length;
   const totalCortesValor = cortesList.reduce((a, c) => a + (parseFloat(c.valor)||0), 0);
   const totalCustoSocorro = rotas.reduce((a, r) => a + (parseFloat(r.custo_socorro)||0), 0);
@@ -2678,6 +2995,10 @@ function renderDashboardView() {
               <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaPendCd.alerta}</span>
               <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaPendCd.ok}</span>
             </div>
+            ${maisAntigaPendCd.item ? `
+            <div class="text-[10px] font-bold mt-1 ${maisAntigaPendCd.horas > 48 ? 'text-red-400' : maisAntigaPendCd.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}" title="Devolução ${maisAntigaPendCd.item.numero_devolucao || maisAntigaPendCd.item.numero_protocolo || ''}">
+              ⏳ Mais antiga: ${maisAntigaPendCd.texto}
+            </div>` : ''}
           </div>
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Peso Expedição (Saída)</div>
@@ -2771,6 +3092,10 @@ function renderDashboardView() {
               <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaAnalise.alerta}</span>
               <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaAnalise.ok}</span>
             </div>
+            ${maisAntigaAnalise.item ? `
+            <div class="text-[10px] font-bold mt-1 ${maisAntigaAnalise.horas > 48 ? 'text-red-400' : maisAntigaAnalise.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}" title="Devolução ${maisAntigaAnalise.item.numero_devolucao || maisAntigaAnalise.item.numero_protocolo || ''}">
+              ⏳ Mais antiga: ${maisAntigaAnalise.texto}
+            </div>` : ''}
           </div>
         </div>
       </div>
@@ -3668,10 +3993,74 @@ function getListaCargasValidadas() {
 }
 
 // Renderiza uma <datalist> reutilizável com todas as cargas conhecidas
+// Renderiza o Nº OS como link clicável quando um link_os válido foi
+// informado (item 1.6 da auditoria de 17/08/2026); caso contrário, mostra
+// apenas o texto, como antes.
+// Deriva automaticamente um identificador legível de "Nº OS" a partir do
+// link do sistema externo — o usuário não precisa mais digitar o número
+// manualmente, já que clicar no link já leva direto à OS correta na outra
+// plataforma (busca automática). Usa o último segmento não vazio do path,
+// ou o parâmetro de query mais informativo, com fallback pro domínio.
+function extrairIdentificadorOsDoLink(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    // 1) Prioriza parâmetros de query com nomes típicos de identificador
+    const paramNomes = ['id', 'os', 'ticket', 'chamado', 'numero', 'num', 'protocolo', 'osid', 'os_id'];
+    for (const nome of paramNomes) {
+      const val = u.searchParams.get(nome);
+      if (val) return decodeURIComponent(val).toUpperCase().slice(0, 40);
+    }
+    // 2) No path, prefere o último segmento que contenha algum dígito
+    //    (mais provável de ser um identificador do que uma palavra genérica
+    //    como "chamados" ou "os" no meio do caminho da URL)
+    const segmentos = u.pathname.split('/').filter(Boolean);
+    if (segmentos.length > 0) {
+      const comDigito = segmentos.slice().reverse().find(s => /\d/.test(s));
+      return decodeURIComponent(comDigito || segmentos[segmentos.length - 1]).toUpperCase().slice(0, 40);
+    }
+    // 3) Fallback: qualquer valor de query, senão o domínio
+    const params = Array.from(u.searchParams.values()).filter(Boolean);
+    if (params.length > 0) {
+      return decodeURIComponent(params[params.length - 1]).toUpperCase().slice(0, 40);
+    }
+    return u.hostname.toUpperCase();
+  } catch (e) {
+    return null;
+  }
+}
+
+function renderNumeroOsLink(numeroOs, linkOs) {
+  const texto = numeroOs || '—';
+  if (linkOs && /^https?:\/\/.+/i.test(linkOs)) {
+    // Usa window.open() explícito no onclick em vez de <a target="_blank">
+    // passivo. Em PWAs instalados (modo standalone), o navegador embutido
+    // frequentemente ignora silenciosamente target="_blank" em links comuns
+    // — não existe "nova aba" nesse modo — por isso o link "não fazia nada"
+    // dentro do app mas funcionava normalmente ao colar em outro app (ex:
+    // WhatsApp), que abre a URL via o navegador do sistema diretamente.
+    // window.open() chamado explicitamente a partir de um clique do usuário
+    // já é o padrão comprovado neste projeto para os outros relatórios/
+    // janelas do sistema, então reaproveitamos o mesmo caminho aqui.
+    const linkEscapado = linkOs.replace(/'/g, "\\'");
+    return `<a href="${linkOs.replace(/"/g,'&quot;')}" onclick="event.preventDefault(); window.open('${linkEscapado}', '_blank', 'noopener'); return false;" class="underline decoration-dotted hover:text-sky-200 transition cursor-pointer" title="Abrir OS no sistema externo">${texto}</a>`;
+  }
+  return texto;
+}
+
 function renderDatalistCargas(datalistId) {
   const lista = getListaCargasValidadas();
   return `<datalist id="${datalistId}">
     ${lista.map(c => `<option value="${c.carga}">Carga Nº ${c.carga} | Rota: ${c.rota || 'Sem Rota'}${c.placa ? ` | ${c.placa}` : ''}${c.motorista ? ` | ${c.motorista}` : ''}</option>`).join('')}
+  </datalist>`;
+}
+
+// Datalist de produtos por código, para permitir busca por digitação em vez
+// de um <select> nativo (item 1.4 da auditoria de 17/08/2026).
+function renderDatalistProdutos(datalistId) {
+  const prods = (db && db.data && db.data.produtos) ? db.data.produtos : [];
+  return `<datalist id="${datalistId}">
+    ${prods.map(p => `<option value="${p.codigo_produto}">${p.codigo_produto} - ${p.descricao}</option>`).join('')}
   </datalist>`;
 }
 
@@ -4108,9 +4497,16 @@ function handleSacAberturaSubmit(e) {
         let valUnit = parseFloat(String(r.querySelector('.item-val')?.value || '0').replace(',', '.')) || 0;
         const qtd = parseFloat(r.querySelector('.item-qtd')?.value || '1') || 1;
         itens.push({
+          id: `item_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           produto_id: prodId,
           codigo: info.codigo,
           descricao: info.descricao,
+          // produto_codigo/produto_descricao são os nomes lidos pelas telas
+          // de Destinação de Itens e Recepção no CD — mantidos em espelho
+          // aqui para essas telas exibirem o produto corretamente (achado
+          // da auditoria de 17/08/2026, ao investigar o item 2.1).
+          produto_codigo: info.codigo,
+          produto_descricao: info.descricao,
           quantidade: qtd,
           valor_unitario: valUnit,
           motivo_item: r.querySelector('.item-motivo')?.value || ''
@@ -5108,6 +5504,7 @@ function renderCdRecepcaoView() {
         if (item.destino_item || d.destino_cd) {
           todosItensDestinados.push({
             ...item,
+            devId: d.id,
             protocolo: d.numero_devolucao || d.numero_protocolo,
             cliente_nome: d.cliente_nome,
             motorista_nome: d.motorista_nome,
@@ -5121,6 +5518,22 @@ function renderCdRecepcaoView() {
         }
       });
     }
+  });
+
+  // Filtro de busca da aba "Destinação de Itens" (item 1.5 da auditoria de
+  // 17/08/2026) — antes não havia nenhuma forma de localizar um produto
+  // específico nessa listagem.
+  const fCdDestinoProduto = window._cdDestinoFiltroProduto || '';
+  const fCdDestinoTipo    = window._cdDestinoFiltroTipo    || '';
+  const itensDestinadosFiltrados = todosItensDestinados.filter(item => {
+    if (fCdDestinoProduto) {
+      const termo = fCdDestinoProduto.toUpperCase();
+      const cod = String(item.produto_codigo || item.codigo || '').toUpperCase();
+      const desc = String(item.produto_descricao || item.descricao || '').toUpperCase();
+      if (!cod.includes(termo) && !desc.includes(termo)) return false;
+    }
+    if (fCdDestinoTipo && item.destino !== fCdDestinoTipo) return false;
+    return true;
   });
 
   const rowCols = `<th class="p-3">Nº Dev / Placa / Rota / Motorista</th>
@@ -5263,7 +5676,21 @@ function renderCdRecepcaoView() {
               </h3>
               <p class="text-xs text-slate-400">Listagem completa dos itens recebidos com data de validade, observações e marcações de negociação</p>
             </div>
-            <span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-3 py-1 rounded-full text-xs font-black">${todosItensDestinados.length} item(ns) destinados</span>
+            <span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-3 py-1 rounded-full text-xs font-black">${itensDestinadosFiltrados.length} de ${todosItensDestinados.length} item(ns)</span>
+          </div>
+
+          <div class="flex flex-col sm:flex-row gap-2 pb-1">
+            <input type="text" value="${fCdDestinoProduto}" placeholder="🔎 Buscar por código ou descrição do produto..."
+              class="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs"
+              oninput="forcarMaiuscula(this); window._cdDestinoFiltroProduto=this.value; renderApp()">
+            <select onchange="window._cdDestinoFiltroTipo=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-emerald-300 font-bold rounded-lg p-2 text-xs sm:w-64">
+              <option value="">Todos os Destinos</option>
+              <option value="ESTOQUE_REUTILIZACAO" ${fCdDestinoTipo==='ESTOQUE_REUTILIZACAO'?'selected':''}>🟢 Reutilização / Estoque</option>
+              <option value="RETRABALHO_REEMBALAGEM" ${fCdDestinoTipo==='RETRABALHO_REEMBALAGEM'?'selected':''}>🟠 Retrabalho / Reembalagem</option>
+              <option value="DEVOLUCAO_FORNECEDOR" ${fCdDestinoTipo==='DEVOLUCAO_FORNECEDOR'?'selected':''}>🔵 Devolução ao Fornecedor</option>
+              <option value="AVARIA_DESCARTE" ${fCdDestinoTipo==='AVARIA_DESCARTE'?'selected':''}>🔴 Avaria / Descarte</option>
+              <option value="PRODUTOS_NEGOCIACAO" ${fCdDestinoTipo==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟡 Produtos para Negociação</option>
+            </select>
           </div>
 
           <div class="overflow-x-auto rounded-xl border border-slate-800">
@@ -5280,16 +5707,17 @@ function renderCdRecepcaoView() {
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-800 text-xs">
-                ${todosItensDestinados.length === 0
-                  ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">Nenhum item destinado até o momento.</td></tr>`
-                  : todosItensDestinados.map(item => {
+                ${itensDestinadosFiltrados.length === 0
+                  ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">${todosItensDestinados.length === 0 ? 'Nenhum item destinado até o momento.' : 'Nenhum item encontrado para o filtro aplicado.'}</td></tr>`
+                  : itensDestinadosFiltrados.map(item => {
                     const isNegociacao = item.destino === 'PRODUTOS_NEGOCIACAO';
                     const negociacaoBadges = {
                       'EM_NEGOCIACAO': '<span class="bg-amber-950 text-amber-300 border border-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">⏳ Em Negociação</span>',
                       'ENVIADO_CONSUMO': '<span class="bg-blue-950 text-blue-300 border border-blue-700 px-2 py-0.5 rounded text-[10px] font-bold">🍴 Consumo</span>',
-                      'VENDA_NEGOCIADA': '<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold">💰 Venda</span>',
+                      'VENDA_NEGOCIADA': '<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold">💰 Vendido</span>',
                       'DESCARTADO': '<span class="bg-red-950 text-red-300 border border-red-700 px-2 py-0.5 rounded text-[10px] font-bold">🗑️ Descarte</span>'
                     };
+                    const temDivisoes = Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0;
 
                     return `
                       <tr class="hover:bg-slate-800/40">
@@ -5298,25 +5726,33 @@ function renderCdRecepcaoView() {
                           <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}</div>
                         </td>
                         <td class="p-3 text-center font-bold text-amber-400 text-sm">${item.quantidade} un</td>
-                        <td class="p-3 font-semibold text-emerald-300">${formatarDestinoLabel(item.destino)}</td>
+                        <td class="p-3 font-semibold text-emerald-300">
+                          ${temDivisoes
+                            ? `<div class="space-y-0.5">
+                                 <span class="inline-block bg-violet-950 text-violet-300 border border-violet-700 px-1.5 py-0.5 rounded text-[9px] font-bold mb-0.5">🔀 Dividido</span>
+                                 ${item.divisoes_destino.map(dv => `<div class="text-[10px] text-slate-300">${dv.quantidade} un → ${formatarDestinoLabel(dv.destino)}</div>`).join('')}
+                               </div>`
+                            : formatarDestinoLabel(item.destino)}
+                        </td>
                         <td class="p-3 text-center font-mono text-slate-200">${item.validade ? item.validade : '<span class="text-slate-500">—</span>'}</td>
                         <td class="p-3 text-slate-300 italic">${item.observacao || '—'}</td>
                         <td class="p-3 text-center">
-                          ${isNegociacao ? `
+                          ${temDivisoes ? '<span class="text-slate-500 text-[10px]">Ver detalhes na divisão</span>' : (isNegociacao ? `
                             <div class="space-y-1">
                               <div>${negociacaoBadges[item.status_negociacao] || negociacaoBadges['EM_NEGOCIACAO']}</div>
                               <select onchange="atualizarStatusNegociacaoItem('${item.id}', this.value)" class="mt-1 bg-slate-800 border border-amber-600 text-amber-300 text-[10px] font-bold rounded px-1.5 py-1 w-full">
                                 <option value="EM_NEGOCIACAO" ${item.status_negociacao==='EM_NEGOCIACAO'?'selected':''}>⏳ Em Negociação</option>
-                                <option value="ENVIADO_CONSUMO" ${item.status_negociacao==='ENVIADO_CONSUMO'?'selected':''}>🍴 Enviado p/ Consumo</option>
-                                <option value="VENDA_NEGOCIADA" ${item.status_negociacao==='VENDA_NEGOCIADA'?'selected':''}>💰 Venda Negociada</option>
+                                <option value="ENVIADO_CONSUMO" ${item.status_negociacao==='ENVIADO_CONSUMO'?'selected':''}>🍴 Consumo Interno</option>
+                                <option value="VENDA_NEGOCIADA" ${item.status_negociacao==='VENDA_NEGOCIADA'?'selected':''}>💰 Vendido</option>
                                 <option value="DESCARTADO" ${item.status_negociacao==='DESCARTADO'?'selected':''}>🗑️ Descartado</option>
                               </select>
                             </div>
-                          ` : '<span class="text-slate-500 text-[10px]">N/A (Outro Destino)</span>'}
+                          ` : '<span class="text-slate-500 text-[10px]">N/A (Outro Destino)</span>')}
                         </td>
                         <td class="p-3 text-center">
-                          <div class="flex items-center justify-center gap-1.5">
+                          <div class="flex items-center justify-center gap-1.5 flex-wrap">
                             <button onclick="openEditarItemDestinoModal('${item.id}', '${item.devId}')" class="bg-blue-900/60 hover:bg-blue-800 text-blue-200 border border-blue-700 px-2 py-1 rounded text-[10px] font-bold transition">✏️ Editar</button>
+                            <button onclick="abrirModalDivisaoDestino('${item.id}', '${item.devId}')" class="bg-violet-900/60 hover:bg-violet-800 text-violet-200 border border-violet-700 px-2 py-1 rounded text-[10px] font-bold transition">🔀 Dividir</button>
                             <button onclick="excluirItemDestino('${item.id}', '${item.devId}')" class="bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-700 px-2 py-1 rounded text-[10px] font-bold transition">🗑️ Excluir</button>
                           </div>
                         </td>
@@ -5393,9 +5829,9 @@ function openEditarItemDestinoModal(itemId, devId) {
             <label class="block font-bold text-slate-300 mb-1">Destino do Produto *</label>
             <select id="edit-item-destino" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
               <option value="ESTOQUE_REUTILIZACAO" ${item.destino_item==='ESTOQUE_REUTILIZACAO'?'selected':''}>🟢 Reutilização / Estoque</option>
-              <option value="RETABALHO_REEMBALAGEM" ${item.destino_item==='RETABALHO_REEMBALAGEM'?'selected':''}>🟠 Retrabalho / Reembalagem</option>
+              <option value="RETRABALHO_REEMBALAGEM" ${item.destino_item==='RETRABALHO_REEMBALAGEM'?'selected':''}>🟠 Retrabalho / Reembalagem</option>
               <option value="DEVOLUCAO_FORNECEDOR" ${item.destino_item==='DEVOLUCAO_FORNECEDOR'?'selected':''}>🔵 Devolução ao Fornecedor</option>
-              <option value="DESCARTE_AVARIA" ${item.destino_item==='DESCARTE_AVARIA'?'selected':''}>🔴 Descarte / Avaria</option>
+              <option value="AVARIA_DESCARTE" ${item.destino_item==='AVARIA_DESCARTE'?'selected':''}>🔴 Descarte / Avaria</option>
               <option value="PRODUTOS_NEGOCIACAO" ${item.destino_item==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟣 Produtos para Negociação em Rota</option>
             </select>
           </div>
@@ -5404,8 +5840,8 @@ function openEditarItemDestinoModal(itemId, devId) {
             <label class="block font-bold text-slate-300 mb-1">Status Negociação</label>
             <select id="edit-item-negociacao" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
               <option value="EM_NEGOCIACAO" ${item.status_negociacao==='EM_NEGOCIACAO'?'selected':''}>⏳ Em Negociação</option>
-              <option value="ENVIADO_CONSUMO" ${item.status_negociacao==='ENVIADO_CONSUMO'?'selected':''}>🍴 Enviado para Consumo</option>
-              <option value="VENDA_NEGOCIADA" ${item.status_negociacao==='VENDA_NEGOCIADA'?'selected':''}>💰 Venda Negociada</option>
+              <option value="ENVIADO_CONSUMO" ${item.status_negociacao==='ENVIADO_CONSUMO'?'selected':''}>🍴 Consumo Interno</option>
+              <option value="VENDA_NEGOCIADA" ${item.status_negociacao==='VENDA_NEGOCIADA'?'selected':''}>💰 Vendido</option>
               <option value="DESCARTADO" ${item.status_negociacao==='DESCARTADO'?'selected':''}>🗑️ Descartado</option>
             </select>
           </div>
@@ -5453,6 +5889,164 @@ function excluirItemDestino(itemId, devId) {
     db.save();
     renderApp();
   }
+}
+
+// ===== DIVISÃO DE DESTINO POR ITEM (item 2.1 da auditoria de 17/08/2026) =====
+// Permite dividir a quantidade de um mesmo item entre múltiplos destinos
+// (ex: de 10 unidades, 6 para reembalagem e 4 para negociação), sem alterar
+// o comportamento existente para itens que não usam divisão.
+
+function abrirModalDivisaoDestino(itemId, devId) {
+  const devs = db.getDevolucoes();
+  const dev = devs.find(d => String(d.id) === String(devId));
+  if (!dev || !Array.isArray(dev.itens)) { alert('Ocorrência ou itens não encontrados.'); return; }
+  const item = dev.itens.find(i => String(i.id) === String(itemId));
+  if (!item) { alert('Item não encontrado.'); return; }
+
+  const divisoes = Array.isArray(item.divisoes_destino) ? item.divisoes_destino : [];
+  const qtdTotal = parseInt(item.quantidade, 10) || 0;
+  const qtdJaDividida = divisoes.reduce((s, d) => s + (parseInt(d.quantidade, 10) || 0), 0);
+  const qtdRestante = qtdTotal - qtdJaDividida;
+
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+
+  modal.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4 animate-fadeIn max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-sm font-extrabold text-white flex items-center gap-2">🔀 Dividir Destino do Item</h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+        </div>
+
+        <div class="p-2 bg-slate-950 border border-slate-800 rounded text-xs">
+          <div class="font-bold text-emerald-400">${item.produto_codigo ? `[${item.produto_codigo}] ` : ''}${item.produto_descricao || 'Produto'}</div>
+          <div class="text-slate-400 mt-1">Quantidade total: <span class="font-bold text-white">${qtdTotal} un</span> · Já dividido: <span class="font-bold text-amber-400">${qtdJaDividida} un</span> · Restante: <span class="font-bold ${qtdRestante > 0 ? 'text-emerald-400' : 'text-slate-500'}">${qtdRestante} un</span></div>
+        </div>
+
+        ${divisoes.length > 0 ? `
+          <div class="space-y-1.5">
+            <div class="text-[10px] font-bold text-slate-400 uppercase">Divisões já criadas</div>
+            ${divisoes.map(dv => `
+              <div class="flex items-center justify-between bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2 text-xs">
+                <div>
+                  <span class="font-bold text-white">${dv.quantidade} un</span>
+                  <span class="text-slate-400"> → </span>
+                  <span class="font-semibold text-emerald-300">${formatarDestinoLabel(dv.destino)}</span>
+                  ${dv.destino === 'PRODUTOS_NEGOCIACAO' ? `<span class="ml-1 text-[10px] text-amber-300">(${formatarStatusNegociacaoLabel(dv.status_negociacao)})</span>` : ''}
+                  ${dv.observacao ? `<div class="text-[10px] text-slate-500 italic mt-0.5">${dv.observacao}</div>` : ''}
+                </div>
+                <button onclick="removerDivisaoDestino('${itemId}', '${devId}', '${dv.id}')" class="text-red-400 hover:text-red-300 text-[10px] font-bold shrink-0 ml-2">🗑️ Remover</button>
+              </div>`).join('')}
+          </div>
+        ` : `<div class="text-xs text-slate-500 italic">Nenhuma divisão criada ainda. Adicione a primeira abaixo.</div>`}
+
+        ${qtdRestante > 0 ? `
+          <form onsubmit="handleAdicionarDivisaoDestino(event, '${itemId}', '${devId}')" class="space-y-3 text-xs border-t border-slate-800 pt-3">
+            <div class="text-[10px] font-bold text-slate-400 uppercase">Adicionar nova divisão</div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block font-bold text-slate-300 mb-1">Quantidade *</label>
+                <input type="number" id="div-dest-qtd" required min="1" max="${qtdRestante}" value="${qtdRestante}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+                <div class="text-[10px] text-slate-500 mt-0.5">Máx: ${qtdRestante} un restantes</div>
+              </div>
+              <div>
+                <label class="block font-bold text-slate-300 mb-1">Destino *</label>
+                <select id="div-dest-destino" required onchange="document.getElementById('div-dest-negociacao-wrap').classList.toggle('hidden', this.value !== 'PRODUTOS_NEGOCIACAO')" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+                  <option value="ESTOQUE_REUTILIZACAO">🟢 Reutilização / Estoque</option>
+                  <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
+                  <option value="DEVOLUCAO_FORNECEDOR">🔵 Devolução ao Fornecedor</option>
+                  <option value="AVARIA_DESCARTE">🔴 Descarte / Avaria</option>
+                  <option value="PRODUTOS_NEGOCIACAO">🟣 Produtos para Negociação</option>
+                </select>
+              </div>
+            </div>
+            <div id="div-dest-negociacao-wrap" class="hidden">
+              <label class="block font-bold text-slate-300 mb-1">Desfecho da Negociação</label>
+              <select id="div-dest-negociacao" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+                <option value="EM_NEGOCIACAO">⏳ Em Negociação</option>
+                <option value="VENDA_NEGOCIADA">💰 Vendido</option>
+                <option value="DESCARTADO">🗑️ Descartado</option>
+                <option value="ENVIADO_CONSUMO">🍴 Consumo Interno</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Observação</label>
+              <input type="text" id="div-dest-obs" placeholder="Ex: Reembalado, seguiu para negociação em 20/08..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
+            </div>
+            <button type="submit" class="w-full bg-violet-600 hover:bg-violet-500 text-white font-bold py-2 rounded-lg shadow">➕ Adicionar Divisão</button>
+          </form>
+        ` : `<div class="text-xs text-emerald-400 font-bold border-t border-slate-800 pt-3">✅ Toda a quantidade já foi dividida entre os destinos acima.</div>`}
+
+        <div class="pt-1">
+          <button type="button" onclick="closeModal()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg">Fechar</button>
+        </div>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+
+function formatarStatusNegociacaoLabel(val) {
+  switch (val) {
+    case 'VENDA_NEGOCIADA': return '💰 Vendido';
+    case 'DESCARTADO': return '🗑️ Descartado';
+    case 'ENVIADO_CONSUMO': return '🍴 Consumo Interno';
+    default: return '⏳ Em Negociação';
+  }
+}
+
+function handleAdicionarDivisaoDestino(e, itemId, devId) {
+  e.preventDefault();
+  const devs = db.getDevolucoes();
+  const dev = devs.find(d => String(d.id) === String(devId));
+  if (!dev || !Array.isArray(dev.itens)) return;
+  const item = dev.itens.find(i => String(i.id) === String(itemId));
+  if (!item) return;
+
+  const qtd = parseInt(document.getElementById('div-dest-qtd')?.value || '0', 10);
+  const destino = document.getElementById('div-dest-destino')?.value || 'ESTOQUE_REUTILIZACAO';
+  const statusNegociacao = document.getElementById('div-dest-negociacao')?.value || 'EM_NEGOCIACAO';
+  const observacao = document.getElementById('div-dest-obs')?.value || '';
+
+  const divisoes = Array.isArray(item.divisoes_destino) ? item.divisoes_destino : [];
+  const qtdTotal = parseInt(item.quantidade, 10) || 0;
+  const qtdJaDividida = divisoes.reduce((s, d) => s + (parseInt(d.quantidade, 10) || 0), 0);
+  const qtdRestante = qtdTotal - qtdJaDividida;
+
+  if (!qtd || qtd < 1) { alert('⚠️ Informe uma quantidade válida.'); return; }
+  if (qtd > qtdRestante) {
+    alert(`⚠️ A quantidade informada (${qtd}) é maior que o restante disponível para dividir (${qtdRestante}).`);
+    return;
+  }
+
+  if (!Array.isArray(item.divisoes_destino)) item.divisoes_destino = [];
+  item.divisoes_destino.push({
+    id: `div_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    quantidade: qtd,
+    destino: destino,
+    status_negociacao: destino === 'PRODUTOS_NEGOCIACAO' ? statusNegociacao : null,
+    observacao: observacao,
+    criado_em: new Date().toISOString(),
+    criado_por: db.currentUser ? db.currentUser.nome : 'SISTEMA'
+  });
+
+  db.save();
+  abrirModalDivisaoDestino(itemId, devId);
+  renderApp();
+}
+
+function removerDivisaoDestino(itemId, devId, divisaoId) {
+  if (!confirm('Deseja remover esta divisão? A quantidade voltará a ficar disponível para redividir.')) return;
+  const devs = db.getDevolucoes();
+  const dev = devs.find(d => String(d.id) === String(devId));
+  if (!dev || !Array.isArray(dev.itens)) return;
+  const item = dev.itens.find(i => String(i.id) === String(itemId));
+  if (!item || !Array.isArray(item.divisoes_destino)) return;
+
+  item.divisoes_destino = item.divisoes_destino.filter(dv => String(dv.id) !== String(divisaoId));
+  db.save();
+  abrirModalDivisaoDestino(itemId, devId);
+  renderApp();
 }
 
 function openCdModal(devId) {
@@ -6417,6 +7011,26 @@ function limparFiltrosViagens() {
 }
 
 // SUB-ABA 1: ACOMPANHAMENTO DE LARGADA (ESCALA)
+// Vincula a linha de Largada ao status real de retorno físico da devolução
+// associada àquela carga (item 2.2 da auditoria de 17/08/2026) — antes, o
+// alerta de "Retorno Físico Pendente" só existia no sininho de notificações,
+// sem nenhuma indicação visual na própria tela de Largada.
+function renderRetornoFisicoBadge(v) {
+  if (!db || !db.data || !Array.isArray(db.data.ocorrencias_devolucao)) return '';
+  const cargaViagem = String(v.carga || v.carga_numero || '').trim().toUpperCase();
+  if (!cargaViagem) return '';
+
+  const dev = db.data.ocorrencias_devolucao.find(d =>
+    !d.is_deleted && String(d.carga_numero || d.carga || '').trim().toUpperCase() === cargaViagem
+  );
+  if (!dev) return '';
+
+  if (dev.status_fechamento === 'PENDENTE_FISICO') {
+    return `<button onclick="event.stopPropagation(); window._cdDestinoFiltroProduto=''; window._cdDestinoFiltroTipo=''; switchTab('cd_recepcao'); switchCdSubTab('recepcao')" class="mt-1 inline-block bg-amber-950 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded text-[9px] font-bold hover:bg-amber-900 transition" title="Clique para abrir o Retorno Físico CD desta carga">⏳ Retorno Pendente CD</button>`;
+  }
+  return `<span class="mt-1 inline-block bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Retorno físico já conferido no CD">✅ Retorno Conferido</span>`;
+}
+
 function renderViagensLargadaSubTab() {
   const todasViagens = db.getControleViagens();
   const veiculos = db.data.veiculos.filter(v => v.situacao !== 'Inativo');
@@ -6771,6 +7385,7 @@ function renderViagensLargadaSubTab() {
                     <td class="p-2 border-r border-slate-800 text-center text-[10px]">
                       <div class="text-slate-300 font-medium">${formatarData(v.data_retorno)}</div>
                       <div class="text-amber-400 font-bold">${v.hora_retorno||'—'}</div>
+                      ${renderRetornoFisicoBadge(v)}
                     </td>
 
                     <td class="p-2 border-r border-slate-800 text-[10px] text-slate-300 italic">${v.observacao||'—'}</td>
@@ -7859,19 +8474,19 @@ function renderViagensOcorrenciasSubTab() {
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Carga</label>
-            <input type="text" value="${fCarga}" placeholder="Ex: 43004" onchange="window._ocFiltroCarga=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
+            <input type="text" value="${fCarga}" placeholder="Ex: 43004" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroCarga=this.value; renderApp()">
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Funcionário</label>
-            <input type="text" value="${fFunc}" placeholder="Nome" onchange="window._ocFiltroFunc=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
+            <input type="text" value="${fFunc}" placeholder="Nome" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroFunc=this.value; renderApp()">
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Veículo / Placa</label>
-            <input type="text" value="${fPlaca}" placeholder="Placa" onchange="window._ocFiltroPlaca=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
+            <input type="text" value="${fPlaca}" placeholder="Placa" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroPlaca=this.value; renderApp()">
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Rota</label>
-            <input type="text" value="${fRota}" placeholder="Rota" onchange="window._ocFiltroRota=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
+            <input type="text" value="${fRota}" placeholder="Rota" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroRota=this.value; renderApp()">
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Motivo</label>
@@ -10868,13 +11483,13 @@ function editarOcorrenciaRotaModal(id) {
               <span>🔧</span> Ficha Técnica de Retorno da Manutenção (Se houver)
             </h4>
             <div>
-              <label class="block text-[10px] font-bold text-slate-300 mb-1">Serviço Realizado / Parecer Técnico</label>
+              <label class="block text-[10px] font-bold text-slate-300 mb-1">Serviço Realizado / Parecer Técnico <span class="text-amber-400" title="Obrigatório se o Status do Veículo for 'Em Rota'">(obrigatório para liberar)</span></label>
               <textarea id="ed-rota-retorno-descricao" rows="2" placeholder="Reparos executados pela mecânica/oficina..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.retorno_manutencao_descricao || item.acao_mecanico || ''}</textarea>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label class="block text-[10px] font-bold text-slate-300 mb-1">Responsável Técnico</label>
+                <label class="block text-[10px] font-bold text-slate-300 mb-1">Responsável Técnico <span class="text-amber-400" title="Obrigatório se o Status do Veículo for 'Em Rota'">(obrigatório para liberar)</span></label>
                 <input type="text" id="ed-rota-retorno-responsavel" value="${item.retorno_manutencao_responsavel || ''}" placeholder="Nome do Mecânico / Oficina" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
               </div>
               <div>
@@ -10938,6 +11553,23 @@ function handleEditarRotaSubmit(e, id) {
   }
 
   const isFinalizado = statusVeic === 'Em Rota';
+
+  // Obrigatoriedade da ação de manutenção ao liberar o veículo (item 0.2 da
+  // auditoria de 17/08/2026): o modal de edição permitia mudar o Status do
+  // Veículo para "Em Rota" (liberando/finalizando o chamado) sem preencher
+  // a ficha técnica de retorno da manutenção, já que esses campos aqui não
+  // eram obrigatórios — diferente do modal correto de liberação
+  // (confirmarLiberacaoVeiculo), que já valida isso.
+  if (isFinalizado && !retornoDesc.trim()) {
+    alert('⚠️ Para liberar o veículo (Status "Em Rota"), descreva o "Serviço Realizado / Parecer Técnico" na Ficha Técnica de Retorno da Manutenção.');
+    document.getElementById('ed-rota-retorno-descricao')?.focus();
+    return;
+  }
+  if (isFinalizado && !retornoResp.trim()) {
+    alert('⚠️ Para liberar o veículo (Status "Em Rota"), informe o "Responsável Técnico" na Ficha Técnica de Retorno da Manutenção.');
+    document.getElementById('ed-rota-retorno-responsavel')?.focus();
+    return;
+  }
 
   db.updateOcorrenciaRota(id, {
     carga_numero: cargaNum,
@@ -12229,14 +12861,17 @@ function renderPainelReterVeiculo() {
             </select>
           </div>
 
-          <!-- N° OS (sistema externo — opcional) -->
+          <!-- Link do Sistema de OS (opcional) — substitui o campo manual de
+               Nº OS: o identificador é derivado automaticamente do link,
+               já que clicar nele já leva direto à OS correta na outra
+               plataforma (busca automática, nada para digitar/errar). -->
           <div class="flex flex-col gap-1">
             <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide flex items-center gap-1">
-              N° OS
-              <span class="text-slate-600 font-normal normal-case">(externo)</span>
+              Link da OS no Sistema Externo
+              <span class="text-slate-600 font-normal normal-case">(opcional)</span>
             </label>
-            <input type="text" id="frt-numero-os" placeholder="Ex.: OS-4521"
-              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 transition"  oninput="forcarMaiuscula(this)" />
+            <input type="url" id="frt-link-os" placeholder="https://..."
+              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500 transition" />
           </div>
 
           <!-- Local / Oficina -->
@@ -12291,7 +12926,7 @@ function renderPainelRetidos(retencoes) {
             <div class="truncate" title="${(r.motivo||'').replace(/"/g,'&quot;')}">${r.motivo || '—'}</div>
           </td>
           <td class="p-2 text-slate-400 text-xs font-mono">${r.numero_retencao || '—'}</td>
-          <td class="p-2 text-sky-300 text-xs font-mono">${r.numero_os || '—'}</td>
+          <td class="p-2 text-sky-300 text-xs font-mono">${renderNumeroOsLink(r.numero_os, r.link_os)}</td>
           <td class="p-2 text-slate-400 text-xs">${r.local || '—'}</td>
           <td class="p-2 text-xs ${!r.data_previsao ? 'text-slate-500' : new Date(r.data_previsao) < new Date() ? 'text-red-400 font-bold' : 'text-emerald-400'}">
             ${formatarData(r.data_previsao)}
@@ -12360,10 +12995,14 @@ function renderPainelRetidos(retencoes) {
       class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
       <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
         <h3 class="text-sm font-black text-emerald-400 mb-4 flex items-center gap-2">✅ Liberar Veículo</h3>
-        <p class="text-xs text-slate-400 mb-4">Informe a data de liberação do veículo:</p>
+        <p class="text-xs text-slate-400 mb-3">Informe a data de liberação do veículo:</p>
         <input type="date" id="modal-data-liberacao"
           value="${new Date().toISOString().split('T')[0]}"
-          class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 transition mb-5" />
+          class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 transition mb-4" />
+        <label class="block text-xs font-bold text-slate-300 mb-1">Ação de Manutenção Realizada <span class="text-amber-400">*</span></label>
+        <textarea id="modal-acao-liberacao-frota" required rows="3"
+          placeholder="Descreva o serviço/reparo realizado antes da liberação..."
+          class="w-full bg-slate-950 border border-amber-600/60 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 transition mb-5" oninput="forcarMaiuscula(this)"></textarea>
         <div class="flex gap-2 justify-end">
           <button onclick="fecharModalLiberacao()"
             class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition">Cancelar</button>
@@ -12393,7 +13032,7 @@ function renderPainelLiberados(retencoes) {
   };
 
   const linhas = liberados.length === 0
-    ? `<tr><td colspan="11" class="p-8 text-center text-slate-500 text-xs">Nenhum veículo liberado ainda.</td></tr>`
+    ? `<tr><td colspan="12" class="p-8 text-center text-slate-500 text-xs">Nenhum veículo liberado ainda.</td></tr>`
     : liberados.map((r, i) => {
         const imob = calcImobilizacao(r.data_parada || r.criado_em, r.data_liberacao);
         return `
@@ -12412,10 +13051,13 @@ function renderPainelLiberados(retencoes) {
             <div class="truncate" title="${(r.motivo||'').replace(/"/g,'&quot;')}">${r.motivo || '—'}</div>
           </td>
           <td class="p-2 text-slate-400 text-xs font-mono">${r.numero_retencao || '—'}</td>
-          <td class="p-2 text-sky-300 text-xs font-mono">${r.numero_os || '—'}</td>
+          <td class="p-2 text-sky-300 text-xs font-mono">${renderNumeroOsLink(r.numero_os, r.link_os)}</td>
           <td class="p-2 text-slate-400 text-xs">${r.local || '—'}</td>
           <td class="p-2 text-slate-400 text-xs">${formatarData(r.data_parada)}</td>
           <td class="p-2 text-emerald-400 text-xs font-bold">${formatarData(r.data_liberacao)}</td>
+          <td class="p-2 text-slate-300 text-xs max-w-[180px]">
+            <div class="truncate" title="${(r.descricao_acao_liberacao||'').replace(/"/g,'&quot;')}">${r.descricao_acao_liberacao || '—'}</div>
+          </td>
           <td class="p-2 text-center font-mono font-bold text-xs ${imob.cls}">${imob.hhmmss} <span class="text-[10px] text-slate-500">(${imob.dias}d)</span></td>
           <td class="p-2 text-center">
             <button onclick="abrirModalEdicaoFrota(${r.id})"
@@ -12453,6 +13095,7 @@ function renderPainelLiberados(retencoes) {
               <th class="p-2 text-left">LOCAL</th>
               <th class="p-2 text-left">PARADO EM</th>
               <th class="p-2 text-left">LIBERADO EM</th>
+              <th class="p-2 text-left">AÇÃO REALIZADA</th>
               <th class="p-2 text-center">TEMPO IMOBILIZADO</th>
               <th class="p-2 text-center">AÇÕES</th>
             </tr>
@@ -12480,11 +13123,21 @@ function salvarRetencaoFrota(event) {
   const tipoOs     = document.getElementById('frt-tipo-os')?.value;
   const local      = document.getElementById('frt-local')?.value?.trim();
   const dataPrev   = document.getElementById('frt-data-previsao')?.value;
-  const numeroOs   = document.getElementById('frt-numero-os')?.value?.trim();
+  const linkOsRaw  = document.getElementById('frt-link-os')?.value?.trim();
 
   if (!veiculoId || !placa) { alert('⚠️ Selecione um veículo da lista de sugestões.'); return; }
   if (!dataParada) { alert('⚠️ Informe a data de parada.'); return; }
   if (!motivo)    { alert('⚠️ Informe o motivo.'); return; }
+  if (linkOsRaw && !/^https?:\/\/.+/i.test(linkOsRaw)) {
+    alert('⚠️ O link do sistema de OS deve começar com http:// ou https://');
+    document.getElementById('frt-link-os')?.focus();
+    return;
+  }
+
+  // O Nº OS não é mais digitado manualmente — é derivado automaticamente
+  // do link informado (ver extrairIdentificadorOsDoLink), já que clicar
+  // no link já leva direto à OS correta na outra plataforma.
+  const numeroOs = extrairIdentificadorOsDoLink(linkOsRaw);
 
   const result = db.addRetencaoFrota({
     veiculo_id:    veiculoId,
@@ -12495,7 +13148,8 @@ function salvarRetencaoFrota(event) {
     tipo_os:       tipoOs,
     local:         local,
     data_previsao: dataPrev || null,
-    numero_os:     numeroOs  || null
+    numero_os:     numeroOs  || null,
+    link_os:       linkOsRaw || null
   });
 
   if (result.success) {
@@ -12594,6 +13248,8 @@ function abrirModalLiberacao(id) {
     modal.classList.remove('hidden');
     modal.classList.add('flex');
   }
+  const acaoEl = document.getElementById('modal-acao-liberacao-frota');
+  if (acaoEl) acaoEl.value = '';
 }
 
 /** Fecha o modal de liberação. */
@@ -12674,23 +13330,23 @@ function abrirModalEdicaoFrota(id) {
               class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white resize-none focus:outline-none focus:border-sky-500 transition" oninput="forcarMaiuscula(this)">${r.motivo || ''}</textarea>
           </div>
 
-          <div class="grid grid-cols-2 gap-4">
-            <!-- N° OS Externo -->
-            <div class="flex flex-col gap-1">
-              <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide flex items-center gap-1">
-                N° OS <span class="text-slate-600 font-normal normal-case">(externo)</span>
-              </label>
-              <input type="text" id="edit-frt-numero-os" value="${r.numero_os || ''}"
-                placeholder="Ex.: OS-4521"
-                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition"  oninput="forcarMaiuscula(this)" />
-            </div>
+          <div class="flex flex-col gap-1">
             <!-- Local / Oficina -->
-            <div class="flex flex-col gap-1">
-              <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide">Local / Oficina</label>
-              <input type="text" id="edit-frt-local" value="${r.local || ''}"
-                placeholder="Ex.: Oficina Central"
-                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition"  oninput="forcarMaiuscula(this)" />
-            </div>
+            <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide">Local / Oficina</label>
+            <input type="text" id="edit-frt-local" value="${r.local || ''}"
+              placeholder="Ex.: Oficina Central"
+              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition"  oninput="forcarMaiuscula(this)" />
+          </div>
+
+          <!-- Link do Sistema de OS (opcional) — o Nº OS não é mais digitado
+               manualmente, é derivado automaticamente deste link. -->
+          <div class="flex flex-col gap-1">
+            <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide flex items-center gap-1">
+              Link da OS no Sistema Externo <span class="text-slate-600 font-normal normal-case">(opcional)</span>
+            </label>
+            <input type="url" id="edit-frt-link-os" value="${r.link_os || ''}"
+              placeholder="https://..."
+              class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition" />
           </div>
 
           <div class="grid grid-cols-2 gap-4">
@@ -12745,13 +13401,21 @@ function salvarEdicaoFrota() {
     data_parada:    document.getElementById('edit-frt-data-parada')?.value    || null,
     tipo_os:        document.getElementById('edit-frt-tipo-os')?.value         || 'CORRETIVA',
     motivo:         (document.getElementById('edit-frt-motivo')?.value         || '').trim(),
-    numero_os:      (document.getElementById('edit-frt-numero-os')?.value      || '').trim().toUpperCase() || null,
+    link_os:        (document.getElementById('edit-frt-link-os')?.value        || '').trim() || null,
     local:          (document.getElementById('edit-frt-local')?.value          || '').trim(),
     data_previsao:  document.getElementById('edit-frt-data-previsao')?.value   || null,
     data_liberacao: document.getElementById('edit-frt-data-liberacao')?.value  || null
   };
 
   if (!dados.motivo) { alert('⚠️ O motivo não pode ficar vazio.'); return; }
+  if (dados.link_os && !/^https?:\/\/.+/i.test(dados.link_os)) {
+    alert('⚠️ O link do sistema de OS deve começar com http:// ou https://');
+    document.getElementById('edit-frt-link-os')?.focus();
+    return;
+  }
+  // Nº OS não é mais editado manualmente — sempre recalculado a partir do
+  // link informado (ver extrairIdentificadorOsDoLink).
+  dados.numero_os = extrairIdentificadorOsDoLink(dados.link_os);
 
   const result = db.updateRetencaoFrota(id, dados);
   fecharModalEdicaoFrota();
@@ -12768,10 +13432,17 @@ function salvarEdicaoFrota() {
 function confirmarLiberacaoFrota() {
   const id   = window._frotaLiberacaoId;
   const data = document.getElementById('modal-data-liberacao')?.value;
+  const acaoEl = document.getElementById('modal-acao-liberacao-frota');
+  const acao = acaoEl ? acaoEl.value.trim() : '';
   if (!id)   { alert('⚠️ Nenhuma retenção selecionada.'); return; }
   if (!data) { alert('⚠️ Informe a data de liberação.'); return; }
+  if (!acao) {
+    alert('⚠️ Descreva a "Ação de Manutenção Realizada" antes de liberar o veículo.');
+    acaoEl?.focus();
+    return;
+  }
 
-  const result = db.liberarVeiculo(id, data);
+  const result = db.liberarVeiculo(id, data, acao);
   fecharModalLiberacao();
 
   if (result.success) {
@@ -14892,7 +15563,8 @@ function editarCorteResumoModal(data, turno, index) {
         <div class="grid grid-cols-3 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Cód Item</label>
-            <input type="text" id="md-cr-cod" value="${c.codigo_item}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+            <input type="text" id="md-cr-cod" list="produtos-list-corte" value="${c.codigo_item}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this); autoFillProdutoCorte(this.value)">
+            ${renderDatalistProdutos('produtos-list-corte')}
           </div>
           <div class="col-span-2">
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Descrição do Produto</label>
@@ -14921,7 +15593,6 @@ function editarCorteResumoModal(data, turno, index) {
 }
 
 function adicionarCorteResumo(data, turno) {
-  const prods = db.data.produtos || [];
   const container = document.getElementById('modal-container');
   if (!container) return;
 
@@ -14935,18 +15606,11 @@ function adicionarCorteResumo(data, turno) {
       </div>
 
       <div class="space-y-3 text-xs">
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Produto (Dados SAC - Produto)</label>
-          <select id="md-cr-prod" onchange="autoFillProdutoCorte(this.value)" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
-            <option value="">-- Selecione o Produto da Lista --</option>
-            ${prods.map(p => `<option value="${p.codigo_produto}||${p.descricao}||${p.valor_unitario_padrao||0}">${p.codigo_produto} - ${p.descricao}</option>`).join('')}
-          </select>
-        </div>
-
         <div class="grid grid-cols-3 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Cód Item</label>
-            <input type="text" id="md-cr-cod" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+            <input type="text" id="md-cr-cod" list="produtos-list-corte" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this); autoFillProdutoCorte(this.value)">
+            ${renderDatalistProdutos('produtos-list-corte')}
           </div>
           <div class="col-span-2">
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Descrição do Produto</label>
@@ -14975,12 +15639,17 @@ function adicionarCorteResumo(data, turno) {
   container.classList.remove('hidden');
 }
 
+// Preenche automaticamente a Descrição quando o código digitado bate com um
+// produto cadastrado (busca por digitação via datalist — item 1.4 da
+// auditoria de 17/08/2026). Se não houver correspondência, não sobrescreve
+// o que o usuário já digitou, permitindo produtos avulsos não cadastrados.
 function autoFillProdutoCorte(val) {
   if (!val) return;
-  const parts = val.split('||');
-  if (parts.length >= 2) {
-    document.getElementById('md-cr-cod').value = parts[0];
-    document.getElementById('md-cr-desc').value = parts[1];
+  const prods = (db && db.data && db.data.produtos) ? db.data.produtos : [];
+  const match = prods.find(p => String(p.codigo_produto).toUpperCase() === String(val).trim().toUpperCase());
+  if (match) {
+    const descEl = document.getElementById('md-cr-desc');
+    if (descEl) descEl.value = match.descricao;
   }
 }
 
