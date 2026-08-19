@@ -5152,6 +5152,31 @@ function extrairIdentificadorOsDoLink(url) {
       const val = u.searchParams.get(nome);
       if (val) return decodeURIComponent(val).toUpperCase().slice(0, 40);
     }
+    // 1b) Vários sistemas usam rota tipo #/caminho/123 (SPA com roteamento
+    // por hash — é o caso do Sofit/SofitView) em vez de path/query "de
+    // verdade". Nesses casos, o pathname vem vazio ("/") e não existe
+    // query string nenhuma, então sem tratar o hash o código caía direto
+    // no fallback do domínio — foi o que aconteceu com o link relatado em
+    // 19/08/2026 (https://sofitview.com.br/#/client/serviceorders/78129
+    // mostrava "SOFITVIEW.COM.BR" em vez de "78129"). Trata o conteúdo do
+    // hash como se fosse o path/query reais da URL.
+    if (u.hash && u.hash.length > 1) {
+      const hashSemAlmofada = u.hash.slice(1); // remove o "#" inicial
+      const [hashPath, hashQuery] = hashSemAlmofada.split('?');
+      if (hashQuery) {
+        const hashParams = new URLSearchParams(hashQuery);
+        for (const nome of paramNomes) {
+          const val = hashParams.get(nome);
+          if (val) return decodeURIComponent(val).toUpperCase().slice(0, 40);
+        }
+      }
+      const segmentosHash = (hashPath || '').split('/').filter(Boolean);
+      if (segmentosHash.length > 0) {
+        const comDigitoHash = segmentosHash.slice().reverse().find(s => /\d/.test(s));
+        return decodeURIComponent(comDigitoHash || segmentosHash[segmentosHash.length - 1]).toUpperCase().slice(0, 40);
+      }
+    }
+
     // 2) No path, prefere o último segmento que contenha algum dígito
     //    (mais provável de ser um identificador do que uma palavra genérica
     //    como "chamados" ou "os" no meio do caminho da URL)
