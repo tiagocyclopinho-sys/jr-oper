@@ -30,6 +30,26 @@ window.JR_CONFIG = {
     syncIntervalMs: 30000 // Sincronização automática a cada 30 segundos
   },
 
+  // Opções do campo "Requisito / Falha" das Ocorrências de Colaborador no
+  // CD (modal "Registrar Ocorrência do CD" e apontamento por colaborador
+  // no Resumo Diário). Antes esta lista estava duplicada em 2 lugares
+  // diferentes no app.js — trocar/adicionar um motivo exigia lembrar de
+  // editar os dois. Agora só se edita aqui (pedido de 19/08/2026).
+  requisitosFalhaCD: [
+    "ERRO DE RECEBIMENTO",
+    "ERRO DE SEPARAÇÃO",
+    "ERRO DE CONFERÊNCIA",
+    "ERRO DE ABASTECIMENTO",
+    "FALTA INJUSTIFICADA",
+    "SAÍDA ANTECIPADA",
+    "ATRASO NA CHEGADA",
+    "DESVIO DE CONDUTA",
+    "INSUBORDINAÇÃO",
+    "AVARIA DE PRODUTO",
+    "DANO AO PATRIMÔNIO",
+    "OUTRO"
+  ],
+
   // Setores Corporativos Integrados (Atuação Multidepartamental)
   departments: [
     { id: "sac", name: "SAC / Operação", color: "green" },

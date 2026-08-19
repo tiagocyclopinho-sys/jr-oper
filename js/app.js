@@ -372,20 +372,39 @@ function atualizarSinoNotificacoes() {
 
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
   const reentregasPendentes = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
+  const maisAntigaReentrega = getMaisAntigaPendente(reentregasPendentes, 'criado_em');
 
   const retencoes = typeof db.getRetencoesFrota === 'function' ? db.getRetencoesFrota() : [];
   const retidos = retencoes.filter(r => r.status === 'RETIDO');
 
   const retidosSlaCritico = retidos.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO_8H');
   const retidosSlaAlerta = retidos.filter(r => calcularSlaManutencao(r).nivel === 'ALERTA_4H');
+  const maisAntigaSlaCritico = getMaisAntigaPendente(retidosSlaCritico, 'data_parada');
+  const maisAntigaSlaAlerta = getMaisAntigaPendente(retidosSlaAlerta, 'data_parada');
 
   const ocorrenciasRota = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
   const veicParadosRota = ocorrenciasRota.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO');
+  const maisAntigaVeicParado = getMaisAntigaPendente(veicParadosRota, 'criado_em');
 
   const devolucoes = typeof db.getDevolucoes === 'function' ? db.getDevolucoes() : [];
   const pendCd = devolucoes.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
+  const maisAntigaPendCd = getMaisAntigaPendente(pendCd, 'criado_em');
+  // Quantas dessas pendências já têm a viagem finalizada (veículo já
+  // voltou, só falta a conferência física) vs ainda em rota — pedido do
+  // Encarregado do CD para priorizar o que já está pronto para conferir.
+  const todasViagensParaAlerta = typeof db.getControleViagens === 'function' ? db.getControleViagens() : [];
+  const pendCdViagemFinalizada = pendCd.filter(d => {
+    const cargaDev = String(d.carga_numero || '').trim().toUpperCase();
+    if (!cargaDev) return false;
+    const v = todasViagensParaAlerta.find(vg => String(vg.carga || vg.carga_numero || '').trim().toUpperCase() === cargaDev);
+    return v && v.status_viagem === 'FINALIZADO';
+  }).length;
 
-  const totalAlertas = reentregasPendentes.length + retidosSlaCritico.length + retidosSlaAlerta.length + veicParadosRota.length + pendCd.length;
+  // Sinistros pendentes (item 18/08/2026: "manter no painel de alerta").
+  const sinistrosPendentes = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
+  const maisAntigoSinistro = getMaisAntigaPendente(sinistrosPendentes, 'data_acidente');
+
+  const totalAlertas = reentregasPendentes.length + retidosSlaCritico.length + retidosSlaAlerta.length + veicParadosRota.length + pendCd.length + sinistrosPendentes.length;
 
   if (totalAlertas > 0) {
     badgeEl.textContent = totalAlertas > 99 ? '99+' : totalAlertas;
@@ -430,6 +449,7 @@ function atualizarSinoNotificacoes() {
                 <span class="bg-purple-950 text-purple-300 border border-purple-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Atraso em Rota</span>
               </div>
               <p class="text-[10px] text-slate-400 leading-snug">Existem devoluções de rota aguardando nova tentativa ou reencaminhamento imediato.</p>
+              ${maisAntigaReentrega.item ? `<div class="text-[10px] font-bold ${maisAntigaReentrega.horas > 48 ? 'text-red-400' : maisAntigaReentrega.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}">⏳ Mais antiga: ${maisAntigaReentrega.texto}</div>` : ''}
               <button onclick="fecharDropdownNotificacoes(); switchTab('controle_viagens'); switchViagensSubTab('reentregas');" class="w-full bg-purple-900/50 hover:bg-purple-800 text-purple-200 border border-purple-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
                 Ver Painel de Reentregas →
               </button>
@@ -446,6 +466,7 @@ function atualizarSinoNotificacoes() {
                 <span class="bg-red-950 text-red-300 border border-red-700 text-[10px] px-1.5 py-0.5 rounded font-black">URGENTE</span>
               </div>
               <p class="text-[10px] text-slate-400 leading-snug">Veículo(s) parados na oficina há mais de 8 horas sem liberação registrada.</p>
+              ${maisAntigaSlaCritico.item ? `<div class="text-[10px] font-bold text-red-400">⏳ Parado há mais tempo: ${maisAntigaSlaCritico.texto}</div>` : ''}
               <button onclick="fecharDropdownNotificacoes(); activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="w-full bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-600 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
                 Ver Veículos Retidos →
               </button>
@@ -462,6 +483,7 @@ function atualizarSinoNotificacoes() {
                 <span class="bg-amber-950 text-amber-300 border border-amber-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Oficina</span>
               </div>
               <p class="text-[10px] text-slate-400 leading-snug">Veículo(s) imobilizados entre 4h e 8h requerem acompanhamento da oficina.</p>
+              ${maisAntigaSlaAlerta.item ? `<div class="text-[10px] font-bold text-amber-400">⏳ Parado há mais tempo: ${maisAntigaSlaAlerta.texto}</div>` : ''}
               <button onclick="fecharDropdownNotificacoes(); activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="w-full bg-amber-900/50 hover:bg-amber-800 text-amber-200 border border-amber-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
                 Acompanhar Manutenção →
               </button>
@@ -478,8 +500,26 @@ function atualizarSinoNotificacoes() {
                 <span class="bg-red-950 text-red-300 border border-red-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Socorro</span>
               </div>
               <p class="text-[10px] text-slate-400 leading-snug">Chamados operacionais de socorro mecânico ou quebra pendentes de solução.</p>
+              ${maisAntigaVeicParado.item ? `<div class="text-[10px] font-bold text-red-400">⏳ Parado há mais tempo: ${maisAntigaVeicParado.texto}</div>` : ''}
               <button onclick="fecharDropdownNotificacoes(); switchTab('rota_ocorrencias');" class="w-full bg-red-900/50 hover:bg-red-800 text-red-200 border border-red-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
                 Ver Ocorrências em Rota →
+              </button>
+            </div>
+          ` : ''}
+
+          <!-- ALERTA DE SINISTROS PENDENTES -->
+          ${sinistrosPendentes.length > 0 ? `
+            <div class="bg-slate-950 border border-red-800 p-2.5 rounded-xl shadow space-y-1.5">
+              <div class="flex items-center justify-between">
+                <div class="text-xs font-black text-red-400 flex items-center gap-1.5">
+                  <span>🚨</span> Sinistros Pendentes (${sinistrosPendentes.length})
+                </div>
+                <span class="bg-red-950 text-red-300 border border-red-700 text-[10px] px-1.5 py-0.5 rounded font-black">Investigação</span>
+              </div>
+              <p class="text-[10px] text-slate-400 leading-snug">Investigação de acidente aguardando conclusão de uma ou mais etapas (Motorista, Manutenção, Operações, Jurídico ou Diretoria).</p>
+              ${maisAntigoSinistro.item ? `<div class="text-[10px] font-bold ${maisAntigoSinistro.horas > 48 ? 'text-red-400' : 'text-amber-400'}">⏳ Mais antigo: ${maisAntigoSinistro.texto} (${maisAntigoSinistro.item.numero_sinistro})</div>` : ''}
+              <button onclick="fecharDropdownNotificacoes(); switchTab('sinistros');" class="w-full bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-600 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
+                Ver Investigação de Sinistros →
               </button>
             </div>
           ` : ''}
@@ -494,6 +534,12 @@ function atualizarSinoNotificacoes() {
                 <span class="bg-amber-950 text-amber-300 border border-amber-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Armazém</span>
               </div>
               <p class="text-[10px] text-slate-400 leading-snug">Mercadorias devolvidas aguardando conferência e entrada física no estoque.</p>
+              ${pendCdViagemFinalizada > 0 ? `
+              <div class="flex items-center gap-1.5 text-[10px] font-bold">
+                <span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded">✅ ${pendCdViagemFinalizada} com viagem já finalizada</span>
+                ${(pendCd.length - pendCdViagemFinalizada) > 0 ? `<span class="bg-blue-950 text-blue-300 border border-blue-700 px-1.5 py-0.5 rounded">🚚 ${pendCd.length - pendCdViagemFinalizada} ainda em rota</span>` : ''}
+              </div>` : ''}
+              ${maisAntigaPendCd.item ? `<div class="text-[10px] font-bold ${maisAntigaPendCd.horas > 48 ? 'text-red-400' : maisAntigaPendCd.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}">⏳ Mais antiga: ${maisAntigaPendCd.texto}</div>` : ''}
               <button onclick="fecharDropdownNotificacoes(); switchTab('cd_recepcao');" class="w-full bg-amber-900/50 hover:bg-amber-800 text-amber-200 border border-amber-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
                 Conferir Devoluções CD →
               </button>
@@ -908,6 +954,1006 @@ function toggleAtivoUsuario(userId) {
   renderApp();
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// ACOMPANHAMENTO DE FUNCIONÁRIO CD & DOSSIÊ MOTORISTA (Parte B, 18/08/2026)
+// ═══════════════════════════════════════════════════════════════════
+// Espelha as 4 seções da planilha anexa (MATRIZ_ACOMPANHAMENTO_DE_
+// FUNCIONÁRIO.xlsx): Orientação e Feedback, Atestados Médicos,
+// Dispensas/Atrasos/Faltas, Medidas Administrativas Aplicadas — essa
+// última reaproveita a coleção medidas_disciplinares já existente
+// (Parte A), sem duplicar nada.
+
+function formatarTipoMedidaLabel(tipo) {
+  return tipo === 'ORIENTACAO_VERBAL' ? '🗣️ Orientação Verbal'
+    : tipo === 'SUSPENSAO' ? '⛔ Suspensão'
+    : '⚠️ Advertência';
+}
+
+// Seletor de colaborador reutilizável — busca por nome, funciona tanto
+// para colaboradores_cd quanto para motoristas conforme `tipo`.
+function renderSeletorColaboradorAcompanhamento(tipo, varFiltro, varSelecionado, onSelectFn) {
+  const lista = tipo === 'MOTORISTA' ? (db.data.motoristas || []) : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
+  const busca = window[varFiltro] || '';
+  const datalistId = tipo === 'MOTORISTA' ? 'dossie-datalist-motorista' : 'acomp-datalist-colaborador';
+
+  return `
+    <div class="max-w-md mx-auto mt-10 space-y-3 text-center">
+      <div class="text-4xl">${tipo === 'MOTORISTA' ? '🪪' : '👤'}</div>
+      <h2 class="text-base font-black text-white">${tipo === 'MOTORISTA' ? 'Dossiê Motorista' : 'Acompanhamento de Funcionário CD'}</h2>
+      <p class="text-xs text-slate-400">Selecione um ${tipo === 'MOTORISTA' ? 'motorista' : 'colaborador'} cadastrado para ver o histórico completo.</p>
+      <form onsubmit="handleSelecionarComValidacao(event, '${tipo}', '${datalistId}', '${onSelectFn}')" class="flex gap-2">
+        <input type="text" id="${datalistId}-input" value="${busca}" list="${datalistId}" placeholder="Digite o nome cadastrado..." autofocus
+          oninput="forcarMaiuscula(this); window['${varFiltro}']=this.value"
+          class="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg p-2.5 text-sm">
+        <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 rounded-lg text-sm shadow">Abrir</button>
+      </form>
+      <datalist id="${datalistId}">
+        ${lista.map(c => `<option value="${c.nome}">${c.chapa ? `Chapa ${c.chapa}` : ''}</option>`).join('')}
+      </datalist>
+      <p class="text-[10px] text-slate-500">A busca só aceita nomes já cadastrados — use o cadastro de ${tipo === 'MOTORISTA' ? 'Motoristas' : 'Colaboradores CD'} em Cadastros Mestres se o nome não aparecer na lista.</p>
+    </div>`;
+}
+
+// Valida que o nome digitado corresponde exatamente a um registro real do
+// cadastro mestre antes de abrir o dossiê — pedido de 18/08/2026: "deve
+// vir da validação de dados dos motoristas/colaboradores", não texto livre.
+function handleSelecionarComValidacao(e, tipo, datalistId, onSelectFn) {
+  e.preventDefault();
+  const input = document.getElementById(datalistId + '-input');
+  const nomeDigitado = (input?.value || '').trim().toUpperCase();
+  const lista = tipo === 'MOTORISTA' ? (db.data.motoristas || []) : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
+  const match = lista.find(c => String(c.nome || '').toUpperCase().trim() === nomeDigitado);
+  if (!match) {
+    alert(`⚠️ "${input?.value || ''}" não foi encontrado no cadastro de ${tipo === 'MOTORISTA' ? 'motoristas' : 'colaboradores CD'}. Selecione um nome da lista sugerida.`);
+    return;
+  }
+  window[onSelectFn === 'selecionarMotoristaDossie' ? '_dossieMotoristaFiltroBusca' : '_acompFuncFiltroBusca'] = '';
+  if (onSelectFn === 'selecionarMotoristaDossie') selecionarMotoristaDossie(match.nome);
+  else selecionarColaboradorAcompanhamento(match.nome);
+}
+
+function selecionarColaboradorAcompanhamento(nome) {
+  window._acompFuncSelecionado = nome;
+  window._acompFuncFiltroBusca = '';
+  renderApp();
+}
+function selecionarMotoristaDossie(nome) {
+  window._dossieMotoristaSelecionado = nome;
+  window._dossieMotoristaFiltroBusca = '';
+  renderApp();
+}
+
+function renderCabecalhoAcompanhamento(dadosMestre, tipo, onVoltarFn) {
+  return `
+    <div class="flex items-start justify-between flex-wrap gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div>
+        <button onclick="${onVoltarFn}" class="text-[10px] text-slate-400 hover:text-white font-bold mb-1.5">← Trocar ${tipo === 'MOTORISTA' ? 'motorista' : 'colaborador'}</button>
+        <h2 class="text-base font-black text-white">${dadosMestre.nome}</h2>
+        <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-slate-400 mt-1">
+          ${dadosMestre.chapa ? `<span>Chapa: <b class="text-slate-300">${dadosMestre.chapa}</b></span>` : ''}
+          ${dadosMestre.funcao ? `<span>Função: <b class="text-slate-300">${dadosMestre.funcao}</b></span>` : ''}
+          ${dadosMestre.cnh ? `<span>CNH: <b class="text-slate-300">${dadosMestre.cnh}</b></span>` : ''}
+          <span>Admissão: <b class="text-slate-300">${dadosMestre.data_admissao ? formatarData(dadosMestre.data_admissao) : '—'}</b></span>
+          <span>Desligamento: <b class="${dadosMestre.data_desligamento ? 'text-red-400' : 'text-slate-300'}">${dadosMestre.data_desligamento ? formatarData(dadosMestre.data_desligamento) : '—'}</b></span>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderFiltroDatasAcompanhamento(varDe, varAte) {
+  return `
+    <div class="flex items-center gap-2 text-xs bg-slate-900 border border-slate-800 rounded-xl p-3">
+      <span class="font-bold text-slate-400 uppercase text-[10px]">Filtrar por período:</span>
+      <input type="date" value="${window[varDe] || ''}" oninput="window['${varDe}']=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+      <span class="text-slate-500">até</span>
+      <input type="date" value="${window[varAte] || ''}" oninput="window['${varAte}']=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+      ${(window[varDe] || window[varAte]) ? `<button onclick="window['${varDe}']=''; window['${varAte}']=''; renderApp()" class="text-[10px] text-red-400 hover:text-red-300 font-bold ml-2">✕ Limpar</button>` : ''}
+    </div>`;
+}
+
+function filtrarPorData(lista, varDe, varAte) {
+  const de = window[varDe] || '';
+  const ate = window[varAte] || '';
+  return lista.filter(r => {
+    if (de && (r.data || '') < de) return false;
+    if (ate && (r.data || '') > ate) return false;
+    return true;
+  });
+}
+
+// --- Bloco 1: Orientação e Feedback ---
+function renderBlocoOrientacaoFeedback(nome, tipo, varDe, varAte, formVisivelVar) {
+  const registros = filtrarPorData(db.getOrientacoesFeedback(nome), varDe, varAte);
+  const formAberto = window[formVisivelVar] === true;
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-xs font-black text-emerald-400 uppercase flex items-center gap-2"><span>💬</span> Orientação e Feedback (${registros.length})</h3>
+        <button onclick="window['${formVisivelVar}']=${!formAberto}; renderApp()" class="text-[10px] bg-emerald-900/60 hover:bg-emerald-800 border border-emerald-700 text-emerald-300 px-2 py-1 rounded-full font-bold transition">${formAberto ? '✕ Fechar' : '+ Adicionar'}</button>
+      </div>
+      ${formAberto ? `
+      <form onsubmit="handleAddOrientacaoFeedback(event, '${nome.replace(/'/g,"\\'")}', '${tipo}')" class="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data *</label><input type="date" id="of-data" required value="${new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+        <div class="sm:col-span-1"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Ocorrência *</label><input type="text" id="of-ocorrencia" required placeholder="O que aconteceu" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+        <div class="sm:col-span-1"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Ação *</label><input type="text" id="of-acao" required placeholder="O que foi feito" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+        <div class="flex items-end"><button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 rounded text-xs">Salvar</button></div>
+      </form>` : ''}
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Ocorrência</th><th class="p-2">Ação</th><th class="p-2 text-right">.</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${registros.length === 0 ? '<tr><td colspan="4" class="p-3 text-center text-slate-500">Nenhum registro.</td></tr>' :
+              registros.map(r => `<tr><td class="p-2">${formatarData(r.data)}</td><td class="p-2">${r.ocorrencia}</td><td class="p-2">${r.acao}</td><td class="p-2 text-right"><button onclick="handleExcluirOrientacaoFeedback('${r.id}')" class="text-red-400 hover:text-red-300 text-[10px]">🗑️</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+function handleAddOrientacaoFeedback(e, nome, tipo) {
+  e.preventDefault();
+  const data = document.getElementById('of-data')?.value;
+  const ocorrencia = document.getElementById('of-ocorrencia')?.value;
+  const acao = document.getElementById('of-acao')?.value;
+  if (!ocorrencia || !acao) { alert('Preencha ocorrência e ação.'); return; }
+  const res = db.addOrientacaoFeedback({ colaborador_tipo: tipo, colaborador_nome: nome, data, ocorrencia, acao });
+  if (!res.success) showToast(res.message, 'error'); else showToast('✅ Registro adicionado!');
+  window._acompOfFormAberto = false; window._dossieOfFormAberto = false;
+  renderApp();
+}
+function handleExcluirOrientacaoFeedback(id) {
+  if (!confirm('Excluir este registro?')) return;
+  db.excluirOrientacaoFeedback(id);
+  renderApp();
+}
+
+// --- Bloco 2: Atestados Médicos ---
+function renderBlocoAtestadosMedicos(nome, tipo, varDe, varAte, formVisivelVar) {
+  const registros = filtrarPorData(db.getAtestadosMedicos(nome), varDe, varAte);
+  const formAberto = window[formVisivelVar] === true;
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-xs font-black text-blue-400 uppercase flex items-center gap-2"><span>🏥</span> Atestados Médicos (${registros.length})</h3>
+        <button onclick="window['${formVisivelVar}']=${!formAberto}; renderApp()" class="text-[10px] bg-blue-900/60 hover:bg-blue-800 border border-blue-700 text-blue-300 px-2 py-1 rounded-full font-bold transition">${formAberto ? '✕ Fechar' : '+ Adicionar'}</button>
+      </div>
+      ${formAberto ? `
+      <form onsubmit="handleAddAtestadoMedico(event, '${nome.replace(/'/g,"\\'")}', '${tipo}')" class="grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data *</label><input type="date" id="am-data" required value="${new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Parcial/Integral</label><select id="am-tipo" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"><option value="PARCIAL">Parcial</option><option value="INTEGRAL">Integral</option></select></div>
+        <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Motivo</label><input type="text" id="am-motivo" placeholder="Motivo do atestado" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">CID</label><input type="text" id="am-cid" placeholder="Ex: M54" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Médico</label><input type="text" id="am-medico" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+        <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">CRM/CRO</label><input type="text" id="am-crm" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+        <div class="flex items-end"><button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 rounded text-xs">Salvar</button></div>
+      </form>` : ''}
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Tipo</th><th class="p-2">Motivo</th><th class="p-2">CID</th><th class="p-2">Médico</th><th class="p-2 text-right">.</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${registros.length === 0 ? '<tr><td colspan="6" class="p-3 text-center text-slate-500">Nenhum registro.</td></tr>' :
+              registros.map(r => `<tr><td class="p-2">${formatarData(r.data)}</td><td class="p-2">${r.tipo_afastamento === 'INTEGRAL' ? 'Integral' : 'Parcial'}</td><td class="p-2">${r.motivo||'—'}</td><td class="p-2">${r.cid||'—'}</td><td class="p-2">${r.medico||'—'}${r.crm_cro?` (${r.crm_cro})`:''}</td><td class="p-2 text-right"><button onclick="handleExcluirAtestadoMedico('${r.id}')" class="text-red-400 hover:text-red-300 text-[10px]">🗑️</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+function handleAddAtestadoMedico(e, nome, tipo) {
+  e.preventDefault();
+  const data = document.getElementById('am-data')?.value;
+  const tipo_afastamento = document.getElementById('am-tipo')?.value;
+  const motivo = document.getElementById('am-motivo')?.value;
+  const cid = document.getElementById('am-cid')?.value;
+  const medico = document.getElementById('am-medico')?.value;
+  const crm_cro = document.getElementById('am-crm')?.value;
+  const res = db.addAtestadoMedico({ colaborador_tipo: tipo, colaborador_nome: nome, data, tipo_afastamento, motivo, cid, medico, crm_cro });
+  if (!res.success) showToast(res.message, 'error'); else showToast('✅ Atestado registrado!');
+  window._acompAmFormAberto = false; window._dossieAmFormAberto = false;
+  renderApp();
+}
+function handleExcluirAtestadoMedico(id) {
+  if (!confirm('Excluir este registro?')) return;
+  db.excluirAtestadoMedico(id);
+  renderApp();
+}
+
+// --- Bloco 3: Dispensas/Atrasos/Faltas ---
+function renderBlocoAusencias(nome, tipo, varDe, varAte, formVisivelVar) {
+  const registros = filtrarPorData(db.getAusenciasRegistros(nome), varDe, varAte);
+  const formAberto = window[formVisivelVar] === true;
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-xs font-black text-amber-400 uppercase flex items-center gap-2"><span>⏱️</span> Dispensas / Atrasos / Faltas (${registros.length})</h3>
+        <button onclick="window['${formVisivelVar}']=${!formAberto}; renderApp()" class="text-[10px] bg-amber-900/60 hover:bg-amber-800 border border-amber-700 text-amber-300 px-2 py-1 rounded-full font-bold transition">${formAberto ? '✕ Fechar' : '+ Adicionar'}</button>
+      </div>
+      ${formAberto ? `
+      <form onsubmit="handleAddAusenciaRegistro(event, '${nome.replace(/'/g,"\\'")}', '${tipo}')" class="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data *</label><input type="date" id="ar-data" required value="${new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+        <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Motivo *</label><input type="text" id="ar-motivo" required placeholder="Ex: Falta injustificada, atraso 15min, saída antecipada..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+        <div class="flex items-end"><button type="submit" class="w-full bg-amber-600 hover:bg-amber-500 text-white font-bold py-1.5 rounded text-xs">Salvar</button></div>
+      </form>` : ''}
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Motivo</th><th class="p-2 text-right">.</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${registros.length === 0 ? '<tr><td colspan="3" class="p-3 text-center text-slate-500">Nenhum registro.</td></tr>' :
+              registros.map(r => `<tr><td class="p-2">${formatarData(r.data)}</td><td class="p-2">${r.motivo}</td><td class="p-2 text-right"><button onclick="handleExcluirAusenciaRegistro('${r.id}')" class="text-red-400 hover:text-red-300 text-[10px]">🗑️</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+function handleAddAusenciaRegistro(e, nome, tipo) {
+  e.preventDefault();
+  const data = document.getElementById('ar-data')?.value;
+  const motivo = document.getElementById('ar-motivo')?.value;
+  if (!motivo) { alert('Informe o motivo.'); return; }
+  const res = db.addAusenciaRegistro({ colaborador_tipo: tipo, colaborador_nome: nome, data, motivo });
+  if (!res.success) showToast(res.message, 'error'); else showToast('✅ Registro adicionado!');
+  window._acompArFormAberto = false; window._dossieArFormAberto = false;
+  renderApp();
+}
+function handleExcluirAusenciaRegistro(id) {
+  if (!confirm('Excluir este registro?')) return;
+  db.excluirAusenciaRegistro(id);
+  renderApp();
+}
+
+// --- Bloco 4: Medidas Administrativas Aplicadas (só consulta — reaproveita
+// a coleção medidas_disciplinares já criada na Parte A) ---
+function renderBlocoMedidasAdministrativas(nome, tipo, varDe, varAte) {
+  const dataDe = window[varDe] || '';
+  const dataAte = window[varAte] || '';
+  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined });
+  return `
+    <div class="bg-slate-900 border border-purple-900/60 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <h3 class="text-xs font-black text-purple-400 uppercase flex items-center gap-2"><span>⚖️</span> Medidas Administrativas Aplicadas (${medidas.length})</h3>
+        <button onclick="abrirModalEmissaoDisciplinarCD({ tipo: 'ORIENTACAO_VERBAL', colabNome: '${nome.replace(/'/g,"\\'")}' })" class="text-[10px] bg-purple-950 hover:bg-purple-900 border border-purple-700 text-purple-300 px-2.5 py-1 rounded-full font-bold transition">+ Emitir Nova Medida</button>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Tipo</th><th class="p-2">Alíneas CLT</th><th class="p-2">Motivo</th><th class="p-2">Gestor</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${medidas.length === 0 ? '<tr><td colspan="5" class="p-3 text-center text-slate-500">Nenhuma medida registrada.</td></tr>' :
+              medidas.map(m => `<tr><td class="p-2">${formatarData(m.data_ocorrencia)}</td><td class="p-2">${formatarTipoMedidaLabel(m.tipo)}</td><td class="p-2">${m.alineas_clt||'—'}</td><td class="p-2 max-w-[220px]"><div class="truncate" title="${(m.motivo||'').replace(/"/g,'&quot;')}">${m.motivo||'—'}</div></td><td class="p-2">${m.gestor||'—'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// --- Blocos exclusivos do Dossiê Motorista (reaproveitam dados já
+// existentes — nenhuma coleção nova) ---
+function renderBlocoOcOperacionalMotorista(nomeMotorista, varDe, varAte) {
+  const termo = normalizeStr(nomeMotorista);
+  // Oc Operacional fica dentro de Controle de Viagens, coleção
+  // ocorrencias_viagens — não em resumo_diario_cd (achado corrigido em
+  // 18/08/2026: o Dossiê Motorista buscava no lugar errado).
+  let ocorrencias = db.getOcorrenciasViagens().filter(o => normalizeStr(o.funcionario || '') === termo);
+  ocorrencias = filtrarPorData(ocorrencias, varDe, varAte).sort((a,b) => new Date(b.data||0) - new Date(a.data||0));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 class="text-xs font-black text-cyan-400 uppercase flex items-center gap-2"><span>📋</span> Ocorrências Operacionais (Oc Operacional) — ${ocorrencias.length}</h3>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Carga</th><th class="p-2">Motivo</th><th class="p-2">Status</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${ocorrencias.length === 0 ? '<tr><td colspan="4" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
+              ocorrencias.map(o => `<tr><td class="p-2">${formatarData(o.data)}</td><td class="p-2">${o.carga||'—'}</td><td class="p-2">${o.motivo||o.causa||'—'}</td><td class="p-2">${o.status||'—'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+function renderBlocoOcRotaMotorista(nomeMotorista, varDe, varAte) {
+  const termo = normalizeStr(nomeMotorista);
+  let ocorrencias = (db.getOcorrenciasRota ? db.getOcorrenciasRota() : (db.data.ocorrencias_rota || []))
+    .filter(r => normalizeStr(r.motorista_nome || r.motorista || '') === termo)
+    .map(r => ({ ...r, data: r.data_parada || r.criado_em }));
+  ocorrencias = filtrarPorData(ocorrencias, varDe, varAte).sort((a,b) => new Date(b.data||0) - new Date(a.data||0));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 class="text-xs font-black text-cyan-400 uppercase flex items-center gap-2"><span>🚚</span> Ocorrências em Rota (Oc em Rota) — ${ocorrencias.length}</h3>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Carga</th><th class="p-2">Motivo</th><th class="p-2">Status</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${ocorrencias.length === 0 ? '<tr><td colspan="4" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
+              ocorrencias.map(o => `<tr><td class="p-2">${formatarData(o.data)}</td><td class="p-2">${o.carga||'—'}</td><td class="p-2">${o.motivo||'—'}</td><td class="p-2">${o.status_chamado||o.status||'—'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// --- TELA: Acompanhamento de Funcionário CD ---
+function renderAcompanhamentoFuncionarioView() {
+  const nomeSelecionado = window._acompFuncSelecionado || '';
+  if (!nomeSelecionado) {
+    return renderSeletorColaboradorAcompanhamento('CD', '_acompFuncFiltroBusca', '_acompFuncSelecionado', 'selecionarColaboradorAcompanhamento');
+  }
+
+  const dadosMestre = getDadosColaboradorMestre(nomeSelecionado) || { nome: nomeSelecionado };
+
+  return `
+    <div class="max-w-5xl mx-auto space-y-4">
+      ${renderCabecalhoAcompanhamento(dadosMestre, 'CD', "window._acompFuncSelecionado=''; renderApp()")}
+      ${renderFiltroDatasAcompanhamento('_acompFiltroDataDe', '_acompFiltroDataAte')}
+      <div class="flex justify-end gap-2">
+        <button onclick="gerarRelatorioAcompanhamentoPdf('${nomeSelecionado.replace(/'/g,"\\'")}', 'CD')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5"><span>🖨️</span> Imprimir Dossiê</button>
+        <button onclick="exportarAcompanhamentoCsv('${nomeSelecionado.replace(/'/g,"\\'")}', 'CD')" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5"><span>⬇️</span> CSV</button>
+      </div>
+      ${renderBlocoOrientacaoFeedback(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte', '_acompOfFormAberto')}
+      ${renderBlocoAtestadosMedicos(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte', '_acompAmFormAberto')}
+      ${renderBlocoAusencias(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte', '_acompArFormAberto')}
+      ${renderBlocoMedidasAdministrativas(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte')}
+    </div>`;
+}
+
+// --- TELA: Dossiê Motorista ---
+function renderDossieMotoristaView() {
+  const nomeSelecionado = window._dossieMotoristaSelecionado || '';
+  if (!nomeSelecionado) {
+    return renderSeletorColaboradorAcompanhamento('MOTORISTA', '_dossieMotoristaFiltroBusca', '_dossieMotoristaSelecionado', 'selecionarMotoristaDossie');
+  }
+
+  const dadosMestre = db.getDadosMotoristaMestre(nomeSelecionado) || { nome: nomeSelecionado };
+
+  return `
+    <div class="max-w-5xl mx-auto space-y-4">
+      ${renderCabecalhoAcompanhamento(dadosMestre, 'MOTORISTA', "window._dossieMotoristaSelecionado=''; renderApp()")}
+      ${renderFiltroDatasAcompanhamento('_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      <div class="flex justify-end gap-2">
+        <button onclick="gerarRelatorioAcompanhamentoPdf('${nomeSelecionado.replace(/'/g,"\\'")}', 'MOTORISTA')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5"><span>🖨️</span> Imprimir Dossiê</button>
+        <button onclick="exportarAcompanhamentoCsv('${nomeSelecionado.replace(/'/g,"\\'")}', 'MOTORISTA')" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5"><span>⬇️</span> CSV</button>
+      </div>
+      ${renderBlocoOrientacaoFeedback(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieOfFormAberto')}
+      ${renderBlocoAtestadosMedicos(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieAmFormAberto')}
+      ${renderBlocoAusencias(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieArFormAberto')}
+      ${renderBlocoMedidasAdministrativas(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoOcOperacionalMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoOcRotaMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoSinistrosMotorista(nomeSelecionado)}
+    </div>`;
+}
+
+// --- Impressão e CSV do Dossiê (Acompanhamento Funcionário e Dossiê
+// Motorista compartilham a mesma função, parametrizada por tipo) ---
+function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
+  const varDe = tipo === 'MOTORISTA' ? '_dossieFiltroDataDe' : '_acompFiltroDataDe';
+  const varAte = tipo === 'MOTORISTA' ? '_dossieFiltroDataAte' : '_acompFiltroDataAte';
+  const dadosMestre = tipo === 'MOTORISTA' ? (db.getDadosMotoristaMestre(nome) || { nome }) : (getDadosColaboradorMestre(nome) || { nome });
+
+  const orientacoes = filtrarPorData(db.getOrientacoesFeedback(nome), varDe, varAte);
+  const atestados = filtrarPorData(db.getAtestadosMedicos(nome), varDe, varAte);
+  const ausencias = filtrarPorData(db.getAusenciasRegistros(nome), varDe, varAte);
+  const dataDe = window[varDe] || '';
+  const dataAte = window[varAte] || '';
+  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined });
+
+  const secaoTabela = (titulo, cols, rows) => `
+    <h2>${titulo}</h2>
+    <table>
+      <thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>${rows.length === 0 ? `<tr><td colspan="${cols.length}" style="text-align:center;">Nenhum registro.</td></tr>` : rows.join('')}</tbody>
+    </table>`;
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>${tipo === 'MOTORISTA' ? 'DOSSIÊ MOTORISTA' : 'ACOMPANHAMENTO DE FUNCIONÁRIO'} — ${nome}</title>
+  <style>
+    @media print { @page { margin: 12mm; size: A4; } body { -webkit-print-color-adjust: exact; } }
+    body { font-family: Arial, sans-serif; padding: 20px; color: #0f172a; background: #fff; font-size: 11px; }
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #6d28d9; padding-bottom: 10px; margin-bottom: 15px; }
+    .logo { height: 55px; }
+    .title-area { text-align: right; }
+    .title-area h1 { margin: 0; font-size: 18px; color: #4c1d95; text-transform: uppercase; }
+    .title-area p { margin: 2px 0 0; font-size: 10px; color: #64748b; }
+    .info-box { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 14px; margin-bottom: 18px; font-size: 11px; }
+    .info-box b { color: #4c1d95; }
+    h2 { font-size: 12px; color: #4c1d95; text-transform: uppercase; border-bottom: 2px solid #ddd6fe; padding-bottom: 4px; margin-top: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 10px; }
+    th, td { border: 1px solid #cbd5e1; padding: 5px 7px; text-align: left; }
+    th { background: #4c1d95; color: #fff; text-transform: uppercase; font-size: 9px; }
+    tr:nth-child(even) { background: #f8fafc; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+    <div class="title-area">
+      <h1>${tipo === 'MOTORISTA' ? 'Dossiê Motorista' : 'Acompanhamento de Funcionário'}</h1>
+      <p>JR Distribuidora • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
+    </div>
+  </div>
+  <div class="info-box">
+    <b>Nome:</b> ${dadosMestre.nome} &nbsp;&nbsp;
+    ${dadosMestre.chapa ? `<b>Chapa:</b> ${dadosMestre.chapa} &nbsp;&nbsp;` : ''}
+    ${dadosMestre.funcao ? `<b>Função:</b> ${dadosMestre.funcao} &nbsp;&nbsp;` : ''}
+    ${dadosMestre.cnh ? `<b>CNH:</b> ${dadosMestre.cnh} &nbsp;&nbsp;` : ''}
+    <b>Admissão:</b> ${dadosMestre.data_admissao ? formatarData(dadosMestre.data_admissao) : '—'} &nbsp;&nbsp;
+    <b>Desligamento:</b> ${dadosMestre.data_desligamento ? formatarData(dadosMestre.data_desligamento) : '—'}
+  </div>
+
+  ${secaoTabela('Orientação e Feedback', ['Data','Ocorrência','Ação'], orientacoes.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.ocorrencia}</td><td>${r.acao}</td></tr>`))}
+  ${secaoTabela('Atestados Médicos', ['Data','Parcial/Integral','Motivo','CID','Médico','CRM/CRO'], atestados.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.tipo_afastamento==='INTEGRAL'?'Integral':'Parcial'}</td><td>${r.motivo||'—'}</td><td>${r.cid||'—'}</td><td>${r.medico||'—'}</td><td>${r.crm_cro||'—'}</td></tr>`))}
+  ${secaoTabela('Dispensas / Atrasos / Faltas', ['Data','Motivo'], ausencias.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.motivo}</td></tr>`))}
+  ${secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td>${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
+
+  <script>window.onload = function() { setTimeout(function(){ window.print(); }, 500); }</script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (win) { win.document.write(htmlContent); win.document.close(); }
+  else alert('Permita pop-ups no navegador para visualizar o dossiê.');
+}
+
+function exportarAcompanhamentoCsv(nome, tipo) {
+  const varDe = tipo === 'MOTORISTA' ? '_dossieFiltroDataDe' : '_acompFiltroDataDe';
+  const varAte = tipo === 'MOTORISTA' ? '_dossieFiltroDataAte' : '_acompFiltroDataAte';
+
+  const orientacoes = filtrarPorData(db.getOrientacoesFeedback(nome), varDe, varAte);
+  const atestados = filtrarPorData(db.getAtestadosMedicos(nome), varDe, varAte);
+  const ausencias = filtrarPorData(db.getAusenciasRegistros(nome), varDe, varAte);
+  const dataDe = window[varDe] || '';
+  const dataAte = window[varAte] || '';
+  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined });
+
+  const linhas = [['Secao','Data','Campo1','Campo2','Campo3','Campo4','Campo5'].map(h => `"${h}"`).join(';')];
+  orientacoes.forEach(r => linhas.push(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao, '', '', ''].map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')));
+  atestados.forEach(r => linhas.push(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
+  ausencias.forEach(r => linhas.push(['AUSENCIA', formatarData(r.data), r.motivo, '', '', '', ''].map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')));
+  medidas.forEach(m => linhas.push(['MEDIDA_DISCIPLINAR', formatarData(m.data_ocorrencia), m.tipo, m.alineas_clt, m.motivo, m.gestor, ''].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
+
+  if (linhas.length === 1) { alert('Nenhum registro encontrado para exportar com os filtros atuais.'); return; }
+
+  const csvString = '\uFEFF' + linhas.join('\r\n');
+  const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `JR_SAC_${tipo === 'MOTORISTA' ? 'Dossie_Motorista' : 'Acompanhamento_Funcionario'}_${nome.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INVESTIGAÇÃO DE SINISTRO (baseado em Formulário_Investigação_de_
+// Acidente.docx, implementado em 18/08/2026)
+// ═══════════════════════════════════════════════════════════════════
+// 5 etapas (Motorista, Manutenção de Frota, Operações e Logística,
+// Jurídico [opcional], Diretoria) preenchidas em paralelo — sem bloqueio
+// entre si — mas o registro fica PENDENTE no painel de alerta até TODAS
+// as etapas aplicáveis estarem completas. O "croqui" do papel foi
+// substituído por upload de fotos reais (ver handleSinistroFotoUpload).
+
+function formatarStatusSinistroBadge(status) {
+  return status === 'CONCLUIDO'
+    ? '<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-2 py-0.5 rounded text-[10px] font-black uppercase">✅ Concluído</span>'
+    : '<span class="bg-red-950 text-red-300 border border-red-700 px-2 py-0.5 rounded text-[10px] font-black uppercase animate-pulse">🚨 Pendente</span>';
+}
+
+// --- Lançamento a partir da Oc em Rota (pré-preenche carga/placa/motorista) ---
+function abrirModalNovoSinistro(prefill) {
+  prefill = prefill || {};
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+
+  modal.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-red-800/70 rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-3 animate-fadeIn">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-sm font-extrabold text-red-400 flex items-center gap-2">🚨 Registrar Sinistro</h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+        </div>
+        <form onsubmit="handleCriarSinistro(event)" class="space-y-3 text-xs">
+          <input type="hidden" id="sin-ocorrencia-rota-id" value="${prefill.ocorrencia_rota_id || ''}">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Carga</label>
+              <input type="text" id="sin-carga" value="${prefill.carga || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold" oninput="forcarMaiuscula(this)">
+            </div>
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Placa</label>
+              <input type="text" id="sin-placa" list="sin-datalist-placa" value="${prefill.placa || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold" oninput="forcarMaiuscula(this)">
+              <datalist id="sin-datalist-placa">${(db.data.veiculos||[]).map(v => `<option value="${v.placa}">`).join('')}</datalist>
+            </div>
+          </div>
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Motorista *</label>
+            <input type="text" id="sin-motorista" required list="sin-datalist-motorista" value="${prefill.motorista_nome || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold" oninput="forcarMaiuscula(this)">
+            <datalist id="sin-datalist-motorista">${(db.data.motoristas||[]).map(m => `<option value="${m.nome}">`).join('')}</datalist>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Data do Acidente *</label>
+              <input type="date" id="sin-data" required value="${prefill.data_acidente || new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+            </div>
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Local / Cidade</label>
+              <input type="text" id="sin-local" value="${prefill.local_acidente || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
+            </div>
+          </div>
+          <div class="pt-2 flex gap-2">
+            <button type="button" onclick="closeModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg">Cancelar</button>
+            <button type="submit" class="flex-1 bg-red-700 hover:bg-red-600 text-white font-bold py-2 rounded-lg shadow">Registrar Sinistro</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+function handleCriarSinistro(e) {
+  e.preventDefault();
+  const motorista_nome = document.getElementById('sin-motorista')?.value?.trim();
+  if (!motorista_nome) { alert('Informe o motorista envolvido.'); return; }
+  const res = db.addSinistro({
+    ocorrencia_rota_id: document.getElementById('sin-ocorrencia-rota-id')?.value || null,
+    carga: document.getElementById('sin-carga')?.value,
+    placa: document.getElementById('sin-placa')?.value,
+    motorista_nome,
+    data_acidente: document.getElementById('sin-data')?.value,
+    local_acidente: document.getElementById('sin-local')?.value
+  });
+  closeModal();
+  if (!res.success) { showToast(res.message, 'error'); renderApp(); return; }
+  showToast(`✅ Sinistro ${res.sinistro.numero_sinistro} registrado!`);
+  window._sinistroSelecionadoId = res.sinistro.id;
+  switchTab('sinistros');
+}
+
+// --- Tela principal: lista + detalhe ---
+function renderSinistrosView() {
+  const idSelecionado = window._sinistroSelecionadoId || '';
+  if (idSelecionado) return renderSinistroDetalhe(idSelecionado);
+
+  const fStatus = window._sinFiltroStatus || '';
+  const fBusca = window._sinFiltroBusca || '';
+  let lista = db.getSinistros({ status: fStatus || undefined });
+  if (fBusca) {
+    const termo = fBusca.toUpperCase();
+    lista = lista.filter(s => (s.motorista_nome||'').includes(termo) || (s.placa||'').includes(termo) || (s.carga||'').includes(termo) || (s.numero_sinistro||'').includes(termo));
+  }
+
+  return `
+    <div class="max-w-5xl mx-auto space-y-4">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 class="text-base font-black text-white flex items-center gap-2">🚨 Investigação de Sinistro</h2>
+          <p class="text-xs text-slate-400">Acompanhamento de acidentes — Motorista → Manutenção → Operações → Jurídico → Diretoria</p>
+        </div>
+        <button onclick="abrirModalNovoSinistro()" class="bg-red-700 hover:bg-red-600 text-white font-bold px-4 py-2 rounded-lg text-xs shadow flex items-center gap-2">
+          <span>➕</span> Registrar Sinistro
+        </button>
+      </div>
+
+      <div class="flex flex-col sm:flex-row gap-2">
+        <input type="text" value="${fBusca}" placeholder="🔎 Buscar por motorista, placa, carga ou nº do sinistro..." oninput="forcarMaiuscula(this); window._sinFiltroBusca=this.value; renderApp()" class="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+        <select onchange="window._sinFiltroStatus=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs sm:w-56">
+          <option value="">Todos os Status</option>
+          <option value="PENDENTE" ${fStatus==='PENDENTE'?'selected':''}>🚨 Pendente</option>
+          <option value="CONCLUIDO" ${fStatus==='CONCLUIDO'?'selected':''}>✅ Concluído</option>
+        </select>
+      </div>
+
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-xs text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+            <tr><th class="p-3">Nº Sinistro</th><th class="p-3">Data</th><th class="p-3">Motorista</th><th class="p-3">Placa / Carga</th><th class="p-3 text-center">Etapas</th><th class="p-3 text-center">Status</th><th class="p-3 text-right">Ação</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            ${lista.length === 0 ? '<tr><td colspan="7" class="p-6 text-center text-slate-500">Nenhum sinistro encontrado.</td></tr>' :
+              lista.map(s => {
+                const etapasOk = [s.etapa_motorista_completa, s.etapa_manutencao_completa, s.etapa_operacoes_completa, (!s.juridico_necessario || s.etapa_juridico_completa), s.etapa_diretoria_completa].filter(Boolean).length;
+                const etapasTotal = s.juridico_necessario ? 5 : 4;
+                return `
+                <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="window._sinistroSelecionadoId='${s.id}'; renderApp()">
+                  <td class="p-3 font-mono font-bold text-red-400">${s.numero_sinistro}</td>
+                  <td class="p-3">${formatarData(s.data_acidente)}</td>
+                  <td class="p-3 font-bold text-white">${s.motorista_nome}</td>
+                  <td class="p-3">${s.placa||'—'} ${s.carga?`/ ${s.carga}`:''}</td>
+                  <td class="p-3 text-center font-bold">${etapasOk}/${etapasTotal}</td>
+                  <td class="p-3 text-center">${formatarStatusSinistroBadge(s.status_geral)}</td>
+                  <td class="p-3 text-right"><button onclick="event.stopPropagation(); window._sinistroSelecionadoId='${s.id}'; renderApp()" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td>
+                </tr>`;
+              }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// --- Detalhe: 5 etapas ---
+function renderSinistroDetalhe(id) {
+  const s = (db.data.sinistros || []).find(x => String(x.id) === String(id));
+  if (!s) { window._sinistroSelecionadoId = ''; return renderSinistrosView(); }
+
+  // Acordeão: ao abrir um sinistro pela primeira vez (ou trocar de
+  // sinistro), a Etapa 1 começa expandida e as demais minimizadas — pedido
+  // de 18/08/2026. Ao salvar uma etapa como concluída, a próxima etapa do
+  // fluxo é quem passa a ficar expandida (ver handleSalvarEtapaSinistro).
+  if (window._sinistroEtapaExpandidaId !== id) {
+    window._sinistroEtapaExpandidaId = id;
+    window._sinistroEtapaExpandida = 'motorista';
+  }
+
+  return `
+    <div class="max-w-4xl mx-auto space-y-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <button onclick="window._sinistroSelecionadoId=''; renderApp()" class="text-[10px] text-slate-400 hover:text-white font-bold mb-1.5">← Voltar à lista</button>
+          <h2 class="text-base font-black text-white">${s.numero_sinistro} — ${s.motorista_nome}</h2>
+          <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-slate-400 mt-1">
+            <span>Data: <b class="text-slate-300">${formatarData(s.data_acidente)}</b></span>
+            <span>Placa: <b class="text-slate-300">${s.placa||'—'}</b></span>
+            <span>Carga: <b class="text-slate-300">${s.carga||'—'}</b></span>
+            <span>Local: <b class="text-slate-300">${s.local_acidente||'—'}</b></span>
+          </div>
+        </div>
+        ${formatarStatusSinistroBadge(s.status_geral)}
+      </div>
+
+      ${renderEtapaMotorista(s)}
+      ${renderEtapaManutencao(s)}
+      ${renderEtapaOperacoes(s)}
+      ${renderEtapaJuridico(s)}
+      ${renderEtapaDiretoria(s)}
+    </div>`;
+}
+
+// Alterna a etapa expandida manualmente (clique no cabeçalho) — permite
+// reabrir uma etapa já concluída para revisar/editar.
+function toggleEtapaSinistro(etapaKey) {
+  window._sinistroEtapaExpandida = (window._sinistroEtapaExpandida === etapaKey) ? null : etapaKey;
+  renderApp();
+}
+
+// Ordem oficial do fluxo — usada para decidir qual etapa abrir a seguir
+// quando uma é marcada como concluída. Jurídico só entra na sequência se
+// estiver marcado como necessário para este sinistro.
+function ordemEtapasSinistro(s) {
+  return ['motorista', 'manutencao', 'operacoes', ...(s.juridico_necessario ? ['juridico'] : []), 'diretoria'];
+}
+
+function renderEtapaMotorista(s) {
+  const c = s.etapa_motorista_completa;
+  const expandida = window._sinistroEtapaExpandida === 'motorista';
+  return `
+    <div class="bg-slate-900 border ${c?'border-emerald-900/60':'border-amber-900/60'} rounded-2xl overflow-hidden">
+      <button type="button" onclick="toggleEtapaSinistro('motorista')" class="w-full flex items-center justify-between p-4 text-left hover:bg-slate-800/40 transition">
+        <h3 class="text-xs font-black ${c?'text-emerald-400':'text-amber-400'} uppercase flex items-center gap-2">
+          <span>${c?'✅':'1️⃣'}</span> Etapa 1 — Motorista Envolvido
+        </h3>
+        <span class="text-slate-500 text-xs">${expandida ? '▲' : '▼'}</span>
+      </button>
+      ${expandida ? `
+      <form onsubmit="handleSalvarEtapaSinistro(event, '${s.id}', 'motorista')" class="space-y-3 text-xs px-4 pb-4">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">CPF</label><input type="text" id="em-cpf" value="${s.motorista_cpf||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">CNH</label><input type="text" id="em-cnh" value="${s.motorista_cnh||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Validade CNH</label><input type="date" id="em-cnh-validade" value="${s.motorista_cnh_validade||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Tipo Veíc. JR</label>
+            <select id="em-tipo-veic" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="LEVE" ${s.tipo_veiculo_jr_motorista==='LEVE'?'selected':''}>Leve</option>
+              <option value="CARRETA" ${s.tipo_veiculo_jr_motorista==='CARRETA'?'selected':''}>Carreta</option>
+              <option value="CAMINHAO" ${s.tipo_veiculo_jr_motorista==='CAMINHAO'?'selected':''}>Caminhão</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 border-t border-slate-800 pt-2">
+          <div class="col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Condutor Terceiro (se houver)</label><input type="text" id="em-terceiro-nome" value="${s.veiculo_terceiro_condutor_nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Placa Terceiro</label><input type="text" id="em-terceiro-placa" value="${s.veiculo_terceiro_placa||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Renavam</label><input type="text" id="em-terceiro-renavam" value="${s.veiculo_terceiro_renavam||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Marca/Modelo Terceiro</label><input type="text" id="em-terceiro-marca" value="${s.veiculo_terceiro_marca||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+        </div>
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Relato do Acidente <span class="text-red-400">*</span></label><textarea id="em-relato" rows="2" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${s.relato_motorista||''}</textarea></div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Havia Sinalização?</label>
+            <select id="em-sinalizacao" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="NAO" ${!s.havia_sinalizacao_motorista?'selected':''}>Não</option>
+              <option value="SIM" ${s.havia_sinalizacao_motorista?'selected':''}>Sim</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Relatar Sinalização / De quem era a preferência</label><input type="text" id="em-sinalizacao-relato" value="${s.sinalizacao_relato_motorista||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-800 pt-2">
+          ${renderUploadFotosSinistro('danos_jr_motorista', 'Fotos dos Danos — Veículo JR *', s.fotos_danos_jr_motorista)}
+          ${renderUploadFotosSinistro('danos_terceiro_motorista', 'Fotos dos Danos — Veículo Terceiro', s.fotos_danos_terceiro_motorista)}
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Assinatura (Nome do Motorista) <span class="text-red-400">*</span></label><input type="text" id="em-assinatura" required value="${s.motorista_assinatura_nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data <span class="text-red-400">*</span></label><input type="date" id="em-assinatura-data" required value="${s.motorista_assinatura_data||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+        </div>
+        <div class="flex items-center justify-between pt-2 border-t border-slate-800">
+          <label class="flex items-center gap-2 text-[11px] font-bold text-slate-300"><input type="checkbox" id="em-completa" ${c?'checked':''} class="w-4 h-4"> Marcar etapa como concluída</label>
+          <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow">Salvar Etapa</button>
+        </div>
+      </form>` : ''}
+    </div>`;
+}
+
+function renderEtapaManutencao(s) {
+  const c = s.etapa_manutencao_completa;
+  const expandida = window._sinistroEtapaExpandida === 'manutencao';
+  return `
+    <div class="bg-slate-900 border ${c?'border-emerald-900/60':'border-amber-900/60'} rounded-2xl overflow-hidden">
+      <button type="button" onclick="toggleEtapaSinistro('manutencao')" class="w-full flex items-center justify-between p-4 text-left hover:bg-slate-800/40 transition">
+        <h3 class="text-xs font-black ${c?'text-emerald-400':'text-amber-400'} uppercase flex items-center gap-2">
+          <span>${c?'✅':'2️⃣'}</span> Etapa 2 — Manutenção de Frota
+        </h3>
+        <span class="text-slate-500 text-xs">${expandida ? '▲' : '▼'}</span>
+      </button>
+      ${expandida ? `
+      <form onsubmit="handleSalvarEtapaSinistro(event, '${s.id}', 'manutencao')" class="space-y-3 text-xs px-4 pb-4">
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Relato do Acidente (visão da Manutenção) <span class="text-red-400">*</span></label><textarea id="man-relato" rows="2" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${s.relato_manutencao||''}</textarea></div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Havia Sinalização?</label>
+            <select id="man-sinalizacao" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="NAO" ${!s.havia_sinalizacao_manutencao?'selected':''}>Não</option>
+              <option value="SIM" ${s.havia_sinalizacao_manutencao?'selected':''}>Sim</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Relatar Sinalização / Preferência</label><input type="text" id="man-sinalizacao-relato" value="${s.sinalizacao_relato_manutencao||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-800 pt-2">
+          ${renderUploadFotosSinistro('danos_jr_manutencao', 'Fotos dos Danos — Veículo JR', s.fotos_danos_jr_manutencao, s.fotos_danos_jr_motorista)}
+          ${renderUploadFotosSinistro('danos_terceiro_manutencao', 'Fotos dos Danos — Veículo Terceiro', s.fotos_danos_terceiro_manutencao, s.fotos_danos_terceiro_motorista)}
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          ${renderUploadFotosSinistro('orcamentos', 'Orçamentos Anexados (até 3)', s.orcamentos_anexos)}
+          ${renderUploadFotosSinistro('fotos_acidente_bo', 'Fotos do Acidente + B.O.', s.fotos_acidente_bo)}
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 border-t border-slate-800 pt-2">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Há Testemunhas?</label>
+            <select id="man-testemunhas" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="NAO" ${!s.tem_testemunhas?'selected':''}>Não</option>
+              <option value="SIM" ${s.tem_testemunhas?'selected':''}>Sim</option>
+            </select>
+          </div>
+          <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Nome e Contato da Testemunha</label><input type="text" id="man-testemunha-contato" value="${s.testemunha_nome_contato||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+        </div>
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Parecer da Manutenção (responsável e por quê) <span class="text-red-400">*</span></label><textarea id="man-parecer" rows="2" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${s.parecer_manutencao||''}</textarea></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Gerente de Manutenção <span class="text-red-400">*</span></label><input type="text" id="man-gestor" required value="${s.manutencao_gestor_nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data <span class="text-red-400">*</span></label><input type="date" id="man-data" required value="${s.manutencao_data||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+        </div>
+        <div class="flex items-center justify-between pt-2 border-t border-slate-800">
+          <label class="flex items-center gap-2 text-[11px] font-bold text-slate-300"><input type="checkbox" id="man-completa" ${c?'checked':''} class="w-4 h-4"> Marcar etapa como concluída</label>
+          <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow">Salvar Etapa</button>
+        </div>
+      </form>` : ''}
+    </div>`;
+}
+
+function renderEtapaOperacoes(s) {
+  const c = s.etapa_operacoes_completa;
+  const expandida = window._sinistroEtapaExpandida === 'operacoes';
+  return `
+    <div class="bg-slate-900 border ${c?'border-emerald-900/60':'border-amber-900/60'} rounded-2xl overflow-hidden">
+      <button type="button" onclick="toggleEtapaSinistro('operacoes')" class="w-full flex items-center justify-between p-4 text-left hover:bg-slate-800/40 transition">
+        <h3 class="text-xs font-black ${c?'text-emerald-400':'text-amber-400'} uppercase flex items-center gap-2">
+          <span>${c?'✅':'3️⃣'}</span> Etapa 3 — Operações e Logística
+        </h3>
+        <span class="text-slate-500 text-xs">${expandida ? '▲' : '▼'}</span>
+      </button>
+      ${expandida ? `
+      <form onsubmit="handleSalvarEtapaSinistro(event, '${s.id}', 'operacoes')" class="space-y-3 text-xs px-4 pb-4">
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Parecer de Operações e Logística <span class="text-red-400">*</span></label><textarea id="op-parecer" rows="3" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${s.parecer_operacoes||''}</textarea></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Gerente de Operações e Logística <span class="text-red-400">*</span></label><input type="text" id="op-gestor" required value="${s.operacoes_gestor_nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data <span class="text-red-400">*</span></label><input type="date" id="op-data" required value="${s.operacoes_data||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+        </div>
+        <div class="flex items-center justify-between pt-2 border-t border-slate-800">
+          <label class="flex items-center gap-2 text-[11px] font-bold text-slate-300"><input type="checkbox" id="op-completa" ${c?'checked':''} class="w-4 h-4"> Marcar etapa como concluída</label>
+          <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow">Salvar Etapa</button>
+        </div>
+      </form>` : ''}
+    </div>`;
+}
+
+function renderEtapaJuridico(s) {
+  const c = s.etapa_juridico_completa;
+  const expandida = window._sinistroEtapaExpandida === 'juridico';
+  return `
+    <div class="bg-slate-900 border ${s.juridico_necessario ? (c?'border-emerald-900/60':'border-amber-900/60') : 'border-slate-800'} rounded-2xl overflow-hidden">
+      <div class="w-full flex items-center justify-between p-4 flex-wrap gap-2">
+        <button type="button" onclick="toggleEtapaSinistro('juridico')" class="text-left hover:opacity-80 transition flex-1">
+          <h3 class="text-xs font-black ${s.juridico_necessario ? (c?'text-emerald-400':'text-amber-400') : 'text-slate-500'} uppercase flex items-center gap-2">
+            <span>${s.juridico_necessario ? (c?'✅':'4️⃣') : '⚪'}</span> Etapa 4 — Jurídico <span class="font-normal normal-case text-slate-500">(só se necessário)</span>
+          </h3>
+        </button>
+        <label class="flex items-center gap-2 text-[11px] font-bold text-slate-300">
+          <input type="checkbox" id="jur-necessario-toggle" ${s.juridico_necessario?'checked':''} onchange="handleToggleJuridicoNecessario('${s.id}', this.checked)" class="w-4 h-4"> Este sinistro precisa de parecer jurídico
+        </label>
+        <span class="text-slate-500 text-xs">${expandida ? '▲' : '▼'}</span>
+      </div>
+      ${expandida ? (s.juridico_necessario ? `
+      <form onsubmit="handleSalvarEtapaSinistro(event, '${s.id}', 'juridico')" class="space-y-3 text-xs px-4 pb-4">
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Parecer do Jurídico <span class="text-red-400">*</span></label><textarea id="jur-parecer" rows="3" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${s.parecer_juridico||''}</textarea></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Responsável Jurídico <span class="text-red-400">*</span></label><input type="text" id="jur-nome" required value="${s.juridico_nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data <span class="text-red-400">*</span></label><input type="date" id="jur-data" required value="${s.juridico_data||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+        </div>
+        <div class="flex items-center justify-between pt-2 border-t border-slate-800">
+          <label class="flex items-center gap-2 text-[11px] font-bold text-slate-300"><input type="checkbox" id="jur-completa" ${c?'checked':''} class="w-4 h-4"> Marcar etapa como concluída</label>
+          <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow">Salvar Etapa</button>
+        </div>
+      </form>` : '<p class="text-[11px] text-slate-500 italic px-4 pb-4">Marcado como não necessário para este sinistro.</p>') : ''}
+    </div>`;
+}
+function handleToggleJuridicoNecessario(id, checked) {
+  const s = (db.data.sinistros || []).find(x => String(x.id) === String(id));
+  if (!s) return;
+  s.juridico_necessario = checked;
+  db._recalcularStatusSinistro(s);
+  db.save();
+  renderApp();
+}
+
+function renderEtapaDiretoria(s) {
+  const c = s.etapa_diretoria_completa;
+  const expandida = window._sinistroEtapaExpandida === 'diretoria';
+  return `
+    <div class="bg-slate-900 border ${c?'border-emerald-900/60':'border-amber-900/60'} rounded-2xl overflow-hidden">
+      <button type="button" onclick="toggleEtapaSinistro('diretoria')" class="w-full flex items-center justify-between p-4 text-left hover:bg-slate-800/40 transition">
+        <h3 class="text-xs font-black ${c?'text-emerald-400':'text-amber-400'} uppercase flex items-center gap-2">
+          <span>${c?'✅':'5️⃣'}</span> Etapa 5 — Exclusivo da Diretoria
+        </h3>
+        <span class="text-slate-500 text-xs">${expandida ? '▲' : '▼'}</span>
+      </button>
+      ${expandida ? `
+      <form onsubmit="handleSalvarEtapaSinistro(event, '${s.id}', 'diretoria')" class="space-y-3 text-xs px-4 pb-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Responsabilidade do Motorista?</label>
+            <select id="dir-responsabilidade" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="NAO" ${!s.responsabilidade_motorista?'selected':''}>Não</option>
+              <option value="SIM" ${s.responsabilidade_motorista?'selected':''}>Sim</option>
+            </select>
+          </div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Desconto do Motorista?</label>
+            <select id="dir-desconto" onchange="document.getElementById('dir-valor-wrap').classList.toggle('hidden', this.value!=='SIM')" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <option value="NAO" ${!s.desconto_motorista?'selected':''}>Não</option>
+              <option value="SIM" ${s.desconto_motorista?'selected':''}>Sim</option>
+            </select>
+          </div>
+        </div>
+        <div id="dir-valor-wrap" class="grid grid-cols-2 gap-3 ${s.desconto_motorista?'':'hidden'}">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Valor a Descontar (R$)</label><input type="number" step="0.01" id="dir-valor" value="${s.valor_desconto||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Nº de Parcelas</label><input type="number" min="1" id="dir-parcelas" value="${s.numero_parcelas||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Diretoria (Nome) <span class="text-red-400">*</span></label><input type="text" id="dir-nome" required value="${s.diretoria_nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
+          <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data <span class="text-red-400">*</span></label><input type="date" id="dir-data" required value="${s.diretoria_data||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
+        </div>
+        <div class="flex items-center justify-between pt-2 border-t border-slate-800">
+          <label class="flex items-center gap-2 text-[11px] font-bold text-slate-300"><input type="checkbox" id="dir-completa" ${c?'checked':''} class="w-4 h-4"> Marcar etapa como concluída</label>
+          <button type="submit" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-4 py-1.5 rounded-lg text-xs shadow">Salvar Etapa</button>
+        </div>
+      </form>` : ''}
+    </div>`;
+}
+
+function handleSalvarEtapaSinistro(e, id, etapa) {
+  e.preventDefault();
+  const sAtual = (db.data.sinistros || []).find(x => String(x.id) === String(id));
+  let dados = {};
+  if (etapa === 'motorista') {
+    dados = {
+      motorista_cpf: document.getElementById('em-cpf')?.value,
+      motorista_cnh: document.getElementById('em-cnh')?.value,
+      motorista_cnh_validade: document.getElementById('em-cnh-validade')?.value,
+      tipo_veiculo_jr_motorista: document.getElementById('em-tipo-veic')?.value,
+      veiculo_terceiro_condutor_nome: document.getElementById('em-terceiro-nome')?.value,
+      veiculo_terceiro_placa: document.getElementById('em-terceiro-placa')?.value,
+      veiculo_terceiro_renavam: document.getElementById('em-terceiro-renavam')?.value,
+      veiculo_terceiro_marca: document.getElementById('em-terceiro-marca')?.value,
+      relato_motorista: document.getElementById('em-relato')?.value,
+      havia_sinalizacao_motorista: document.getElementById('em-sinalizacao')?.value === 'SIM',
+      sinalizacao_relato_motorista: document.getElementById('em-sinalizacao-relato')?.value,
+      motorista_assinatura_nome: document.getElementById('em-assinatura')?.value,
+      motorista_assinatura_data: document.getElementById('em-assinatura-data')?.value,
+      fotos_danos_jr_motorista: (window._sinistroFotos.danos_jr_motorista && window._sinistroFotos.danos_jr_motorista.length) ? window._sinistroFotos.danos_jr_motorista : undefined,
+      fotos_danos_terceiro_motorista: (window._sinistroFotos.danos_terceiro_motorista && window._sinistroFotos.danos_terceiro_motorista.length) ? window._sinistroFotos.danos_terceiro_motorista : undefined
+    };
+    var completaEl = document.getElementById('em-completa');
+    // Fotos são obrigatórias na Etapa 1 (pedido de 18/08/2026) — conta o
+    // que já existia no registro somado ao que acabou de ser anexado
+    // agora, já que o upload não substitui, ele soma à galeria.
+    const totalFotosJr = (sAtual?.fotos_danos_jr_motorista?.length || 0) + (window._sinistroFotos.danos_jr_motorista?.length || 0);
+    if (totalFotosJr === 0) {
+      alert('⚠️ Anexe ao menos uma foto dos danos do Veículo JR antes de salvar esta etapa.');
+      return;
+    }
+  } else if (etapa === 'manutencao') {
+    dados = {
+      relato_manutencao: document.getElementById('man-relato')?.value,
+      havia_sinalizacao_manutencao: document.getElementById('man-sinalizacao')?.value === 'SIM',
+      sinalizacao_relato_manutencao: document.getElementById('man-sinalizacao-relato')?.value,
+      tem_testemunhas: document.getElementById('man-testemunhas')?.value === 'SIM',
+      testemunha_nome_contato: document.getElementById('man-testemunha-contato')?.value,
+      parecer_manutencao: document.getElementById('man-parecer')?.value,
+      manutencao_gestor_nome: document.getElementById('man-gestor')?.value,
+      manutencao_data: document.getElementById('man-data')?.value,
+      fotos_danos_jr_manutencao: (window._sinistroFotos.danos_jr_manutencao && window._sinistroFotos.danos_jr_manutencao.length) ? window._sinistroFotos.danos_jr_manutencao : undefined,
+      fotos_danos_terceiro_manutencao: (window._sinistroFotos.danos_terceiro_manutencao && window._sinistroFotos.danos_terceiro_manutencao.length) ? window._sinistroFotos.danos_terceiro_manutencao : undefined,
+      orcamentos_anexos: (window._sinistroFotos.orcamentos && window._sinistroFotos.orcamentos.length) ? window._sinistroFotos.orcamentos : undefined,
+      fotos_acidente_bo: (window._sinistroFotos.fotos_acidente_bo && window._sinistroFotos.fotos_acidente_bo.length) ? window._sinistroFotos.fotos_acidente_bo : undefined
+    };
+    var completaEl = document.getElementById('man-completa');
+  } else if (etapa === 'operacoes') {
+    dados = {
+      parecer_operacoes: document.getElementById('op-parecer')?.value,
+      operacoes_gestor_nome: document.getElementById('op-gestor')?.value,
+      operacoes_data: document.getElementById('op-data')?.value
+    };
+    var completaEl = document.getElementById('op-completa');
+  } else if (etapa === 'juridico') {
+    dados = {
+      parecer_juridico: document.getElementById('jur-parecer')?.value,
+      juridico_nome: document.getElementById('jur-nome')?.value,
+      juridico_data: document.getElementById('jur-data')?.value
+    };
+    var completaEl = document.getElementById('jur-completa');
+  } else if (etapa === 'diretoria') {
+    dados = {
+      responsabilidade_motorista: document.getElementById('dir-responsabilidade')?.value === 'SIM',
+      desconto_motorista: document.getElementById('dir-desconto')?.value === 'SIM',
+      valor_desconto: parseFloat(document.getElementById('dir-valor')?.value) || 0,
+      numero_parcelas: parseInt(document.getElementById('dir-parcelas')?.value, 10) || 1,
+      diretoria_nome: document.getElementById('dir-nome')?.value,
+      diretoria_data: document.getElementById('dir-data')?.value
+    };
+    var completaEl = document.getElementById('dir-completa');
+  }
+  Object.keys(dados).forEach(k => { if (dados[k] === undefined) delete dados[k]; });
+
+  const marcarCompleta = completaEl ? completaEl.checked : true;
+  const res = db.atualizarEtapaSinistro(id, etapa, dados, marcarCompleta);
+  if (!res.success) { showToast(res.message, 'error'); return; }
+  window._sinistroFotos = {};
+
+  // Acordeão: ao concluir uma etapa, minimiza ela e abre a próxima do
+  // fluxo automaticamente — pedido de 18/08/2026. Se só salvou sem marcar
+  // como concluída, a etapa continua expandida para seguir editando.
+  if (marcarCompleta) {
+    const ordem = ordemEtapasSinistro(res.sinistro);
+    const idxAtual = ordem.indexOf(etapa);
+    const proxima = ordem[idxAtual + 1];
+    window._sinistroEtapaExpandida = proxima || null;
+    showToast(proxima ? '✅ Etapa concluída! Avançando para a próxima.' : '✅ Última etapa concluída — sinistro finalizado!');
+  } else {
+    showToast('✅ Etapa salva (rascunho, ainda não concluída).');
+  }
+  renderApp();
+}
+
+// --- Bloco no Dossiê Motorista ---
+function renderBlocoSinistrosMotorista(nomeMotorista) {
+  const sinistros = db.getSinistros({ motoristaNome: nomeMotorista });
+  return `
+    <div class="bg-slate-900 border border-red-900/60 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-xs font-black text-red-400 uppercase flex items-center gap-2"><span>🚨</span> Sinistros (${sinistros.length})</h3>
+        <button onclick="abrirModalNovoSinistro({ motorista_nome: '${nomeMotorista.replace(/'/g,"\\'")}' })" class="text-[10px] bg-red-950 hover:bg-red-900 border border-red-700 text-red-300 px-2.5 py-1 rounded-full font-bold transition">+ Registrar Sinistro</button>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Nº</th><th class="p-2">Data</th><th class="p-2">Placa/Carga</th><th class="p-2">Status</th><th class="p-2 text-right">.</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${sinistros.length === 0 ? '<tr><td colspan="5" class="p-3 text-center text-slate-500">Nenhum sinistro registrado.</td></tr>' :
+              sinistros.map(s => `<tr><td class="p-2 font-mono text-red-400 font-bold">${s.numero_sinistro}</td><td class="p-2">${formatarData(s.data_acidente)}</td><td class="p-2">${s.placa||'—'} ${s.carga?`/ ${s.carga}`:''}</td><td class="p-2">${formatarStatusSinistroBadge(s.status_geral)}</td><td class="p-2 text-right"><button onclick="window._sinistroSelecionadoId='${s.id}'; switchTab('sinistros')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function renderLixeiraItemsContent(items) {
   return `
     <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl space-y-4 p-5">
@@ -1130,6 +2176,7 @@ function renderNavMenu() {
     { tab: 'cadastros_dados', icon: '⚙️', label: 'Cadastros Mestres' },
     { tab: 'lixeira', icon: '🛡️', label: 'Governança & Lixeira' },
     { tab: 'gestao_usuarios', icon: '🔐', label: 'Logins e Senhas' },
+    { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro' },
     { tab: 'power_bi', icon: '🔌', label: 'Conector Power BI' }
   ];
 
@@ -1229,6 +2276,15 @@ function renderApp() {
         break;
       case 'gestao_usuarios':
         html = renderGestaoUsuariosView();
+        break;
+      case 'acompanhamento_funcionario':
+        html = renderAcompanhamentoFuncionarioView();
+        break;
+      case 'dossie_motorista':
+        html = renderDossieMotoristaView();
+        break;
+      case 'sinistros':
+        html = renderSinistrosView();
         break;
       case 'resumo_diario_cd':
         html = renderResumoDiarioCdView();
@@ -2534,6 +3590,10 @@ function renderDashboardView() {
   // parado o pior caso", que é o que mais importa para priorização.
   const maisAntigaPendCd = getMaisAntigaPendente(devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO'), 'criado_em');
   const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaiz, 'criado_em');
+  const maisAntigaVeicParadoRota = getMaisAntigaPendente(rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO'), 'criado_em');
+  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, 'data_parada');
+  const sinistrosPendentesDash = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
+  const maisAntigoSinistroDash = getMaisAntigaPendente(sinistrosPendentesDash, 'data_acidente');
   const totDescontosGestor = devs.filter(d => d.desconto_produtividade_gestor).length;
   const totalCortesValor = cortesList.reduce((a, c) => a + (parseFloat(c.valor)||0), 0);
   const totalCustoSocorro = rotas.reduce((a, r) => a + (parseFloat(r.custo_socorro)||0), 0);
@@ -2544,6 +3604,7 @@ function renderDashboardView() {
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
   const reentregasPeriodo = todasReentregas.filter(r => dataNoPeriodo(r.data || r.criado_em, fDe, fAte));
   const reentregasPendentes = reentregasPeriodo.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
+  const maisAntigaReentregaDash = getMaisAntigaPendente(reentregasPendentes, 'criado_em');
   const totalQtdReentregas = reentregasPeriodo.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
   const indiceReentregaViagemPct = viagensIniciadas > 0 ? ((reentregasPeriodo.length / viagensIniciadas) * 100).toFixed(1) : '0.0';
 
@@ -2560,6 +3621,8 @@ function renderDashboardView() {
   // ===== SLA CRÍTICO DE MANUTENÇÃO (4H / 8H) =====
   const retidosCriticos8h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO_8H');
   const retidosAlerta4h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'ALERTA_4H');
+  const maisAntigaCritico8h = getMaisAntigaPendente(retidosCriticos8h, 'data_parada');
+  const maisAntigaAlerta4h = getMaisAntigaPendente(retidosAlerta4h, 'data_parada');
 
   // ===== CÁLCULOS DOS NOVOS KPIS =====
   // 1. Lead Time de Abertura (Formato hh:mm:ss — Tempo médio entre criação da ocorrência e parecer/ação do gestor)
@@ -2754,7 +3817,7 @@ function renderDashboardView() {
     return item;
   }).sort((a,b) => (b.gravidadeMatriz.ordem - a.gravidadeMatriz.ordem) || (b.qtd - a.qtd) || (b.valor - a.valor));
 
-  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParados > 0 || veicRetidos > 0 || pendCd > 0 || abertasCausaRaiz.length > 0);
+  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParados > 0 || veicRetidos > 0 || pendCd > 0 || abertasCausaRaiz.length > 0 || sinistrosPendentesDash.length > 0);
 
   return `
     <div class="space-y-6">
@@ -2819,6 +3882,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-purple-300 truncate">${reentregasPendentes.length} Reentrega(s) Pendente(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Atrasos & devoluções de rota</div>
+                    ${maisAntigaReentregaDash.item ? `<div class="text-[10px] font-bold text-purple-300 truncate">⏳ Mais antiga: ${maisAntigaReentregaDash.texto}</div>` : ''}
                   </div>
                 </div>
                 <button onclick="switchTab('controle_viagens'); switchViagensSubTab('reentregas');" class="bg-purple-900/50 hover:bg-purple-800 border border-purple-600 text-purple-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver</button>
@@ -2832,6 +3896,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-red-300 truncate">${retidosCriticos8h.length} Veículo(s) SLA &gt;8h</div>
                     <div class="text-[10px] text-red-400 font-bold truncate">Imobilização crítica estourada</div>
+                    ${maisAntigaCritico8h.item ? `<div class="text-[10px] font-bold text-red-300 truncate">⏳ Parado há: ${maisAntigaCritico8h.texto}</div>` : ''}
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-red-900/60 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
@@ -2845,6 +3910,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-amber-300 truncate">${retidosAlerta4h.length} Veículo(s) SLA &gt;4h</div>
                     <div class="text-[10px] text-slate-400 truncate">Atenção tempo na oficina</div>
+                    ${maisAntigaAlerta4h.item ? `<div class="text-[10px] font-bold text-amber-300 truncate">⏳ Parado há: ${maisAntigaAlerta4h.texto}</div>` : ''}
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
@@ -2858,6 +3924,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-red-300 truncate">${veicParados} Veículo(s) Parado(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Socorro / Chamado em rota</div>
+                    ${maisAntigaVeicParadoRota.item ? `<div class="text-[10px] font-bold text-red-300 truncate">⏳ Parado há: ${maisAntigaVeicParadoRota.texto}</div>` : ''}
                   </div>
                 </div>
                 <button onclick="switchTab('rota_ocorrencias')" class="bg-red-900/40 hover:bg-red-900/80 border border-red-700 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver Rota</button>
@@ -2871,6 +3938,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-amber-300 truncate">${veicRetidos} Veículo(s) Retido(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Oficina / Manutenção</div>
+                    ${maisAntigaVeicRetido.item ? `<div class="text-[10px] font-bold text-amber-300 truncate">⏳ Retido há: ${maisAntigaVeicRetido.texto}</div>` : ''}
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota')" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver Frota</button>
@@ -2884,6 +3952,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-amber-300 truncate">${pendCd} Retorno(s) Pendente(s) CD</div>
                     <div class="text-[10px] text-slate-400 truncate">Aguardando entrada física</div>
+                    ${maisAntigaPendCd.item ? `<div class="text-[10px] font-bold text-amber-300 truncate">⏳ Mais antiga: ${maisAntigaPendCd.texto}</div>` : ''}
                   </div>
                 </div>
                 <button onclick="switchTab('cd_recepcao')" class="bg-amber-900/40 hover:bg-amber-900/80 border border-amber-700 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver CD</button>
@@ -2897,9 +3966,24 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-orange-300 truncate">${abertasCausaRaiz.length} Análise(s) Pendente(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Causa raiz não apurada</div>
+                    ${maisAntigaAnalise.item ? `<div class="text-[10px] font-bold text-orange-300 truncate">⏳ Mais antiga: ${maisAntigaAnalise.texto}</div>` : ''}
                   </div>
                 </div>
                 <button onclick="switchTab('sac_investigacao')" class="bg-orange-900/40 hover:bg-orange-900/80 border border-orange-700 text-orange-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Analisar</button>
+              </div>` : ''}
+
+            <!-- ALERTA SINISTROS PENDENTES -->
+            ${sinistrosPendentesDash.length > 0 ? `
+              <div class="bg-slate-950 border border-red-800 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
+                <div class="flex items-center gap-3 overflow-hidden">
+                  <div class="w-9 h-9 rounded-lg bg-red-950 border border-red-700 text-red-400 flex items-center justify-center shrink-0 text-base font-bold">🚨</div>
+                  <div class="truncate">
+                    <div class="text-xs font-black text-red-300 truncate">${sinistrosPendentesDash.length} Sinistro(s) Pendente(s)</div>
+                    <div class="text-[10px] text-slate-400 truncate">Investigação em andamento</div>
+                    ${maisAntigoSinistroDash.item ? `<div class="text-[10px] font-bold text-red-300 truncate">⏳ Mais antigo: ${maisAntigoSinistroDash.texto}</div>` : ''}
+                  </div>
+                </div>
+                <button onclick="switchTab('sinistros')" class="bg-red-900/50 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver</button>
               </div>` : ''}
           </div>
         </div>` : ''}
@@ -3864,6 +4948,58 @@ function handleFotoUpload(inputEl, context, devId) {
   });
 }
 
+// Upload de fotos genérico e multi-grupo para o formulário de Sinistro —
+// substitui o "croqui" desenhado do papel por fotos reais (item pedido em
+// 18/08/2026). Diferente do handleFotoUpload (que só suporta 2 contextos
+// fixos), aqui cada `grupo` mantém sua própria galeria em memória, porque
+// o formulário tem 6 grupos distintos (danos JR e terceiro em duas etapas,
+// orçamentos, fotos do acidente + B.O.).
+window._sinistroFotos = window._sinistroFotos || {};
+function handleSinistroFotoUpload(inputEl, grupo) {
+  const files = Array.from(inputEl.files || []);
+  if (!files.length) return;
+  if (!window._sinistroFotos[grupo]) window._sinistroFotos[grupo] = [];
+  const container = document.getElementById('sinistro-foto-preview-' + grupo);
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      window._sinistroFotos[grupo].push(e.target.result);
+      if (container) {
+        const wrap = document.createElement('div');
+        wrap.className = 'relative';
+        wrap.innerHTML = `<img src="${e.target.result}" class="w-16 h-16 object-cover rounded-lg border border-slate-700 shadow">`;
+        container.appendChild(wrap);
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+}
+function limparSinistroFotosGrupo(grupo) {
+  if (window._sinistroFotos) window._sinistroFotos[grupo] = [];
+  const container = document.getElementById('sinistro-foto-preview-' + grupo);
+  if (container) container.innerHTML = '';
+}
+function renderUploadFotosSinistro(grupo, label, fotosExistentes, fotosHerdadas) {
+  const existentes = fotosExistentes || [];
+  const herdadas = fotosHerdadas || [];
+  return `
+    <div>
+      <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">${label}</label>
+      <input type="file" accept="image/*" multiple onchange="handleSinistroFotoUpload(this, '${grupo}')"
+        class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-emerald-700 file:text-white hover:file:bg-emerald-600 cursor-pointer">
+      ${herdadas.length > 0 ? `
+      <div class="mt-1.5">
+        <div class="text-[9px] text-slate-500 font-bold uppercase mb-1">Da Etapa 1 (já enviadas)</div>
+        <div class="flex gap-2 flex-wrap">
+          ${herdadas.map(f => `<img src="${f}" class="w-16 h-16 object-cover rounded-lg border border-slate-600 shadow opacity-90">`).join('')}
+        </div>
+      </div>` : ''}
+      <div id="sinistro-foto-preview-${grupo}" class="flex gap-2 flex-wrap mt-1.5">
+        ${existentes.map(f => `<img src="${f}" class="w-16 h-16 object-cover rounded-lg border border-slate-700 shadow">`).join('')}
+      </div>
+    </div>`;
+}
+
 function handleVideoUpload(inputEl, context, devId) {
   context = context || 'sac';
   const files = Array.from(inputEl.files || []);
@@ -4046,6 +5182,25 @@ function renderNumeroOsLink(numeroOs, linkOs) {
     return `<a href="${linkOs.replace(/"/g,'&quot;')}" onclick="event.preventDefault(); window.open('${linkEscapado}', '_blank', 'noopener'); return false;" class="underline decoration-dotted hover:text-sky-200 transition cursor-pointer" title="Abrir OS no sistema externo">${texto}</a>`;
   }
   return texto;
+}
+
+// Lê a lista de opções de "Requisito / Falha" (Ocorrências de Colaborador
+// no CD) a partir da fonte única em window.JR_CONFIG.requisitosFalhaCD —
+// mesmo padrão de fallback já usado para a senha de admin, para o app não
+// quebrar caso config.js não tenha carregado por algum motivo.
+function getRequisitosFalhaCD() {
+  const lista = (typeof window !== 'undefined' && window.JR_CONFIG && Array.isArray(window.JR_CONFIG.requisitosFalhaCD))
+    ? window.JR_CONFIG.requisitosFalhaCD
+    : ['ERRO DE RECEBIMENTO', 'ERRO DE SEPARAÇÃO', 'ERRO DE CONFERÊNCIA', 'ERRO DE ABASTECIMENTO',
+       'FALTA INJUSTIFICADA', 'SAÍDA ANTECIPADA', 'ATRASO NA CHEGADA', 'DESVIO DE CONDUTA',
+       'INSUBORDINAÇÃO', 'AVARIA DE PRODUTO', 'DANO AO PATRIMÔNIO', 'OUTRO'];
+  return lista;
+}
+
+// Gera as <option> do campo "Requisito / Falha" a partir da fonte única
+// acima, para os dois selects que usam essa lista (item 19/08/2026).
+function renderOptionsRequisitoFalhaCD() {
+  return getRequisitosFalhaCD().map(r => `<option value="${r}">${r}</option>`).join('');
 }
 
 function renderDatalistCargas(datalistId) {
@@ -4393,7 +5548,7 @@ function addItemRow() {
         class="item-prod-busca w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs focus:border-emerald-500 focus:outline-none">
       <input type="hidden" class="item-prod-id">
     </td>
-    <td class="p-1.5"><input type="number" value="1" min="1" onchange="calcTotalValores()" class="item-qtd w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></td>
+    <td class="p-1.5"><input type="number" value="1" min="0.01" step="0.01" onchange="calcTotalValores()" class="item-qtd w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></td>
     <td class="p-1.5"><input type="number" step="0.01" value="0.00" onchange="calcTotalValores()" class="item-val w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></td>
     <td class="p-1.5">
       <select class="item-motivo w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
@@ -5475,28 +6630,12 @@ function handleAcaoGestorSubmit(e, devId) {
   renderApp();
 }
 
-// ===== MÓDULO: RECEPÇÃO NO CD =====
-function renderCdRecepcaoView() {
+// Monta e filtra a listagem de itens de destinação (devolução + avulsos),
+// reaproveitada tanto pela tela quanto pelos botões de exportação (PDF/CSV)
+// — item 1 pendente: "Na destinação de itens ao retornar físico gerar
+// relatórios PDF e CSV".
+function getItensDestinadosFiltrados() {
   const devs = db.getDevolucoes();
-  const pendentes = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
-
-  const activeCdSubTab = window._activeCdSubTab || 'recepcao';
-
-  // Filtros do painel de acompanhamento
-  const fDataDe  = window._cdFiltroDataDe  || '';
-  const fDataAte = window._cdFiltroDataAte || '';
-  const fPlaca   = window._cdFiltroPlaca   || '';
-  const fRota    = window._cdFiltroRota    || '';
-  const fCarga   = window._cdFiltroCarga   || '';
-
-  let historico = devs.filter(d => d.status_fechamento !== 'PENDENTE_FISICO');
-  if (fDataDe)  historico = historico.filter(d => (d.criado_em||'').split('T')[0] >= fDataDe);
-  if (fDataAte) historico = historico.filter(d => (d.criado_em||'').split('T')[0] <= fDataAte);
-  if (fPlaca)   historico = historico.filter(d => (d.veiculo_placa||'').toLowerCase().includes(fPlaca.toLowerCase()));
-  if (fRota)    historico = historico.filter(d => (d.carga_rota||'').toLowerCase().includes(fRota.toLowerCase()));
-  if (fCarga)   historico = historico.filter(d => String(d.carga_numero||'').includes(fCarga));
-
-  // Coleta de todos os itens com destinação no CD para a Subaba 2
   const todosItensDestinados = [];
   devs.forEach(d => {
     if (Array.isArray(d.itens) && d.itens.length > 0) {
@@ -5520,9 +6659,22 @@ function renderCdRecepcaoView() {
     }
   });
 
-  // Filtro de busca da aba "Destinação de Itens" (item 1.5 da auditoria de
-  // 17/08/2026) — antes não havia nenhuma forma de localizar um produto
-  // específico nessa listagem.
+  db.getItensAvulsosDestinacao().forEach(item => {
+    todosItensDestinados.push({
+      ...item,
+      devId: '__AVULSO__',
+      protocolo: 'AVULSO',
+      cliente_nome: item.motivo_avulso || 'Item avulso (sem devolução)',
+      motorista_nome: '—',
+      placa: '—',
+      data_entrada: item.criado_em,
+      destino: item.destino_item || 'ESTOQUE_REUTILIZACAO',
+      validade: item.data_validade || '—',
+      observacao: item.observacao || '—',
+      status_negociacao: item.status_negociacao || 'EM_NEGOCIACAO'
+    });
+  });
+
   const fCdDestinoProduto = window._cdDestinoFiltroProduto || '';
   const fCdDestinoTipo    = window._cdDestinoFiltroTipo    || '';
   const itensDestinadosFiltrados = todosItensDestinados.filter(item => {
@@ -5536,17 +6688,60 @@ function renderCdRecepcaoView() {
     return true;
   });
 
+  return { todosItensDestinados, itensDestinadosFiltrados };
+}
+
+// ===== MÓDULO: RECEPÇÃO NO CD =====
+function renderCdRecepcaoView() {
+  const devs = db.getDevolucoes();
+  const pendentes = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
+
+  const activeCdSubTab = window._activeCdSubTab || 'recepcao';
+
+  // Filtros do painel de acompanhamento
+  const fDataDe  = window._cdFiltroDataDe  || '';
+  const fDataAte = window._cdFiltroDataAte || '';
+  const fPlaca   = window._cdFiltroPlaca   || '';
+  const fRota    = window._cdFiltroRota    || '';
+  const fCarga   = window._cdFiltroCarga   || '';
+
+  let historico = devs.filter(d => d.status_fechamento !== 'PENDENTE_FISICO');
+  if (fDataDe)  historico = historico.filter(d => (d.criado_em||'').split('T')[0] >= fDataDe);
+  if (fDataAte) historico = historico.filter(d => (d.criado_em||'').split('T')[0] <= fDataAte);
+  if (fPlaca)   historico = historico.filter(d => (d.veiculo_placa||'').toLowerCase().includes(fPlaca.toLowerCase()));
+  if (fRota)    historico = historico.filter(d => (d.carga_rota||'').toLowerCase().includes(fRota.toLowerCase()));
+  if (fCarga)   historico = historico.filter(d => String(d.carga_numero||'').includes(fCarga));
+
+  const { todosItensDestinados, itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+  const fCdDestinoProduto = window._cdDestinoFiltroProduto || '';
+  const fCdDestinoTipo    = window._cdDestinoFiltroTipo    || '';
+
   const rowCols = `<th class="p-3">Nº Dev / Placa / Rota / Motorista</th>
                    <th class="p-3 hidden sm:table-cell">NF & Cliente</th>
                    <th class="p-3 hidden md:table-cell">Itens</th>`;
 
-  const buildRow = (d, showBtn) => `
+  const buildRow = (d, showBtn) => {
+    // Vincula ao status real da viagem (Largada) para o Encarregado do CD
+    // saber se o veículo já finalizou a rota ou ainda está em trânsito —
+    // pedido direto: "preciso que fique a informação da viagem 'finalizada'
+    // no alerta de retorno pendente".
+    const cargaDev = String(d.carga_numero || '').trim().toUpperCase();
+    const viagemAssociada = cargaDev
+      ? (db.getControleViagens() || []).find(v => String(v.carga || v.carga_numero || '').trim().toUpperCase() === cargaDev)
+      : null;
+    const statusViagemBadge = viagemAssociada
+      ? (viagemAssociada.status_viagem === 'FINALIZADO'
+          ? '<span class="inline-block mt-0.5 bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold">✅ Viagem Finalizada</span>'
+          : `<span class="inline-block mt-0.5 bg-blue-950 text-blue-300 border border-blue-700 px-1.5 py-0.5 rounded text-[9px] font-bold">🚚 ${viagemAssociada.status_viagem || 'Em Rota'}</span>`)
+      : '';
+    return `
     <tr class="hover:bg-slate-800/40">
       <td class="p-3">
         <div class="font-black text-amber-400">${d.numero_devolucao||d.numero_protocolo}</div>
         <div class="text-[11px] text-white font-bold">🚛 ${d.veiculo_placa} ${d.veiculo_modelo?`(${d.veiculo_modelo})`:''}</div>
         <div class="text-[10px] text-slate-400">📍 ${d.carga_rota} | ${d.carga_numero}</div>
         <div class="text-[10px] text-slate-400">👤 ${d.motorista_nome}</div>
+        ${statusViagemBadge}
       </td>
       <td class="p-3 hidden sm:table-cell">
         <div class="font-bold text-white text-[11px]">${d.cliente_nome}</div>
@@ -5577,6 +6772,7 @@ function renderCdRecepcaoView() {
              </div>`}
       </td>
     </tr>`;
+  };
 
   return `
     <div class="space-y-6">
@@ -5676,7 +6872,18 @@ function renderCdRecepcaoView() {
               </h3>
               <p class="text-xs text-slate-400">Listagem completa dos itens recebidos com data de validade, observações e marcações de negociação</p>
             </div>
-            <span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-3 py-1 rounded-full text-xs font-black">${itensDestinadosFiltrados.length} de ${todosItensDestinados.length} item(ns)</span>
+            <div class="flex items-center gap-2 flex-wrap">
+              <button onclick="abrirModalItemAvulso()" class="bg-violet-700 hover:bg-violet-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Adicionar item sem devolução associada (outras formas de avaria)">
+                <span>➕</span> Item Avulso
+              </button>
+              <button onclick="gerarRelatorioDestinacaoPdf()" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Imprimir relatório (respeitando os filtros aplicados)">
+                <span>🖨️</span> Imprimir
+              </button>
+              <button onclick="exportarDestinacaoCsv()" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Exportar CSV (respeitando os filtros aplicados)">
+                <span>⬇️</span> CSV
+              </button>
+              <span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-3 py-1 rounded-full text-xs font-black">${itensDestinadosFiltrados.length} de ${todosItensDestinados.length} item(ns)</span>
+            </div>
           </div>
 
           <div class="flex flex-col sm:flex-row gap-2 pb-1">
@@ -5690,6 +6897,7 @@ function renderCdRecepcaoView() {
               <option value="DEVOLUCAO_FORNECEDOR" ${fCdDestinoTipo==='DEVOLUCAO_FORNECEDOR'?'selected':''}>🔵 Devolução ao Fornecedor</option>
               <option value="AVARIA_DESCARTE" ${fCdDestinoTipo==='AVARIA_DESCARTE'?'selected':''}>🔴 Avaria / Descarte</option>
               <option value="PRODUTOS_NEGOCIACAO" ${fCdDestinoTipo==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟡 Produtos para Negociação</option>
+              <option value="VENDIDO" ${fCdDestinoTipo==='VENDIDO'?'selected':''}>💰 Vendido</option>
             </select>
           </div>
 
@@ -5740,7 +6948,7 @@ function renderCdRecepcaoView() {
                           ${temDivisoes ? '<span class="text-slate-500 text-[10px]">Ver detalhes na divisão</span>' : (isNegociacao ? `
                             <div class="space-y-1">
                               <div>${negociacaoBadges[item.status_negociacao] || negociacaoBadges['EM_NEGOCIACAO']}</div>
-                              <select onchange="atualizarStatusNegociacaoItem('${item.id}', this.value)" class="mt-1 bg-slate-800 border border-amber-600 text-amber-300 text-[10px] font-bold rounded px-1.5 py-1 w-full">
+                              <select onchange="atualizarStatusNegociacaoItem('${item.id}', '${item.devId}', this.value)" class="mt-1 bg-slate-800 border border-amber-600 text-amber-300 text-[10px] font-bold rounded px-1.5 py-1 w-full">
                                 <option value="EM_NEGOCIACAO" ${item.status_negociacao==='EM_NEGOCIACAO'?'selected':''}>⏳ Em Negociação</option>
                                 <option value="ENVIADO_CONSUMO" ${item.status_negociacao==='ENVIADO_CONSUMO'?'selected':''}>🍴 Consumo Interno</option>
                                 <option value="VENDA_NEGOCIADA" ${item.status_negociacao==='VENDA_NEGOCIADA'?'selected':''}>💰 Vendido</option>
@@ -5772,28 +6980,62 @@ function formatarDestinoLabel(val) {
     case 'DEVOLUCAO_FORNECEDOR': return '🔵 Devolução ao Fornecedor';
     case 'RETRABALHO_REEMBALAGEM': return '🟠 Retrabalho / Reembalagem';
     case 'PRODUTOS_NEGOCIACAO': return '🟡 Produtos para Negociação';
+    case 'VENDIDO': return '💰 Vendido';
     case 'RENEGOCIADO_ROTA': return '🚚 Renegociado em Rota (Não retorna ao CD)';
     default: return val || '—';
   }
 }
 
-function atualizarStatusNegociacaoItem(itemId, novoStatus) {
-  if (db.updateItemNegociacao(itemId, novoStatus)) {
-    alert('✅ Status de negociação do item atualizado!');
+function atualizarStatusNegociacaoItem(itemId, devId, novoStatus) {
+  const ref = resolverItemDestino(itemId, devId);
+  if (!ref) { alert('Item não encontrado.'); return; }
+
+  ref.item.status_negociacao = novoStatus;
+  ref.item.data_negociacao = new Date().toISOString();
+
+  // Mesma "graduação" de destino aplicada na tela de Editar: Vendido gera
+  // seu próprio destino "Vendido"; Descartado entra na lista de Avaria/
+  // Descarte — para o select rápido da tabela se comportar igual ao modal.
+  if (novoStatus === 'VENDA_NEGOCIADA') {
+    ref.item.destino_item = 'VENDIDO';
+  } else if (novoStatus === 'DESCARTADO') {
+    ref.item.destino_item = 'AVARIA_DESCARTE';
+  }
+
+  const salvou = db.save();
+  if (salvou) {
+    showToast('✅ Status de negociação do item atualizado!');
     renderApp();
+  } else {
+    showToast('Não foi possível salvar a alteração neste dispositivo.', 'error');
   }
 }
 
-function openEditarItemDestinoModal(itemId, devId) {
+// Resolve um item de destinação, seja ele de uma Devolução SAC ou um item
+// avulso (devId === '__AVULSO__') — usado por editar/excluir/dividir para
+// funcionar de forma idêntica nos dois casos (item 5 pendente: itens
+// avulsos, para cobrir outras formas de avaria que podem ocorrer).
+function resolverItemDestino(itemId, devId) {
+  if (String(devId) === '__AVULSO__') {
+    const item = (db.data.itens_avulsos_destinacao || []).find(i => String(i.id) === String(itemId) && !i.is_deleted);
+    if (!item) return null;
+    return { item, isAvulso: true, dev: null };
+  }
   const devs = db.getDevolucoes();
   const dev = devs.find(d => String(d.id) === String(devId));
-  if (!dev || !Array.isArray(dev.itens)) {
+  if (!dev || !Array.isArray(dev.itens)) return null;
+  const item = dev.itens.find(i => String(i.id) === String(itemId));
+  if (!item) return null;
+  return { item, isAvulso: false, dev };
+}
+
+function openEditarItemDestinoModal(itemId, devId) {
+  const ref = resolverItemDestino(itemId, devId);
+  if (!ref) {
     alert('Ocorrência ou itens não encontrados.');
     return;
   }
-
-  const item = dev.itens.find(i => String(i.id) === String(itemId)) || dev.itens[0];
-  if (!item) return;
+  const item = ref.item;
 
   const modal = document.getElementById('modal-container');
   if (!modal) return;
@@ -5817,7 +7059,7 @@ function openEditarItemDestinoModal(itemId, devId) {
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="block font-bold text-slate-300 mb-1">Quantidade *</label>
-              <input type="number" id="edit-item-qtd" required min="1" value="${item.quantidade || 1}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+              <input type="number" id="edit-item-qtd" required min="0.01" step="0.01" value="${item.quantidade || 1}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
             </div>
             <div>
               <label class="block font-bold text-slate-300 mb-1">Data Validade</label>
@@ -5863,25 +7105,42 @@ function openEditarItemDestinoModal(itemId, devId) {
 
 function handleSalvarEdicaoItemDestino(e, itemId, devId) {
   e.preventDefault();
-  const devs = db.getDevolucoes();
-  const dev = devs.find(d => String(d.id) === String(devId));
-  if (!dev || !Array.isArray(dev.itens)) return;
+  const ref = resolverItemDestino(itemId, devId);
+  if (!ref) return;
+  const item = ref.item;
+  item.quantidade = parseFloat(document.getElementById('edit-item-qtd')?.value || '1') || 1;
+  item.data_validade = document.getElementById('edit-item-validade')?.value || '';
+  item.observacao = document.getElementById('edit-item-obs')?.value || '';
 
-  const item = dev.itens.find(i => String(i.id) === String(itemId)) || dev.itens[0];
-  if (item) {
-    item.quantidade = parseInt(document.getElementById('edit-item-qtd')?.value || '1', 10);
-    item.data_validade = document.getElementById('edit-item-validade')?.value || '';
-    item.destino_item = document.getElementById('edit-item-destino')?.value || 'ESTOQUE_REUTILIZACAO';
-    item.status_negociacao = document.getElementById('edit-item-negociacao')?.value || 'EM_NEGOCIACAO';
-    item.observacao = document.getElementById('edit-item-obs')?.value || '';
-    db.save();
-    closeModal();
-    renderApp();
+  let destinoSelecionado = document.getElementById('edit-item-destino')?.value || 'ESTOQUE_REUTILIZACAO';
+  const statusNegociacao = document.getElementById('edit-item-negociacao')?.value || 'EM_NEGOCIACAO';
+
+  // "Graduação" do destino: ao marcar um item de negociação como Vendido ou
+  // Descartado, o item deixa de figurar como "Produtos para Negociação" e
+  // passa a ter seu destino final correto — Vendido gera seu próprio
+  // destino "Vendido"; Descartado entra na lista de Avaria/Descarte.
+  if (destinoSelecionado === 'PRODUTOS_NEGOCIACAO') {
+    if (statusNegociacao === 'VENDA_NEGOCIADA') {
+      destinoSelecionado = 'VENDIDO';
+    } else if (statusNegociacao === 'DESCARTADO') {
+      destinoSelecionado = 'AVARIA_DESCARTE';
+    }
   }
+
+  item.destino_item = destinoSelecionado;
+  item.status_negociacao = statusNegociacao;
+  db.save();
+  closeModal();
+  renderApp();
 }
 
 function excluirItemDestino(itemId, devId) {
   if (!confirm('Deseja realmente excluir este item do retorno físico?')) return;
+  if (String(devId) === '__AVULSO__') {
+    db.excluirItemAvulsoDestinacao(itemId);
+    renderApp();
+    return;
+  }
   const devs = db.getDevolucoes();
   const dev = devs.find(d => String(d.id) === String(devId));
   if (dev && Array.isArray(dev.itens)) {
@@ -5897,15 +7156,13 @@ function excluirItemDestino(itemId, devId) {
 // o comportamento existente para itens que não usam divisão.
 
 function abrirModalDivisaoDestino(itemId, devId) {
-  const devs = db.getDevolucoes();
-  const dev = devs.find(d => String(d.id) === String(devId));
-  if (!dev || !Array.isArray(dev.itens)) { alert('Ocorrência ou itens não encontrados.'); return; }
-  const item = dev.itens.find(i => String(i.id) === String(itemId));
-  if (!item) { alert('Item não encontrado.'); return; }
+  const ref = resolverItemDestino(itemId, devId);
+  if (!ref) { alert('Item não encontrado.'); return; }
+  const item = ref.item;
 
   const divisoes = Array.isArray(item.divisoes_destino) ? item.divisoes_destino : [];
-  const qtdTotal = parseInt(item.quantidade, 10) || 0;
-  const qtdJaDividida = divisoes.reduce((s, d) => s + (parseInt(d.quantidade, 10) || 0), 0);
+  const qtdTotal = parseFloat(item.quantidade) || 0;
+  const qtdJaDividida = divisoes.reduce((s, d) => s + (parseFloat(d.quantidade) || 0), 0);
   const qtdRestante = qtdTotal - qtdJaDividida;
 
   const modal = document.getElementById('modal-container');
@@ -5947,7 +7204,7 @@ function abrirModalDivisaoDestino(itemId, devId) {
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="block font-bold text-slate-300 mb-1">Quantidade *</label>
-                <input type="number" id="div-dest-qtd" required min="1" max="${qtdRestante}" value="${qtdRestante}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+                <input type="number" id="div-dest-qtd" required min="0.01" max="${qtdRestante}" step="0.01" value="${qtdRestante}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
                 <div class="text-[10px] text-slate-500 mt-0.5">Máx: ${qtdRestante} un restantes</div>
               </div>
               <div>
@@ -5997,23 +7254,21 @@ function formatarStatusNegociacaoLabel(val) {
 
 function handleAdicionarDivisaoDestino(e, itemId, devId) {
   e.preventDefault();
-  const devs = db.getDevolucoes();
-  const dev = devs.find(d => String(d.id) === String(devId));
-  if (!dev || !Array.isArray(dev.itens)) return;
-  const item = dev.itens.find(i => String(i.id) === String(itemId));
-  if (!item) return;
+  const ref = resolverItemDestino(itemId, devId);
+  if (!ref) return;
+  const item = ref.item;
 
-  const qtd = parseInt(document.getElementById('div-dest-qtd')?.value || '0', 10);
+  const qtd = parseFloat(document.getElementById('div-dest-qtd')?.value || '0');
   const destino = document.getElementById('div-dest-destino')?.value || 'ESTOQUE_REUTILIZACAO';
   const statusNegociacao = document.getElementById('div-dest-negociacao')?.value || 'EM_NEGOCIACAO';
   const observacao = document.getElementById('div-dest-obs')?.value || '';
 
   const divisoes = Array.isArray(item.divisoes_destino) ? item.divisoes_destino : [];
-  const qtdTotal = parseInt(item.quantidade, 10) || 0;
-  const qtdJaDividida = divisoes.reduce((s, d) => s + (parseInt(d.quantidade, 10) || 0), 0);
+  const qtdTotal = parseFloat(item.quantidade) || 0;
+  const qtdJaDividida = divisoes.reduce((s, d) => s + (parseFloat(d.quantidade) || 0), 0);
   const qtdRestante = qtdTotal - qtdJaDividida;
 
-  if (!qtd || qtd < 1) { alert('⚠️ Informe uma quantidade válida.'); return; }
+  if (!qtd || qtd <= 0) { alert('⚠️ Informe uma quantidade válida.'); return; }
   if (qtd > qtdRestante) {
     alert(`⚠️ A quantidade informada (${qtd}) é maior que o restante disponível para dividir (${qtdRestante}).`);
     return;
@@ -6037,16 +7292,491 @@ function handleAdicionarDivisaoDestino(e, itemId, devId) {
 
 function removerDivisaoDestino(itemId, devId, divisaoId) {
   if (!confirm('Deseja remover esta divisão? A quantidade voltará a ficar disponível para redividir.')) return;
-  const devs = db.getDevolucoes();
-  const dev = devs.find(d => String(d.id) === String(devId));
-  if (!dev || !Array.isArray(dev.itens)) return;
-  const item = dev.itens.find(i => String(i.id) === String(itemId));
-  if (!item || !Array.isArray(item.divisoes_destino)) return;
+  const ref = resolverItemDestino(itemId, devId);
+  if (!ref || !Array.isArray(ref.item.divisoes_destino)) return;
 
-  item.divisoes_destino = item.divisoes_destino.filter(dv => String(dv.id) !== String(divisaoId));
+  ref.item.divisoes_destino = ref.item.divisoes_destino.filter(dv => String(dv.id) !== String(divisaoId));
   db.save();
   abrirModalDivisaoDestino(itemId, devId);
   renderApp();
+}
+
+// Cria um item de destinação SEM devolução associada — cobre outras
+// formas de avaria que podem ocorrer direto no CD, sem passar por uma
+// Devolução SAC formal (item pendente: "quadro de destinação de produto
+// tem que poder incluir avulso").
+function abrirModalItemAvulso() {
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+
+  modal.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-violet-800/70 rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-3 animate-fadeIn max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-sm font-extrabold text-violet-300 flex items-center gap-2">➕ Adicionar Item Avulso</h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+        </div>
+        <p class="text-[11px] text-slate-400 -mt-1">Para itens que precisam de destinação no CD mas não vieram de uma Devolução SAC (ex: avaria identificada em conferência avulsa, sobra de estoque etc.)</p>
+
+        <form onsubmit="handleSalvarItemAvulso(event)" class="space-y-3 text-xs">
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Motivo do Item Avulso *</label>
+            <input type="text" id="avulso-motivo" required placeholder="Ex: Avaria identificada em conferência avulsa" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Cód Item</label>
+              <input type="text" id="avulso-cod" list="produtos-list-avulso" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 font-bold" oninput="forcarMaiuscula(this); autoFillProdutoAvulso(this.value)">
+              ${renderDatalistProdutos('produtos-list-avulso')}
+            </div>
+            <div class="col-span-2">
+              <label class="block font-bold text-slate-300 mb-1">Descrição do Produto *</label>
+              <input type="text" id="avulso-desc" required placeholder="ex: MEIO DA ASA C/PONTA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold" oninput="forcarMaiuscula(this)">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Quantidade *</label>
+              <input type="number" id="avulso-qtd" required min="0.01" step="0.01" value="1" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+            </div>
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">Data Validade</label>
+              <input type="date" id="avulso-validade" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Destino do Produto *</label>
+            <select id="avulso-destino" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+              <option value="ESTOQUE_REUTILIZACAO">🟢 Reutilização / Estoque</option>
+              <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
+              <option value="DEVOLUCAO_FORNECEDOR">🔵 Devolução ao Fornecedor</option>
+              <option value="AVARIA_DESCARTE">🔴 Descarte / Avaria</option>
+              <option value="PRODUTOS_NEGOCIACAO">🟣 Produtos para Negociação em Rota</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Observações do CD</label>
+            <input type="text" id="avulso-obs" placeholder="Ex: Caixa avariada, reembalado..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
+          </div>
+
+          <div class="pt-2 flex gap-2">
+            <button type="button" onclick="closeModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg">Cancelar</button>
+            <button type="submit" class="flex-1 bg-violet-600 hover:bg-violet-500 text-white font-bold py-2 rounded-lg shadow">Salvar Item Avulso</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+
+function autoFillProdutoAvulso(val) {
+  if (!val) return;
+  const prods = (db && db.data && db.data.produtos) ? db.data.produtos : [];
+  const match = prods.find(p => String(p.codigo_produto).toUpperCase() === String(val).trim().toUpperCase());
+  if (match) {
+    const descEl = document.getElementById('avulso-desc');
+    if (descEl) descEl.value = match.descricao;
+  }
+}
+
+function handleSalvarItemAvulso(e) {
+  e.preventDefault();
+  const motivo = document.getElementById('avulso-motivo')?.value?.trim();
+  const cod = document.getElementById('avulso-cod')?.value?.trim();
+  const desc = document.getElementById('avulso-desc')?.value?.trim();
+  const qtd = document.getElementById('avulso-qtd')?.value;
+  const validade = document.getElementById('avulso-validade')?.value;
+  const destino = document.getElementById('avulso-destino')?.value;
+  const obs = document.getElementById('avulso-obs')?.value;
+
+  if (!motivo) { alert('⚠️ Informe o motivo do item avulso.'); return; }
+  if (!desc) { alert('⚠️ Informe a descrição do produto.'); return; }
+
+  const res = db.addItemAvulsoDestinacao({
+    produto_codigo: cod,
+    produto_descricao: desc,
+    quantidade: qtd,
+    destino_item: destino,
+    data_validade: validade,
+    observacao: obs,
+    motivo_avulso: motivo
+  });
+
+  closeModal();
+  if (!res.success) {
+    showToast(res.message, 'error');
+  } else {
+    showToast('✅ Item avulso adicionado à Destinação de Itens!');
+  }
+  renderApp();
+}
+
+// ===== EXPORTAÇÃO DA DESTINAÇÃO DE ITENS (PDF & CSV) =====
+// Item pendente: "Na destinação de itens ao retornar físico gerar
+// relatórios PDF e CSV". Reaproveita getItensDestinadosFiltrados() para
+// que a exportação respeite exatamente os mesmos filtros aplicados na tela.
+
+function gerarRelatorioDestinacaoPdf() {
+  const { itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>DESTINAÇÃO DE ITENS — JR DISTRIBUIDORA</title>
+  <style>
+    @media print {
+      @page { margin: 10mm; size: A4 landscape; }
+      body { -webkit-print-color-adjust: exact; }
+    }
+    body { font-family: Arial, sans-serif; padding: 20px; color: #0f172a; background: #fff; }
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #047857; padding-bottom: 10px; margin-bottom: 15px; }
+    .logo { height: 60px; }
+    .title-area { text-align: right; }
+    .title-area h1 { margin: 0; font-size: 20px; color: #064e3b; text-transform: uppercase; }
+    .title-area p { margin: 2px 0 0; font-size: 11px; color: #64748b; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }
+    .kpi-box { border: 1px solid #cbd5e1; background: #f8fafc; padding: 10px; border-radius: 6px; text-align: center; }
+    .kpi-num { font-size: 20px; font-weight: 900; color: #047857; }
+    .kpi-label { font-size: 10px; font-weight: bold; color: #475569; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 10px; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
+    th { background: #064e3b; color: #fff; text-transform: uppercase; font-size: 9px; }
+    tr:nth-child(even) { background: #f8fafc; }
+    .badge-avulso { background: #ede9fe; color: #5b21b6; font-weight: bold; padding: 2px 4px; border-radius: 3px; font-size: 9px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+    <div class="title-area">
+      <h1>Destinação de Itens — Retorno Físico CD</h1>
+      <p>JR Distribuidora • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
+    </div>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi-box"><div class="kpi-num">${itensDestinadosFiltrados.length}</div><div class="kpi-label">Itens Listados</div></div>
+    <div class="kpi-box"><div class="kpi-num" style="color:#7c3aed;">${itensDestinadosFiltrados.filter(i => i.devId === '__AVULSO__').length}</div><div class="kpi-label">Itens Avulsos</div></div>
+    <div class="kpi-box"><div class="kpi-num" style="color:#b45309;">${itensDestinadosFiltrados.filter(i => Array.isArray(i.divisoes_destino) && i.divisoes_destino.length > 0).length}</div><div class="kpi-label">Itens Divididos</div></div>
+    <div class="kpi-box"><div class="kpi-num" style="color:#1d4ed8;">${itensDestinadosFiltrados.reduce((s,i)=>s+(parseFloat(i.quantidade)||0),0).toLocaleString('pt-BR',{minimumFractionDigits:2})}</div><div class="kpi-label">Quantidade Total</div></div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Protocolo</th>
+        <th>Produto</th>
+        <th>Quantidade</th>
+        <th>Destino</th>
+        <th>Validade</th>
+        <th>Cliente / Motivo</th>
+        <th>Observação</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itensDestinadosFiltrados.length === 0
+        ? '<tr><td colspan="7" style="text-align:center;">Nenhum item encontrado.</td></tr>'
+        : itensDestinadosFiltrados.map(item => `
+          <tr>
+            <td>${item.devId === '__AVULSO__' ? '<span class="badge-avulso">AVULSO</span>' : (item.protocolo || '—')}</td>
+            <td>${item.produto_codigo ? `[${item.produto_codigo}] ` : ''}${item.produto_descricao || item.descricao || 'Produto'}</td>
+            <td>${item.quantidade} un</td>
+            <td>${Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0
+                ? item.divisoes_destino.map(dv => `${dv.quantidade}un: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
+                : formatarDestinoLabel(item.destino)}</td>
+            <td>${item.validade || '—'}</td>
+            <td>${item.cliente_nome || '—'}</td>
+            <td>${item.observacao || '—'}</td>
+          </tr>`).join('')}
+    </tbody>
+  </table>
+
+  <script>
+    window.onload = function() { setTimeout(function(){ window.print(); }, 500); }
+  </script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (win) {
+    win.document.write(htmlContent);
+    win.document.close();
+  } else {
+    alert('Permita pop-ups no navegador para visualizar o relatório de Destinação de Itens.');
+  }
+}
+
+function exportarDestinacaoCsv() {
+  const { itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+  if (itensDestinadosFiltrados.length === 0) {
+    alert('Nenhum item encontrado para exportar com os filtros atuais.');
+    return;
+  }
+
+  const headers = ['Protocolo', 'Cod Produto', 'Descricao Produto', 'Quantidade', 'Destino', 'Validade', 'Cliente/Motivo', 'Observacao', 'Dividido'];
+  const csvRows = [headers.map(h => `"${h}"`).join(';')];
+
+  itensDestinadosFiltrados.forEach(item => {
+    const destinoTxt = Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0
+      ? item.divisoes_destino.map(dv => `${dv.quantidade}un: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
+      : formatarDestinoLabel(item.destino);
+    const linha = [
+      item.devId === '__AVULSO__' ? 'AVULSO' : (item.protocolo || ''),
+      item.produto_codigo || '',
+      item.produto_descricao || item.descricao || '',
+      String(item.quantidade || '').replace('.', ','),
+      destinoTxt,
+      item.validade || '',
+      item.cliente_nome || '',
+      item.observacao || '',
+      (Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0) ? 'SIM' : 'NAO'
+    ];
+    csvRows.push(linha.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';'));
+  });
+
+  const csvString = '\uFEFF' + csvRows.join('\r\n');
+  const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `JR_SAC_Destinacao_Itens_${new Date().toISOString().slice(0,10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+// ===== PAINEL DE MEDIDAS DISCIPLINARES (Parte A.4) =====
+// Consulta consolidada de toda Orientação Verbal/Advertência/Suspensão já
+// registrada, com filtro de data/tipo/colaborador, impressão e CSV.
+
+function getMedidasDisciplinaresFiltradas() {
+  const fDataDe = window._medidasFiltroDataDe || '';
+  const fDataAte = window._medidasFiltroDataAte || '';
+  const fTipo = window._medidasFiltroTipo || '';
+  const fColabTipo = window._medidasFiltroColabTipo || '';
+  const fBusca = window._medidasFiltroBusca || '';
+
+  let medidas = db.getMedidasDisciplinares({
+    tipo: fTipo || undefined,
+    colaboradorTipo: fColabTipo || undefined,
+    dataDe: fDataDe || undefined,
+    dataAte: fDataAte || undefined
+  });
+  if (fBusca) {
+    const termo = fBusca.toUpperCase();
+    medidas = medidas.filter(m => (m.colaborador_nome || '').includes(termo));
+  }
+  return medidas;
+}
+
+function abrirPainelMedidasDisciplinares() {
+  renderPainelMedidasDisciplinares();
+}
+
+function renderPainelMedidasDisciplinares() {
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+
+  const fDataDe = window._medidasFiltroDataDe || '';
+  const fDataAte = window._medidasFiltroDataAte || '';
+  const fTipo = window._medidasFiltroTipo || '';
+  const fColabTipo = window._medidasFiltroColabTipo || '';
+  const fBusca = window._medidasFiltroBusca || '';
+  const medidas = getMedidasDisciplinaresFiltradas();
+
+  const tipoLabel = { ORIENTACAO_VERBAL: '🗣️ Orientação Verbal', ADVERTENCIA: '⚠️ Advertência', SUSPENSAO: '⛔ Suspensão' };
+
+  modal.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-purple-800/70 rounded-2xl max-w-6xl w-full p-5 shadow-2xl space-y-4 animate-fadeIn max-h-[92vh] overflow-y-auto">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-sm font-extrabold text-purple-300 flex items-center gap-2">⚖️ Painel de Medidas Disciplinares</h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+        </div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+          <div>
+            <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data De</label>
+            <input type="date" value="${fDataDe}" oninput="window._medidasFiltroDataDe=this.value; renderPainelMedidasDisciplinares()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+          </div>
+          <div>
+            <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data Até</label>
+            <input type="date" value="${fDataAte}" oninput="window._medidasFiltroDataAte=this.value; renderPainelMedidasDisciplinares()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+          </div>
+          <div>
+            <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Tipo</label>
+            <select onchange="window._medidasFiltroTipo=this.value; renderPainelMedidasDisciplinares()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <option value="">Todos</option>
+              <option value="ORIENTACAO_VERBAL" ${fTipo==='ORIENTACAO_VERBAL'?'selected':''}>🗣️ Orientação Verbal</option>
+              <option value="ADVERTENCIA" ${fTipo==='ADVERTENCIA'?'selected':''}>⚠️ Advertência</option>
+              <option value="SUSPENSAO" ${fTipo==='SUSPENSAO'?'selected':''}>⛔ Suspensão</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Colaborador</label>
+            <select onchange="window._medidasFiltroColabTipo=this.value; renderPainelMedidasDisciplinares()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <option value="">Todos</option>
+              <option value="CD" ${fColabTipo==='CD'?'selected':''}>CD</option>
+              <option value="MOTORISTA" ${fColabTipo==='MOTORISTA'?'selected':''}>Motorista</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Buscar Nome</label>
+            <input type="text" value="${fBusca}" placeholder="Nome do colaborador" oninput="forcarMaiuscula(this); window._medidasFiltroBusca=this.value; renderPainelMedidasDisciplinares()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <span class="bg-purple-950 text-purple-300 border border-purple-700 px-3 py-1 rounded-full text-xs font-black">${medidas.length} medida(s)</span>
+          <div class="flex gap-2">
+            <button onclick="gerarRelatorioMedidasDisciplinaresPdf()" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5"><span>🖨️</span> Imprimir</button>
+            <button onclick="exportarMedidasDisciplinaresCsv()" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5"><span>⬇️</span> CSV</button>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-slate-800">
+          <table class="w-full text-left text-xs text-slate-300 border-collapse">
+            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+              <tr>
+                <th class="p-2">Nº</th>
+                <th class="p-2">Data</th>
+                <th class="p-2">Colaborador</th>
+                <th class="p-2">Tipo</th>
+                <th class="p-2">Cargo/Função</th>
+                <th class="p-2">Alíneas CLT</th>
+                <th class="p-2">Motivo</th>
+                <th class="p-2">Gestor</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+              ${medidas.length === 0
+                ? '<tr><td colspan="8" class="p-6 text-center text-slate-500">Nenhuma medida encontrada.</td></tr>'
+                : medidas.map(m => `
+                  <tr class="hover:bg-slate-800/40">
+                    <td class="p-2 font-mono text-slate-400">${m.numero_medida || '—'}</td>
+                    <td class="p-2">${formatarData(m.data_ocorrencia)}</td>
+                    <td class="p-2 font-bold text-white">${m.colaborador_nome}<span class="block text-[9px] text-slate-500">${m.colaborador_tipo}</span></td>
+                    <td class="p-2">${tipoLabel[m.tipo] || m.tipo}</td>
+                    <td class="p-2">${m.funcao || '—'}</td>
+                    <td class="p-2">${m.alineas_clt || '—'}</td>
+                    <td class="p-2 max-w-[220px]"><div class="truncate" title="${(m.motivo||'').replace(/"/g,'&quot;')}">${m.motivo || '—'}</div></td>
+                    <td class="p-2">${m.gestor || '—'}</td>
+                  </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+
+function gerarRelatorioMedidasDisciplinaresPdf() {
+  const medidas = getMedidasDisciplinaresFiltradas();
+  const tipoLabel = { ORIENTACAO_VERBAL: '🗣️ Orientação Verbal', ADVERTENCIA: '⚠️ Advertência', SUSPENSAO: '⛔ Suspensão' };
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>MEDIDAS DISCIPLINARES — JR DISTRIBUIDORA</title>
+  <style>
+    @media print { @page { margin: 10mm; size: A4 landscape; } body { -webkit-print-color-adjust: exact; } }
+    body { font-family: Arial, sans-serif; padding: 20px; color: #0f172a; background: #fff; }
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #6d28d9; padding-bottom: 10px; margin-bottom: 15px; }
+    .logo { height: 60px; }
+    .title-area { text-align: right; }
+    .title-area h1 { margin: 0; font-size: 20px; color: #4c1d95; text-transform: uppercase; }
+    .title-area p { margin: 2px 0 0; font-size: 11px; color: #64748b; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 10px; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
+    th { background: #4c1d95; color: #fff; text-transform: uppercase; font-size: 9px; }
+    tr:nth-child(even) { background: #f8fafc; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+    <div class="title-area">
+      <h1>Painel de Medidas Disciplinares</h1>
+      <p>JR Distribuidora • Emissão: ${new Date().toLocaleString('pt-BR')} • ${medidas.length} medida(s)</p>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Nº</th><th>Data</th><th>Colaborador</th><th>Tipo</th><th>Tipo Colab.</th><th>Cargo</th><th>Alíneas CLT</th><th>Motivo</th><th>Gestor</th></tr>
+    </thead>
+    <tbody>
+      ${medidas.length === 0
+        ? '<tr><td colspan="9" style="text-align:center;">Nenhuma medida encontrada.</td></tr>'
+        : medidas.map(m => `
+          <tr>
+            <td>${m.numero_medida || '—'}</td>
+            <td>${formatarData(m.data_ocorrencia)}</td>
+            <td>${m.colaborador_nome}</td>
+            <td>${tipoLabel[m.tipo] || m.tipo}</td>
+            <td>${m.colaborador_tipo}</td>
+            <td>${m.funcao || '—'}</td>
+            <td>${m.alineas_clt || '—'}</td>
+            <td>${m.motivo || '—'}</td>
+            <td>${m.gestor || '—'}</td>
+          </tr>`).join('')}
+    </tbody>
+  </table>
+  <script>window.onload = function() { setTimeout(function(){ window.print(); }, 500); }</script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (win) {
+    win.document.write(htmlContent);
+    win.document.close();
+  } else {
+    alert('Permita pop-ups no navegador para visualizar o relatório de Medidas Disciplinares.');
+  }
+}
+
+function exportarMedidasDisciplinaresCsv() {
+  const medidas = getMedidasDisciplinaresFiltradas();
+  if (medidas.length === 0) {
+    alert('Nenhuma medida encontrada para exportar com os filtros atuais.');
+    return;
+  }
+  const tipoLabel = { ORIENTACAO_VERBAL: 'ORIENTACAO VERBAL', ADVERTENCIA: 'ADVERTENCIA', SUSPENSAO: 'SUSPENSAO' };
+
+  const headers = ['Numero', 'Data', 'Colaborador', 'Tipo Colaborador', 'Tipo Medida', 'Cargo', 'Alineas CLT', 'Dias Suspensao', 'Motivo', 'Gestor'];
+  const csvRows = [headers.map(h => `"${h}"`).join(';')];
+  medidas.forEach(m => {
+    const linha = [
+      m.numero_medida || '',
+      formatarData(m.data_ocorrencia),
+      m.colaborador_nome || '',
+      m.colaborador_tipo || '',
+      tipoLabel[m.tipo] || m.tipo || '',
+      m.funcao || '',
+      m.alineas_clt || '',
+      m.dias_suspensao || '',
+      m.motivo || '',
+      m.gestor || ''
+    ];
+    csvRows.push(linha.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';'));
+  });
+
+  const csvString = '\uFEFF' + csvRows.join('\r\n');
+  const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `JR_SAC_Medidas_Disciplinares_${new Date().toISOString().slice(0,10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 function openCdModal(devId) {
@@ -6107,7 +7837,7 @@ function openCdModal(devId) {
           <div id="item-div-box-${idx}" class="hidden pt-2 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950 p-2 rounded">
             <div>
               <label class="block text-[10px] text-slate-400 font-bold mb-0.5">Qtd Recebida (Esperado: ${item.quantidade})</label>
-              <input type="number" id="item-qtd-rec-${idx}" min="0" max="${item.quantidade}" value="0" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1 text-xs">
+              <input type="number" id="item-qtd-rec-${idx}" min="0" max="${item.quantidade}" step="0.01" value="0" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1 text-xs">
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 font-bold mb-0.5">Observação da Falta</label>
@@ -6262,7 +7992,7 @@ function handleCdModalSubmit(e, devId) {
       const radio = document.querySelector(`input[name="item-status-${idx}"]:checked`);
       if (radio && radio.value === 'divergente') {
         const qtdEsperada = parseInt(item.quantidade) || 0;
-        const qtdRecebida = parseInt(document.getElementById(`item-qtd-rec-${idx}`)?.value) || 0;
+        const qtdRecebida = parseFloat(document.getElementById(`item-qtd-rec-${idx}`)?.value) || 0;
         const qtdFaltante = Math.max(0, qtdEsperada - qtdRecebida);
         const obs = document.getElementById(`item-obs-${idx}`)?.value || 'Item com divergência física no CD';
         const vUnit = getValorUnitarioProduto(item, dev);
@@ -8474,19 +10204,33 @@ function renderViagensOcorrenciasSubTab() {
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Carga</label>
-            <input type="text" value="${fCarga}" placeholder="Ex: 43004" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroCarga=this.value; renderApp()">
+            <input type="text" value="${fCarga}" list="oc-op-datalist-carga" placeholder="Ex: 43004" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroCarga=this.value; renderApp()">
+            ${renderDatalistCargas('oc-op-datalist-carga')}
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Funcionário</label>
-            <input type="text" value="${fFunc}" placeholder="Nome" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroFunc=this.value; renderApp()">
+            <input type="text" value="${fFunc}" list="oc-op-datalist-funcionario" placeholder="Nome" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroFunc=this.value; renderApp()">
+            <datalist id="oc-op-datalist-funcionario">
+              ${[...new Set([
+                ...((db.data.colaboradores_cd || []).map(c => c.nome)),
+                ...((db.data.motoristas || []).map(m => m.nome)),
+                ...((db.data.ajudantes || []).map(a => a.nome || a))
+              ].filter(Boolean))].map(n => `<option value="${n}"></option>`).join('')}
+            </datalist>
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Veículo / Placa</label>
-            <input type="text" value="${fPlaca}" placeholder="Placa" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroPlaca=this.value; renderApp()">
+            <input type="text" value="${fPlaca}" list="oc-op-datalist-placa" placeholder="Placa" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroPlaca=this.value; renderApp()">
+            <datalist id="oc-op-datalist-placa">
+              ${(db.data.veiculos || []).map(v => `<option value="${v.placa}">${v.placa} — ${v.tipo || v.modelo || ''}</option>`).join('')}
+            </datalist>
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Rota</label>
-            <input type="text" value="${fRota}" placeholder="Rota" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroRota=this.value; renderApp()">
+            <input type="text" value="${fRota}" list="oc-op-datalist-rota" placeholder="Rota" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this); window._ocFiltroRota=this.value; renderApp()">
+            <datalist id="oc-op-datalist-rota">
+              ${[...new Set(getListaCargasValidadas().map(c => c.rota).filter(Boolean))].map(r => `<option value="${r}"></option>`).join('')}
+            </datalist>
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Motivo</label>
@@ -9363,6 +11107,9 @@ function renderRotaOcorrenciasView() {
                     <div class="space-y-2">
                       <button onclick="abrirModalRetornoManutencao('${r.id}')" class="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold py-2.5 px-4 rounded-xl text-xs shadow-lg shadow-emerald-950/40 flex items-center justify-center gap-2 transition hover:scale-[1.01]">
                         <span>🔧</span> Retorno da Manutenção / Liberar Veículo
+                      </button>
+                      <button onclick="abrirModalNovoSinistro({ ocorrencia_rota_id: '${r.id}', carga: '${(r.carga_numero||'').toString().replace(/'/g,"\\'")}', placa: '${(r.veiculo_placa||'').replace(/'/g,"\\'")}', motorista_nome: '${(r.motorista_nome||'').replace(/'/g,"\\'")}' })" class="w-full bg-red-950/60 hover:bg-red-900 border border-red-800 text-red-300 font-bold py-2 px-4 rounded-xl text-xs shadow flex items-center justify-center gap-2 transition">
+                        <span>🚨</span> Registrar Sinistro / Investigação de Acidente
                       </button>
 
                       <form onsubmit="handleManutencaoSubmit(event, '${r.id}')" class="pt-2 border-t border-slate-800/80 space-y-2">
@@ -10567,6 +12314,7 @@ function gerarRelatorioLargadaOperacaoModal() {
   const totViagens = filtradas.length;
   const totFusionOk = filtradas.filter(v => v.fusion === 'INICIADO').length;
   const totChkOk = filtradas.filter(v => v.checklist_saida === 'INICIADO').length;
+  const totChkChegadaOk = filtradas.filter(v => v.checklist_chegada === 'INICIADO').length;
   const totObs = filtradas.filter(v => v.observacao && v.observacao.trim() !== '').length;
 
   const htmlContent = `
@@ -10586,7 +12334,7 @@ function gerarRelatorioLargadaOperacaoModal() {
     .title-area { text-align: right; }
     .title-area h1 { margin: 0; font-size: 20px; color: #064e3b; text-transform: uppercase; }
     .title-area p { margin: 2px 0 0; font-size: 11px; color: #64748b; }
-    .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 15px; }
     .kpi-box { border: 1px solid #cbd5e1; background: #f8fafc; padding: 10px; border-radius: 6px; text-align: center; }
     .kpi-num { font-size: 20px; font-weight: 900; color: #047857; }
     .kpi-label { font-size: 10px; font-weight: bold; color: #475569; text-transform: uppercase; }
@@ -10611,6 +12359,7 @@ function gerarRelatorioLargadaOperacaoModal() {
     <div class="kpi-box"><div class="kpi-num">${totViagens}</div><div class="kpi-label">Viagens na Escala</div></div>
     <div class="kpi-box"><div class="kpi-num" style="color: #047857;">${totFusionOk}</div><div class="kpi-label">Fusion Iniciado</div></div>
     <div class="kpi-box"><div class="kpi-num" style="color: #1d4ed8;">${totChkOk}</div><div class="kpi-label">Checklist Saída OK</div></div>
+    <div class="kpi-box"><div class="kpi-num" style="color: #0891b2;">${totChkChegadaOk}</div><div class="kpi-label">Checklist Chegada OK</div></div>
     <div class="kpi-box"><div class="kpi-num" style="color: #b45309;">${totObs}</div><div class="kpi-label">Ocorrências Largada</div></div>
   </div>
 
@@ -10626,13 +12375,14 @@ function gerarRelatorioLargadaOperacaoModal() {
         <th>Saída (Data / Hora)</th>
         <th>Status</th>
         <th>Fusion</th>
-        <th>Checklist</th>
+        <th>Checklist Saída</th>
+        <th>Checklist Chegada</th>
         <th>Observação Largada</th>
       </tr>
     </thead>
     <tbody>
       ${(() => {
-        if (filtradas.length === 0) return '<tr><td colspan="11" style="text-align:center;">Nenhuma viagem encontrada.</td></tr>';
+        if (filtradas.length === 0) return '<tr><td colspan="12" style="text-align:center;">Nenhuma viagem encontrada.</td></tr>';
         
         const cargaCounts = {};
         filtradas.forEach(x => {
@@ -10655,6 +12405,7 @@ function gerarRelatorioLargadaOperacaoModal() {
               <td>${v.status_viagem || '—'}</td>
               <td>${v.fusion ? `<span class="${v.fusion==='INICIADO'?'badge-ok':'badge-nok'}">${v.fusion}</span>` : '—'}</td>
               <td>${v.checklist_saida ? `<span class="${v.checklist_saida==='INICIADO'?'badge-ok':'badge-nok'}">${v.checklist_saida}</span>` : '—'}</td>
+              <td>${v.checklist_chegada ? `<span class="${v.checklist_chegada==='INICIADO'?'badge-ok':'badge-nok'}">${v.checklist_chegada}</span>` : '—'}</td>
               <td>${v.observacao||'—'}</td>
             </tr>`;
         }).join('');
@@ -11626,6 +13377,8 @@ function handleCadColaboradorCDSubmit(e) {
   const cpf = document.getElementById('cad-colab-cpf')?.value || '';
   const funcao = document.getElementById('cad-colab-funcao')?.value || 'SEPARADOR';
   const secao = document.getElementById('cad-colab-secao')?.value || '';
+  const dataAdmissao = document.getElementById('cad-colab-admissao')?.value || '';
+  const dataDesligamento = document.getElementById('cad-colab-desligamento')?.value || '';
 
   if (!nome.trim()) { alert('Informe o nome do colaborador!'); return; }
 
@@ -11635,6 +13388,8 @@ function handleCadColaboradorCDSubmit(e) {
     cpf: cpf.trim(),
     funcao: funcao.trim(),
     secao: secao.trim(),
+    data_admissao: dataAdmissao || null,
+    data_desligamento: dataDesligamento || null,
     ativo: true
   });
 
@@ -11890,6 +13645,14 @@ function renderCadSubTabContent() {
                 ${secoesDisponiveis.map(s => `<option value="${s}">${s}</option>`).join('')}
               </select>
             </div>
+            <div>
+              <label class="block text-[10px] text-slate-400 mb-1 font-bold">Admissão</label>
+              <input type="date" id="cad-colab-admissao" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-400 mb-1 font-bold">Desligamento</label>
+              <input type="date" id="cad-colab-desligamento" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">
+            </div>
           </div>
 
           <div class="flex justify-end gap-2 pt-1">
@@ -11968,10 +13731,12 @@ function renderCadSubTabContent() {
       <div class="space-y-5">
         <form onsubmit="handleCadMotoristaSubmit(event)" class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
           <h3 class="font-bold text-emerald-400 text-xs uppercase">Novo Motorista</h3>
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div class="grid grid-cols-2 sm:grid-cols-6 gap-3">
             <div><label class="block text-[10px] text-slate-400">Cód. ERP</label><input type="number" id="cad-mot-erp" placeholder="Ex: 520" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></div>
             <div class="col-span-2"><label class="block text-[10px] text-slate-400">Nome Completo *</label><input type="text" id="cad-mot-nome" required placeholder="CARLOS ALBERTO SILVA" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
             <div><label class="block text-[10px] text-slate-400">CNH</label><input type="text" id="cad-mot-cnh" placeholder="00000000000" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
+            <div><label class="block text-[10px] text-slate-400">Admissão</label><input type="date" id="cad-mot-admissao" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+            <div><label class="block text-[10px] text-slate-400">Desligamento</label><input type="date" id="cad-mot-desligamento" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
@@ -12126,7 +13891,7 @@ function deleteMotivoDevolucaoCad(nome) {
 }
 
 // ---- Handlers Cadastros ----
-function handleCadMotoristaSubmit(e) { e.preventDefault(); const r=db.addMotorista(document.getElementById('cad-mot-erp').value,document.getElementById('cad-mot-nome').value,document.getElementById('cad-mot-cnh').value,''); if(r) alert('✅ Motorista cadastrado!'); renderApp(); }
+function handleCadMotoristaSubmit(e) { e.preventDefault(); const r=db.addMotorista(document.getElementById('cad-mot-erp').value,document.getElementById('cad-mot-nome').value,document.getElementById('cad-mot-cnh').value,'',document.getElementById('cad-mot-admissao')?.value||'',document.getElementById('cad-mot-desligamento')?.value||''); if(r) alert('✅ Motorista cadastrado!'); renderApp(); }
 function handleCadAjudanteSubmit(e) { e.preventDefault(); db.addAjudante(document.getElementById('cad-aju-erp').value,document.getElementById('cad-aju-nome').value); alert('✅ Ajudante cadastrado!'); renderApp(); }
 function handleCadProdutoSubmit(e) { e.preventDefault(); db.addProduto(document.getElementById('cad-prod-cod').value,document.getElementById('cad-prod-desc').value,document.getElementById('cad-prod-cat').value,0); alert('✅ Produto cadastrado!'); renderApp(); }
 function handleCadVeiculoSubmit(e) { e.preventDefault(); db.addVeiculo(document.getElementById('cad-veic-placa').value,document.getElementById('cad-veic-tipo').value,document.getElementById('cad-veic-situacao').value); alert('✅ Veículo cadastrado!'); renderApp(); }
@@ -12370,6 +14135,7 @@ function editarOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
 
       <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
         <div class="flex items-center gap-1.5">
+          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
           <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Advertência CLT">⚠️ Advertência</button>
           <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Suspensão CLT">⛔ Suspensão</button>
         </div>
@@ -12456,15 +14222,7 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha *</label>
             <select id="md-oc2-titulo" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
-              <option value="ERRO DE RECEBIMENTO">ERRO DE RECEBIMENTO</option>
-              <option value="ERRO DE SEPARAÇÃO">ERRO DE SEPARAÇÃO</option>
-              <option value="ERRO DE CONFERÊNCIA">ERRO DE CONFERÊNCIA</option>
-              <option value="FALTA INJUSTIFICADA">FALTA INJUSTIFICADA</option>
-              <option value="SAÍDA ANTECIPADA">SAÍDA ANTECIPADA</option>
-              <option value="ATRASO NA CHEGADA">ATRASO NA CHEGADA</option>
-              <option value="DESVIO DE CONDUTA">DESVIO DE CONDUTA</option>
-              <option value="AVARIA NO MANUSEIO">AVARIA NO MANUSEIO</option>
-              <option value="OUTRO">OUTRO</option>
+              ${renderOptionsRequisitoFalhaCD()}
             </select>
           </div>
         </div>
@@ -15064,10 +16822,12 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
                     <td class="p-2 border-r border-slate-800 text-right font-bold text-slate-300">${o.peso ? `${o.peso} Kg` : '-'}</td>
                     <td class="p-2 border-r border-slate-800 text-center whitespace-nowrap">
                       <span class="bg-amber-950 text-amber-300 border border-amber-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">PENDENTE</span>
+                      ${o.medida_disciplinar === 'ORIENTACAO_VERBAL' ? '<div class="mt-1"><span class="bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">🗣️ Orientado</span></div>' : ''}
                       ${o.medida_disciplinar === 'ADVERTENCIA' ? '<div class="mt-1"><span class="bg-purple-950 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⚠️ Adv. Emitida</span></div>' : ''}
                       ${o.medida_disciplinar === 'SUSPENSAO' ? `<div class="mt-1"><span class="bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⛔ Susp. (${o.dias_suspensao||1}d)</span></div>` : ''}
                     </td>
                     <td class="p-2 text-center whitespace-nowrap space-x-1">
+                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
                       <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Advertência CLT">⚠️ Gerar Advertência</button>
                       <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Suspensão CLT">⛔ Gerar Suspensão</button>
                       <button onclick="editarOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-blue-400 hover:text-blue-300 p-1 text-xs" title="Editar Ocorrência">✏️</button>
@@ -15156,10 +16916,12 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
                     <td class="p-2 border-r border-slate-800 text-right font-bold text-slate-300">${o.peso ? `${o.peso} Kg` : '-'}</td>
                     <td class="p-2 border-r border-slate-800 text-center whitespace-nowrap">
                       <span class="bg-emerald-950 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">FECHADO</span>
+                      ${o.medida_disciplinar === 'ORIENTACAO_VERBAL' ? '<div class="mt-1"><span class="bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">🗣️ Orientado</span></div>' : ''}
                       ${o.medida_disciplinar === 'ADVERTENCIA' ? '<div class="mt-1"><span class="bg-purple-950 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⚠️ Adv. Emitida</span></div>' : ''}
                       ${o.medida_disciplinar === 'SUSPENSAO' ? `<div class="mt-1"><span class="bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⛔ Susp. (${o.dias_suspensao||1}d)</span></div>` : ''}
                     </td>
                     <td class="p-2 text-center whitespace-nowrap space-x-1">
+                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
                       <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Advertência CLT">⚠️ Gerar Advertência</button>
                       <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Suspensão CLT">⛔ Gerar Suspensão</button>
                       <button onclick="editarOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-blue-400 hover:text-blue-300 p-1 text-xs" title="Editar Ocorrência">✏️</button>
@@ -15738,15 +17500,7 @@ function adicionarOcorrenciaColaboradorResumo(data, turno) {
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha</label>
             <select id="md-occ-req" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
-              <option value="ERRO DE RECEBIMENTO">ERRO DE RECEBIMENTO</option>
-              <option value="ERRO DE SEPARAÇÃO">ERRO DE SEPARAÇÃO</option>
-              <option value="ERRO DE CONFERÊNCIA">ERRO DE CONFERÊNCIA</option>
-              <option value="FALTA INJUSTIFICADA">FALTA INJUSTIFICADA</option>
-              <option value="SAÍDA ANTECIPADA">SAÍDA ANTECIPADA</option>
-              <option value="ATRASO NA CHEGADA">ATRASO NA CHEGADA</option>
-              <option value="DESVIO DE CONDUTA">DESVIO DE CONDUTA</option>
-              <option value="AVARIA NO MANUSEIO">AVARIA NO MANUSEIO</option>
-              <option value="OUTRO">OUTRO</option>
+              ${renderOptionsRequisitoFalhaCD()}
             </select>
           </div>
           <div>
@@ -17973,9 +19727,31 @@ function renderBoletimGerencialView() {
                 <h3 class="text-xs font-black text-purple-400 uppercase tracking-wider flex items-center gap-2">
                   <span>⚖️</span> BLOCO 5: MEDIDAS DISCIPLINARES & GESTÃO DE PESSOAL
                 </h3>
-                <span class="text-[10px] bg-purple-950 border border-purple-700 text-purple-300 px-2 py-0.5 rounded-full font-bold">3 Relatórios Disponíveis</span>
+                <button onclick="abrirPainelMedidasDisciplinares()" class="text-[10px] bg-purple-950 hover:bg-purple-900 border border-purple-700 text-purple-300 px-2.5 py-1 rounded-full font-bold transition flex items-center gap-1">
+                  <span>📋</span> Ver Painel de Medidas
+                </button>
               </div>
-              <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-emerald-700/60 transition">
+                  <div>
+                    <div class="text-xs font-bold text-emerald-300 uppercase flex items-center gap-1"><span>👤</span> Acompanhamento Funcionário</div>
+                    <div class="text-[11px] text-slate-400 mt-1">Histórico completo do colaborador CD: feedback, atestados, faltas e medidas aplicadas.</div>
+                  </div>
+                  <button onclick="switchTab('acompanhamento_funcionario')" class="w-full bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
+                    <span>👤</span> Abrir Acompanhamento
+                  </button>
+                </div>
+
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-cyan-700/60 transition">
+                  <div>
+                    <div class="text-xs font-bold text-cyan-300 uppercase flex items-center gap-1"><span>🪪</span> Dossiê Motorista</div>
+                    <div class="text-[11px] text-slate-400 mt-1">Histórico do motorista, incluindo Oc Operacional, Oc em Rota e Sinistros.</div>
+                  </div>
+                  <button onclick="switchTab('dossie_motorista')" class="w-full bg-cyan-700 hover:bg-cyan-600 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
+                    <span>🪪</span> Abrir Dossiê
+                  </button>
+                </div>
+
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-purple-700/60 transition">
                   <div>
                     <div class="text-xs font-bold text-purple-300 uppercase flex items-center gap-1"><span>⚠️</span> Termo de Advertência Disciplinar</div>
@@ -18396,6 +20172,9 @@ function openPdfFilterModal(pdfType) {
     return;
   } else if (pdfType === 'suspensao_disciplinar') {
     abrirModalEmissaoDisciplinarCD({ tipo: 'SUSPENSAO' });
+    return;
+  } else if (pdfType === 'orientacao_verbal_disciplinar') {
+    abrirModalEmissaoDisciplinarCD({ tipo: 'ORIENTACAO_VERBAL' });
     return;
   }
 
@@ -19299,7 +21078,7 @@ function atualizarColaboradorDisciplinarSelecaoModal() {
 }
 
 function abrirModalEmissaoDisciplinarCD(options = {}) {
-  const tipo = options.tipo || 'ADVERTENCIA'; // 'ADVERTENCIA' ou 'SUSPENSAO'
+  const tipo = options.tipo || 'ADVERTENCIA'; // 'ADVERTENCIA', 'SUSPENSAO' ou 'ORIENTACAO_VERBAL'
   const container = document.getElementById('modal-container');
   if (!container) return;
 
@@ -19332,24 +21111,41 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
 
   const headerOption = hasSelection ? '' : '<option value="" selected>-- SELECIONAR DO CADASTRO MESTRE --</option>';
 
+  const isVerbal = tipo === 'ORIENTACAO_VERBAL';
+  const corBorda = tipo === 'SUSPENSAO' ? 'border-red-800/80' : (isVerbal ? 'border-amber-800/80' : 'border-purple-800/80');
+  const corTexto = tipo === 'SUSPENSAO' ? 'text-red-400' : (isVerbal ? 'text-amber-400' : 'text-purple-400');
+  const tituloModal = tipo === 'SUSPENSAO' ? 'Suspensão Disciplinar' : (isVerbal ? 'Orientação Verbal' : 'Advertência Disciplinar');
+  const icone = tipo === 'SUSPENSAO' ? '⛔' : (isVerbal ? '🗣️' : '⚠️');
+
+  // Mesmo número de reincidências deste colaborador para este tipo de
+  // medida, mostrado antes de confirmar — item 2 pendente: "controle de
+  // reincidência".
+  const reincidenciasAnteriores = initialColabNome ? db.contarReincidencia(initialColabNome, tipo) : 0;
+
   container.innerHTML = `
     <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div class="bg-slate-900 border ${tipo==='SUSPENSAO'?'border-red-800/80':'border-purple-800/80'} rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 text-white animate-fadeIn max-h-[90vh] overflow-y-auto">
+      <div class="bg-slate-900 border ${corBorda} rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 text-white animate-fadeIn max-h-[90vh] overflow-y-auto">
         <div class="flex items-center justify-between border-b border-slate-800 pb-3">
           <div class="flex items-center gap-2">
-            <span class="text-xl">${tipo==='SUSPENSAO'?'⛔':'⚠️'}</span>
+            <span class="text-xl">${icone}</span>
             <div>
-              <h3 class="text-base font-black uppercase ${tipo==='SUSPENSAO'?'text-red-400':'text-purple-400'}">
-                Emissão de ${tipo==='SUSPENSAO'?'Suspensão Disciplinar':'Advertência Disciplinar'}
+              <h3 class="text-base font-black uppercase ${corTexto}">
+                Emissão de ${tituloModal}
               </h3>
-              <p class="text-[11px] text-slate-400 font-medium">Marca Corporativa CSA SERVICES LTDA • CNPJ 50.699.226/0001-09</p>
+              <p class="text-[11px] text-slate-400 font-medium">${isVerbal ? 'Fica registrado no histórico do colaborador para consulta no Acompanhamento de Funcionário' : 'Marca Corporativa CSA SERVICES LTDA • CNPJ 50.699.226/0001-09'}</p>
             </div>
           </div>
           <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold text-lg">✕</button>
         </div>
 
+        ${reincidenciasAnteriores > 0 ? `
+        <div class="bg-amber-950/50 border border-amber-700 rounded-lg p-2.5 text-[11px] text-amber-300 font-bold flex items-center gap-2">
+          <span>⚠️</span> Este colaborador já recebeu ${reincidenciasAnteriores} medida(s) do tipo "${tituloModal}" anteriormente.
+        </div>` : ''}
+
         <form onsubmit="handleConfirmarEmissaoDisciplinar(event)" class="space-y-4 text-xs">
           <input type="hidden" id="disc-tipo" value="${tipo}">
+          <input type="hidden" id="disc-gerar-pdf" value="${isVerbal ? 'false' : 'true'}">
           <input type="hidden" id="disc-parent-data" value="${options.parentData||''}">
           <input type="hidden" id="disc-parent-turno" value="${options.parentTurno||''}">
           <input type="hidden" id="disc-parent-type" value="${options.type||''}">
@@ -19377,8 +21173,8 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
           <!-- SELEÇÃO MÚLTIPLA DE ALÍNEAS DA CLT 482 -->
           <div class="bg-slate-950 p-3 rounded-xl border border-purple-800/80 space-y-2">
             <div class="flex items-center justify-between">
-              <label class="block text-[10px] font-black text-purple-400 uppercase">2. Alínea(s) do Artigo 482 da CLT (Seleção Múltipla) *</label>
-              <span class="text-[9px] text-purple-300 font-bold">Marque uma ou mais alíneas (Obrigatório)</span>
+              <label class="block text-[10px] font-black text-purple-400 uppercase">2. Alínea(s) do Artigo 482 da CLT ${isVerbal ? '(Opcional)' : '(Seleção Múltipla) *'}</label>
+              <span class="text-[9px] text-purple-300 font-bold">${isVerbal ? 'Referência opcional para orientação verbal' : 'Marque uma ou mais alíneas (Obrigatório)'}</span>
             </div>
             <div class="max-h-48 overflow-y-auto space-y-1.5 p-2 bg-slate-900 border border-slate-700 rounded text-xs">
               ${ALINEAS_CLT_482.map(a => `
@@ -19429,9 +21225,15 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
 
           <div class="flex items-center justify-between gap-3 pt-3 border-t border-slate-800">
             <button type="button" onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded text-xs">Cancelar</button>
+            ${isVerbal ? `
+            <button type="submit" class="bg-gradient-to-r from-slate-700 to-slate-600 hover:from-slate-600 hover:to-slate-500 text-white font-black px-6 py-2.5 rounded-xl shadow-lg text-xs flex items-center gap-2">
+              <span>📝</span> Registrar no Histórico do Colaborador
+            </button>
+            ` : `
             <button type="submit" class="bg-gradient-to-r ${tipo==='SUSPENSAO'?'from-red-700 to-red-600 hover:from-red-600 hover:to-red-500':'from-purple-700 to-purple-600 hover:from-purple-600 hover:to-purple-500'} text-white font-black px-6 py-2.5 rounded-xl shadow-lg text-xs flex items-center gap-2">
               <span>🖨️</span> Gerar PDF Oficial (CSA A4)
             </button>
+            `}
           </div>
         </form>
       </div>
@@ -19443,14 +21245,17 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
 function handleConfirmarEmissaoDisciplinar(e) {
   e.preventDefault();
   const tipo = document.getElementById('disc-tipo')?.value || 'ADVERTENCIA';
+  const gerarPdf = (document.getElementById('disc-gerar-pdf')?.value || 'true') === 'true';
   const selectElem = document.getElementById('disc-colab-select');
   const nome = (selectElem?.value || document.getElementById('disc-nome-manual')?.value || '').trim().toUpperCase();
   
-  // Captura alíneas selecionadas (multi-opção)
+  // Captura alíneas selecionadas (multi-opção). Para Orientação Verbal, as
+  // alíneas do Art. 482 CLT são opcionais — nem toda orientação verbal está
+  // ligada a uma hipótese de justa causa.
   const checkedBoxes = document.querySelectorAll('input[name="disc-alinea-check"]:checked');
   const alineasSelecionadasKeys = Array.from(checkedBoxes).map(cb => cb.value);
 
-  if (alineasSelecionadasKeys.length === 0) {
+  if (tipo !== 'ORIENTACAO_VERBAL' && alineasSelecionadasKeys.length === 0) {
     alert('Selecione pelo menos uma alínea do Artigo 482 da CLT.');
     return;
   }
@@ -19493,21 +21298,47 @@ function handleConfirmarEmissaoDisciplinar(e) {
     }
   }
 
+  // Salva SEMPRE um registro em medidas_disciplinares, independente de a
+  // emissão ter vindo de uma ocorrência do Resumo Diário CD ou de forma
+  // avulsa (ex: Boletim Gerencial) — item 2 pendente: "controle de
+  // reincidência" só funciona se todo tipo de emissão for registrado.
+  const jaTinhaAntes = db.contarReincidencia(nome, tipo);
+  const resMedida = db.registrarMedidaDisciplinar({
+    tipo,
+    colaborador_tipo: 'CD',
+    colaborador_id: colabMatched ? colabMatched.id : null,
+    colaborador_nome: nome,
+    chapa, cpf, funcao, secao,
+    alineas_clt: alineasSelecionadasKeys.join(', '),
+    dias_suspensao: diasSuspensao,
+    motivo,
+    gestor,
+    data_ocorrencia: dataOc
+  });
+
   fecharModalResumo();
 
-  gerarPdfDisciplinarOficial({
-    tipo,
-    nome,
-    chapa,
-    cpf,
-    funcao,
-    secao,
-    alineasKeys: alineasSelecionadasKeys,
-    diasSuspensao,
-    dataOc,
-    gestor,
-    motivo
-  });
+  if (!resMedida.success) {
+    showToast(resMedida.message, 'error');
+  } else if (jaTinhaAntes > 0) {
+    showToast(`⚠️ Atenção: esta é a ${jaTinhaAntes + 1}ª medida do tipo "${tipo === 'SUSPENSAO' ? 'Suspensão' : tipo === 'ORIENTACAO_VERBAL' ? 'Orientação Verbal' : 'Advertência'}" para ${nome}.`, 'warning');
+  }
+
+  if (gerarPdf) {
+    gerarPdfDisciplinarOficial({
+      tipo,
+      nome,
+      chapa,
+      cpf,
+      funcao,
+      secao,
+      alineasKeys: alineasSelecionadasKeys,
+      diasSuspensao,
+      dataOc,
+      gestor,
+      motivo
+    });
+  }
 
   renderApp();
 }

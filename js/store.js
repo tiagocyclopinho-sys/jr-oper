@@ -211,6 +211,12 @@ class Store {
     ensureArray('audit_logs');
     ensureArray('retencoes_frota');
     ensureArray('reentregas');
+    ensureArray('itens_avulsos_destinacao');
+    ensureArray('medidas_disciplinares');
+    ensureArray('orientacoes_feedback');
+    ensureArray('atestados_medicos');
+    ensureArray('ausencias_registros');
+    ensureArray('sinistros');
 
     // Migração leve, roda uma única vez por dispositivo (idempotente):
     // 1) garante um 'id' único em cada item de devolução — sem isso, o
@@ -250,6 +256,25 @@ class Store {
         });
       }
     });
+    // 3) renomeia o rótulo "AVARIA NO MANUSEIO" (Requisito/Falha das
+    //    ocorrências de colaborador no CD) para "AVARIA DE PRODUTO" em
+    //    registros já salvos, para acompanhar a opção renomeada no formulário
+    //    (pedido de 19/08/2026) e manter filtros/relatórios consistentes.
+    let precisaSalvarMigracaoOcCD = false;
+    (this.data.resumo_diario_cd || []).forEach(resumo => {
+      if (Array.isArray(resumo.ocorrencias_colaboradores)) {
+        resumo.ocorrencias_colaboradores.forEach(oc => {
+          if (oc.requisito === 'AVARIA NO MANUSEIO') {
+            oc.requisito = 'AVARIA DE PRODUTO';
+            precisaSalvarMigracaoOcCD = true;
+          }
+        });
+      }
+    });
+    if (precisaSalvarMigracaoOcCD) {
+      this.save();
+    }
+
     if (precisaSalvarMigracaoItens) {
       this.save();
     }
@@ -1100,8 +1125,8 @@ class Store {
   }
 
   // CRUD Cadastros Auxiliares (Dados SAC)
-  addMotorista(cod_erp, nome, cnh, telefone) {
-    const item = { id: cod_erp ? parseInt(cod_erp) : Date.now(), nome: nome.toUpperCase(), cnh, telefone };
+  addMotorista(cod_erp, nome, cnh, telefone, data_admissao, data_desligamento) {
+    const item = { id: cod_erp ? parseInt(cod_erp) : Date.now(), nome: nome.toUpperCase(), cnh, telefone, data_admissao: data_admissao || null, data_desligamento: data_desligamento || null };
     if (this.data.motoristas.find(x => x.id == item.id)) {
       alert('Código ERP já cadastrado!');
       return null;
@@ -1434,6 +1459,8 @@ class Store {
           secao: String(colabData.secao || item.secao || '').trim().toUpperCase(),
           funcao: String(colabData.funcao || item.funcao || 'SEPARADOR').trim().toUpperCase(),
           cpf: String(colabData.cpf !== undefined ? colabData.cpf : item.cpf || '').trim(),
+          data_admissao: colabData.data_admissao !== undefined ? colabData.data_admissao : (item.data_admissao || null),
+          data_desligamento: colabData.data_desligamento !== undefined ? colabData.data_desligamento : (item.data_desligamento || null),
           ativo: colabData.ativo !== undefined ? Boolean(colabData.ativo) : true
         });
       }
@@ -1446,6 +1473,8 @@ class Store {
         secao: String(colabData.secao || 'CARREGAMENTO FRIOS - 1 TURNO').trim().toUpperCase(),
         funcao: String(colabData.funcao || 'SEPARADOR').trim().toUpperCase(),
         cpf: String(colabData.cpf || '').trim(),
+        data_admissao: colabData.data_admissao || null,
+        data_desligamento: colabData.data_desligamento || null,
         ativo: colabData.ativo !== undefined ? Boolean(colabData.ativo) : true
       };
       if (!item.nome) return null;
@@ -1928,6 +1957,318 @@ class Store {
 
   liberarRetencaoFrota(id, dataLiberacao, descricaoAcao) {
     return this.liberarVeiculo(id, dataLiberacao, descricaoAcao);
+  }
+
+  // ===== ITENS AVULSOS DE DESTINAÇÃO =====
+  // Itens que precisam de destinação no CD (reutilização, retrabalho,
+  // descarte, negociação etc.) mas que NÃO vieram de uma Devolução SAC
+  // formal — cobre outras formas de avaria que podem ocorrer direto no CD
+  // (ex: item avariado identificado em conferência avulsa, sobra de
+  // estoque, produto sem devolução associada).
+  addItemAvulsoDestinacao({ produto_codigo, produto_descricao, quantidade, destino_item, data_validade, observacao, status_negociacao, motivo_avulso }) {
+    if (!Array.isArray(this.data.itens_avulsos_destinacao)) this.data.itens_avulsos_destinacao = [];
+    const item = {
+      id: `avulso_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      produto_codigo: String(produto_codigo || '').toUpperCase().trim() || null,
+      produto_descricao: String(produto_descricao || '').toUpperCase().trim() || 'PRODUTO NÃO ESPECIFICADO',
+      quantidade: parseFloat(quantidade) || 1,
+      destino_item: destino_item || 'ESTOQUE_REUTILIZACAO',
+      data_validade: data_validade || null,
+      observacao: String(observacao || '').toUpperCase().trim(),
+      status_negociacao: status_negociacao || 'EM_NEGOCIACAO',
+      motivo_avulso: String(motivo_avulso || '').toUpperCase().trim(),
+      divisoes_destino: [],
+      is_deleted: false,
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString()
+    };
+    this.data.itens_avulsos_destinacao.push(item);
+    const salvou = this.save();
+    return salvou
+      ? { success: true, item }
+      : { success: false, item, message: 'Não foi possível salvar o item avulso neste dispositivo. Tente novamente.' };
+  }
+
+  getItensAvulsosDestinacao() {
+    return (this.data.itens_avulsos_destinacao || []).filter(i => !i.is_deleted);
+  }
+
+  excluirItemAvulsoDestinacao(id) {
+    const item = (this.data.itens_avulsos_destinacao || []).find(i => String(i.id) === String(id));
+    if (!item) return { success: false, message: 'Item avulso não encontrado.' };
+    item.is_deleted = true;
+    item.deleted_at = new Date().toISOString();
+    const salvou = this.save();
+    return { success: salvou };
+  }
+
+  // ===== MEDIDAS DISCIPLINARES (Parte A do documento de Acompanhamento de
+  // Pessoas, 18/08/2026) =====
+  // Coleção única e consultável de toda Orientação Verbal, Advertência e
+  // Suspensão emitida — antes disso, a emissão só marcava um campo na
+  // ocorrência de origem (ou nada, se emitida avulsa), sem permitir
+  // consultar o histórico/reincidência de um colaborador.
+  registrarMedidaDisciplinar({ tipo, colaborador_tipo, colaborador_id, colaborador_nome, chapa, cpf, funcao, secao, alineas_clt, dias_suspensao, motivo, gestor, data_ocorrencia }) {
+    if (!Array.isArray(this.data.medidas_disciplinares)) this.data.medidas_disciplinares = [];
+    const numero_medida = this.getNextSequenceNumber('medidas_disciplinares', 'numero_medida', 'MD-', 4);
+    const medida = {
+      id: `medida_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      numero_medida,
+      tipo: tipo || 'ORIENTACAO_VERBAL', // 'ORIENTACAO_VERBAL' | 'ADVERTENCIA' | 'SUSPENSAO'
+      colaborador_tipo: colaborador_tipo || 'CD', // 'CD' | 'MOTORISTA'
+      colaborador_id: colaborador_id || null,
+      colaborador_nome: String(colaborador_nome || '').toUpperCase().trim(),
+      chapa: chapa || null,
+      cpf: cpf || null,
+      funcao: funcao || null,
+      secao: secao || null,
+      alineas_clt: alineas_clt || null,
+      dias_suspensao: tipo === 'SUSPENSAO' ? (parseInt(dias_suspensao, 10) || 1) : null,
+      motivo: String(motivo || '').trim(),
+      gestor: String(gestor || '').toUpperCase().trim(),
+      data_ocorrencia: data_ocorrencia || new Date().toISOString().split('T')[0],
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString(),
+      is_deleted: false
+    };
+    this.data.medidas_disciplinares.push(medida);
+    const salvou = this.save();
+    return salvou
+      ? { success: true, medida }
+      : { success: false, medida, message: 'Não foi possível salvar a medida disciplinar neste dispositivo. Tente novamente.' };
+  }
+
+  getMedidasDisciplinares({ colaboradorNome, colaboradorTipo, tipo, dataDe, dataAte } = {}) {
+    let lista = (this.data.medidas_disciplinares || []).filter(m => !m.is_deleted);
+    if (colaboradorNome) {
+      const alvo = String(colaboradorNome).toUpperCase().trim();
+      lista = lista.filter(m => m.colaborador_nome === alvo);
+    }
+    if (colaboradorTipo) lista = lista.filter(m => m.colaborador_tipo === colaboradorTipo);
+    if (tipo) lista = lista.filter(m => m.tipo === tipo);
+    if (dataDe) lista = lista.filter(m => (m.data_ocorrencia || '') >= dataDe);
+    if (dataAte) lista = lista.filter(m => (m.data_ocorrencia || '') <= dataAte);
+    return lista.sort((a, b) => new Date(b.data_ocorrencia || 0) - new Date(a.data_ocorrencia || 0));
+  }
+
+  contarReincidencia(colaboradorNome, tipo) {
+    if (!colaboradorNome) return 0;
+    const alvo = String(colaboradorNome).toUpperCase().trim();
+    return (this.data.medidas_disciplinares || []).filter(m =>
+      !m.is_deleted && m.colaborador_nome === alvo && (!tipo || m.tipo === tipo)
+    ).length;
+  }
+
+  // ===== ACOMPANHAMENTO DE FUNCIONÁRIO / DOSSIÊ MOTORISTA (Parte B do
+  // documento de 18/08/2026) =====
+  // Três seções da planilha anexa que não têm fonte de dado em nenhum
+  // outro módulo do sistema hoje — lançamento manual mesmo, igual a
+  // planilha já fazia. Mesmo padrão das outras coleções: id, save() com
+  // verificação de retorno, soft delete, consulta por colaborador.
+
+  addOrientacaoFeedback({ colaborador_tipo, colaborador_id, colaborador_nome, data, ocorrencia, acao }) {
+    if (!Array.isArray(this.data.orientacoes_feedback)) this.data.orientacoes_feedback = [];
+    const registro = {
+      id: `orient_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      colaborador_tipo: colaborador_tipo || 'CD',
+      colaborador_id: colaborador_id || null,
+      colaborador_nome: String(colaborador_nome || '').toUpperCase().trim(),
+      data: data || new Date().toISOString().split('T')[0],
+      ocorrencia: String(ocorrencia || '').trim(),
+      acao: String(acao || '').trim(),
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString(),
+      is_deleted: false
+    };
+    this.data.orientacoes_feedback.push(registro);
+    const salvou = this.save();
+    return salvou ? { success: true, registro } : { success: false, registro, message: 'Não foi possível salvar neste dispositivo. Tente novamente.' };
+  }
+
+  excluirOrientacaoFeedback(id) {
+    const r = (this.data.orientacoes_feedback || []).find(x => String(x.id) === String(id));
+    if (!r) return { success: false, message: 'Registro não encontrado.' };
+    r.is_deleted = true;
+    r.deleted_at = new Date().toISOString();
+    return { success: this.save() };
+  }
+
+  getOrientacoesFeedback(colaboradorNome) {
+    let lista = (this.data.orientacoes_feedback || []).filter(r => !r.is_deleted);
+    if (colaboradorNome) {
+      const alvo = String(colaboradorNome).toUpperCase().trim();
+      lista = lista.filter(r => r.colaborador_nome === alvo);
+    }
+    return lista.sort((a, b) => new Date(b.data || 0) - new Date(a.data || 0));
+  }
+
+  addAtestadoMedico({ colaborador_tipo, colaborador_id, colaborador_nome, data, tipo_afastamento, motivo, cid, medico, crm_cro }) {
+    if (!Array.isArray(this.data.atestados_medicos)) this.data.atestados_medicos = [];
+    const registro = {
+      id: `atest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      colaborador_tipo: colaborador_tipo || 'CD',
+      colaborador_id: colaborador_id || null,
+      colaborador_nome: String(colaborador_nome || '').toUpperCase().trim(),
+      data: data || new Date().toISOString().split('T')[0],
+      tipo_afastamento: tipo_afastamento === 'INTEGRAL' ? 'INTEGRAL' : 'PARCIAL',
+      motivo: String(motivo || '').trim(),
+      cid: String(cid || '').toUpperCase().trim(),
+      medico: String(medico || '').toUpperCase().trim(),
+      crm_cro: String(crm_cro || '').toUpperCase().trim(),
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString(),
+      is_deleted: false
+    };
+    this.data.atestados_medicos.push(registro);
+    const salvou = this.save();
+    return salvou ? { success: true, registro } : { success: false, registro, message: 'Não foi possível salvar neste dispositivo. Tente novamente.' };
+  }
+
+  excluirAtestadoMedico(id) {
+    const r = (this.data.atestados_medicos || []).find(x => String(x.id) === String(id));
+    if (!r) return { success: false, message: 'Registro não encontrado.' };
+    r.is_deleted = true;
+    r.deleted_at = new Date().toISOString();
+    return { success: this.save() };
+  }
+
+  getAtestadosMedicos(colaboradorNome) {
+    let lista = (this.data.atestados_medicos || []).filter(r => !r.is_deleted);
+    if (colaboradorNome) {
+      const alvo = String(colaboradorNome).toUpperCase().trim();
+      lista = lista.filter(r => r.colaborador_nome === alvo);
+    }
+    return lista.sort((a, b) => new Date(b.data || 0) - new Date(a.data || 0));
+  }
+
+  addAusenciaRegistro({ colaborador_tipo, colaborador_id, colaborador_nome, data, motivo }) {
+    if (!Array.isArray(this.data.ausencias_registros)) this.data.ausencias_registros = [];
+    const registro = {
+      id: `ausen_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      colaborador_tipo: colaborador_tipo || 'CD',
+      colaborador_id: colaborador_id || null,
+      colaborador_nome: String(colaborador_nome || '').toUpperCase().trim(),
+      data: data || new Date().toISOString().split('T')[0],
+      motivo: String(motivo || '').trim(),
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString(),
+      is_deleted: false
+    };
+    this.data.ausencias_registros.push(registro);
+    const salvou = this.save();
+    return salvou ? { success: true, registro } : { success: false, registro, message: 'Não foi possível salvar neste dispositivo. Tente novamente.' };
+  }
+
+  excluirAusenciaRegistro(id) {
+    const r = (this.data.ausencias_registros || []).find(x => String(x.id) === String(id));
+    if (!r) return { success: false, message: 'Registro não encontrado.' };
+    r.is_deleted = true;
+    r.deleted_at = new Date().toISOString();
+    return { success: this.save() };
+  }
+
+  getAusenciasRegistros(colaboradorNome) {
+    let lista = (this.data.ausencias_registros || []).filter(r => !r.is_deleted);
+    if (colaboradorNome) {
+      const alvo = String(colaboradorNome).toUpperCase().trim();
+      lista = lista.filter(r => r.colaborador_nome === alvo);
+    }
+    return lista.sort((a, b) => new Date(b.data || 0) - new Date(a.data || 0));
+  }
+
+  // Busca um motorista pelo nome no cadastro mestre (equivalente a
+  // getDadosColaboradorMestre, que só busca em colaboradores_cd).
+  getDadosMotoristaMestre(nome) {
+    if (!nome) return null;
+    const alvo = String(nome).toUpperCase().trim();
+    return (this.data.motoristas || []).find(m => String(m.nome || '').toUpperCase().trim() === alvo) || null;
+  }
+
+  // ===== INVESTIGAÇÃO DE SINISTRO (baseado no Formulário_Investigação_de_
+  // Acidente.docx, 18/08/2026) =====
+  // Fluxo de 5 etapas (Motorista, Manutenção de Frota, Operações e
+  // Logística, Jurídico [opcional], Diretoria). As etapas NÃO são
+  // bloqueadas entre si (podem ser preenchidas em paralelo por pessoas
+  // diferentes), mas o registro só fica com status_geral 'CONCLUIDO'
+  // quando todas as etapas aplicáveis estiverem completas — até lá,
+  // permanece 'PENDENTE' e aparece no painel de alerta.
+  // O "croqui" do papel foi substituído por upload de fotos reaproveitando
+  // o mesmo padrão já usado em Devolução SAC / Oc em Rota.
+
+  _recalcularStatusSinistro(s) {
+    const juridicoOk = !s.juridico_necessario || s.etapa_juridico_completa;
+    s.status_geral = (s.etapa_motorista_completa && s.etapa_manutencao_completa && s.etapa_operacoes_completa && s.etapa_diretoria_completa && juridicoOk)
+      ? 'CONCLUIDO' : 'PENDENTE';
+  }
+
+  addSinistro({ ocorrencia_rota_id, carga, placa, veiculo_id, motorista_nome, motorista_id, data_acidente, local_acidente }) {
+    if (!Array.isArray(this.data.sinistros)) this.data.sinistros = [];
+    const numero_sinistro = this.getNextSequenceNumber('sinistros', 'numero_sinistro', 'SIN-2026-', 4);
+    const sinistro = {
+      id: `sinistro_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      numero_sinistro,
+      ocorrencia_rota_id: ocorrencia_rota_id || null,
+      carga: String(carga || '').toUpperCase().trim(),
+      placa: String(placa || '').toUpperCase().trim(),
+      veiculo_id: veiculo_id || null,
+      motorista_nome: String(motorista_nome || '').toUpperCase().trim(),
+      motorista_id: motorista_id || null,
+      data_acidente: data_acidente || new Date().toISOString().split('T')[0],
+      local_acidente: String(local_acidente || '').toUpperCase().trim(),
+
+      etapa_motorista_completa: false,
+      etapa_manutencao_completa: false,
+      etapa_operacoes_completa: false,
+      juridico_necessario: false,
+      etapa_juridico_completa: false,
+      etapa_diretoria_completa: false,
+      status_geral: 'PENDENTE',
+
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: new Date().toISOString(),
+      is_deleted: false
+    };
+    this.data.sinistros.push(sinistro);
+    const salvou = this.save();
+    return salvou ? { success: true, sinistro } : { success: false, sinistro, message: 'Não foi possível salvar o sinistro neste dispositivo. Tente novamente.' };
+  }
+
+  // Atualiza os campos de uma etapa específica e marca ela como completa.
+  // `dadosEtapa` é aplicado diretamente sobre o registro (union), sem
+  // apagar dados de outras etapas.
+  atualizarEtapaSinistro(id, etapa, dadosEtapa, completa) {
+    const s = (this.data.sinistros || []).find(x => String(x.id) === String(id) && !x.is_deleted);
+    if (!s) return { success: false, message: 'Sinistro não encontrado.' };
+    Object.assign(s, dadosEtapa || {});
+    if (etapa === 'motorista') s.etapa_motorista_completa = completa !== false;
+    else if (etapa === 'manutencao') s.etapa_manutencao_completa = completa !== false;
+    else if (etapa === 'operacoes') s.etapa_operacoes_completa = completa !== false;
+    else if (etapa === 'juridico') s.etapa_juridico_completa = completa !== false;
+    else if (etapa === 'diretoria') s.etapa_diretoria_completa = completa !== false;
+    s.atualizado_em = new Date().toISOString();
+    this._recalcularStatusSinistro(s);
+    const salvou = this.save();
+    return salvou ? { success: true, sinistro: s } : { success: false, sinistro: s, message: 'Não foi possível salvar neste dispositivo. Tente novamente.' };
+  }
+
+  excluirSinistro(id) {
+    const s = (this.data.sinistros || []).find(x => String(x.id) === String(id));
+    if (!s) return { success: false, message: 'Sinistro não encontrado.' };
+    s.is_deleted = true;
+    s.deleted_at = new Date().toISOString();
+    return { success: this.save() };
+  }
+
+  getSinistros({ motoristaNome, status, dataDe, dataAte } = {}) {
+    let lista = (this.data.sinistros || []).filter(s => !s.is_deleted);
+    if (motoristaNome) {
+      const alvo = String(motoristaNome).toUpperCase().trim();
+      lista = lista.filter(s => s.motorista_nome === alvo);
+    }
+    if (status) lista = lista.filter(s => s.status_geral === status);
+    if (dataDe) lista = lista.filter(s => (s.data_acidente || '') >= dataDe);
+    if (dataAte) lista = lista.filter(s => (s.data_acidente || '') <= dataAte);
+    return lista.sort((a, b) => new Date(b.data_acidente || 0) - new Date(a.data_acidente || 0));
   }
 
   /**
