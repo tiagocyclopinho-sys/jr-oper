@@ -275,6 +275,38 @@ class Store {
       this.save();
     }
 
+    // 4) Orientação Verbal deixou de ser uma medida administrativa
+    //    (pedido de 19/08/2026): registros que já tinham sido emitidos
+    //    como medida disciplinar são migrados para orientacoes_feedback
+    //    (mesma coleção do bloco "Orientação e Feedback") e marcados como
+    //    excluídos em medidas_disciplinares, para não sumir do histórico
+    //    do colaborador nem ficar contando como "medida administrativa"
+    //    (que passa a conter só Advertência e Suspensão).
+    let precisaSalvarMigracaoOV = false;
+    (this.data.medidas_disciplinares || []).forEach(m => {
+      if (m.tipo === 'ORIENTACAO_VERBAL' && !m.is_deleted) {
+        if (!Array.isArray(this.data.orientacoes_feedback)) this.data.orientacoes_feedback = [];
+        this.data.orientacoes_feedback.push({
+          id: `orient_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          colaborador_tipo: m.colaborador_tipo || 'CD',
+          colaborador_id: m.colaborador_id || null,
+          colaborador_nome: m.colaborador_nome,
+          data: m.data_ocorrencia,
+          ocorrencia: m.motivo || '',
+          acao: `ORIENTAÇÃO VERBAL APLICADA${m.gestor ? ` — GESTOR: ${m.gestor}` : ''}`,
+          criado_por: m.criado_por || 'SISTEMA',
+          criado_em: m.criado_em || new Date().toISOString(),
+          is_deleted: false
+        });
+        m.is_deleted = true;
+        m.deleted_at = new Date().toISOString();
+        precisaSalvarMigracaoOV = true;
+      }
+    });
+    if (precisaSalvarMigracaoOV) {
+      this.save();
+    }
+
     if (precisaSalvarMigracaoItens) {
       this.save();
     }
@@ -2165,6 +2197,27 @@ class Store {
     r.is_deleted = true;
     r.deleted_at = new Date().toISOString();
     return { success: this.save() };
+  }
+
+  // Bloco "Faltas / Condutas / Ausências" do Acompanhamento de Funcionário
+  // e do Dossiê Motorista deixou de ter lançamento próprio (pedido de
+  // 19/08/2026) e passou a puxar da "Gestão de Faltas, Condutas &
+  // Ausências" já existente dentro do Resumo Diário CD — mesmo dado, sem
+  // duplicar o lançamento. resumo_diario_cd é gravado por data+turno, e
+  // cada falta_conduta não carrega a própria data, então ela é herdada do
+  // resumo que a contém ao montar o resultado.
+  getFaltasCondutasPorColaborador(nome) {
+    if (!nome) return [];
+    const alvo = String(nome).toUpperCase().trim();
+    const resultado = [];
+    (this.data.resumo_diario_cd || []).forEach(resumo => {
+      (resumo.faltas_condutas || []).forEach(f => {
+        if (String(f.nome || '').toUpperCase().trim() === alvo) {
+          resultado.push({ ...f, data: resumo.data, turno: resumo.turno });
+        }
+      });
+    });
+    return resultado.sort((a, b) => new Date(b.data || 0) - new Date(a.data || 0));
   }
 
   getAusenciasRegistros(colaboradorNome) {

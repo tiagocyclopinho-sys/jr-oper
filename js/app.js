@@ -1067,9 +1067,12 @@ function renderBlocoOrientacaoFeedback(nome, tipo, varDe, varAte, formVisivelVar
   const formAberto = window[formVisivelVar] === true;
   return `
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between flex-wrap gap-2">
         <h3 class="text-xs font-black text-emerald-400 uppercase flex items-center gap-2"><span>💬</span> Orientação e Feedback (${registros.length})</h3>
-        <button onclick="window['${formVisivelVar}']=${!formAberto}; renderApp()" class="text-[10px] bg-emerald-900/60 hover:bg-emerald-800 border border-emerald-700 text-emerald-300 px-2 py-1 rounded-full font-bold transition">${formAberto ? '✕ Fechar' : '+ Adicionar'}</button>
+        <div class="flex items-center gap-1.5">
+          <button onclick="abrirModalEmissaoDisciplinarCD({ tipo: 'ORIENTACAO_VERBAL', colabNome: '${nome.replace(/'/g,"\\'")}' })" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1 rounded-full font-bold transition flex items-center gap-1" title="Formulário completo, com gestor responsável e detalhamento dos fatos">🗣️ Emitir Orientação Verbal</button>
+          <button onclick="window['${formVisivelVar}']=${!formAberto}; renderApp()" class="text-[10px] bg-emerald-900/60 hover:bg-emerald-800 border border-emerald-700 text-emerald-300 px-2 py-1 rounded-full font-bold transition">${formAberto ? '✕ Fechar' : '+ Adicionar Nota Rápida'}</button>
+        </div>
       </div>
       ${formAberto ? `
       <form onsubmit="handleAddOrientacaoFeedback(event, '${nome.replace(/'/g,"\\'")}', '${tipo}')" class="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
@@ -1156,47 +1159,44 @@ function handleExcluirAtestadoMedico(id) {
   renderApp();
 }
 
-// --- Bloco 3: Dispensas/Atrasos/Faltas ---
+// --- Bloco 3: Faltas / Condutas / Ausências — só consulta (pedido de
+// 19/08/2026: parou de ter lançamento próprio e passou a puxar da
+// "Gestão de Faltas, Condutas & Ausências" do Resumo Diário CD, mesmo
+// padrão de reaproveitamento já usado no Bloco 4/Medidas Administrativas). ---
 function renderBlocoAusencias(nome, tipo, varDe, varAte, formVisivelVar) {
-  const registros = filtrarPorData(db.getAusenciasRegistros(nome), varDe, varAte);
-  const formAberto = window[formVisivelVar] === true;
+  const registros = filtrarPorData(db.getFaltasCondutasPorColaborador(nome), varDe, varAte);
   return `
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
-      <div class="flex items-center justify-between">
-        <h3 class="text-xs font-black text-amber-400 uppercase flex items-center gap-2"><span>⏱️</span> Dispensas / Atrasos / Faltas (${registros.length})</h3>
-        <button onclick="window['${formVisivelVar}']=${!formAberto}; renderApp()" class="text-[10px] bg-amber-900/60 hover:bg-amber-800 border border-amber-700 text-amber-300 px-2 py-1 rounded-full font-bold transition">${formAberto ? '✕ Fechar' : '+ Adicionar'}</button>
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <h3 class="text-xs font-black text-amber-400 uppercase flex items-center gap-2"><span>⏱️</span> Faltas, Condutas & Ausências (${registros.length})</h3>
+        <span class="text-[9px] text-slate-500">Lançado no Resumo Diário CD, seção "Gestão de Faltas, Condutas & Ausências"</span>
       </div>
-      ${formAberto ? `
-      <form onsubmit="handleAddAusenciaRegistro(event, '${nome.replace(/'/g,"\\'")}', '${tipo}')" class="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
-        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data *</label><input type="date" id="ar-data" required value="${new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
-        <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Motivo *</label><input type="text" id="ar-motivo" required placeholder="Ex: Falta injustificada, atraso 15min, saída antecipada..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
-        <div class="flex items-end"><button type="submit" class="w-full bg-amber-600 hover:bg-amber-500 text-white font-bold py-1.5 rounded text-xs">Salvar</button></div>
-      </form>` : ''}
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
-          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Motivo</th><th class="p-2 text-right">.</th></tr></thead>
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]">
+            <tr>
+              <th class="p-2">Data</th>
+              <th class="p-2">Turno</th>
+              <th class="p-2">Conduta / Ausência</th>
+              <th class="p-2 text-center">Avisado?</th>
+              <th class="p-2 text-center">Período</th>
+              <th class="p-2 text-center">Compensar?</th>
+            </tr>
+          </thead>
           <tbody class="divide-y divide-slate-800">
-            ${registros.length === 0 ? '<tr><td colspan="3" class="p-3 text-center text-slate-500">Nenhum registro.</td></tr>' :
-              registros.map(r => `<tr><td class="p-2">${formatarData(r.data)}</td><td class="p-2">${r.motivo}</td><td class="p-2 text-right"><button onclick="handleExcluirAusenciaRegistro('${r.id}')" class="text-red-400 hover:text-red-300 text-[10px]">🗑️</button></td></tr>`).join('')}
+            ${registros.length === 0 ? '<tr><td colspan="6" class="p-3 text-center text-slate-500">Nenhum registro.</td></tr>' :
+              registros.map(r => `<tr>
+                <td class="p-2">${formatarData(r.data)}</td>
+                <td class="p-2">${r.turno || '—'}</td>
+                <td class="p-2 text-amber-300 font-medium">${r.conduta || '—'}</td>
+                <td class="p-2 text-center"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${r.avisado==='SIM'?'bg-emerald-950 text-emerald-300':'bg-red-950 text-red-300'}">${r.avisado || '—'}</span></td>
+                <td class="p-2 text-center">${r.periodo || 'Integral'}</td>
+                <td class="p-2 text-center">${r.compensar || 'NÃO'}</td>
+              </tr>`).join('')}
           </tbody>
         </table>
       </div>
     </div>`;
-}
-function handleAddAusenciaRegistro(e, nome, tipo) {
-  e.preventDefault();
-  const data = document.getElementById('ar-data')?.value;
-  const motivo = document.getElementById('ar-motivo')?.value;
-  if (!motivo) { alert('Informe o motivo.'); return; }
-  const res = db.addAusenciaRegistro({ colaborador_tipo: tipo, colaborador_nome: nome, data, motivo });
-  if (!res.success) showToast(res.message, 'error'); else showToast('✅ Registro adicionado!');
-  window._acompArFormAberto = false; window._dossieArFormAberto = false;
-  renderApp();
-}
-function handleExcluirAusenciaRegistro(id) {
-  if (!confirm('Excluir este registro?')) return;
-  db.excluirAusenciaRegistro(id);
-  renderApp();
 }
 
 // --- Bloco 4: Medidas Administrativas Aplicadas (só consulta — reaproveita
@@ -1204,12 +1204,17 @@ function handleExcluirAusenciaRegistro(id) {
 function renderBlocoMedidasAdministrativas(nome, tipo, varDe, varAte) {
   const dataDe = window[varDe] || '';
   const dataAte = window[varAte] || '';
-  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined });
+  // Só Advertência e Suspensão (pedido de 19/08/2026) — Orientação Verbal
+  // passou a integrar o bloco de Orientação e Feedback acima, e não é mais
+  // gravada em medidas_disciplinares. O filtro de tipo aqui é só uma
+  // segurança extra: com a migração no store.js, não deve sobrar nenhum
+  // registro de Orientação Verbal nessa coleção de qualquer forma.
+  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
+    .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
   return `
     <div class="bg-slate-900 border border-purple-900/60 rounded-2xl p-4 space-y-3">
       <div class="flex items-center justify-between flex-wrap gap-2">
-        <h3 class="text-xs font-black text-purple-400 uppercase flex items-center gap-2"><span>⚖️</span> Medidas Administrativas Aplicadas (${medidas.length})</h3>
-        <button onclick="abrirModalEmissaoDisciplinarCD({ tipo: 'ORIENTACAO_VERBAL', colabNome: '${nome.replace(/'/g,"\\'")}' })" class="text-[10px] bg-purple-950 hover:bg-purple-900 border border-purple-700 text-purple-300 px-2.5 py-1 rounded-full font-bold transition">+ Emitir Nova Medida</button>
+        <h3 class="text-xs font-black text-purple-400 uppercase flex items-center gap-2"><span>⚖️</span> Medidas Administrativas Aplicadas — Advertência & Suspensão (${medidas.length})</h3>
       </div>
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
@@ -7613,7 +7618,6 @@ function renderPainelMedidasDisciplinares() {
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Tipo</label>
             <select onchange="window._medidasFiltroTipo=this.value; renderPainelMedidasDisciplinares()" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
               <option value="">Todos</option>
-              <option value="ORIENTACAO_VERBAL" ${fTipo==='ORIENTACAO_VERBAL'?'selected':''}>🗣️ Orientação Verbal</option>
               <option value="ADVERTENCIA" ${fTipo==='ADVERTENCIA'?'selected':''}>⚠️ Advertência</option>
               <option value="SUSPENSAO" ${fTipo==='SUSPENSAO'?'selected':''}>⛔ Suspensão</option>
             </select>
@@ -21119,8 +21123,13 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
 
   // Mesmo número de reincidências deste colaborador para este tipo de
   // medida, mostrado antes de confirmar — item 2 pendente: "controle de
-  // reincidência".
-  const reincidenciasAnteriores = initialColabNome ? db.contarReincidencia(initialColabNome, tipo) : 0;
+  // reincidência". Orientação Verbal deixou de ser gravada em
+  // medidas_disciplinares (pedido de 19/08/2026: passa a integrar o bloco
+  // de Orientação e Feedback), então sua contagem de reincidência vem de
+  // orientacoes_feedback em vez de contarReincidencia.
+  const reincidenciasAnteriores = !initialColabNome ? 0
+    : isVerbal ? db.getOrientacoesFeedback(initialColabNome).length
+    : db.contarReincidencia(initialColabNome, tipo);
 
   container.innerHTML = `
     <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -21170,11 +21179,15 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
             </div>
           </div>
 
-          <!-- SELEÇÃO MÚLTIPLA DE ALÍNEAS DA CLT 482 -->
+          <!-- SELEÇÃO MÚLTIPLA DE ALÍNEAS DA CLT 482 — Orientação Verbal não
+          é uma medida formal amparada em alínea do Art. 482 (essa é a
+          diferença prática entre orientar e advertir/suspender), então a
+          seção nem é exibida para esse tipo (pedido de 19/08/2026). -->
+          ${!isVerbal ? `
           <div class="bg-slate-950 p-3 rounded-xl border border-purple-800/80 space-y-2">
             <div class="flex items-center justify-between">
-              <label class="block text-[10px] font-black text-purple-400 uppercase">2. Alínea(s) do Artigo 482 da CLT ${isVerbal ? '(Opcional)' : '(Seleção Múltipla) *'}</label>
-              <span class="text-[9px] text-purple-300 font-bold">${isVerbal ? 'Referência opcional para orientação verbal' : 'Marque uma ou mais alíneas (Obrigatório)'}</span>
+              <label class="block text-[10px] font-black text-purple-400 uppercase">2. Alínea(s) do Artigo 482 da CLT (Seleção Múltipla) *</label>
+              <span class="text-[9px] text-purple-300 font-bold">Marque uma ou mais alíneas (Obrigatório)</span>
             </div>
             <div class="max-h-48 overflow-y-auto space-y-1.5 p-2 bg-slate-900 border border-slate-700 rounded text-xs">
               ${ALINEAS_CLT_482.map(a => `
@@ -21187,7 +21200,7 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
                 </label>
               `).join('')}
             </div>
-          </div>
+          </div>` : ''}
 
           ${tipo === 'SUSPENSAO' ? `
           <!-- CAMPO DIAS DE SUSPENSÃO -->
@@ -21298,23 +21311,40 @@ function handleConfirmarEmissaoDisciplinar(e) {
     }
   }
 
-  // Salva SEMPRE um registro em medidas_disciplinares, independente de a
-  // emissão ter vindo de uma ocorrência do Resumo Diário CD ou de forma
-  // avulsa (ex: Boletim Gerencial) — item 2 pendente: "controle de
-  // reincidência" só funciona se todo tipo de emissão for registrado.
-  const jaTinhaAntes = db.contarReincidencia(nome, tipo);
-  const resMedida = db.registrarMedidaDisciplinar({
-    tipo,
-    colaborador_tipo: 'CD',
-    colaborador_id: colabMatched ? colabMatched.id : null,
-    colaborador_nome: nome,
-    chapa, cpf, funcao, secao,
-    alineas_clt: alineasSelecionadasKeys.join(', '),
-    dias_suspensao: diasSuspensao,
-    motivo,
-    gestor,
-    data_ocorrencia: dataOc
-  });
+  // Orientação Verbal não é mais uma medida administrativa (pedido de
+  // 19/08/2026): passa a ser gravada em orientacoes_feedback — o mesmo
+  // bloco "Orientação e Feedback" do Acompanhamento de Funcionário/Dossiê
+  // Motorista — deixando medidas_disciplinares só com Advertência e
+  // Suspensão. Fora isso, o fluxo de salvamento é idêntico (sempre grava,
+  // venha a emissão de uma ocorrência do Resumo Diário CD ou avulsa).
+  let resMedida;
+  let jaTinhaAntes;
+  if (tipo === 'ORIENTACAO_VERBAL') {
+    jaTinhaAntes = db.getOrientacoesFeedback(nome).length;
+    const resOrientacao = db.addOrientacaoFeedback({
+      colaborador_tipo: 'CD',
+      colaborador_id: colabMatched ? colabMatched.id : null,
+      colaborador_nome: nome,
+      data: dataOc,
+      ocorrencia: motivo,
+      acao: `ORIENTAÇÃO VERBAL APLICADA${gestor ? ` — GESTOR: ${gestor}` : ''}`
+    });
+    resMedida = { success: resOrientacao.success, message: resOrientacao.message };
+  } else {
+    jaTinhaAntes = db.contarReincidencia(nome, tipo);
+    resMedida = db.registrarMedidaDisciplinar({
+      tipo,
+      colaborador_tipo: 'CD',
+      colaborador_id: colabMatched ? colabMatched.id : null,
+      colaborador_nome: nome,
+      chapa, cpf, funcao, secao,
+      alineas_clt: alineasSelecionadasKeys.join(', '),
+      dias_suspensao: diasSuspensao,
+      motivo,
+      gestor,
+      data_ocorrencia: dataOc
+    });
+  }
 
   fecharModalResumo();
 
