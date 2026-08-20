@@ -77,6 +77,9 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 window.addEventListener('load', runInitSafely);
 setTimeout(runInitSafely, 100);
 
+// A tela nunca era atualizada quando dado novo chegava da nuvem em segundo plano (ex: import de escala feito em outro aparelho) - o CloudStore ja disparava esse evento, mas nada escutava, entao so um F5 manual mostrava os dados novos (achado de 20/08/2026).
+window.addEventListener('jr-cloud-sync', () => { if (typeof renderApp === 'function') renderApp(); });
+
 // ===== UTILITÁRIOS GLOBAIS DE FORMATAÇÃO E NORMALIZAÇÃO DE DATA (DD/MM/AAAA) =====
 function formatarData(val, fallback = '—') {
   if (val === null || val === undefined || val === '') return fallback;
