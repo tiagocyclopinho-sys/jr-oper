@@ -203,7 +203,9 @@ class CloudStore {
     }
   }
 
-  // ---------------------------------------------------------------
+  async clearCloudTrainingData() { if (!this.isConfigured()) return { success: true, skipped: true }; const tabelas = ['ocorrencias_devolucao', 'itens_devolucao', 'cargas', 'controle_viagens', 'ocorrencias_viagens', 'ocorrencias_rota', 'resumo_diario_cd', 'relatorios_divergencia', 'auditoria_produtividade', 'trocas_veiculos', 'retencoes_frota', 'reentregas_rota', 'audit_logs', 'registro_versoes']; let ok = true; for (const t of tabelas) { try { const response = await fetch(`${this.config.url}/rest/v1/${t}?id=not.is.null`, { method: 'DELETE', headers: this._headers() }); if (!response.ok) { ok = false; console.warn(`[CloudStore] Erro ao limpar ${t} na nuvem:`, response.status, await response.text()); } } catch(e) { ok = false; console.warn(`[CloudStore] Falha na rede ao limpar ${t} na nuvem:`, e.message); } } return { success: ok }; }
+  
+    // ---------------------------------------------------------------
   // SINCRONIZAÇÃO AUTOMÁTICA: Local → Nuvem
   // Pega os dados do LocalStorage e envia para o Supabase
   // ---------------------------------------------------------------
