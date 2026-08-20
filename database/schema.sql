@@ -354,6 +354,79 @@ CREATE INDEX IF NOT EXISTS idx_clientes_is_deleted ON clientes(is_deleted) WHERE
 CREATE INDEX IF NOT EXISTS idx_produtos_is_deleted ON produtos(is_deleted) WHERE is_deleted = FALSE;
 
 -- =============================================================================
+-- 10.4b LIMPEZA DE VIEWS ANTIGAS (achado em 20/08/2026) — se este schema já
+-- foi rodado antes (mesmo numa versão anterior, com as views ainda dentro
+-- deste arquivo), as 6 views de BI podem já existir no banco e ainda
+-- estarem "presas" ao tipo antigo (INTEGER) das colunas abaixo. Isso
+-- bloqueia o ALTER COLUMN da seção 10.5 com o mesmo erro de sempre
+-- ("cannot alter type of a column used by a view or rule"), mesmo esse
+-- arquivo não criando mais nenhuma view. Removendo aqui, incondicionalmente
+-- e de forma idempotente (IF EXISTS), garante que o schema.sql sempre
+-- rode do zero independente do que sobrou de tentativas anteriores. As
+-- views voltam a existir ao rodar database/schema_views.sql (Query 2) —
+-- rodar esse arquivo de novo depois deste é obrigatório sempre que este
+-- bloco disparar.
+DROP VIEW IF EXISTS vw_bi_produtividade_equipe CASCADE;
+DROP VIEW IF EXISTS vw_bi_devolucoes_causa_raiz CASCADE;
+DROP VIEW IF EXISTS vw_bi_frota_veiculos_parados CASCADE;
+DROP VIEW IF EXISTS vw_bi_controle_cd_pendencias CASCADE;
+DROP VIEW IF EXISTS vw_bi_trocas_veiculos CASCADE;
+DROP VIEW IF EXISTS vw_bi_disponibilidade_frota CASCADE;
+
+-- =============================================================================
+-- 10.5 CORREÇÃO DE TIPO: id gerado no cliente não cabe em INTEGER (32 bits)
+-- (achado em 19/08/2026, antes do go-live) — o app gera id com Date.now(),
+-- um número de 13 dígitos (hoje ~1,78 trilhão). O limite do INTEGER de 32
+-- bits do Postgres é ~2,1 bilhões. Como a sincronização Local→Nuvem envia
+-- esse id explicitamente (upsert por chave primária), TODA gravação nas
+-- tabelas abaixo falhava com "integer out of range" ao tentar sincronizar
+-- — silenciosamente, sem avisar o usuário, os dados ficavam presos só no
+-- aparelho local. PRECISA rodar antes de qualquer VIEW ser criada (uma
+-- view que dependa da coluna trava o ALTER COLUMN com o erro "cannot
+-- alter type of a column used by a view or rule") — por isso este bloco
+-- fica aqui, logo após as tabelas base, e não mais perto do fim do
+-- arquivo. ALTER COLUMN TYPE é seguro de rodar de novo (idempotente na
+-- prática — mudar um BIGINT para BIGINT não dá erro).
+ALTER TABLE usuarios ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE motoristas ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE ajudantes ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE colaboradores_cd ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE veiculos ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE clientes ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE produtos ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE cargas ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE ocorrencias_rota ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE trocas_veiculos ALTER COLUMN id TYPE BIGINT;
+
+-- Colunas que guardam uma referência (FK) a alguma das tabelas acima —
+-- mesmo estouro se ficarem como INT.
+ALTER TABLE colaboradores_cd ALTER COLUMN deleted_by_usuario_id TYPE BIGINT;
+ALTER TABLE cargas ALTER COLUMN motorista_id TYPE BIGINT;
+ALTER TABLE cargas ALTER COLUMN ajudante_id TYPE BIGINT;
+ALTER TABLE cargas ALTER COLUMN veiculo_id TYPE BIGINT;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN carga_id TYPE BIGINT;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN cliente_id TYPE BIGINT;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN veiculo_id TYPE BIGINT;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN separador_id TYPE BIGINT;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN conferente_id TYPE BIGINT;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN gestor_id TYPE BIGINT;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN criado_por_usuario_id TYPE BIGINT;
+ALTER TABLE ocorrencias_rota ALTER COLUMN carga_id TYPE BIGINT;
+ALTER TABLE ocorrencias_rota ALTER COLUMN veiculo_id TYPE BIGINT;
+ALTER TABLE ocorrencias_rota ALTER COLUMN motorista_id TYPE BIGINT;
+ALTER TABLE ocorrencias_rota ALTER COLUMN mecanico_responsavel_id TYPE BIGINT;
+ALTER TABLE itens_devolucao ALTER COLUMN ocorrencia_devolucao_id TYPE BIGINT;
+ALTER TABLE itens_devolucao ALTER COLUMN produto_id TYPE BIGINT;
+ALTER TABLE relatorios_divergencia ALTER COLUMN ocorrencia_devolucao_id TYPE BIGINT;
+ALTER TABLE itens_relatorio_divergencia ALTER COLUMN relatorio_divergencia_id TYPE BIGINT;
+ALTER TABLE itens_relatorio_divergencia ALTER COLUMN produto_id TYPE BIGINT;
+ALTER TABLE auditoria_produtividade ALTER COLUMN usuario_id TYPE BIGINT;
+ALTER TABLE auditoria_produtividade ALTER COLUMN ocorrencia_devolucao_id TYPE BIGINT;
+ALTER TABLE auditoria_produtividade ALTER COLUMN ocorrencia_rota_id TYPE BIGINT;
+ALTER TABLE audit_logs ALTER COLUMN usuario_id TYPE BIGINT;
+
+-- =============================================================================
 -- ÍNDICES PARA ALTA PERFORMANCE
 -- =============================================================================
 CREATE INDEX IF NOT EXISTS idx_devolucao_status ON ocorrencias_devolucao(status_fechamento);
@@ -428,102 +501,11 @@ DROP POLICY IF EXISTS "acesso_total_anon" ON registro_versoes;
 CREATE POLICY "acesso_total_anon" ON registro_versoes FOR ALL TO anon USING (true) WITH CHECK (true);
 
 -- =============================================================================
--- VIEWS OTIMIZADAS PARA POWER BI
+-- As VIEWS otimizadas para Power BI ficam em database/schema_views.sql
+-- (Query 2) — rodar SEMPRE depois deste arquivo (Query 1) ter concluído
+-- com sucesso, nunca junto na mesma query. Ver o cabeçalho daquele
+-- arquivo para o motivo.
 -- =============================================================================
-
--- VIEW 1: PRODUTIVIDADE DA EQUIPE
-DROP VIEW IF EXISTS vw_bi_produtividade_equipe CASCADE;
-CREATE OR REPLACE VIEW vw_bi_produtividade_equipe AS
-SELECT 
-    u.id AS usuario_id,
-    u.nome AS colaborador_nome,
-    u.cargo,
-    s.nome AS setor_nome,
-    COUNT(DISTINCT od.id) AS total_ocorrencias_vinculadas,
-    SUM(od.valor_reclamado) AS total_valor_reclamado_r$,
-    COUNT(CASE WHEN ap.tipo_falha LIKE '%separacao%' OR ap.tipo_falha LIKE '%FALTA%' THEN 1 END) AS qtd_erros_separacao,
-    COUNT(CASE WHEN ap.tipo_falha LIKE '%conferencia%' THEN 1 END) AS qtd_erros_conferencia,
-    COALESCE(SUM(ap.valor_prejuizo), 0.00) AS total_prejuizo_financeiro_r$,
-    COALESCE(SUM(ap.pontos_desconto), 0) AS total_pontos_descontados
-FROM usuarios u
-LEFT JOIN setores s ON u.setor_id = s.id
-LEFT JOIN ocorrencias_devolucao od ON u.id = od.separador_id OR u.id = od.conferente_id
-LEFT JOIN auditoria_produtividade ap ON u.id = ap.usuario_id
-GROUP BY u.id, u.nome, u.cargo, s.nome;
-
--- VIEW 2: ANÁLISE DE CAUSA RAIZ
-DROP VIEW IF EXISTS vw_bi_devolucoes_causa_raiz CASCADE;
-CREATE OR REPLACE VIEW vw_bi_devolucoes_causa_raiz AS
-SELECT 
-    od.motivo_reclamado AS motivo_inicial_cliente,
-    COALESCE(od.motivo_real_causa_raiz, 'Pendente de Investigação') AS causa_raiz_real,
-    s.nome AS setor_causador,
-    COUNT(od.id) AS quantidade_ocorrencias,
-    SUM(od.valor_reclamado) AS valor_total_devolvido_r$,
-    COUNT(CASE WHEN od.cliente_emite_nf = TRUE THEN 1 END) AS qtd_cliente_emitiu_nf,
-    COUNT(CASE WHEN od.forma_acerto = 'ABATIMENTO' THEN 1 END) AS qtd_acerto_abatimento,
-    COUNT(CASE WHEN od.forma_acerto = 'JR_PAGA_DIFERENCA' THEN 1 END) AS qtd_acerto_jr_paga
-FROM ocorrencias_devolucao od
-LEFT JOIN setores s ON od.setor_encaminhado_id = s.id
-GROUP BY od.motivo_reclamado, od.motivo_real_causa_raiz, s.nome;
-
--- VIEW 3: FROTA & VEÍCULOS PARADOS
-DROP VIEW IF EXISTS vw_bi_frota_veiculos_parados CASCADE;
-CREATE OR REPLACE VIEW vw_bi_frota_veiculos_parados AS
-SELECT 
-    v.placa,
-    v.modelo,
-    m.nome AS motorista_nome,
-    c.numero_carga,
-    c.rota,
-    o.tipo_ocorrencia,
-    o.localizacao,
-    o.descricao,
-    o.veiculo_parado,
-    o.status AS status_manutencao,
-    o.status_chamado,
-    o.retorno_manutencao_descricao,
-    o.retorno_manutencao_data,
-    o.retorno_manutencao_responsavel,
-    o.guincho_acionado,
-    COALESCE(o.custo_socorro, 0.00) AS custo_socorro_r$,
-    o.criado_em AS data_abertura,
-    o.resolvido_em AS data_resolucao,
-    ROUND(EXTRACT(EPOCH FROM (COALESCE(o.resolvido_em, CURRENT_TIMESTAMP) - o.criado_em))/3600, 2) AS horas_parado
-FROM ocorrencias_rota o
-JOIN veiculos v ON o.veiculo_id = v.id
-JOIN motoristas m ON o.motorista_id = m.id
-JOIN cargas c ON o.carga_id = c.id;
-
--- VIEW 4: CONTROLE CD - PENDÊNCIAS
-DROP VIEW IF EXISTS vw_bi_controle_cd_pendencias CASCADE;
-CREATE OR REPLACE VIEW vw_bi_controle_cd_pendencias AS
-SELECT 
-    od.numero_protocolo,
-    c.numero_carga,
-    c.rota,
-    cli.razao_social AS cliente_nome,
-    p.codigo_produto,
-    p.descricao AS produto_descricao,
-    id.quantidade,
-    id.valor_total AS valor_item_r$,
-    od.status_fechamento,
-    od.destino_cd,
-    od.criado_em AS data_chamado
-FROM ocorrencias_devolucao od
-JOIN cargas c ON od.carga_id = c.id
-JOIN clientes cli ON od.cliente_id = cli.id
-JOIN itens_devolucao id ON od.id = id.ocorrencia_devolucao_id
-JOIN produtos p ON id.produto_id = p.id
-WHERE od.status_fechamento = 'PENDENTE_FISICO';
-
--- VIEW 5: TROCAS DE VEÍCULOS
-DROP VIEW IF EXISTS vw_bi_trocas_veiculos CASCADE;
-CREATE OR REPLACE VIEW vw_bi_trocas_veiculos AS
-SELECT 
-    id, data, veiculo_escalado, veiculo_trocado, motivo_resumido,
-    motivo_outro, detalhamento, autorizado_por, criado_em
-FROM trocas_veiculos;
 
 -- =============================================================================
 -- 11. MÓDULO: GESTÃO DE RETENÇÃO DE FROTA (v6.1.0)
@@ -570,50 +552,11 @@ CREATE POLICY "acesso_total_anon" ON retencoes_frota
     FOR ALL TO anon USING (true) WITH CHECK (true);
 
 -- =============================================================================
--- VIEW 6: DISPONIBILIDADE DA FROTA (Power BI)
--- Cruza veículos cadastrados × retenções ativas para calcular status atual,
--- dias parado e dias de atraso em relação à previsão.
--- =============================================================================
-DROP VIEW IF EXISTS vw_bi_disponibilidade_frota CASCADE;
-CREATE OR REPLACE VIEW vw_bi_disponibilidade_frota AS
-SELECT
-    v.id                                          AS veiculo_id,
-    v.placa,
-    v.modelo,
-    v.tipo                                        AS tipo_veiculo,
-    v.capacidade_kg,
-    v.ativo                                       AS veiculo_ativo,
-    COALESCE(r.status, 'DISPONÍVEL')              AS status_frota,
-    r.numero_retencao,
-    r.motivo,
-    r.tipo_os,
-    r.local                                       AS local_parada,
-    r.data_parada,
-    r.data_previsao,
-    r.data_liberacao,
-    r.criado_por                                  AS registrado_por,
-    -- Dias corridos parado (aberto) ou tempo total de parada (liberado)
-    CASE
-        WHEN r.status = 'RETIDO' THEN
-            CURRENT_DATE - r.data_parada
-        WHEN r.status = 'LIBERADO' AND r.data_liberacao IS NOT NULL THEN
-            r.data_liberacao - r.data_parada
-        ELSE NULL
-    END                                           AS dias_parado,
-    -- Dias de atraso em relação à previsão (apenas RETIDO e atrasado)
-    CASE
-        WHEN r.status = 'RETIDO'
-             AND r.data_previsao IS NOT NULL
-             AND CURRENT_DATE > r.data_previsao
-        THEN CURRENT_DATE - r.data_previsao
-        ELSE 0
-    END                                           AS dias_atraso_previsao
-FROM veiculos v
-LEFT JOIN retencoes_frota r
-    ON r.veiculo_id = v.id
-    AND r.is_deleted = FALSE
-    AND r.status = 'RETIDO'   -- apenas retenção aberta por veículo
-WHERE v.is_deleted = FALSE;
+-- 13. CORREÇÃO DE TIPO (continuação): retencoes_frota.veiculo_id só existe
+-- depois da tabela ser criada acima. A VIEW 6 (disponibilidade_frota) que
+-- usava essa coluna agora está em database/schema_views.sql (Query 2),
+-- pelo mesmo motivo do bloco 10.5.
+ALTER TABLE retencoes_frota ALTER COLUMN veiculo_id TYPE BIGINT;
 
 -- =============================================================================
 -- 12. MÓDULO: CONTROLE DE REENTREGAS DE ROTA
@@ -639,15 +582,178 @@ CREATE TABLE IF NOT EXISTS reentregas_rota (
     deleted_by_nome VARCHAR(120) NULL
 );
 
--- Índices de performance
+-- Índices de performance (restaurados em 19/08/2026 — tinham sido
+-- removidos sem querer numa edição anterior deste arquivo)
 CREATE INDEX IF NOT EXISTS idx_reentregas_status ON reentregas_rota(status);
 CREATE INDEX IF NOT EXISTS idx_reentregas_data ON reentregas_rota(data);
 CREATE INDEX IF NOT EXISTS idx_reentregas_carga ON reentregas_rota(carga_numero);
 CREATE INDEX IF NOT EXISTS idx_reentregas_is_deleted ON reentregas_rota(is_deleted) WHERE is_deleted = FALSE;
 
--- RLS
+-- RLS (idem — restaurado)
 ALTER TABLE reentregas_rota ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "acesso_total_anon" ON reentregas_rota;
 CREATE POLICY "acesso_total_anon" ON reentregas_rota
     FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- =============================================================================
+-- 14. COLEÇÕES SEM TABELA (achado em 19/08/2026) — Resumo Diário CD,
+-- Controle de Viagens, Ocorrências de Viagem e os 3 blocos do
+-- Acompanhamento de Funcionário/Dossiê Motorista (Medidas Disciplinares,
+-- Orientação e Feedback, Atestados, Ausências) nunca tiveram tabela no
+-- Supabase — ficavam presas em localStorage, sem sincronizar entre contas
+-- nem sobreviver a uma limpeza de cache. controle_viagens e
+-- ocorrencias_viagens têm registros simples (mesmo padrão de
+-- trocas_veiculos/retencoes_frota). resumo_diario_cd é diferente: cada
+-- registro (por data+turno) contém listas aninhadas (ocorrências,
+-- faltas, movimentação) — em vez de forçar uma normalização relacional
+-- grande e arriscada a poucos dias do go-live, essas listas viram
+-- colunas JSONB, espelhando exatamente a estrutura que o app já usa
+-- localmente. Isso resolve o problema real de hoje (dado preso no
+-- aparelho) sem reescrever a lógica de leitura/escrita do módulo. A
+-- quebra em tabelas relacionais completas (para Power BI DirectQuery)
+-- continua sendo um projeto à parte, do tamanho que já foi sinalizado.
+
+CREATE TABLE IF NOT EXISTS controle_viagens (
+    id BIGINT PRIMARY KEY,                          -- Date.now() do cliente
+    carga VARCHAR(60),
+    rota VARCHAR(150),
+    placa VARCHAR(10),
+    motorista VARCHAR(120),
+    ajudante VARCHAR(120),
+    setor VARCHAR(30) DEFAULT 'FRIO',
+    data_saida VARCHAR(20),
+    hora_saida VARCHAR(10),
+    data_entrega VARCHAR(20),
+    hora_entrega VARCHAR(10),
+    data_retorno VARCHAR(20),
+    hora_retorno VARCHAR(10),
+    status_viagem VARCHAR(40),
+    fusion VARCHAR(20),
+    checklist_saida VARCHAR(20),
+    checklist_chegada VARCHAR(20),
+    observacao TEXT,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP NULL,
+    deleted_by_nome VARCHAR(120) NULL,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+ALTER TABLE controle_viagens ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON controle_viagens;
+CREATE POLICY "acesso_total_anon" ON controle_viagens FOR ALL TO anon USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS ocorrencias_viagens (
+    id BIGINT PRIMARY KEY,
+    data VARCHAR(20),
+    carga VARCHAR(60),
+    rota VARCHAR(150),
+    placa VARCHAR(10),
+    funcionario VARCHAR(120),
+    funcao VARCHAR(40) DEFAULT 'MOTORISTA',
+    motivo VARCHAR(60) DEFAULT 'OUTRO',
+    causa TEXT,
+    ocorrencia TEXT,
+    acao TEXT,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP NULL,
+    deleted_by_nome VARCHAR(120) NULL,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+ALTER TABLE ocorrencias_viagens ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON ocorrencias_viagens;
+CREATE POLICY "acesso_total_anon" ON ocorrencias_viagens FOR ALL TO anon USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS resumo_diario_cd (
+    id BIGINT PRIMARY KEY,
+    data DATE NOT NULL,
+    turno VARCHAR(40) NOT NULL,
+    gestor VARCHAR(120),
+    movimentacao JSONB,
+    faltas_condutas JSONB,
+    ocorrencias JSONB,
+    ocorrencias_colaboradores JSONB,
+    cortes JSONB,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    UNIQUE(data, turno)
+);
+ALTER TABLE resumo_diario_cd ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON resumo_diario_cd;
+CREATE POLICY "acesso_total_anon" ON resumo_diario_cd FOR ALL TO anon USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS medidas_disciplinares (
+    id VARCHAR(60) PRIMARY KEY,                     -- ex: medida_1755600000000_ab12cd
+    numero_medida VARCHAR(20),
+    tipo VARCHAR(30),                               -- ADVERTENCIA | SUSPENSAO (Orientação Verbal não entra mais aqui)
+    colaborador_tipo VARCHAR(20),
+    colaborador_id BIGINT,
+    colaborador_nome VARCHAR(120),
+    chapa VARCHAR(20),
+    cpf VARCHAR(14),
+    funcao VARCHAR(80),
+    secao VARCHAR(100),
+    alineas_clt TEXT,
+    dias_suspensao INT,
+    motivo TEXT,
+    gestor VARCHAR(120),
+    data_ocorrencia DATE,
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP NULL
+);
+ALTER TABLE medidas_disciplinares ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON medidas_disciplinares;
+CREATE POLICY "acesso_total_anon" ON medidas_disciplinares FOR ALL TO anon USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS orientacoes_feedback (
+    id VARCHAR(60) PRIMARY KEY,
+    colaborador_tipo VARCHAR(20),
+    colaborador_id BIGINT,
+    colaborador_nome VARCHAR(120),
+    data DATE,
+    ocorrencia TEXT,
+    acao TEXT,
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP NULL
+);
+ALTER TABLE orientacoes_feedback ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON orientacoes_feedback;
+CREATE POLICY "acesso_total_anon" ON orientacoes_feedback FOR ALL TO anon USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS atestados_medicos (
+    id VARCHAR(60) PRIMARY KEY,
+    colaborador_tipo VARCHAR(20),
+    colaborador_id BIGINT,
+    colaborador_nome VARCHAR(120),
+    data DATE,
+    tipo_afastamento VARCHAR(20),
+    motivo TEXT,
+    cid VARCHAR(20),
+    medico VARCHAR(120),
+    crm_cro VARCHAR(30),
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP NULL
+);
+ALTER TABLE atestados_medicos ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON atestados_medicos;
+CREATE POLICY "acesso_total_anon" ON atestados_medicos FOR ALL TO anon USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS ausencias_registros (
+    id VARCHAR(60) PRIMARY KEY,
+    colaborador_tipo VARCHAR(20),
+    colaborador_id BIGINT,
+    colaborador_nome VARCHAR(120),
+    data DATE,
+    motivo TEXT,
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP NULL
+);
+ALTER TABLE ausencias_registros ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON ausencias_registros;
+CREATE POLICY "acesso_total_anon" ON ausencias_registros FOR ALL TO anon USING (true) WITH CHECK (true);
 

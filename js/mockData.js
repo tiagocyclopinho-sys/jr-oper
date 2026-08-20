@@ -13,14 +13,23 @@ const INITIAL_DATA = {
     { value: "ADMIN",      label: "Admin / BI",           desc: "Acesso total + Power BI" }
   ],
 
-  usuarios: [
-    { id: 1, nome: "ANA OLIVEIRA", email: "sac@jrdistribuidora.com.br", senha_hash: "123456", role: "SAC", departamento: "SAC", cargo: "Analista de SAC" },
-    { id: 2, nome: "CARLOS EDUARDO", email: "cd@jrdistribuidora.com.br", senha_hash: "123456", role: "CD", departamento: "MONTAGEM DE CARGA", cargo: "Líder de Conferência CD" },
-    { id: 3, nome: "MARIANA SOUZA", email: "financeiro@jrdistribuidora.com.br", senha_hash: "123456", role: "FINANCEIRO", departamento: "FATURAMENTO", cargo: "Analista Financeiro" },
-    { id: 4, nome: "ROBERTO MECANICO", email: "manutencao@jrdistribuidora.com.br", senha_hash: "123456", role: "MANUTENÇÃO", cargo: "Gestor de Manutenção" },
-    { id: 5, nome: "THIAGO FERREIRA", email: "admin@jrdistribuidora.com.br", senha_hash: "admin123", role: "ADMIN", departamento: "ANALISTA", cargo: "Analista de Logística / BI" },
-    { id: 6, nome: "GERENTE GERAL", email: "gerente@jrdistribuidora.com.br", senha_hash: "gerente123", role: "GESTOR", departamento: "GERÊNCIA GERAL", cargo: "Gerente Geral" }
-  ],
+  // Usuários de demonstração REMOVIDOS em 19/08/2026 — a lista anterior
+  // (Ana Oliveira, Carlos Eduardo, Mariana Souza, Roberto Mecânico,
+  // Thiago Ferreira, Gerente Geral) tinha senhas fracas e fixas
+  // ("123456", "admin123", "gerente123") em texto puro, e por estar neste
+  // arquivo, carregado no navegador de qualquer visitante, essas senhas
+  // ficavam públicas no código-fonte — incluindo a de admin.
+  // Tanto o Reset Global de Treinamento quanto a primeira ativação da
+  // nuvem (Supabase) tratam "usuários" como cadastro mestre (junto com
+  // motoristas/veículos/clientes) e por isso NUNCA os apagam automaticamente
+  // — o que é correto para usuários reais, mas fez esses 6 fictícios
+  // sobreviverem a ambos e provavelmente foram sincronizados como reais
+  // para a base de produção. Verificar e excluir manualmente em
+  // "Logins e Senhas" caso ainda existam lá.
+  // Em uma instalação nova (sem nenhum usuário ainda), é necessário criar
+  // o primeiro usuário admin diretamente no banco (Supabase) — o login não
+  // tem um caminho de bootstrap sem usuários cadastrados.
+  usuarios: [],
 
   colaboradores_cd: [
     { id: 1, chapa: "111", nome: "ADONIAS MILHOMEM", secao: "CARREGAMENTO FRIOS - 2 TURNO", funcao: "AUXILIAR JUNIOR", cpf: "3098165138", ativo: true },

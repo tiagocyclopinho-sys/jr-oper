@@ -311,46 +311,13 @@ class Store {
       this.save();
     }
 
-    // Seed inicial para reentregas apenas na primeiríssima instalação (não recriar após reset)
-    if (isFirstInstall && this.data.reentregas.length === 0) {
-      const hojeStr = new Date().toISOString().split('T')[0];
-      this.data.reentregas = [
-        {
-          id: 1718000000001,
-          data: hojeStr,
-          carga_numero: "43125",
-          rota_nome: "ROTA 03 - ZUL",
-          motorista_nome: "ROBERTO CARLOS",
-          placa: "BRA2E19",
-          novo_motorista: null,
-          entregas_saiu: 28,
-          entregas_feitas: 24,
-          entregas_reentrega: 4,
-          motivo: "CLIENTE AUSENTE / ESTABELECIMENTO FECHADO NO HORÁRIO",
-          status: "PENDENTE",
-          criado_por: "SISTEMA",
-          criado_em: new Date().toISOString(),
-          is_deleted: false
-        },
-        {
-          id: 1718000000002,
-          data: hojeStr,
-          carga_numero: "43118",
-          rota_nome: "ROTA 07 - GUARULHOS",
-          motorista_nome: "LUIZ EDUARDO",
-          placa: "CZT3042",
-          novo_motorista: "MARCOS SILVA",
-          entregas_saiu: 32,
-          entregas_feitas: 30,
-          entregas_reentrega: 2,
-          motivo: "ATRASO DEVIDO A TRÂNSITO INTENSO NA VIA DUTRA",
-          status: "REALIZADA",
-          criado_por: "SISTEMA",
-          criado_em: new Date().toISOString(),
-          is_deleted: false
-        }
-      ];
-    }
+    // Seed de demonstração de reentregas REMOVIDO em 19/08/2026 — inseria 2
+    // registros fictícios ("ROBERTO CARLOS"/"LUIZ EDUARDO") toda vez que a
+    // chave 'jr_sac_db' não existisse no localStorage, o que acontece não só
+    // na instalação genuinamente nova, mas também sempre que alguém usa o
+    // botão de recuperação "Limpar Cache e Reiniciar" (que roda
+    // localStorage.clear()) — reintroduzindo dados de teste como se fossem
+    // reais, inclusive sincronizados para a nuvem em produção.
 
     // Migração/Sincronia automática do cadastro estruturado de Colaboradores do CD
     if (typeof INITIAL_DATA !== 'undefined' && Array.isArray(INITIAL_DATA.colaboradores_cd)) {
@@ -502,6 +469,7 @@ class Store {
     const payload = JSON.stringify(this._getOperationalSlice());
     try {
       localStorage.setItem('jr_sac_db', payload);
+      this._scheduleCloudSync();
       return true;
     } catch(e) {
       console.error("[Store] Falha ao salvar dados operacionais no localStorage (tentativa 1):", e);
@@ -510,6 +478,7 @@ class Store {
         try {
           localStorage.setItem('jr_sac_db', JSON.stringify(this._getOperationalSlice()));
           console.info("[Store] Gravação bem-sucedida após liberar espaço automaticamente (histórico de auditoria/versões reduzido).");
+          this._scheduleCloudSync();
           return true;
         } catch(e2) {
           console.error("[Store] Falha ao salvar mesmo após liberar espaço:", e2);
@@ -518,6 +487,27 @@ class Store {
       }
       return false;
     }
+  }
+
+  // Agenda o envio Local → Nuvem de forma "debounced" (pedido de 19/08/2026):
+  // em vez de chamar cloudStore.syncLocalToCloud() a cada save() — o que
+  // reenviaria as 13 tabelas inteiras a cada micro-ação e poderia sobrepor
+  // envios se save() disparar várias vezes seguidas — este método reinicia
+  // um timer de 1.5s a cada chamada. Só quando ficar 1.5s sem nenhum save()
+  // novo é que o envio de fato acontece, juntando várias gravações próximas
+  // (ex: salvar um formulário inteiro, campo a campo) em um único envio.
+  // fetch() do navegador nunca bloqueia a tela, então isso não trava nada
+  // mesmo sem debounce — o debounce existe para não desperdiçar rede/cota
+  // do Supabase e para não sobrepor envios concorrentes.
+  _scheduleCloudSync() {
+    if (typeof window === 'undefined' || !window.cloudStore || !window.cloudStore.isConfigured()) return;
+    if (this._cloudSyncTimer) clearTimeout(this._cloudSyncTimer);
+    this._cloudSyncTimer = setTimeout(() => {
+      this._cloudSyncTimer = null;
+      window.cloudStore.syncLocalToCloud().catch(e => {
+        console.warn('[Store] Falha ao sincronizar com a nuvem (dados continuam salvos localmente):', e);
+      });
+    }, 1500);
   }
 
   // Tamanho aproximado (KB) do que está salvo hoje, para o painel de
@@ -1429,7 +1419,7 @@ class Store {
       motivo_resumido: String(trocaData.motivo_resumido || 'PESO EXCEDIDO').toUpperCase().trim(),
       motivo_outro: String(trocaData.motivo_outro || '').toUpperCase().trim(),
       detalhamento: String(trocaData.detalhamento || '').toUpperCase().trim(),
-      autorizado_por: String(trocaData.autorizado_por || 'LUIZ EDUARDO').toUpperCase().trim(),
+      autorizado_por: String(trocaData.autorizado_por || '').toUpperCase().trim(),
       criado_em: new Date().toISOString()
     };
     this.data.trocas_veiculos.unshift(item);
@@ -1886,6 +1876,81 @@ class Store {
         sql += `) VALUES (\n`;
         sql += `  ${re.id}, ${esc(re.data)}, ${esc(re.carga_numero)}, ${esc(re.rota_nome)}, ${esc(re.motorista_nome)}, ${re.entregas_saiu || 0}, ${re.entregas_feitas || 0}, ${re.entregas_reentrega || 0}, ${esc(re.motivo)}, ${esc(re.placa)}, ${esc(re.novo_motorista)}, ${esc(re.status || 'PENDENTE')}, ${esc(re.criado_por || 'SISTEMA')}, ${esc(re.criado_em)}\n`;
         sql += `) ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, entregas_feitas = EXCLUDED.entregas_feitas, entregas_reentrega = EXCLUDED.entregas_reentrega;\n\n`;
+      });
+    }
+
+    // 6. Cadastros mestres (pedido de 19/08/2026: o exportador ignorava
+    // completamente estas tabelas, mesmo já existindo no schema.sql —
+    // ficavam de fora do "Baixar Base SQL" usado pro Power BI Import).
+    // Usam ON CONFLICT pela chave natural de cada tabela (mesma que tem
+    // UNIQUE no schema.sql), então rodar de novo só atualiza, não duplica.
+    const motoristasList = this.getMotoristas();
+    if (motoristasList && motoristasList.length > 0) {
+      sql += `-- 6. MOTORISTAS\n`;
+      motoristasList.forEach(m => {
+        sql += `INSERT INTO motoristas (nome, cnh, telefone, ativo) VALUES (\n`;
+        sql += `  ${esc(m.nome)}, ${esc(m.cnh || m.nome)}, ${esc(m.telefone || '')}, ${esc(m.ativo !== false)}\n`;
+        sql += `) ON CONFLICT (cnh) DO UPDATE SET nome = EXCLUDED.nome, telefone = EXCLUDED.telefone, ativo = EXCLUDED.ativo;\n\n`;
+      });
+    }
+
+    const ajudantesList = this.data.ajudantes || [];
+    if (ajudantesList.length > 0) {
+      sql += `-- 7. AJUDANTES\n`;
+      ajudantesList.forEach(a => {
+        sql += `INSERT INTO ajudantes (nome, cpf, ativo) VALUES (\n`;
+        sql += `  ${esc(a.nome)}, ${esc(a.cpf || null)}, ${esc(a.ativo !== false)}\n`;
+        sql += `) ON CONFLICT (cpf) DO UPDATE SET nome = EXCLUDED.nome, ativo = EXCLUDED.ativo;\n\n`;
+      });
+    }
+
+    const veiculosList = this.getVeiculos();
+    if (veiculosList && veiculosList.length > 0) {
+      sql += `-- 8. VEÍCULOS\n`;
+      veiculosList.forEach(v => {
+        sql += `INSERT INTO veiculos (placa, modelo, tipo, capacidade_kg, ativo) VALUES (\n`;
+        sql += `  ${esc(v.placa)}, ${esc(v.modelo || v.tipo || '')}, ${esc(v.tipo || 'PROPRIO')}, ${v.capacidade_kg || 'NULL'}, ${esc(v.ativo !== false)}\n`;
+        sql += `) ON CONFLICT (placa) DO UPDATE SET modelo = EXCLUDED.modelo, tipo = EXCLUDED.tipo, ativo = EXCLUDED.ativo;\n\n`;
+      });
+    }
+
+    const clientesList = this.getClientes();
+    if (clientesList && clientesList.length > 0) {
+      sql += `-- 9. CLIENTES\n`;
+      clientesList.forEach(c => {
+        sql += `INSERT INTO clientes (codigo_cliente, razao_social, cnpj, cidade, uf) VALUES (\n`;
+        sql += `  ${esc(c.codigo_cliente || c.codigo)}, ${esc(c.razao_social || c.nome)}, ${esc(c.cnpj || c.codigo_cliente || c.codigo)}, ${esc(c.cidade || 'Araguaína')}, ${esc(c.uf || 'TO')}\n`;
+        sql += `) ON CONFLICT (codigo_cliente) DO UPDATE SET razao_social = EXCLUDED.razao_social, cidade = EXCLUDED.cidade, uf = EXCLUDED.uf;\n\n`;
+      });
+    }
+
+    const produtosList = this.getProdutos();
+    if (produtosList && produtosList.length > 0) {
+      sql += `-- 10. PRODUTOS\n`;
+      produtosList.forEach(p => {
+        sql += `INSERT INTO produtos (codigo_produto, descricao, categoria, valor_unitario_padrao) VALUES (\n`;
+        sql += `  ${esc(p.codigo_produto)}, ${esc(p.descricao)}, ${esc(p.categoria || '')}, ${p.valor_unitario_padrao || 0}\n`;
+        sql += `) ON CONFLICT (codigo_produto) DO UPDATE SET descricao = EXCLUDED.descricao, categoria = EXCLUDED.categoria, valor_unitario_padrao = EXCLUDED.valor_unitario_padrao;\n\n`;
+      });
+    }
+
+    const usuariosList = this.getUsuarios();
+    if (usuariosList && usuariosList.length > 0) {
+      sql += `-- 11. USUÁRIOS\n`;
+      usuariosList.forEach(u => {
+        sql += `INSERT INTO usuarios (nome, email, senha_hash, role, cargo, ativo) VALUES (\n`;
+        sql += `  ${esc(u.nome)}, ${esc(u.email)}, ${esc(u.senha_hash)}, ${esc(u.role || 'SAC')}, ${esc(u.cargo || '')}, ${esc(u.ativo !== false)}\n`;
+        sql += `) ON CONFLICT (email) DO UPDATE SET nome = EXCLUDED.nome, role = EXCLUDED.role, cargo = EXCLUDED.cargo, ativo = EXCLUDED.ativo;\n\n`;
+      });
+    }
+
+    const colaboradoresList = this.getColaboradoresCD();
+    if (colaboradoresList && colaboradoresList.length > 0) {
+      sql += `-- 12. COLABORADORES CD\n`;
+      colaboradoresList.forEach(c => {
+        sql += `INSERT INTO colaboradores_cd (chapa, nome, cpf, funcao, secao, ativo) VALUES (\n`;
+        sql += `  ${esc(c.chapa || '')}, ${esc(c.nome)}, ${esc(c.cpf || null)}, ${esc(c.funcao)}, ${esc(c.secao || '')}, ${esc(c.ativo !== false)}\n`;
+        sql += `);\n\n`;
       });
     }
 

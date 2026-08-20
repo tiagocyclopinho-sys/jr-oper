@@ -5196,6 +5196,31 @@ function extrairIdentificadorOsDoLink(url) {
   }
 }
 
+// Normaliza o case da URL do link de OS antes de salvar. O domínio/esquema
+// já são normalizados automaticamente pelo próprio navegador ao navegar,
+// mas o conteúdo depois do "#" (usado por SPAs com rota tipo
+// #/client/serviceorders/78129 — é o caso do SofitView) é opaco pro
+// navegador e nunca é tocado. Se foi digitado/colado com Caps Lock ou já
+// veio maiúsculo de outro lugar, o roteador da OUTRA plataforma pode não
+// reconhecer a rota e mostrar tela em branco — foi o que aconteceu com o
+// link relatado em 19/08/2026. Só normaliza o "caminho" da rota (antes de
+// um eventual "?"), preservando o case de qualquer valor de query dentro
+// do hash, que pode ser sensível (ex: token).
+function normalizarCaseLinkOs(url) {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    if (u.hash && u.hash.length > 1) {
+      const hashSemAlmofada = u.hash.slice(1);
+      const [hashPath, hashQuery] = hashSemAlmofada.split('?');
+      u.hash = '#' + hashPath.toLowerCase() + (hashQuery ? '?' + hashQuery : '');
+    }
+    return u.toString();
+  } catch (e) {
+    return url;
+  }
+}
+
 function renderNumeroOsLink(numeroOs, linkOs) {
   const texto = numeroOs || '—';
   if (linkOs && /^https?:\/\/.+/i.test(linkOs)) {
@@ -13973,8 +13998,11 @@ function renderConectorDadosView() {
               <button onclick="const sql=db.exportToSQL();const b=new Blob([sql],{type:'text/plain'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='jr_oper_dump.sql';a.click()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-2.5 rounded-lg text-xs shadow flex items-center gap-1.5">
                 📥 Baixar Base SQL (.sql)
               </button>
-              <button onclick="alert('Script SQL de schema relacional 3FN e Views disponível na pasta database/schema.sql!')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2.5 rounded-lg text-xs">
+              <button onclick="alert('Schema em 2 arquivos, nessa ordem: database/schema.sql (Query 1 — tabelas, tipos e RLS) e database/schema_views.sql (Query 2 — Views de BI). Rodar sempre 1 depois do outro, nunca juntos.')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2.5 rounded-lg text-xs">
                 📄 Ver Schema SQL
+              </button>
+              <button onclick="window.open('./database/schema_views.sql','_blank')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2.5 rounded-lg text-xs">
+                📄 Ver Views SQL
               </button>
             </div>
           </div>
@@ -14910,7 +14938,7 @@ function salvarRetencaoFrota(event) {
   const tipoOs     = document.getElementById('frt-tipo-os')?.value;
   const local      = document.getElementById('frt-local')?.value?.trim();
   const dataPrev   = document.getElementById('frt-data-previsao')?.value;
-  const linkOsRaw  = document.getElementById('frt-link-os')?.value?.trim();
+  const linkOsRaw  = normalizarCaseLinkOs(document.getElementById('frt-link-os')?.value?.trim());
 
   if (!veiculoId || !placa) { alert('⚠️ Selecione um veículo da lista de sugestões.'); return; }
   if (!dataParada) { alert('⚠️ Informe a data de parada.'); return; }
@@ -15188,7 +15216,7 @@ function salvarEdicaoFrota() {
     data_parada:    document.getElementById('edit-frt-data-parada')?.value    || null,
     tipo_os:        document.getElementById('edit-frt-tipo-os')?.value         || 'CORRETIVA',
     motivo:         (document.getElementById('edit-frt-motivo')?.value         || '').trim(),
-    link_os:        (document.getElementById('edit-frt-link-os')?.value        || '').trim() || null,
+    link_os:        normalizarCaseLinkOs((document.getElementById('edit-frt-link-os')?.value        || '').trim()) || null,
     local:          (document.getElementById('edit-frt-local')?.value          || '').trim(),
     data_previsao:  document.getElementById('edit-frt-data-previsao')?.value   || null,
     data_liberacao: document.getElementById('edit-frt-data-liberacao')?.value  || null
