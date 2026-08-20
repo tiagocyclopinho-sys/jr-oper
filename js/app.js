@@ -8766,7 +8766,9 @@ function handleImportEscalaFile(event) {
       const qtd = typeof res === 'object' ? res.importados : res;
       const dup = typeof res === 'object' ? res.duplicados : 0;
 
-      let msg = `✅ Sucesso! ${qtd} viagem(ns) importada(s) da escala (${fileName})!`;
+      if (window.cloudStore && window.cloudStore.isConfigured()) { window.cloudStore.syncLocalToCloud().catch(() => {}); }
+      
+            let msg = `✅ Sucesso! ${qtd} viagem(ns) importada(s) da escala (${fileName})!`;
       if (dup > 0) {
         msg += `\nℹ️ ${dup} registro(s) repetido(s) com todos os 6 campos idênticos (Carga, Rota, Placa, Motorista, Ajudante e Setor) foram ignorados para evitar duplicidade.`;
       }
