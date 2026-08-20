@@ -350,8 +350,16 @@ class CloudStore {
     const interval = this.config.syncIntervalMs || 30000;
     console.log(`[CloudStore] Sincronização automática iniciada (a cada ${interval/1000}s)`);
     
-    // Primeira sincronização imediata
-    this.syncCloudToLocal();
+    // Migração automática: antes do primeiro "pull", envia o que já existe
+            // neste aparelho. Sem isso, o primeiro pull sobrescreveria com os dados
+            // da nuvem qualquer cadastro feito localmente antes da nuvem existir
+            // (ex: usuários de teste criados em cada aparelho antes do modo cloud
+            // ser ativado) — cada aparelho perderia silenciosamente seus próprios
+            // dados. Rodar o push primeiro garante que eles sejam mesclados na
+            // nuvem (upsert com merge-duplicates) em vez de descartados.
+            this.syncLocalToCloud()
+              .catch(e => console.warn('[CloudStore] Falha ao enviar dados locais antes da primeira sincronização:', e))
+              .then(() => this.syncCloudToLocal());
     
     this._syncTimer = setInterval(() => {
       this.syncCloudToLocal();
