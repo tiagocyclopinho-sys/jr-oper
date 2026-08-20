@@ -273,6 +273,8 @@ class CloudStore {
   async syncCloudToLocal() {
     if (!this.isConfigured()) return false;
 
+        if (window.db && window.db._cloudSyncTimer) { clearTimeout(window.db._cloudSyncTimer); window.db._cloudSyncTimer = null; try { await this.syncLocalToCloud(); } catch(e) {} }
+
     const mappings = [
       { tableName: 'ocorrencias_devolucao', localKey: 'jr_ocorrencias',       dbKey: 'ocorrencias_devolucao' },
       { tableName: 'ocorrencias_rota',      localKey: 'jr_ocorrencias_rota',  dbKey: 'ocorrencias_rota' },
