@@ -1235,8 +1235,9 @@ class Store {
 
   addViagem(viagemData) {
     if (!this.data.controle_viagens) this.data.controle_viagens = [];
+        let novoId = Date.now(); while (this.data.controle_viagens.some(v => v.id === novoId)) novoId++;
     const item = {
-      id: Date.now(),
+      id: novoId,
       carga: String(viagemData.carga || '').toUpperCase().trim(),
       rota: String(viagemData.rota || '').toUpperCase().trim(),
       placa: String(viagemData.placa || '').toUpperCase().trim(),
