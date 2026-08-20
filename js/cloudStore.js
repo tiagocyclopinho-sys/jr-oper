@@ -184,7 +184,7 @@ class CloudStore {
     if (!this.isConfigured()) return false;
     if (!records || (Array.isArray(records) && records.length === 0)) return true;
     
-    const data = Array.isArray(records) ? records : [records];
+    let data = Array.isArray(records) ? records : [records]; if (data.length > 1) { const allKeys = new Set(); data.forEach(r => Object.keys(r).forEach(k => allKeys.add(k))); data = data.map(r => { const normalized = {}; allKeys.forEach(k => { normalized[k] = (k in r) ? r[k] : null; }); return normalized; }); }
     try {
       const response = await fetch(`${this.config.url}/rest/v1/${tableName}`, {
         method: 'POST',
