@@ -741,14 +741,15 @@ class Store {
   // SAC Devoluções Methods
   getDevolucoes() {
     return (this.data.ocorrencias_devolucao || []).filter(d => !d.is_deleted).map(d => {
-      const carga = this.data.cargas.find(c => c.id == d.carga_id) || {};
-      const veiculoDirect = this.data.veiculos.find(v => v.id == d.veiculo_id);
-      const veiculoCarga = this.data.veiculos.find(v => v.id == carga.veiculo_id);
-      const veiculo = veiculoDirect || veiculoCarga || {};
+      const cargasArr = this.data.cargas || []; const veiculosArr = this.data.veiculos || []; const motoristasArr = this.data.motoristas || []; const ajudantesArr = this.data.ajudantes || []; const clientesArr = this.data.clientes || [];
+            const carga = cargasArr.find(c => c.id == d.carga_id) || {};
+            const veiculoDirect = veiculosArr.find(v => v.id == d.veiculo_id);
+            const veiculoCarga = veiculosArr.find(v => v.id == carga.veiculo_id);
+            const veiculo = veiculoDirect || veiculoCarga || {};
 
-      const motorista = this.data.motoristas.find(m => m.id == (carga.motorista_id || d.motorista_id)) || {};
-      const ajudante = this.data.ajudantes.find(a => a.id == carga.ajudante_id) || {};
-      const cliente = this.data.clientes.find(cli => cli.id == d.cliente_id) || {};
+            const motorista = motoristasArr.find(m => m.id == (carga.motorista_id || d.motorista_id)) || {};
+            const ajudante = ajudantesArr.find(a => a.id == carga.ajudante_id) || {};
+            const cliente = clientesArr.find(cli => cli.id == d.cliente_id) || {};
       
       const itens = (this.data.itens_devolucao || []).filter(i => i.ocorrencia_devolucao_id == d.id).map(i => {
         const prod = (this.data.produtos || []).find(p => p.id == i.produto_id || String(p.codigo_produto) === String(i.produto_id)) || {};
