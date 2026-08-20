@@ -10,7 +10,7 @@ window.JR_CONFIG = {
   appVersion: "4.7.0",
   
   // Modo de Operação: 'local' (LocalStorage no navegador) ou 'cloud' (Supabase/Postgres)
-  mode: "local",
+  mode: "cloud",
 
   // PRIORIDADE 7c: Senha mestra de administrador centralizada em um único
   // ponto. Antes, o valor '4533215' estava hardcoded em 6+ lugares
@@ -25,8 +25,8 @@ window.JR_CONFIG = {
 
   // Configurações do Banco na Nuvem (Preencher quando criar a conta no Supabase - 100% Gratuito)
   supabase: {
-    url: "",      // Ex: "https://xyzcompany.supabase.co"
-    anonKey: "",  // Chave pública fornecida pelo Supabase
+    url: "https://qxipgnkdbzxtfvuyupow.supabase.co",      // Ex: "https://xyzcompany.supabase.co"
+    anonKey: "sb_publishable_oX9VhXUCTJYqGJ-9MgusuQ_eKF-B0KN",  // Chave pública fornecida pelo Supabase
     syncIntervalMs: 30000 // Sincronização automática a cada 30 segundos
   },
 
