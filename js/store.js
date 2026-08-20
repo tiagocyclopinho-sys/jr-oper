@@ -1272,7 +1272,7 @@ class Store {
 
   deleteViagem(id) {
     if (this.data.controle_viagens) {
-      this.data.controle_viagens = this.data.controle_viagens.filter(x => x.id != id);
+      const item = this.data.controle_viagens.find(x => x.id == id); if (item) { item.is_deleted = true; item.deleted_at = new Date().toISOString(); item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA'; }
       this.save();
     }
   }
@@ -1315,7 +1315,7 @@ class Store {
 
   deleteOcorrenciaViagem(id) {
     if (this.data.ocorrencias_viagens) {
-      this.data.ocorrencias_viagens = this.data.ocorrencias_viagens.filter(x => x.id != id);
+      const item = this.data.ocorrencias_viagens.find(x => x.id == id); if (item) { item.is_deleted = true; item.deleted_at = new Date().toISOString(); item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA'; }
       this.save();
     }
   }
@@ -1439,7 +1439,7 @@ class Store {
 
   deleteTrocaVeiculo(id) {
     if (this.data.trocas_veiculos) {
-      this.data.trocas_veiculos = this.data.trocas_veiculos.filter(x => x.id != id);
+      const item = this.data.trocas_veiculos.find(x => x.id == id); if (item) { item.is_deleted = true; item.deleted_at = new Date().toISOString(); item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA'; }
       this.save();
     }
   }
