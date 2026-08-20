@@ -3419,7 +3419,16 @@ function handleCadastroUsuarioSubmit(e) {
 
   const res = db.addUsuario({ nome, email, senha, role, departamento: depart, cargo });
   if (res.success) {
-    alert(`✅ Usuário ${res.user.nome} cadastrado com sucesso no departamento ${res.user.departamento}!`);
+    // Dispara o envio para a nuvem IMEDIATAMENTE, antes do alert() de
+          // sucesso — alert() bloqueia a aba (principalmente no celular) até o
+          // usuário tocar OK, e nesse meio tempo o timer de 1.5s do envio
+          // "debounced" normal não roda. Se o usuário trocar de app logo após
+          // fechar o alerta, o navegador pode suspender a aba antes do timer
+          // disparar, perdendo o cadastro (achado de 20/08/2026).
+          if (window.cloudStore && window.cloudStore.isConfigured()) {
+                    window.cloudStore.syncLocalToCloud().catch(() => {});
+          }
+          alert(`✅ Usuário ${res.user.nome} cadastrado com sucesso no departamento ${res.user.departamento}!`);
     db.currentUser = res.user;
     try { localStorage.setItem('jr_sac_user', JSON.stringify(res.user)); } catch(e){}
     updateUserHeader();
