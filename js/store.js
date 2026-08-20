@@ -1790,7 +1790,7 @@ class Store {
     });
 
     this.save();
-    return { success: true, message: 'Reset executado com sucesso! Dados operacionais, logs e caches zerados para início da operação oficial.' };
+    if (window.cloudStore && window.cloudStore.isConfigured()) { window.cloudStore.clearCloudTrainingData().catch(e => { console.warn('[Store] Falha ao limpar dados de treinamento na nuvem:', e); }); } return { success: true, message: 'Reset executado com sucesso! Dados operacionais, logs e caches zerados (neste aparelho e na nuvem) para inicio da operacao oficial.' };
   }
 
   getOcorrenciasDevolucao() {
