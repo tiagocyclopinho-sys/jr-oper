@@ -183,8 +183,28 @@ class CloudStore {
   async upsert(tableName, records) {
     if (!this.isConfigured()) return false;
     if (!records || (Array.isArray(records) && records.length === 0)) return true;
-    
-    let data = Array.isArray(records) ? records : [records]; if (data.length > 1) { const allKeys = new Set(); data.forEach(r => Object.keys(r).forEach(k => allKeys.add(k))); data = data.map(r => { const normalized = {}; allKeys.forEach(k => { normalized[k] = (k in r) ? r[k] : null; }); return normalized; }); }
+
+    let data = Array.isArray(records) ? records : [records];
+
+    // O PostgREST exige que, num envio em lote, todos os objetos do array
+    // tenham exatamente as mesmas chaves — registros mais antigos (ex: os
+    // 5 usuários padrão, sem o campo "departamento") misturados com
+    // registros mais novos (que já têm esse campo) derrubam o envio
+    // inteiro com o erro "All object keys must match" (PGRST102), mesmo
+    // que os dados em si sejam válidos. Achado de 20/08/2026 — nenhum
+    // cadastro de usuário estava chegando na nuvem por causa disso.
+    // Preenchemos com null as chaves que faltarem em cada objeto para
+    // igualar o formato de todos antes de enviar.
+    if (data.length > 1) {
+      const allKeys = new Set();
+      data.forEach(r => Object.keys(r).forEach(k => allKeys.add(k)));
+      data = data.map(r => {
+        const normalized = {};
+        allKeys.forEach(k => { normalized[k] = (k in r) ? r[k] : null; });
+        return normalized;
+      });
+    }
+
     try {
       const response = await fetch(`${this.config.url}/rest/v1/${tableName}`, {
         method: 'POST',
@@ -194,7 +214,14 @@ class CloudStore {
       if (!response.ok) {
         const errBody = await response.text();
         console.warn(`[CloudStore] Erro ao salvar em ${tableName}:`, response.status, errBody);
+        this._checkConflitoUnicidade(tableName, errBody, data).catch(() => {});
         return false;
+      }
+      // Sincronizou com sucesso — se havia um conflito de unicidade pendente
+      // registrado para essa tabela (ver _checkConflitoUnicidade), foi
+      // corrigido: limpa da fila de revisão (Fase 4, 20/08/2026).
+      if (window.db && typeof window.db.limparConflitosDaTabela === 'function') {
+        window.db.limparConflitosDaTabela(tableName);
       }
       return true;
     } catch(err) {
@@ -203,9 +230,108 @@ class CloudStore {
     }
   }
 
-  async clearCloudTrainingData() { if (!this.isConfigured()) return { success: true, skipped: true }; const tabelas = ['ocorrencias_devolucao', 'itens_devolucao', 'cargas', 'controle_viagens', 'ocorrencias_viagens', 'ocorrencias_rota', 'resumo_diario_cd', 'relatorios_divergencia', 'auditoria_produtividade', 'trocas_veiculos', 'retencoes_frota', 'reentregas_rota', 'audit_logs', 'registro_versoes']; let ok = true; for (const t of tabelas) { try { const response = await fetch(`${this.config.url}/rest/v1/${t}?id=not.is.null`, { method: 'DELETE', headers: this._headers() }); if (!response.ok) { ok = false; console.warn(`[CloudStore] Erro ao limpar ${t} na nuvem:`, response.status, await response.text()); } } catch(e) { ok = false; console.warn(`[CloudStore] Falha na rede ao limpar ${t} na nuvem:`, e.message); } } return { success: ok }; }
-  
-    // ---------------------------------------------------------------
+  // Fase 4 (20/08/2026): motoristas.cnh e usuarios.email são UNIQUE no
+  // banco. Quando dois aparelhos offline cadastram, cada um sem saber do
+  // outro, o mesmo CNH/e-mail com ids diferentes, o upsert acima falha
+  // inteiro com violação de unicidade (código Postgres 23505) — e como o
+  // upsert reenvia a tabela inteira a cada ciclo, nada daquela tabela
+  // sincroniza até alguém corrigir manualmente. Em vez de sobrescrever
+  // automaticamente (decisão do usuário: gestor revisa manualmente),
+  // registra o conflito localmente para aparecer na tela de Governança.
+  //
+  // (achado em 20/08/2026, testando contra a nuvem de verdade) a primeira
+  // versão tentava extrair a coluna/valor duplicado do texto do erro do
+  // Postgres (campo "details", formato "Key (cnh)=(123) already exists.").
+  // Esse projeto Supabase devolve "details":null para o anon key (oculta
+  // detalhe interno do erro por segurança) — só "code":"23505" é confiável.
+  // Por isso, em vez de tentar ler o valor do erro, reconsulta a nuvem
+  // pelo valor de cada registro do lote que falhou; quem já existe lá com
+  // um id diferente é o conflito real.
+  // Fase 5 (21/08/2026): esta checagem só reconhecia motoristas.cnh e
+  // usuarios.email como colunas UNIQUE. Mas ocorrencias_devolucao.numero_protocolo,
+  // ocorrencias_rota.numero_protocolo, retencoes_frota.numero_retencao e
+  // sinistros.numero_sinistro também são UNIQUE no banco (schema.sql) — e
+  // caíam fora do "if" acima, então uma colisão nesses campos (dois
+  // aparelhos gerando o mesmo número sequencial offline) nunca era
+  // reconhecida como conflito: o registro simplesmente não sincronizava,
+  // sem aparecer na aba "⚠️ Conflitos" nem em nenhum outro aviso.
+  // medidas_disciplinares.numero_medida fica de fora de propósito: não tem
+  // UNIQUE no banco, então uma colisão ali não derruba o upsert (é um
+  // problema de qualidade do dado, não de sincronização silenciosa).
+  async _checkConflitoUnicidade(tableName, errBody, records) {
+    const CAMPOS_UNICOS_POR_TABELA = {
+      motoristas: 'cnh',
+      usuarios: 'email',
+      ocorrencias_devolucao: 'numero_protocolo',
+      ocorrencias_rota: 'numero_protocolo',
+      retencoes_frota: 'numero_retencao',
+      sinistros: 'numero_sinistro'
+    };
+    const campo = CAMPOS_UNICOS_POR_TABELA[tableName];
+    if (!campo) return;
+    if (!window.db || typeof window.db.registrarConflitoSincronizacao !== 'function') return;
+    let code = null;
+    try { code = JSON.parse(errBody).code; } catch(e) {}
+    if (code !== '23505') return;
+
+    const data = Array.isArray(records) ? records : [records];
+    for (const rec of data) {
+      const valor = rec[campo];
+      if (!valor) continue;
+      try {
+        const resp = await fetch(
+          `${this.config.url}/rest/v1/${tableName}?select=id,${campo}&${campo}=eq.${encodeURIComponent(valor)}`,
+          { headers: this._headers() }
+        );
+        if (!resp.ok) continue;
+        const rows = await resp.json();
+        const conflita = rows.some(r => String(r.id) !== String(rec.id));
+        if (conflita) {
+          window.db.registrarConflitoSincronizacao({ tabela: tableName, campo, valor });
+        }
+      } catch(e) {
+        // falha de rede na re-consulta — não é crítico, só não registra
+        // esse conflito agora; ele será detectado de novo no próximo ciclo.
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // LIMPEZA DE DADOS DE TREINAMENTO NA NUVEM
+  // Usado pelo "Reset Global de Treinamento" (store.js) para zerar na
+  // nuvem as mesmas tabelas operacionais/transacionais que o reset já
+  // zerava só localmente. Mantém cadastros mestre (usuarios, motoristas,
+  // veiculos, clientes, produtos, setores) intactos.
+  // ---------------------------------------------------------------
+  async clearCloudTrainingData() {
+    if (!this.isConfigured()) return { success: true, skipped: true };
+    const tabelas = [
+      'ocorrencias_devolucao', 'itens_devolucao', 'cargas', 'controle_viagens',
+      'ocorrencias_viagens', 'ocorrencias_rota', 'resumo_diario_cd',
+      'relatorios_divergencia', 'auditoria_produtividade', 'trocas_veiculos',
+      'retencoes_frota', 'reentregas_rota', 'audit_logs', 'registro_versoes',
+      'sinistros', 'itens_avulsos_destinacao'
+    ];
+    let ok = true;
+    for (const t of tabelas) {
+      try {
+        const response = await fetch(`${this.config.url}/rest/v1/${t}?id=not.is.null`, {
+          method: 'DELETE',
+          headers: this._headers()
+        });
+        if (!response.ok) {
+          ok = false;
+          console.warn(`[CloudStore] Erro ao limpar ${t} na nuvem:`, response.status, await response.text());
+        }
+      } catch(e) {
+        ok = false;
+        console.warn(`[CloudStore] Falha na rede ao limpar ${t} na nuvem:`, e.message);
+      }
+    }
+    return { success: ok };
+  }
+
+  // ---------------------------------------------------------------
   // SINCRONIZAÇÃO AUTOMÁTICA: Local → Nuvem
   // Pega os dados do LocalStorage e envia para o Supabase
   // ---------------------------------------------------------------
@@ -235,7 +361,16 @@ class CloudStore {
       { dbKey: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', tableName: 'medidas_disciplinares' },
       { dbKey: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', tableName: 'orientacoes_feedback' },
       { dbKey: 'atestados_medicos',     localKey: 'jr_atestados_medicos', tableName: 'atestados_medicos' },
-      { dbKey: 'ausencias_registros',   localKey: 'jr_ausencias_registros', tableName: 'ausencias_registros' }
+      { dbKey: 'ausencias_registros',   localKey: 'jr_ausencias_registros', tableName: 'ausencias_registros' },
+      // Adicionadas em 20/08/2026 (auditoria externa) — existiam como
+      // coleção local e tabela no schema.sql, mas nunca estavam nesta
+      // lista, então nunca saíam do aparelho que as criou.
+      { dbKey: 'itens_devolucao',       localKey: 'jr_itens_devolucao',   tableName: 'itens_devolucao' },
+      { dbKey: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  tableName: 'colaboradores_cd' },
+      { dbKey: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', tableName: 'relatorios_divergencia' },
+      { dbKey: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', tableName: 'auditoria_produtividade' },
+      { dbKey: 'sinistros',             localKey: 'jr_sinistros',         tableName: 'sinistros' },
+      { dbKey: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', tableName: 'itens_avulsos_destinacao' }
     ];
 
     let fullDb = null;
@@ -275,7 +410,18 @@ class CloudStore {
   async syncCloudToLocal() {
     if (!this.isConfigured()) return false;
 
-        if (window.db && window.db._cloudSyncTimer) { clearTimeout(window.db._cloudSyncTimer); window.db._cloudSyncTimer = null; try { await this.syncLocalToCloud(); } catch(e) {} }
+    // Se existe um envio local (push) agendado e ainda não disparado (ex:
+    // dado que acabou de ser salvo e está no debounce de 1.5s — muito
+    // comum logo após um alert() de sucesso, que bloqueia a aba e atrasa
+    // esse envio), baixar da nuvem agora sobrescreveria esse dado local
+    // ainda não enviado, perdendo-o (achado de 20/08/2026 — escala
+    // importada sumia após um pull automático rodar antes do push
+    // terminar). Forçamos esse envio pendente a completar primeiro.
+    if (window.db && window.db._cloudSyncTimer) {
+      clearTimeout(window.db._cloudSyncTimer);
+      window.db._cloudSyncTimer = null;
+      try { await this.syncLocalToCloud(); } catch(e) {}
+    }
 
     const mappings = [
       { tableName: 'ocorrencias_devolucao', localKey: 'jr_ocorrencias',       dbKey: 'ocorrencias_devolucao' },
@@ -297,7 +443,13 @@ class CloudStore {
       { tableName: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', dbKey: 'medidas_disciplinares' },
       { tableName: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', dbKey: 'orientacoes_feedback' },
       { tableName: 'atestados_medicos',     localKey: 'jr_atestados_medicos', dbKey: 'atestados_medicos' },
-      { tableName: 'ausencias_registros',   localKey: 'jr_ausencias_registros', dbKey: 'ausencias_registros' }
+      { tableName: 'ausencias_registros',   localKey: 'jr_ausencias_registros', dbKey: 'ausencias_registros' },
+      { tableName: 'itens_devolucao',       localKey: 'jr_itens_devolucao',   dbKey: 'itens_devolucao' },
+      { tableName: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  dbKey: 'colaboradores_cd' },
+      { tableName: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', dbKey: 'relatorios_divergencia' },
+      { tableName: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', dbKey: 'auditoria_produtividade' },
+      { tableName: 'sinistros',             localKey: 'jr_sinistros',         dbKey: 'sinistros' },
+      { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' }
     ];
 
     let anyChange = false;
@@ -311,7 +463,7 @@ class CloudStore {
       try {
         const cloudData = await this.getAll(m.tableName);
         if (!cloudData) continue;
-        
+
         const localRaw = localStorage.getItem(m.localKey);
         const localStr = JSON.stringify(cloudData);
         
@@ -341,6 +493,7 @@ class CloudStore {
       // Dispara evento para que o app atualize a tela
       window.dispatchEvent(new CustomEvent('jr-cloud-sync', { detail: { updated: true } }));
     }
+
     return anyChange;
   }
 
@@ -353,18 +506,26 @@ class CloudStore {
     
     const interval = this.config.syncIntervalMs || 30000;
     console.log(`[CloudStore] Sincronização automática iniciada (a cada ${interval/1000}s)`);
-    
-    // Migração automática: antes do primeiro "pull", envia o que já existe
-            // neste aparelho. Sem isso, o primeiro pull sobrescreveria com os dados
-            // da nuvem qualquer cadastro feito localmente antes da nuvem existir
-            // (ex: usuários de teste criados em cada aparelho antes do modo cloud
-            // ser ativado) — cada aparelho perderia silenciosamente seus próprios
-            // dados. Rodar o push primeiro garante que eles sejam mesclados na
-            // nuvem (upsert com merge-duplicates) em vez de descartados.
-            this.syncLocalToCloud()
-              .catch(e => console.warn('[CloudStore] Falha ao enviar dados locais antes da primeira sincronização:', e))
-              .then(() => this.syncCloudToLocal());
-    
+
+    // Fase 5 (21/08/2026): esta função tinha um ramo que empurrava (push) o
+    // estado local ANTES de puxar (pull) sempre que este aparelho "já tinha
+    // sincronizado antes" — pensado para uma migração pontual, só a
+    // primeira vez que cada aparelho entrasse em modo nuvem (dados de teste
+    // cadastrados localmente antes da nuvem existir). Só que a condição
+    // ficava verdadeira pra sempre depois da primeira sincronização, então
+    // esse push-antes-do-pull rodava em TODA abertura do app, em todo
+    // aparelho — inclusive quando o cache local estava desatualizado (ex:
+    // um Reset Global de Treinamento rodado só em OUTRO aparelho). Achado
+    // de 21/08/2026: 68 registros de treinamento voltaram no PC porque ele
+    // empurrou seu estado antigo antes de puxar o reset feito no celular.
+    // Essa migração já passou — agora sempre puxa primeiro; só empurra (pra
+    // mandar cadastros feitos localmente enquanto offline) depois que o
+    // pull mais recente já foi aplicado.
+    this.syncCloudToLocal()
+      .catch(e => console.warn('[CloudStore] Falha ao puxar dados da nuvem na sincronização inicial:', e))
+      .then(() => this.syncLocalToCloud())
+      .catch(e => console.warn('[CloudStore] Falha ao enviar dados locais após a sincronização inicial:', e));
+
     this._syncTimer = setInterval(() => {
       this.syncCloudToLocal();
     }, interval);
@@ -417,3 +578,22 @@ if (window.cloudStore.isConfigured()) {
     setTimeout(() => window.cloudStore.startAutoSync(), 2000);
   });
 }
+
+// (achado em 20/08/2026, auditoria externa) sem isso, quem salva algo sem
+// sinal (motorista na estrada com 5G oscilando, conferente no fundo do
+// galpão sem Wi-Fi) só sincroniza quando o timer de 30s cair de novo —
+// até 30s de espera depois do sinal já ter voltado. Escuta os eventos
+// nativos do navegador e força uma tentativa imediata assim que a conexão
+// volta, sem esperar o próximo tick do timer.
+window.addEventListener('online', () => {
+  console.log('[CloudStore] Conexão de rede voltou — sincronizando imediatamente.');
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    window.cloudStore.syncLocalToCloud()
+      .catch(e => console.warn('[CloudStore] Falha ao sincronizar após reconexão:', e))
+      .then(() => window.cloudStore.syncCloudToLocal());
+  }
+});
+window.addEventListener('offline', () => {
+  console.log('[CloudStore] Conexão de rede perdida — voltando para modo local até reconectar.');
+  if (window.cloudStore) window.cloudStore._setStatus('offline');
+});
