@@ -453,11 +453,19 @@ class CloudStore {
     ];
 
     let anyChange = false;
-    let fullDb = null;
-    try {
-      const rawFull = localStorage.getItem('jr_sac_db');
-      if (rawFull) fullDb = JSON.parse(rawFull);
-    } catch(e) {}
+    // Guarda só as tabelas que realmente mudaram (dbKey -> dado da nuvem),
+    // em vez de acumular direto num "fullDb" lido no início. O loop abaixo
+    // faz uma requisição sequencial POR TABELA (mais de 20 no total) e pode
+    // levar vários segundos — se alguém salvar algo localmente NESSE meio
+    // tempo (ex: abrir uma devolução SAC), o save() já escreve certo em
+    // jr_sac_db na hora. O bug (achado de 21/08/2026, reproduzido testando
+    // o branch de teste): ao terminar, este pull reescrevia jr_sac_db
+    // inteiro com o "fullDb" capturado no INÍCIO do loop — de antes desse
+    // save() — apagando silenciosamente o registro recém-criado antes
+    // mesmo dele chegar a ser enviado pra nuvem. Nenhum erro, nenhum
+    // aviso: o dado simplesmente sumia. Agora só relemos e mesclamos por
+    // cima do jr_sac_db mais atual no final, não do snapshot do início.
+    const pulledUpdates = {};
 
     for (const m of mappings) {
       try {
@@ -466,12 +474,10 @@ class CloudStore {
 
         const localRaw = localStorage.getItem(m.localKey);
         const localStr = JSON.stringify(cloudData);
-        
+
         if (localRaw !== localStr) {
           localStorage.setItem(m.localKey, localStr);
-          if (fullDb) {
-            fullDb[m.dbKey] = cloudData;
-          }
+          pulledUpdates[m.dbKey] = cloudData;
           anyChange = true;
         }
       } catch(e) {
@@ -479,10 +485,13 @@ class CloudStore {
       }
     }
 
-    if (fullDb && anyChange) {
+    if (anyChange) {
       try {
+        const rawFullNow = localStorage.getItem('jr_sac_db');
+        const fullDb = rawFullNow ? JSON.parse(rawFullNow) : {};
+        Object.assign(fullDb, pulledUpdates);
         localStorage.setItem('jr_sac_db', JSON.stringify(fullDb));
-        if (window.db && window.db.data) {
+        if (window.db) {
           window.db.data = fullDb;
         }
       } catch(e) {}
