@@ -1646,7 +1646,9 @@ class Store {
       razao_social: String(clienteData.nome || clienteData.razao_social || '').trim().toUpperCase(),
       cidade: clienteData.cidade || '',
       uf: clienteData.uf || 'GO',
-      cnpj: clienteData.cnpj_cpf || clienteData.cnpj || `SEM-CNPJ-${this.gerarIdUnico()}`
+      // cnpj é VARCHAR(20) — gerarIdUnico() tem até 16 dígitos, não cabe
+      // com prefixo. Date.now() sozinho (13 dígitos) cabe com sobra.
+      cnpj: clienteData.cnpj_cpf || clienteData.cnpj || `SN${Date.now()}`
     };
     if (!item.razao_social) return null;
     this.data.clientes.unshift(item);
