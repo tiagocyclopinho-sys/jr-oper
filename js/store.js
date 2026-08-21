@@ -753,8 +753,13 @@ class Store {
         id: this.gerarIdUnico(),
         ocorrencia_devolucao_id: id,
         protocolo: dev.numero_protocolo,
-        separador: dados.separador_apurado,
-        conferente: dados.conferente_apurado,
+        // As colunas no Supabase são separador_nome/conferente_nome (ver
+        // schema.sql seção 16) — "separador"/"conferente" não existem e
+        // derrubavam o envio inteiro desta tabela, silenciosamente, toda
+        // vez que um gestor aplicava desconto de produtividade (achado de
+        // 21/08/2026, auditoria de nomes de campo local x coluna real).
+        separador_nome: dados.separador_apurado,
+        conferente_nome: dados.conferente_apurado,
         tipo_erro: dev.tipo_erro,
         motivo_causa_raiz: dev.motivo_real_causa_raiz,
         acao_gestor: dados.acao_gestor,
@@ -819,7 +824,7 @@ class Store {
       return {
         ...d,
         carga_numero: carga.numero_carga || d.carga_numero || 'N/A',
-        carga_rota: carga.rota_nome || d.rota_nome || 'N/A',
+        carga_rota: carga.rota || carga.rota_nome || d.rota_nome || 'N/A',
         motorista_nome: motorista.nome || 'N/A',
         ajudante_nome: ajudante.nome || 'N/A',
         veiculo_placa: veiculo.placa || d.veiculo_placa || 'N/A',
@@ -847,7 +852,14 @@ class Store {
       cargaObj = {
         id: newCargaId,
         numero_carga: String(devolucaoData.carga_numero),
-        rota_nome: devolucaoData.rota_nome || 'Rota Não Cadastrada',
+        // A coluna no Supabase se chama "rota", não "rota_nome" (achado de
+        // 21/08/2026: toda devolução aberta contra uma carga que ainda não
+        // existia na nuvem criava esse objeto com "rota_nome", e o envio
+        // inteiro da tabela cargas falhava com "Could not find the
+        // 'rota_nome' column" — e como ocorrencias_devolucao.carga_id
+        // referencia cargas.id, a devolução também nunca chegava na nuvem,
+        // silenciosamente, mesmo com a gravação local funcionando normal).
+        rota: devolucaoData.rota_nome || 'Rota Não Cadastrada',
         motorista_id: parseInt(devolucaoData.motorista_id) || null,
         ajudante_id: parseInt(devolucaoData.ajudante_id) || null,
         veiculo_id: parseInt(devolucaoData.veiculo_id) || null,
@@ -856,7 +868,7 @@ class Store {
       this.data.cargas.push(cargaObj);
     } else if (cargaObj) {
       // Atualiza dados da carga se vieram no form
-      if (devolucaoData.rota_nome) cargaObj.rota_nome = devolucaoData.rota_nome;
+      if (devolucaoData.rota_nome) cargaObj.rota = devolucaoData.rota_nome;
       if (devolucaoData.motorista_id) cargaObj.motorista_id = parseInt(devolucaoData.motorista_id);
       if (devolucaoData.ajudante_id) cargaObj.ajudante_id = parseInt(devolucaoData.ajudante_id);
       if (devolucaoData.veiculo_id) cargaObj.veiculo_id = parseInt(devolucaoData.veiculo_id);
@@ -1046,7 +1058,7 @@ class Store {
         retorno_manutencao_data: r.retorno_manutencao_data || null,
         retorno_manutencao_responsavel: r.retorno_manutencao_responsavel || (mecanico.nome || null),
         carga_numero: carga.numero_carga || r.carga_numero || 'N/A',
-        carga_rota: carga.rota_nome || r.rota_nome || 'N/A',
+        carga_rota: carga.rota || carga.rota_nome || r.rota_nome || 'N/A',
         veiculo_placa: veiculo.placa || r.veiculo_placa || 'N/A',
         veiculo_modelo: veiculo.tipo || veiculo.modelo || 'N/A',
         motorista_nome: motorista.nome || r.motorista_nome || 'N/A',
@@ -1256,7 +1268,8 @@ class Store {
     const item = {
       id: this.gerarIdUnico(),
       numero_carga: String(numero_carga),
-      rota_nome: rota_nome.toUpperCase(),
+      // A coluna no Supabase se chama "rota" (ver comentário em addDevolucao)
+      rota: rota_nome.toUpperCase(),
       motorista_id: parseInt(motorista_id),
       ajudante_id: parseInt(ajudante_id),
       veiculo_id: parseInt(veiculo_id),

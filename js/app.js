@@ -82,6 +82,24 @@ setTimeout(runInitSafely, 100);
 // disparava esse evento, mas nada escutava, então só um F5 manual mostrava
 // os dados novos (achado de 20/08/2026).
 window.addEventListener('jr-cloud-sync', () => {
+  // Achado de 21/08/2026: renderApp() redesenha a TELA INTEIRA do zero. Se
+  // essa sincronização em segundo plano (roda a cada ~30s, sem o usuário
+  // pedir) chegasse enquanto alguém estava no meio de preencher um
+  // formulário (ex: Abertura de Devolução SAC), o formulário inteiro era
+  // apagado sem aviso nenhum — tudo que a pessoa tinha digitado se perdia.
+  // Se o foco estiver num campo editável agora, adia o redesenho: os dados
+  // novos já estão salvos em memória (isso já aconteceu antes deste
+  // evento disparar), só a TELA não é redesenhada ainda — ela pega os
+  // dados atualizados normalmente na próxima renderização (ex: ao enviar
+  // o formulário, fechar um modal, trocar de aba).
+  const emCampoEditavel = document.activeElement && document.activeElement.matches &&
+    document.activeElement.matches('input, textarea, select');
+  if (emCampoEditavel) {
+    if (typeof showToast === 'function') {
+      showToast('🔄 Novos dados chegaram da nuvem. A tela atualiza sozinha assim que você terminar aqui.', 'warning');
+    }
+    return;
+  }
   if (typeof renderApp === 'function') renderApp();
 });
 
@@ -5607,8 +5625,9 @@ function checkCargaExistente(val) {
   if (carga) {
     if (hint) hint.classList.remove('hidden');
     const rotaSel = document.getElementById('sac-rota-nome');
-    if (rotaSel && carga.rota_nome) {
-      Array.from(rotaSel.options).forEach(opt => { opt.selected = opt.value === carga.rota_nome; });
+    const cargaRotaAtual = carga.rota || carga.rota_nome;
+    if (rotaSel && cargaRotaAtual) {
+      Array.from(rotaSel.options).forEach(opt => { opt.selected = opt.value === cargaRotaAtual; });
     }
     if (carga.veiculo_id) { const s = document.getElementById('sac-veiculo-id'); if(s) s.value = carga.veiculo_id; }
     if (carga.motorista_id) { const s = document.getElementById('sac-motorista-id'); if(s) s.value = carga.motorista_id; }
