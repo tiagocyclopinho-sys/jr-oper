@@ -79,6 +79,11 @@ function sha256Sync(ascii) {
 
 class Store {
   constructor() {
+    // Semente aleatória por instância (recarrega a cada abertura do app) —
+    // usada por gerarIdUnico() para reduzir a chance de dois aparelhos
+    // gerarem o mesmo id caso criem um registro no mesmíssimo milissegundo.
+    this._gerarIdContador = Math.floor(Math.random() * 900) + 1;
+    this._gerarIdUltimoMs = 0;
     try {
       this.init();
     } catch(err) {
@@ -86,6 +91,28 @@ class Store {
       this.data = (typeof INITIAL_DATA !== 'undefined') ? JSON.parse(JSON.stringify(INITIAL_DATA)) : {};
       this.currentUser = null;
     }
+  }
+
+  // Gerador de id único centralizado (achado em 20/08/2026 — antes disso,
+  // 15 pontos diferentes de store.js chamavam Date.now() direto para gerar
+  // id, cada um de um jeito: puro, +Math.random() [gerava float, não
+  // cabendo bem num BIGINT] ou +Math.floor(Math.random()*1000) [podia
+  // colidir com o id de outro milissegundo vizinho, já que soma direto sem
+  // multiplicar a base]. Corrigir um por um era o método errado — mudava
+  // 15 lugares por 15 razões diferentes toda vez que aparecia mais um caso.
+  // multiplicar Date.now() por 1000 preserva um "bloco" de 1000 ids só
+  // pra esse milissegundo, sem nunca encostar no bloco do milissegundo
+  // seguinte; o contador (com semente aleatória por instância) garante
+  // que duas chamadas no mesmo milissegundo, no mesmo aparelho, nunca
+  // colidam.
+  gerarIdUnico() {
+    const agora = Date.now();
+    if (agora === this._gerarIdUltimoMs) {
+      this._gerarIdContador++;
+    } else {
+      this._gerarIdUltimoMs = agora;
+    }
+    return agora * 1000 + (this._gerarIdContador % 1000);
   }
 
   init() {
@@ -217,6 +244,7 @@ class Store {
     ensureArray('atestados_medicos');
     ensureArray('ausencias_registros');
     ensureArray('sinistros');
+    ensureArray('conflitos_pendentes');
 
     // Migração leve, roda uma única vez por dispositivo (idempotente):
     // 1) garante um 'id' único em cada item de devolução — sem isso, o
@@ -681,7 +709,7 @@ class Store {
       return { success: false, message: 'E-mail já cadastrado no sistema!' };
     }
     const newUser = {
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       nome: nome.toUpperCase().trim(),
       email: email.toLowerCase().trim(),
       senha_hash: sha256Sync(senha),
@@ -722,7 +750,7 @@ class Store {
     if (dados.desconto_produtividade_gestor) {
       if (!this.data.auditoria_produtividade) this.data.auditoria_produtividade = [];
       this.data.auditoria_produtividade.push({
-        id: Date.now(),
+        id: this.gerarIdUnico(),
         ocorrencia_devolucao_id: id,
         protocolo: dev.numero_protocolo,
         separador: dados.separador_apurado,
@@ -741,15 +769,28 @@ class Store {
   // SAC Devoluções Methods
   getDevolucoes() {
     return (this.data.ocorrencias_devolucao || []).filter(d => !d.is_deleted).map(d => {
-      const cargasArr = this.data.cargas || []; const veiculosArr = this.data.veiculos || []; const motoristasArr = this.data.motoristas || []; const ajudantesArr = this.data.ajudantes || []; const clientesArr = this.data.clientes || [];
-            const carga = cargasArr.find(c => c.id == d.carga_id) || {};
-            const veiculoDirect = veiculosArr.find(v => v.id == d.veiculo_id);
-            const veiculoCarga = veiculosArr.find(v => v.id == carga.veiculo_id);
-            const veiculo = veiculoDirect || veiculoCarga || {};
+      // this.data.X podia ficar undefined depois de um pull da nuvem (o
+      // syncCloudToLocal só reatribui a chave quando detecta mudança —
+      // numa primeira sincronização "sem mudança" a chave nunca era
+      // criada, já que clientes/produtos vivem fora do jr_sac_db). Isso
+      // quebrava a tela inteira do SAC com "Cannot read properties of
+      // undefined" (achado de 20/08/2026). Blindando com fallback.
+      const cargasArr = this.data.cargas || [];
+      const veiculosArr = this.data.veiculos || [];
+      const motoristasArr = this.data.motoristas || [];
+      const ajudantesArr = this.data.ajudantes || [];
+      const clientesArr = this.data.clientes || [];
+      const usuariosArr = this.data.usuarios || [];
+      const setoresArr = this.data.setores || [];
 
-            const motorista = motoristasArr.find(m => m.id == (carga.motorista_id || d.motorista_id)) || {};
-            const ajudante = ajudantesArr.find(a => a.id == carga.ajudante_id) || {};
-            const cliente = clientesArr.find(cli => cli.id == d.cliente_id) || {};
+      const carga = cargasArr.find(c => c.id == d.carga_id) || {};
+      const veiculoDirect = veiculosArr.find(v => v.id == d.veiculo_id);
+      const veiculoCarga = veiculosArr.find(v => v.id == carga.veiculo_id);
+      const veiculo = veiculoDirect || veiculoCarga || {};
+
+      const motorista = motoristasArr.find(m => m.id == (carga.motorista_id || d.motorista_id)) || {};
+      const ajudante = ajudantesArr.find(a => a.id == carga.ajudante_id) || {};
+      const cliente = clientesArr.find(cli => cli.id == d.cliente_id) || {};
       
       const itens = (this.data.itens_devolucao || []).filter(i => i.ocorrencia_devolucao_id == d.id).map(i => {
         const prod = (this.data.produtos || []).find(p => p.id == i.produto_id || String(p.codigo_produto) === String(i.produto_id)) || {};
@@ -767,9 +808,13 @@ class Store {
           valor_total: valorTotal
         };
       });
-      const separador = this.data.usuarios.find(u => u.id == d.separador_id) || {};
-      const conferente = this.data.usuarios.find(u => u.id == d.conferente_id) || {};
-      const setor = this.data.setores.find(s => s.id == d.setor_encaminhado_id) || {};
+      // Mesmo achado de 20/08/2026 (comentário acima): usuarios/setores
+      // ficaram de fora daquele fix e continuavam quebrando a tela com
+      // "Cannot read properties of undefined" quando ficavam undefined
+      // após um pull (achado de 21/08/2026, testando o preview de teste).
+      const separador = usuariosArr.find(u => u.id == d.separador_id) || {};
+      const conferente = usuariosArr.find(u => u.id == d.conferente_id) || {};
+      const setor = setoresArr.find(s => s.id == d.setor_encaminhado_id) || {};
 
       return {
         ...d,
@@ -868,7 +913,7 @@ class Store {
       itens.forEach(item => {
         if (!this.data.itens_devolucao) this.data.itens_devolucao = [];
         this.data.itens_devolucao.push({
-          id: Date.now() + Math.floor(Math.random() * 1000),
+          id: this.gerarIdUnico(),
           ocorrencia_devolucao_id: id,
           produto_id: parseInt(item.produto_id),
           quantidade: parseInt(item.quantidade),
@@ -934,7 +979,7 @@ class Store {
       if (updateData.registra_desconto && updateData.separador_id) {
         if (!this.data.auditoria_produtividade) this.data.auditoria_produtividade = [];
         this.data.auditoria_produtividade.push({
-          id: Date.now(),
+          id: this.gerarIdUnico(),
           usuario_id: parseInt(updateData.separador_id),
           setor_id: 2,
           ocorrencia_devolucao_id: id,
@@ -1154,6 +1199,15 @@ class Store {
       alert('Código ERP já cadastrado!');
       return null;
     }
+    // CNH é UNIQUE no schema.sql — checagem local evita o caso mais comum
+    // (digitar a mesma CNH duas vezes neste aparelho). Não cobre o caso de
+    // dois aparelhos diferentes cadastrando a mesma CNH offline ao mesmo
+    // tempo — esse é detectado depois, na sincronização (ver Fase 4,
+    // registrarConflitoSincronizacao() e a aba "⚠️ Conflitos" em Governança).
+    if (cnh && this.data.motoristas.find(x => String(x.cnh || '').toUpperCase() === String(cnh).toUpperCase())) {
+      alert('CNH já cadastrada para outro motorista!');
+      return null;
+    }
     this.data.motoristas.push(item);
     this.save();
     return item;
@@ -1167,7 +1221,7 @@ class Store {
   }
 
   addVeiculo(placa, tipo, situacao) {
-    const item = { id: Date.now(), placa: placa.toUpperCase(), modelo: tipo, tipo: tipo.toUpperCase(), situacao: situacao || 'Ativo' };
+    const item = { id: this.gerarIdUnico(), placa: placa.toUpperCase(), modelo: tipo, tipo: tipo.toUpperCase(), situacao: situacao || 'Ativo' };
     this.data.veiculos.push(item);
     this.save();
     return item;
@@ -1200,7 +1254,7 @@ class Store {
 
   addCargaRota(numero_carga, rota_nome, motorista_id, ajudante_id, veiculo_id) {
     const item = {
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       numero_carga: String(numero_carga),
       rota_nome: rota_nome.toUpperCase(),
       motorista_id: parseInt(motorista_id),
@@ -1236,7 +1290,15 @@ class Store {
 
   addViagem(viagemData) {
     if (!this.data.controle_viagens) this.data.controle_viagens = [];
-        let novoId = Date.now(); while (this.data.controle_viagens.some(v => v.id === novoId)) novoId++;
+    // Date.now() sozinho colide quando várias viagens são importadas em
+    // sequência rápida (mesmo milissegundo) — o Supabase recusa o lote
+    // inteiro com "ON CONFLICT DO UPDATE command cannot affect row a
+    // second time" quando há IDs repetidos, e nenhuma das viagens daquele
+    // envio chega na nuvem (achado de 20/08/2026 — importação de escala
+    // com várias linhas nunca sincronizava). Garante um id único checando
+    // contra o que já existe no array.
+    let novoId = Date.now();
+    while (this.data.controle_viagens.some(v => v.id === novoId)) novoId++;
     const item = {
       id: novoId,
       carga: String(viagemData.carga || '').toUpperCase().trim(),
@@ -1272,9 +1334,19 @@ class Store {
   }
 
   deleteViagem(id) {
+    // Era exclusão física (removia do array) — a exclusão nunca chegava na
+    // nuvem (upsert só insere/atualiza, nunca remove), e o próximo pull
+    // trazia a viagem "apagada" de volta (achado de 20/08/2026). Agora é
+    // soft delete: getControleViagens() já filtra is_deleted, e a mudança
+    // de flag sincroniza normalmente como qualquer outra edição.
     if (this.data.controle_viagens) {
-      const item = this.data.controle_viagens.find(x => x.id == id); if (item) { item.is_deleted = true; item.deleted_at = new Date().toISOString(); item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA'; }
-      this.save();
+      const item = this.data.controle_viagens.find(x => x.id == id);
+      if (item) {
+        item.is_deleted = true;
+        item.deleted_at = new Date().toISOString();
+        item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+        this.save();
+      }
     }
   }
 
@@ -1288,7 +1360,7 @@ class Store {
   addOcorrenciaViagem(ocData) {
     if (!this.data.ocorrencias_viagens) this.data.ocorrencias_viagens = [];
     const item = {
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       data: ocData.data || new Date().toISOString().split('T')[0],
       carga: String(ocData.carga || '').toUpperCase().trim(),
       rota: String(ocData.rota || '').toUpperCase().trim(),
@@ -1315,9 +1387,16 @@ class Store {
   }
 
   deleteOcorrenciaViagem(id) {
+    // Mesmo motivo de deleteViagem: soft delete para a exclusão sincronizar
+    // com a nuvem em vez de ser desfeita no próximo pull.
     if (this.data.ocorrencias_viagens) {
-      const item = this.data.ocorrencias_viagens.find(x => x.id == id); if (item) { item.is_deleted = true; item.deleted_at = new Date().toISOString(); item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA'; }
-      this.save();
+      const item = this.data.ocorrencias_viagens.find(x => x.id == id);
+      if (item) {
+        item.is_deleted = true;
+        item.deleted_at = new Date().toISOString();
+        item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+        this.save();
+      }
     }
   }
 
@@ -1369,7 +1448,7 @@ class Store {
     else if (turno === '1º TURNO - FRIO') gestorPadrao = 'MELQUIADES NETO';
 
     return {
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       data: data || new Date().toISOString().split('T')[0],
       turno: turno || '2º TURNO - FRIO',
       gestor: gestorPadrao,
@@ -1414,7 +1493,7 @@ class Store {
   addTrocaVeiculo(trocaData) {
     if (!this.data.trocas_veiculos) this.data.trocas_veiculos = [];
     const item = {
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       data: trocaData.data || new Date().toISOString().split('T')[0],
       veiculo_escalado: String(trocaData.veiculo_escalado || '').toUpperCase().trim(),
       veiculo_trocado: String(trocaData.veiculo_trocado || '').toUpperCase().trim(),
@@ -1439,9 +1518,16 @@ class Store {
   }
 
   deleteTrocaVeiculo(id) {
+    // Mesmo motivo de deleteViagem: soft delete para a exclusão sincronizar
+    // com a nuvem em vez de ser desfeita no próximo pull.
     if (this.data.trocas_veiculos) {
-      const item = this.data.trocas_veiculos.find(x => x.id == id); if (item) { item.is_deleted = true; item.deleted_at = new Date().toISOString(); item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA'; }
-      this.save();
+      const item = this.data.trocas_veiculos.find(x => x.id == id);
+      if (item) {
+        item.is_deleted = true;
+        item.deleted_at = new Date().toISOString();
+        item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+        this.save();
+      }
     }
   }
 
@@ -1491,7 +1577,7 @@ class Store {
     }
     if (!item) {
       item = {
-        id: Date.now(),
+        id: this.gerarIdUnico(),
         chapa: colabData.chapa || '',
         nome: String(colabData.nome || '').trim().toUpperCase(),
         secao: String(colabData.secao || 'CARREGAMENTO FRIOS - 1 TURNO').trim().toUpperCase(),
@@ -1518,11 +1604,13 @@ class Store {
   }
 
   getMotoristas() {
-    return this.data.motoristas || [];
+    // (achado em 20/08/2026) faltava filtrar is_deleted — motorista excluído
+    // continuava aparecendo em exportação/CSV/Power BI indefinidamente.
+    return (this.data.motoristas || []).filter(x => !x.is_deleted);
   }
 
   getVeiculos() {
-    return this.data.veiculos || [];
+    return (this.data.veiculos || []).filter(x => !x.is_deleted);
   }
 
   getClientes() {
@@ -1532,7 +1620,7 @@ class Store {
   addCliente(clienteData) {
     if (!this.data.clientes) this.data.clientes = [];
     const item = {
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       codigo: clienteData.codigo || `CLI-${Date.now().toString().slice(-4)}`,
       nome: String(clienteData.nome || '').trim().toUpperCase(),
       cidade: clienteData.cidade || '',
@@ -1563,8 +1651,16 @@ class Store {
     if (!item) return false;
     item.is_deleted = true;
     item.deleted_at = new Date().toISOString();
-    item.deleted_by = this.currentUser ? { id: this.currentUser.id, nome: this.currentUser.nome } : { id: 0, nome: 'SISTEMA' };
-    
+    // achado em 20/08/2026: gravava um objeto aninhado deleted_by:{id,nome},
+    // mas nenhuma tabela do schema.sql tem essa coluna — só as flat
+    // deleted_by_usuario_id/deleted_by_nome (seção 10.1). cloudStore.upsert()
+    // manda o registro inteiro sem filtrar colunas, então o PostgREST
+    // rejeitava o upsert inteiro (coluna desconhecida) e toda exclusão lógica
+    // feita por softDelete() — motoristas, veículos, clientes, produtos,
+    // colaboradores_cd, ocorrencias_rota — nunca chegava na nuvem.
+    item.deleted_by_usuario_id = this.currentUser ? this.currentUser.id : null;
+    item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+
     this.logAudit({
       acao: 'EXCLUSAO_LOGICA',
       modulo: collection,
@@ -1580,9 +1676,10 @@ class Store {
     const item = this.data[collection].find(x => x.id == id);
     if (!item) return false;
     item.is_deleted = false;
-    item.restored_at = new Date().toISOString();
-    item.restored_by = this.currentUser ? this.currentUser.nome : 'SISTEMA';
-
+    // achado em 20/08/2026: restored_at/restored_by não existem em nenhuma
+    // tabela do schema.sql — mesmo bug de softDelete() (coluna desconhecida
+    // derruba o upsert inteiro). Quem restaurou e quando já fica registrado
+    // corretamente no logAudit() abaixo (tabela audit_logs, colunas reais).
     this.logAudit({
       acao: 'RESTAURACAO',
       modulo: collection,
@@ -1646,10 +1743,71 @@ class Store {
     return items.sort((a, b) => new Date(b.deleted_at || 0) - new Date(a.deleted_at || 0));
   }
 
+  // ===== CONFLITOS DE SINCRONIZAÇÃO (Fase 4, 20/08/2026) =====
+  // motoristas.cnh e usuarios.email são UNIQUE no schema.sql. Quando dois
+  // aparelhos offline cadastram, cada um sem saber do outro, um registro
+  // com o mesmo CNH/e-mail (mas ids diferentes, gerados localmente), o
+  // upsert em lote do cloudStore falha inteiro nesse ciclo de sync com
+  // violação de unicidade (23505) — e como o lote reenvia a tabela inteira
+  // a cada 30s, NENHUM motorista/usuário daquele aparelho sincroniza,
+  // silenciosamente, até alguém perceber e corrigir manualmente. Decisão
+  // do usuário (20/08/2026): não sobrescrever automaticamente — avisar e
+  // deixar um gestor revisar. cloudStore.js chama registrarConflitoSincronizacao()
+  // quando detecta o 23505, e limparConflitosDaTabela() quando a tabela
+  // volta a sincronizar com sucesso (indício de que foi corrigido).
+  registrarConflitoSincronizacao({ tabela, campo, valor }) {
+    if (!tabela || !campo || valor === undefined || valor === null || valor === '') return;
+    if (!Array.isArray(this.data.conflitos_pendentes)) this.data.conflitos_pendentes = [];
+    const existente = this.data.conflitos_pendentes.find(c =>
+      c.tabela === tabela && c.campo === campo && String(c.valor).toLowerCase() === String(valor).toLowerCase() && !c.resolvido
+    );
+    if (existente) {
+      existente.detectado_em = new Date().toISOString();
+      existente.ocorrencias = (existente.ocorrencias || 1) + 1;
+    } else {
+      const registrosLocais = (this.data[tabela] || [])
+        .filter(r => String(r[campo] || '').toLowerCase() === String(valor).toLowerCase())
+        .map(r => ({ id: r.id, nome: r.nome || r.email || `ID #${r.id}` }));
+      this.data.conflitos_pendentes.push({
+        id: this.gerarIdUnico(),
+        tabela,
+        campo,
+        valor,
+        registros_locais: registrosLocais,
+        detectado_em: new Date().toISOString(),
+        ocorrencias: 1,
+        resolvido: false
+      });
+    }
+    this.save();
+  }
+
+  limparConflitosDaTabela(tabela) {
+    if (!Array.isArray(this.data.conflitos_pendentes)) return;
+    const antes = this.data.conflitos_pendentes.length;
+    this.data.conflitos_pendentes = this.data.conflitos_pendentes.filter(c => c.tabela !== tabela || c.resolvido);
+    if (this.data.conflitos_pendentes.length !== antes) this.save();
+  }
+
+  resolverConflito(id) {
+    if (!Array.isArray(this.data.conflitos_pendentes)) return false;
+    const c = this.data.conflitos_pendentes.find(x => x.id == id);
+    if (!c) return false;
+    c.resolvido = true;
+    c.resolvido_em = new Date().toISOString();
+    c.resolvido_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    this.save();
+    return true;
+  }
+
+  getConflitosPendentes() {
+    return (this.data.conflitos_pendentes || []).filter(c => !c.resolvido);
+  }
+
   logAudit({ acao, modulo, registro_id, diff }) {
     if (!this.data.audit_logs) this.data.audit_logs = [];
     const entry = {
-      id: Date.now() + Math.random(),
+      id: this.gerarIdUnico(),
       usuario_id: this.currentUser ? this.currentUser.id : 0,
       usuario_nome: this.currentUser ? this.currentUser.nome : 'SISTEMA',
       data_hora: new Date().toISOString(),
@@ -1671,7 +1829,7 @@ class Store {
     const versions = this.data.registro_versoes.filter(v => v.collection === collection && v.registro_id == record.id);
     const versaoNum = versions.length + 1;
     this.data.registro_versoes.unshift({
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       collection,
       registro_id: record.id,
       versao: versaoNum,
@@ -1771,6 +1929,11 @@ class Store {
     this.data.reentregas = [];
     this.data.audit_logs = [];
     this.data.registro_versoes = [];
+    // (achado em 20/08/2026, auditoria externa) sinistros e itens avulsos
+    // são dados operacionais/de treinamento como os demais acima — só
+    // faltavam aqui porque os módulos são mais novos que esta função.
+    this.data.sinistros = [];
+    this.data.itens_avulsos_destinacao = [];
 
     // Limpa chaves e caches locais isolados no localStorage
     const chavesLimpeza = [
@@ -1785,14 +1948,28 @@ class Store {
       'jr_controle_viagens',
       'jr_resumo_diario_cd',
       'jr_relatorios_divergencia',
-      'jr_auditoria_produtividade'
+      'jr_auditoria_produtividade',
+      'jr_sinistros',
+      'jr_itens_avulsos_destinacao'
     ];
     chavesLimpeza.forEach(k => {
       try { localStorage.removeItem(k); } catch(e) {}
     });
 
     this.save();
-    if (window.cloudStore && window.cloudStore.isConfigured()) { window.cloudStore.clearCloudTrainingData().catch(e => { console.warn('[Store] Falha ao limpar dados de treinamento na nuvem:', e); }); } return { success: true, message: 'Reset executado com sucesso! Dados operacionais, logs e caches zerados (neste aparelho e na nuvem) para inicio da operacao oficial.' };
+
+    // O reset sempre só limpou o navegador local, nunca a nuvem — rodar
+    // em um aparelho não removia o que já tinha subido ao Supabase, e o
+    // próximo "pull" automático trazia os dados de treinamento de volta
+    // para este e para outros aparelhos (achado de 20/08/2026). Limpa a
+    // nuvem também, em segundo plano, sem travar o retorno desta função.
+    if (window.cloudStore && window.cloudStore.isConfigured()) {
+      window.cloudStore.clearCloudTrainingData().catch(e => {
+        console.warn('[Store] Falha ao limpar dados de treinamento na nuvem:', e);
+      });
+    }
+
+    return { success: true, message: 'Reset executado com sucesso! Dados operacionais, logs e caches zerados (neste aparelho e na nuvem) para início da operação oficial.' };
   }
 
   getOcorrenciasDevolucao() {
@@ -2002,7 +2179,7 @@ class Store {
       3
     );
     const retencao = {
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       numero_retencao,
       veiculo_id: parseInt(veiculo_id) || null,
       placa: String(placa || '').toUpperCase().trim(),
@@ -2454,7 +2631,7 @@ class Store {
       this.data.reentregas = [];
     }
     const novaReentrega = {
-      id: Date.now(),
+      id: this.gerarIdUnico(),
       data: item.data || new Date().toISOString().split('T')[0],
       carga_numero: String(item.carga_numero || '').trim().toUpperCase(),
       rota_nome: String(item.rota_nome || '').trim().toUpperCase(),
@@ -2542,7 +2719,8 @@ class Store {
     item.is_deleted = true;
     item.deleted_at = new Date().toISOString();
     item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
-    item.deleted_by = this.currentUser ? { id: this.currentUser.id, nome: this.currentUser.nome } : { id: 0, nome: 'SISTEMA' };
+    // (achado em 20/08/2026) não existe coluna deleted_by em reentregas_rota
+    // — só deleted_by_nome, já preenchida acima. Ver mesmo achado em softDelete().
 
     this.logAudit({
       acao: 'EXCLUSAO_LOGICA',
