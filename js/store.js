@@ -1632,16 +1632,23 @@ class Store {
 
   addCliente(clienteData) {
     if (!this.data.clientes) this.data.clientes = [];
+    // As colunas reais no Supabase são codigo_cliente/razao_social/cnpj
+    // (ver database/schema.sql) — este método gravava codigo/nome/cnpj_cpf,
+    // que nunca existiram como coluna. Nem "criado_em" existe nesta tabela.
+    // Isso não só quebrava a sincronização (PGRST204, achado de
+    // 21/08/2026) como já deixava o cliente com nome "N/A" mesmo
+    // localmente em qualquer tela que lê codigo_cliente/razao_social (ex:
+    // getDevolucoes) — os nomes de campo aqui nunca bateram com o resto
+    // do app.
     const item = {
       id: this.gerarIdUnico(),
-      codigo: clienteData.codigo || `CLI-${Date.now().toString().slice(-4)}`,
-      nome: String(clienteData.nome || '').trim().toUpperCase(),
+      codigo_cliente: clienteData.codigo || clienteData.codigo_cliente || `CLI-${Date.now().toString().slice(-4)}`,
+      razao_social: String(clienteData.nome || clienteData.razao_social || '').trim().toUpperCase(),
       cidade: clienteData.cidade || '',
       uf: clienteData.uf || 'GO',
-      cnpj_cpf: clienteData.cnpj_cpf || '',
-      criado_em: new Date().toISOString()
+      cnpj: clienteData.cnpj_cpf || clienteData.cnpj || `SEM-CNPJ-${this.gerarIdUnico()}`
     };
-    if (!item.nome) return null;
+    if (!item.razao_social) return null;
     this.data.clientes.unshift(item);
     this.logAudit({ acao: 'CRIACAO', modulo: 'clientes', registro_id: item.id, diff: { depois: item } });
     this.save();
