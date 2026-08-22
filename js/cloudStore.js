@@ -49,6 +49,12 @@ class CloudStore {
   // Diagnóstico rápido: chame jrDiagnosticoSync() no console do navegador.
   getDiagnostico() {
     return {
+      // Confira ANTES de rodar o Reset Global: todo aparelho precisa estar
+      // nesta build. Um aparelho com código antigo não conhece o carimbo de
+      // reset e reenvia o que foi apagado — foi o que trouxe a DEV-2026-001
+      // de volta em 22/08/2026.
+      buildSync: CloudStore.BUILD,
+      resetAplicado: Number(localStorage.getItem('jr_reset_epoch') || 0) || null,
       configurado: this.isConfigured(),
       status: this._connectionStatus,
       tabelasComPendencia: [...this._tabelasPendentesDeEnvio],
@@ -443,6 +449,42 @@ class CloudStore {
   async syncLocalToCloud() {
     if (!this.isConfigured()) return;
 
+    // TRAVA DE RESET (achado de 22/08/2026, 01:05)
+    //
+    // A devolução DEV-2026-001 (criada 00:48) reapareceu na nuvem DEPOIS do
+    // Reset Global das 01:05, junto com as 15 viagens. Não foi lançada
+    // sozinha: um aparelho que ainda tinha o registro em cache empurrou de
+    // volta o que o reset tinha acabado de apagar.
+    //
+    // A proteção anterior vivia só no pull (syncCloudToLocal). Mas existem
+    // CINCO caminhos que disparam o push sem pull antes — o debounce do
+    // save(), o interceptador do alert(), o evento 'online' (que empurrava
+    // primeiro e puxava depois), o startAutoSync e o flush do pull. Bastava
+    // um deles rodar na janela entre o reset e o próximo pull daquele
+    // aparelho para ressuscitar tudo.
+    //
+    // Por isso a trava fica aqui, no push, e não em quem chama: enquanto
+    // este aparelho não tiver aplicado o reset mais recente da nuvem, ele
+    // não tem autoridade para enviar nada. Puxa primeiro, envia depois.
+    // O _aplicandoReset evita ida e volta infinita: syncCloudToLocal()
+    // também chama o push (para dar vazão a gravações pendentes), então sem
+    // essa marca os dois ficariam se chamando enquanto o reset não fosse
+    // aplicado.
+    if (!this._aplicandoReset) {
+      const epochNuvem = await this._lerResetEpochNuvem();
+      const epochLocal = Number(localStorage.getItem('jr_reset_epoch') || 0);
+      if (epochNuvem > epochLocal) {
+        console.warn('[CloudStore] Envio bloqueado: há um Reset Global mais recente na nuvem que este aparelho ainda não aplicou. Baixando o estado novo antes de enviar qualquer coisa.');
+        this._aplicandoReset = true;
+        try {
+          await this.syncCloudToLocal();
+        } finally {
+          this._aplicandoReset = false;
+        }
+        return;
+      }
+    }
+
     // Mapeamento: chave no jr_sac_db / localStorage → tabela no Supabase
     //
     // ORDEM IMPORTA (achado de 21/08/2026): as tabelas são enviadas uma a
@@ -788,6 +830,8 @@ class CloudStore {
   }
 }
 
+CloudStore.BUILD = "sync-4.7.6";
+
 window.cloudStore = new CloudStore();
 
 // Atalho de diagnóstico para o console do navegador (F12). Responde a
@@ -846,9 +890,14 @@ if (window.cloudStore.isConfigured()) {
 window.addEventListener('online', () => {
   console.log('[CloudStore] Conexão de rede voltou — sincronizando imediatamente.');
   if (window.cloudStore && window.cloudStore.isConfigured()) {
-    window.cloudStore.syncLocalToCloud()
-      .catch(e => console.warn('[CloudStore] Falha ao sincronizar após reconexão:', e))
-      .then(() => window.cloudStore.syncCloudToLocal());
+    // Puxa ANTES de empurrar. Este aparelho acabou de ficar sem rede: o
+    // que existe na nuvem é necessariamente mais atual que o cache local,
+    // e pode inclusive conter um Reset Global feito enquanto ele estava
+    // fora do ar. Empurrar primeiro era um caminho de ressurreição.
+    window.cloudStore.syncCloudToLocal()
+      .catch(e => console.warn('[CloudStore] Falha ao baixar dados após reconexão:', e))
+      .then(() => window.cloudStore.syncLocalToCloud())
+      .catch(e => console.warn('[CloudStore] Falha ao enviar dados após reconexão:', e));
   }
 });
 window.addEventListener('offline', () => {

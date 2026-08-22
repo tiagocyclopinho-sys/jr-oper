@@ -71,6 +71,12 @@ Arquivos alterados nesta correção:
 
 ## PASSO 4 — Limpar o cache em cada aparelho
 
+> ⚠️ **Este passo tem que estar 100% concluído antes do PASSO 5.** Um aparelho
+> rodando código antigo não conhece o carimbo de reset: ele reenvia o que o
+> reset acabou de apagar. Foi exatamente isso que trouxe a DEV-2026-001 e as
+> 15 viagens de volta em 22/08/2026 — a devolução não foi lançada sozinha,
+> foi ressuscitada por um aparelho desatualizado.
+
 O app é um PWA: sem isso, o aparelho continua rodando o JavaScript antigo e
 nada muda, por mais que você publique.
 
@@ -78,6 +84,16 @@ nada muda, por mais que você publique.
 - **Celular:** fechar a aba do app, reabrir, puxar a tela para baixo para recarregar
 
 Faça em **todos** os aparelhos que vão operar.
+
+**Como confirmar que o aparelho atualizou** — abra o console (F12 no PC) e rode:
+
+```
+jrDiagnosticoSync()
+```
+
+O campo `buildSync` tem que dizer **`sync-4.7.6`**. Se disser outra coisa, ou se
+a função não existir ("is not defined"), aquele aparelho ainda está no código
+antigo — repita o refresh até aparecer. Não siga para o passo 5 antes disso.
 
 ## PASSO 5 — Zerar os dados de treinamento
 
