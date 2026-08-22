@@ -2219,8 +2219,16 @@ class Store {
     this.data.itens_avulsos_destinacao = [];
 
     // Limpa chaves e caches locais isolados no localStorage
+    // jr_ocorrencias_viagens e jr_itens_devolucao entraram em 22/08/2026
+    // (build 4.8.2): as duas coleções eram zeradas em this.data acima, mas
+    // as chaves espelhadas ficavam para trás. O envio lê jr_sac_db primeiro
+    // e só cai nessas chaves como último recurso, então o furo era latente —
+    // mas é exatamente depois de um reset que as duas cópias divergem, e
+    // essa divergência já custou meio dia de diagnóstico hoje.
     const chavesLimpeza = [
       'jr_ocorrencias',
+      'jr_ocorrencias_viagens',
+      'jr_itens_devolucao',
       'jr_ocorrencias_rota',
       'jr_retencoes_frota',
       'jr_reentregas',

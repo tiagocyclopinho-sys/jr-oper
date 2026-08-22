@@ -2169,12 +2169,24 @@ function renderAparelhosContent() {
     corpo = '<div class="p-8 text-center text-slate-500">Nenhum aparelho registrado ainda. Abra o app em cada máquina e volte aqui.</div>';
   } else {
     const desatualizados = cache.lista.filter(a => a.build !== buildAtual).length;
-    const contaminados = cache.lista.filter(a => (a.registros_recusados || 0) > 0).length;
+    const recusadosPorAparelho = cache.lista.map(a => a.registros_recusados || 0);
+    const contaminados = recusadosPorAparelho.filter(n => n > 0).length;
+    // Se TODOS marcam o mesmo número, não é um aparelho sujo — é a mesma
+    // linha contada de vários lugares (correção de 22/08/2026). O pull grava
+    // as linhas da nuvem no mesmo cache que a auditoria varre, então
+    // fantasma que está no BANCO aparece igual em todo aparelho que
+    // sincroniza. Limpar cache não resolve isso; só a faxina do banco.
+    // A leitura oposta — um aparelho destoando dos outros — é que denuncia
+    // máquina reenviando cache velho, e aí sim é ação imediata.
+    const todosIguais = contaminados === cache.lista.length && cache.lista.length > 1
+      && recusadosPorAparelho.every(n => n === recusadosPorAparelho[0]);
     corpo = `
       ${(desatualizados > 0 || contaminados > 0) ? `
       <div class="bg-amber-950/30 border border-amber-900/60 rounded-xl p-3 text-[11px] text-amber-200 space-y-1">
         ${desatualizados > 0 ? `<div>⚠️ <b>${desatualizados}</b> aparelho(s) em versão antiga — peça para fechar e reabrir o app.</div>` : ''}
-        ${contaminados > 0 ? `<div>⛔ <b>${contaminados}</b> aparelho(s) com cache contaminado (registros recusados no envio) — é a limpeza da ETAPA 3.</div>` : ''}
+        ${contaminados > 0 ? (todosIguais
+          ? `<div>⛔ Todos os aparelhos marcam <b>${recusadosPorAparelho[0]}</b> recusados — mesmo número em todos significa que os registros estão <b>no banco</b>, não neste ou naquele aparelho. Limpar cache não resolve: é a faxina da <b>ETAPA 1</b> (<code>migration_25</code>).</div>`
+          : `<div>⛔ <b>${contaminados}</b> de ${cache.lista.length} aparelho(s) com registros recusados no envio, e os números <b>não batem entre si</b> — o que destoa está reenviando cache antigo. Coloque-o na versão atual (ETAPA 3).</div>`) : ''}
       </div>` : ''}
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-xs border-collapse">
@@ -2216,9 +2228,79 @@ function renderAparelhosContent() {
     <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl space-y-4 p-5">
       ${cabecalho}
       ${corpo}
+      ${renderDiagnosticoDesteAparelho()}
     </div>`;
 }
 window.renderAparelhosContent = renderAparelhosContent;
+
+// =================================================================
+// DIAGNÓSTICO DESTE APARELHO — build 4.8.2 (22/08/2026)
+//
+// Existe por um motivo específico: **celular não tem console**. Todo o
+// diagnóstico de sincronização vivia em jrDiagnosticoSync()/jrErrosSync(),
+// acessível só por F12 — ou seja, invisível justamente nos aparelhos que
+// mais operam fora de vista. Um motorista com dado preso no celular não
+// tinha como saber, e ninguém tinha como perguntar a ele.
+//
+// Mostra o que o console mostraria: quais tabelas a nuvem está recusando e
+// por quê. O botão dispara jrErrosSync(), que roda um ciclo de envio
+// capturando TODOS os erros — e não só o último, que foi o que mascarou o
+// diagnóstico de 22/08 por horas.
+// =================================================================
+function renderDiagnosticoDesteAparelho() {
+  if (!window.cloudStore || !window.cloudStore.getDiagnostico) return '';
+  const d = window.cloudStore.getDiagnostico();
+  if (!d.configurado) return '';
+
+  const pendentes = d.tabelasComPendencia || [];
+  const capturados = (window.jrUltimosErrosSync && window.jrUltimosErrosSync.erros) || null;
+
+  const linhas = (capturados && capturados.length)
+    ? capturados.map(e => `
+        <tr class="border-t border-slate-800">
+          <td class="p-2 font-bold text-red-300">${e.tabela}</td>
+          <td class="p-2 text-slate-400">HTTP ${e.status}</td>
+          <td class="p-2 text-slate-300 break-words">${String(e.detalhe || '').replace(/</g, '&lt;')}</td>
+        </tr>`).join('')
+    : pendentes.map(t => `
+        <tr class="border-t border-slate-800">
+          <td class="p-2 font-bold text-red-300">${t}</td>
+          <td class="p-2 text-slate-400">—</td>
+          <td class="p-2 text-slate-500">Toque em "Ver o motivo" para o detalhe</td>
+        </tr>`).join('');
+
+  return `
+    <div class="border-t border-slate-800 pt-4 space-y-2">
+      <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 text-xs">
+        <span class="font-bold text-slate-200 uppercase flex items-center gap-2"><span>🩺</span> Diagnóstico deste aparelho</span>
+        <button onclick="verErrosDesteAparelho(this)" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold">🔎 Ver o motivo</button>
+      </div>
+      <div class="text-[11px] text-slate-400">
+        Versão: <b class="text-slate-200">${d.buildSync}</b> ·
+        Conexão: <b class="text-slate-200">${d.status}</b> ·
+        Tabelas não salvas na nuvem: <b class="${pendentes.length ? 'text-red-400' : 'text-emerald-400'}">${pendentes.length}</b>
+      </div>
+      ${pendentes.length === 0 && !(capturados && capturados.length)
+        ? '<div class="text-[11px] text-emerald-400">✅ Tudo que foi salvo neste aparelho chegou ao banco.</div>'
+        : `<div class="overflow-x-auto rounded-xl border border-slate-800">
+             <table class="w-full text-left text-[11px] border-collapse">
+               <thead class="bg-slate-950 text-slate-300 text-[10px] uppercase">
+                 <tr><th class="p-2">Tabela</th><th class="p-2">Código</th><th class="p-2">Motivo</th></tr>
+               </thead>
+               <tbody>${linhas}</tbody>
+             </table>
+           </div>`}
+    </div>`;
+}
+window.renderDiagnosticoDesteAparelho = renderDiagnosticoDesteAparelho;
+
+function verErrosDesteAparelho(botao) {
+  if (botao) { botao.disabled = true; botao.textContent = '⏳ Verificando...'; }
+  Promise.resolve(window.jrErrosSync ? window.jrErrosSync() : [])
+    .catch(() => [])
+    .then(() => { if (typeof renderApp === 'function') renderApp(); });
+}
+window.verErrosDesteAparelho = verErrosDesteAparelho;
 
 function renderConflitosContent(conflitos) {
   const rotuloCampo = { cnh: 'CNH', email: 'E-mail' };

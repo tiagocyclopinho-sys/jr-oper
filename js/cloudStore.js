@@ -725,7 +725,20 @@ class CloudStore {
     } catch(e) { return; }
     if (!viagens) return;
 
-    const contaminados = viagens.filter(v => v && !this._dataSaidaEhValida(v.data_saida));
+    // Ignora as já excluídas (22/08/2026, build 4.8.2). O GO_LIVE.md previa
+    // que este contador zerasse sozinho depois da migration_25 — não zerou, e
+    // o motivo é aqui: a migração marca os 247 fantasmas como is_deleted, mas
+    // getAll() faz `select=*` sem filtrar a flag, então eles continuam
+    // descendo no pull e ficando no cache. Contando-os, o alarme nunca
+    // apagava.
+    //
+    // Uma linha com is_deleted não é "cache contaminado" em nenhum sentido
+    // acionável: não aparece em tela nenhuma, e a guarda de escrita a
+    // recusaria de qualquer forma. Contá-la custava caro — não pelo número
+    // errado, mas porque um detector que fica permanentemente vermelho é um
+    // detector que ninguém mais olha. Este número precisa significar
+    // exatamente uma coisa: fantasma VIVO chegou ao cache deste aparelho.
+    const contaminados = viagens.filter(v => v && !v.is_deleted && !this._dataSaidaEhValida(v.data_saida));
     if (contaminados.length === 0) {
       this._bloqueadosNaEscrita = null;
       return;
@@ -1437,7 +1450,7 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.8.1";
+CloudStore.BUILD = "sync-4.8.2";
 
 // Tamanho do bloco de leitura paginada (item 4). Deliberadamente ABAIXO do
 // corte padrão de 1.000 linhas do PostgREST: assim um bloco cheio sempre
@@ -1518,6 +1531,40 @@ window.jrDiagnosticoSync = function() {
   }
   if (!d.tabelasComPendencia.length) console.info('✅ Nenhuma tabela pendente — tudo que foi salvo aqui chegou ao banco.');
   return d;
+};
+
+// Captura de TODOS os erros de envio, e não só do último (22/08/2026).
+//
+// getDiagnostico() guarda um único _ultimoErroSync. Quando quatro tabelas
+// falham no mesmo ciclo, ele mostra a quarta e esconde as três primeiras —
+// foi assim que a investigação de 22/08 começou olhando um 23503 de
+// sinistros que era mera consequência de um 23514 em ocorrencias_rota.
+// Diagnosticar uma por vez custou horas.
+//
+// Roda um ciclo de envio com todas as falhas registradas e devolve a lista
+// inteira. O array fica em window.jrUltimosErrosSync para a tela de
+// Aparelhos ler — que é o único caminho que funciona no celular, onde não
+// existe console.
+window.jrErrosSync = async function() {
+  const cs = window.cloudStore;
+  if (!cs || !cs.isConfigured()) { console.warn('Nuvem não configurada neste aparelho.'); return []; }
+  const capturados = [];
+  const original = cs._registrarFalhaSync.bind(cs);
+  cs._registrarFalhaSync = function(tabela, status, corpo) {
+    let detalhe = corpo;
+    try { const j = JSON.parse(corpo); detalhe = j.message || j.hint || corpo; } catch(e) {}
+    capturados.push({ tabela, status, detalhe: String(detalhe || '').slice(0, 300) });
+    return original(tabela, status, corpo);
+  };
+  try {
+    await cs.syncLocalToCloud();
+  } finally {
+    cs._registrarFalhaSync = original;
+  }
+  window.jrUltimosErrosSync = { erros: capturados, quando: new Date().toISOString() };
+  if (capturados.length === 0) console.info('✅ Nenhuma tabela recusada — o envio passou inteiro.');
+  else console.table(capturados);
+  return capturados;
 };
 
 // Achado de 21/08/2026, testando de verdade com dois aparelhos: o padrão

@@ -90,7 +90,31 @@ window._aparelhosCache = {
 html = renderAparelhosContent();
 conferir('marca qual é o aparelho em que estou', /\(este\)/.test(html));
 conferir('avisa quantos estão em versão antiga', /<b>1<\/b> aparelho\(s\) em versão antiga/.test(html));
-conferir('avisa quantos têm cache contaminado', /<b>1<\/b> aparelho\(s\) com cache contaminado/.test(html));
+// Números DIFERENTES entre aparelhos (0 e 247): é aparelho destoante, e a
+// tarja tem que mandar atualizar aquele aparelho.
+conferir('números que não batem apontam o aparelho destoante',
+  /não batem entre si/.test(html) && /ETAPA 3/.test(html));
+
+// Números IGUAIS em todos: os registros estão no BANCO, não num aparelho.
+// Mandar limpar cache aqui era o texto errado — limpar não resolve, porque
+// o pull baixa os mesmos registros de volta no ciclo seguinte. A correção
+// de 22/08/2026 fez a tarja apontar a ETAPA 1 (migration_25) nesse caso.
+window._aparelhosCache.lista = [
+  { id: CloudStore.idDoAparelho(), apelido: 'CCO 1', plataforma: 'Windows / Chrome', build: buildAtual, ultimo_usuario: 'THIAGO', ultimo_acesso: new Date().toISOString(), registros_recusados: 247 },
+  { id: 'ap-2', apelido: 'Celular', plataforma: 'Android / Chrome', build: buildAtual, ultimo_usuario: 'MARIA', ultimo_acesso: new Date().toISOString(), registros_recusados: 247 }
+];
+const htmlIguais = renderAparelhosContent();
+conferir('números iguais apontam o banco, não o aparelho',
+  /Todos os aparelhos marcam/.test(htmlIguais) && /ETAPA 1/.test(htmlIguais));
+conferir('e não manda limpar cache nesse caso',
+  /Limpar cache não resolve/.test(htmlIguais));
+
+// Volta o fixture original para os testes seguintes.
+window._aparelhosCache.lista = [
+  { id: CloudStore.idDoAparelho(), apelido: 'CCO 1', plataforma: 'Windows / Chrome', build: buildAtual, ultimo_usuario: 'THIAGO', ultimo_acesso: new Date().toISOString(), registros_recusados: 0 },
+  { id: 'ap-velho', apelido: 'PC da Expedição', plataforma: 'Windows / Chrome', build: 'sync-4.7.9', ultimo_usuario: 'MARIA', ultimo_acesso: new Date(Date.now() - 3 * 86400000).toISOString(), registros_recusados: 247 }
+];
+html = renderAparelhosContent();
 conferir('mostra o número de recusados', />247</.test(html));
 conferir('aponta o roteiro de conferência', /CONFERIR_APARELHO\.md/.test(html));
 conferir('mostra tempo relativo em vez de data crua', /há 3 dias/.test(html), html.match(/há [^<]*/g));
