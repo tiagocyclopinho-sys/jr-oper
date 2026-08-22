@@ -735,7 +735,34 @@ class CloudStore {
         } else if (window.db) {
           window.db.data = fullDb;
         }
+
+        // O pull acabou de sobrescrever motoristas/ajudantes/veiculos com o
+        // que existe na nuvem. Se a nuvem estiver incompleta (ex: os 39
+        // motoristas da planilha barrados pelo UNIQUE da cnh, deixando só 2
+        // registros de teste), este aparelho ficaria com a lista curta — e
+        // o push seguinte devolveria essa lista curta para a nuvem,
+        // consolidando a perda.
+        //
+        // Reinserimos aqui o que a planilha Dados SAC garante, ANTES do
+        // push. Assim o que falta na nuvem sobe em vez de o que sobra no
+        // aparelho descer.
       } catch(e) {}
+    }
+
+    // FORA do "if (anyChange)" de propósito: quando a nuvem já está igual ao
+    // cache local (nenhuma mudança a aplicar), é justamente o caso em que a
+    // lista curta já se consolidou nos dois lados. É aí que a reposição mais
+    // precisa rodar.
+    if (window.db && typeof window.db.restaurarCadastrosDaPlanilha === 'function') {
+      try {
+        const repostos = window.db.restaurarCadastrosDaPlanilha();
+        if (repostos > 0) {
+          // save() persiste em jr_sac_db (de onde o push lê) e agenda o envio.
+          window.db.save();
+        }
+      } catch(e) {
+        console.warn('[CloudStore] Falha ao restaurar cadastros da planilha:', e);
+      }
     }
 
     // Só marca o reset como aplicado depois que o pull inteiro terminou —
@@ -841,7 +868,7 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.7.8";
+CloudStore.BUILD = "sync-4.7.9";
 
 window.cloudStore = new CloudStore();
 

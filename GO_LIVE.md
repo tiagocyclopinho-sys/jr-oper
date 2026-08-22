@@ -97,7 +97,7 @@ Arquivos alterados nesta correção:
   destrutiva no pull, erro de gravação visível na tela
 - `js/app.js` — telas de Cadastros não quebram mais se uma lista ainda não carregou
 - `database/schema.sql` — correções incorporadas (instalação nova nasce certa)
-- `sw.js` — versão de cache `v4.7.3` → `v4.7.8`
+- `sw.js` — versão de cache `v4.7.3` → `v4.7.9`
 
 ## PASSO 4 — Limpar o cache em cada aparelho
 
@@ -121,7 +121,7 @@ Faça em **todos** os aparelhos que vão operar.
 jrDiagnosticoSync()
 ```
 
-O campo `buildSync` tem que dizer **`sync-4.7.8`**. Se disser outra coisa, ou se
+O campo `buildSync` tem que dizer **`sync-4.7.9`**. Se disser outra coisa, ou se
 a função não existir ("is not defined"), aquele aparelho ainda está no código
 antigo — repita o refresh até aparecer. Não siga para o passo 5 antes disso.
 

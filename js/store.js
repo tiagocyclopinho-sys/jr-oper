@@ -208,21 +208,13 @@ class Store {
       // tinham CNH distinta, chegaram à nuvem; o pull então reduziu a lista
       // local a esses 2. (Lado do banco corrigido na migration_24.)
       //
-      // Aqui a rede de proteção: reinsere da planilha o que faltar, POR ID.
-      // Diferente do tratamento de clientes/produtos acima, este é uma
-      // MESCLA, não uma substituição — um motorista cadastrado pela tela do
-      // app tem id próprio e é preservado.
-      ['motoristas', 'ajudantes', 'veiculos'].forEach(colecao => {
-        const base = INITIAL_DATA[colecao];
-        if (!Array.isArray(base) || !base.length) return;
-        if (!Array.isArray(this.data[colecao])) this.data[colecao] = [];
-        const idsPresentes = new Set(this.data[colecao].map(r => String(r.id)));
-        const faltando = base.filter(r => !idsPresentes.has(String(r.id)));
-        if (faltando.length) {
-          this.data[colecao] = this.data[colecao].concat(JSON.parse(JSON.stringify(faltando)));
-          console.info(`[Store] ${faltando.length} ${colecao} restaurados da planilha Dados SAC (faltavam neste aparelho).`);
-        }
-      });
+      // Aqui a rede de proteção — ver restaurarCadastrosDaPlanilha().
+      // Se repôs algo, força a gravação abaixo: o envio para a nuvem lê de
+      // 'jr_sac_db', não da memória, então uma restauração que não for
+      // persistida não chega a subir.
+      if (this.restaurarCadastrosDaPlanilha() > 0) {
+        legacyMonolithic = legacyMonolithic || {};
+      }
     }
 
     if (legacyMonolithic) {
@@ -466,6 +458,38 @@ class Store {
   // que ficam na chave separada 'jr_sac_static' (ver init()). É essa fatia
   // que save() grava a cada operação; por isso cada gravação passou de
   // ~3MB para poucas dezenas de KB.
+  // Reinsere, POR ID, os cadastros da planilha Dados SAC que estiverem
+  // faltando neste aparelho. É uma MESCLA, não uma substituição: um
+  // motorista/veículo/ajudante cadastrado pela tela do app tem id próprio e
+  // é preservado; e um registro que já existe não é sobrescrito, para não
+  // desfazer edições feitas pela equipe.
+  //
+  // Precisa ser chamada em DOIS momentos (achado de 22/08/2026):
+  //   1. na carga do app (load), e
+  //   2. logo depois de cada pull da nuvem.
+  //
+  // Só no load não resolve: startAutoSync() puxa ANTES de empurrar, então o
+  // pull substituía a lista recém-restaurada pela lista curta da nuvem e o
+  // push seguinte subia essa lista curta. Os 39 motoristas eram restaurados
+  // e descartados no mesmo segundo, sem nunca chegar ao banco.
+  restaurarCadastrosDaPlanilha() {
+    if (typeof INITIAL_DATA === 'undefined') return 0;
+    let reinseridos = 0;
+    ['motoristas', 'ajudantes', 'veiculos'].forEach(colecao => {
+      const base = INITIAL_DATA[colecao];
+      if (!Array.isArray(base) || !base.length) return;
+      if (!Array.isArray(this.data[colecao])) this.data[colecao] = [];
+      const idsPresentes = new Set(this.data[colecao].map(r => String(r.id)));
+      const faltando = base.filter(r => !idsPresentes.has(String(r.id)));
+      if (faltando.length) {
+        this.data[colecao] = this.data[colecao].concat(JSON.parse(JSON.stringify(faltando)));
+        reinseridos += faltando.length;
+        console.info(`[Store] ${faltando.length} ${colecao} restaurados da planilha Dados SAC (faltavam neste aparelho).`);
+      }
+    });
+    return reinseridos;
+  }
+
   _getOperationalSlice() {
     const slice = { ...this.data };
     delete slice.clientes;
