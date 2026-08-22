@@ -77,8 +77,31 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 window.addEventListener('load', runInitSafely);
 setTimeout(runInitSafely, 100);
 
-// A tela nunca era atualizada quando dado novo chegava da nuvem em segundo plano (ex: import de escala feito em outro aparelho) - o CloudStore ja disparava esse evento, mas nada escutava, entao so um F5 manual mostrava os dados novos (achado de 20/08/2026).
-window.addEventListener('jr-cloud-sync', () => { if (typeof renderApp === 'function') renderApp(); });
+// A tela nunca era atualizada quando dado novo chegava da nuvem em segundo
+// plano (ex: import de escala feito em outro aparelho) — o CloudStore já
+// disparava esse evento, mas nada escutava, então só um F5 manual mostrava
+// os dados novos (achado de 20/08/2026).
+window.addEventListener('jr-cloud-sync', () => {
+  // Achado de 21/08/2026: renderApp() redesenha a TELA INTEIRA do zero. Se
+  // essa sincronização em segundo plano (roda a cada ~30s, sem o usuário
+  // pedir) chegasse enquanto alguém estava no meio de preencher um
+  // formulário (ex: Abertura de Devolução SAC), o formulário inteiro era
+  // apagado sem aviso nenhum — tudo que a pessoa tinha digitado se perdia.
+  // Se o foco estiver num campo editável agora, adia o redesenho: os dados
+  // novos já estão salvos em memória (isso já aconteceu antes deste
+  // evento disparar), só a TELA não é redesenhada ainda — ela pega os
+  // dados atualizados normalmente na próxima renderização (ex: ao enviar
+  // o formulário, fechar um modal, trocar de aba).
+  const emCampoEditavel = document.activeElement && document.activeElement.matches &&
+    document.activeElement.matches('input, textarea, select');
+  if (emCampoEditavel) {
+    if (typeof showToast === 'function') {
+      showToast('🔄 Novos dados chegaram da nuvem. A tela atualiza sozinha assim que você terminar aqui.', 'warning');
+    }
+    return;
+  }
+  if (typeof renderApp === 'function') renderApp();
+});
 
 // ===== UTILITÁRIOS GLOBAIS DE FORMATAÇÃO E NORMALIZAÇÃO DE DATA (DD/MM/AAAA) =====
 function formatarData(val, fallback = '—') {
@@ -647,6 +670,7 @@ function renderLixeiraView() {
   const items = db.getLixeiraItems ? db.getLixeiraItems() : [];
   const logs = db.data.audit_logs || [];
   const versoes = db.data.registro_versoes || [];
+  const conflitos = db.getConflitosPendentes ? db.getConflitosPendentes() : [];
 
   return `
     <div class="space-y-6 max-w-7xl mx-auto pb-12">
@@ -673,12 +697,15 @@ function renderLixeiraView() {
           <button onclick="switchLixeiraSubTab('versoes')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='versoes'?'bg-purple-700 text-white shadow':'text-slate-400 hover:text-white'}">
             🔄 Versões & Rollback (${versoes.length})
           </button>
+          <button onclick="switchLixeiraSubTab('conflitos')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='conflitos'?'bg-amber-600 text-white shadow':'text-slate-400 hover:text-white'}">
+            ⚠️ Conflitos (${conflitos.length})
+          </button>
         </div>
       </div>
 
       ${renderStorageUsagePanel()}
 
-      ${activeSub === 'lixeira' ? renderLixeiraItemsContent(items) : (activeSub === 'auditoria' ? renderAuditLogsContent(logs) : renderVersoesContent(versoes))}
+      ${activeSub === 'lixeira' ? renderLixeiraItemsContent(items) : (activeSub === 'auditoria' ? renderAuditLogsContent(logs) : (activeSub === 'versoes' ? renderVersoesContent(versoes) : renderConflitosContent(conflitos)))}
 
       <!-- PAINEL DE MANUTENÇÃO & RESET GLOBAL DE TREINAMENTO -->
       <div class="bg-red-950/30 border border-red-900/60 p-5 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-xs shadow-2xl">
@@ -1497,10 +1524,18 @@ function abrirModalNovoSinistro(prefill) {
     </div>`;
   modal.classList.remove('hidden');
 }
-function handleCriarSinistro(e) {
+async function handleCriarSinistro(e) {
   e.preventDefault();
   const motorista_nome = document.getElementById('sin-motorista')?.value?.trim();
   if (!motorista_nome) { alert('Informe o motorista envolvido.'); return; }
+  // Mesma causa raiz do fix de importação de escala (21/08/2026): o número
+  // sequencial (SIN-2026-xxx) é gerado olhando só o estado LOCAL deste
+  // aparelho. Sem puxar a nuvem antes, dois aparelhos desincronizados
+  // podem gerar o MESMO número para sinistros diferentes — e a coluna é
+  // UNIQUE no banco, então um dos dois nunca sincroniza (silenciosamente).
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
+  }
   const res = db.addSinistro({
     ocorrencia_rota_id: document.getElementById('sin-ocorrencia-rota-id')?.value || null,
     carga: document.getElementById('sin-carga')?.value,
@@ -2008,6 +2043,61 @@ function renderLixeiraItemsContent(items) {
         </table>
       </div>
     </div>`;
+}
+
+// Fase 4 (20/08/2026): fila de revisão manual para CNH/e-mail duplicados
+// entre aparelhos — ver registrarConflitoSincronizacao() em store.js e
+// _checkConflitoUnicidade() em cloudStore.js.
+function renderConflitosContent(conflitos) {
+  const rotuloCampo = { cnh: 'CNH', email: 'E-mail' };
+  const rotuloTabela = { motoristas: 'Motoristas', usuarios: 'Usuários' };
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl space-y-4 p-5">
+      <div class="flex justify-between items-center text-xs border-b border-slate-800 pb-3">
+        <span class="font-bold text-white uppercase flex items-center gap-2"><span>⚠️</span> Conflitos de Sincronização (Revisão Manual)</span>
+        <span class="text-slate-400">CNH ou e-mail cadastrados em dois aparelhos diferentes — não sincronizam até serem corrigidos</span>
+      </div>
+      ${conflitos.length === 0 ? '<div class="p-8 text-center text-slate-500">✅ Nenhum conflito pendente. Todos os cadastros de motoristas e usuários estão sincronizando normalmente.</div>' : `
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead class="bg-slate-950 text-slate-300 text-[10px] uppercase border-b border-slate-800">
+            <tr>
+              <th class="p-3">Cadastro</th>
+              <th class="p-3">Campo Duplicado</th>
+              <th class="p-3">Valor</th>
+              <th class="p-3">Registros Afetados (neste aparelho)</th>
+              <th class="p-3">Detectado Em</th>
+              <th class="p-3 text-right">Ação</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800 text-[11px]">
+            ${conflitos.map(c => `
+              <tr class="hover:bg-slate-800/40">
+                <td class="p-3 font-bold text-emerald-400">${rotuloTabela[c.tabela] || c.tabela}</td>
+                <td class="p-3 text-white">${rotuloCampo[c.campo] || c.campo}</td>
+                <td class="p-3 text-amber-300 font-mono">${c.valor}</td>
+                <td class="p-3 text-slate-300">${(c.registros_locais||[]).map(r => `${r.nome} (ID ${r.id})`).join(', ') || '—'}</td>
+                <td class="p-3 text-slate-400">${c.detectado_em ? new Date(c.detectado_em).toLocaleString('pt-BR') : '—'}${c.ocorrencias > 1 ? ` • ${c.ocorrencias}x` : ''}</td>
+                <td class="p-3 text-right whitespace-nowrap">
+                  <button onclick="resolverConflitoManual('${c.id}')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow transition">
+                    ✅ Corrigi, Marcar Resolvido
+                  </button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <p class="text-[10px] text-slate-500 px-1">Como resolver: abra os Cadastros, edite um dos registros afetados para corrigir o valor duplicado (ex: corrigir CNH digitada errada, ou excluir o cadastro repetido), depois clique em "Marcar Resolvido" — o sistema volta a tentar sincronizar no próximo ciclo automaticamente.</p>
+      `}
+    </div>`;
+}
+
+function resolverConflitoManual(id) {
+  if (confirm('Confirma que já corrigiu o cadastro duplicado (CNH ou e-mail) na tela de Cadastros? Isso apenas remove o aviso desta lista — a sincronização real depende da correção ter sido feita.')) {
+    db.resolverConflito(id);
+    renderApp();
+  }
 }
 
 function renderAuditLogsContent(logs) {
@@ -3423,15 +3513,15 @@ function handleCadastroUsuarioSubmit(e) {
   const res = db.addUsuario({ nome, email, senha, role, departamento: depart, cargo });
   if (res.success) {
     // Dispara o envio para a nuvem IMEDIATAMENTE, antes do alert() de
-          // sucesso — alert() bloqueia a aba (principalmente no celular) até o
-          // usuário tocar OK, e nesse meio tempo o timer de 1.5s do envio
-          // "debounced" normal não roda. Se o usuário trocar de app logo após
-          // fechar o alerta, o navegador pode suspender a aba antes do timer
-          // disparar, perdendo o cadastro (achado de 20/08/2026).
-          if (window.cloudStore && window.cloudStore.isConfigured()) {
-                    window.cloudStore.syncLocalToCloud().catch(() => {});
-          }
-          alert(`✅ Usuário ${res.user.nome} cadastrado com sucesso no departamento ${res.user.departamento}!`);
+    // sucesso — alert() bloqueia a aba (principalmente no celular) até o
+    // usuário tocar OK, e nesse meio tempo o timer de 1.5s do envio
+    // "debounced" normal não roda. Se o usuário trocar de app logo após
+    // fechar o alerta, o navegador pode suspender a aba antes do timer
+    // disparar, perdendo o cadastro (achado de 20/08/2026).
+    if (window.cloudStore && window.cloudStore.isConfigured()) {
+      window.cloudStore.syncLocalToCloud().catch(() => {});
+    }
+    alert(`✅ Usuário ${res.user.nome} cadastrado com sucesso no departamento ${res.user.departamento}!`);
     db.currentUser = res.user;
     try { localStorage.setItem('jr_sac_user', JSON.stringify(res.user)); } catch(e){}
     updateUserHeader();
@@ -4925,6 +5015,39 @@ function renderGaleriaMidia(dev, opcoes = {}) {
     </div>`;
 }
 
+// (achado em 20/08/2026, auditoria externa) fotos de câmera de celular
+// moderno saem com 4-12MB cada; em Base64 bruto (readAsDataURL sem
+// tratamento) isso estoura a cota de localStorage do navegador (5-10MB
+// no mobile) já com 1-2 fotos, disparando QuotaExceededError e derrubando
+// o salvamento da ocorrência no celular. Redesenha a foto num canvas
+// (máx. 1280px no maior lado) e reexporta como JPEG ~75% — na prática
+// reduz uma foto de celular de ~8MB para ~150-400KB, sem perda visual
+// perceptível no tamanho que a tela realmente exibe (thumbnails/preview).
+function comprimirImagem(file, maxDimensao = 1280, qualidade = 0.75) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
+    reader.onload = e => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Arquivo não é uma imagem válida.'));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDimensao || height > maxDimensao) {
+          if (width > height) { height = Math.round(height * maxDimensao / width); width = maxDimensao; }
+          else { width = Math.round(width * maxDimensao / height); height = maxDimensao; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', qualidade));
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function handleFotoUpload(inputEl, context, devId) {
   context = context || 'sac';
   const files = Array.from(inputEl.files || []);
@@ -4949,19 +5072,20 @@ function handleFotoUpload(inputEl, context, devId) {
   const inner = document.getElementById(innerId);
 
   files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      if (context === 'sac') uploadedFotosBase64.push(e.target.result);
-      else uploadedFotosBase64Inv.push(e.target.result);
+    comprimirImagem(file).then(dataUrl => {
+      if (context === 'sac') uploadedFotosBase64.push(dataUrl);
+      else uploadedFotosBase64Inv.push(dataUrl);
       if (inner) {
         const img = document.createElement('img');
-        img.src = e.target.result;
+        img.src = dataUrl;
         img.className = 'w-20 h-20 object-cover rounded-lg border border-slate-700 shadow';
         inner.appendChild(img);
       }
       if (container) container.classList.remove('hidden');
-    };
-    reader.readAsDataURL(file);
+    }).catch(err => {
+      console.warn('[Foto] Falha ao processar imagem:', err.message);
+      showToast('Não foi possível processar uma das fotos selecionadas.', 'error');
+    });
   });
 }
 
@@ -4978,17 +5102,18 @@ function handleSinistroFotoUpload(inputEl, grupo) {
   if (!window._sinistroFotos[grupo]) window._sinistroFotos[grupo] = [];
   const container = document.getElementById('sinistro-foto-preview-' + grupo);
   files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      window._sinistroFotos[grupo].push(e.target.result);
+    comprimirImagem(file).then(dataUrl => {
+      window._sinistroFotos[grupo].push(dataUrl);
       if (container) {
         const wrap = document.createElement('div');
         wrap.className = 'relative';
-        wrap.innerHTML = `<img src="${e.target.result}" class="w-16 h-16 object-cover rounded-lg border border-slate-700 shadow">`;
+        wrap.innerHTML = `<img src="${dataUrl}" class="w-16 h-16 object-cover rounded-lg border border-slate-700 shadow">`;
         container.appendChild(wrap);
       }
-    };
-    reader.readAsDataURL(file);
+    }).catch(err => {
+      console.warn('[Foto Sinistro] Falha ao processar imagem:', err.message);
+      showToast('Não foi possível processar uma das fotos selecionadas.', 'error');
+    });
   });
 }
 function limparSinistroFotosGrupo(grupo) {
@@ -5500,8 +5625,9 @@ function checkCargaExistente(val) {
   if (carga) {
     if (hint) hint.classList.remove('hidden');
     const rotaSel = document.getElementById('sac-rota-nome');
-    if (rotaSel && carga.rota_nome) {
-      Array.from(rotaSel.options).forEach(opt => { opt.selected = opt.value === carga.rota_nome; });
+    const cargaRotaAtual = carga.rota || carga.rota_nome;
+    if (rotaSel && cargaRotaAtual) {
+      Array.from(rotaSel.options).forEach(opt => { opt.selected = opt.value === cargaRotaAtual; });
     }
     if (carga.veiculo_id) { const s = document.getElementById('sac-veiculo-id'); if(s) s.value = carga.veiculo_id; }
     if (carga.motorista_id) { const s = document.getElementById('sac-motorista-id'); if(s) s.value = carga.motorista_id; }
@@ -5682,7 +5808,7 @@ function calcTotalValores() {
   if (inp) inp.value = total.toFixed(2);
 }
 
-function handleSacAberturaSubmit(e) {
+async function handleSacAberturaSubmit(e) {
   e.preventDefault();
 
   // PRIORIDADE 2e: bloquear submissão com carga inexistente na Largada
@@ -5746,6 +5872,15 @@ function handleSacAberturaSubmit(e) {
 
   const veicSel = document.getElementById('sac-veiculo-id');
   const veicOpt = veicSel.options[veicSel.selectedIndex];
+  // Mesma causa raiz do fix de importação de escala (21/08/2026): os
+  // números sequenciais (DEV-2026-xxx / DEV-xxx) são gerados olhando só o
+  // estado LOCAL deste aparelho. Sem puxar a nuvem antes, dois aparelhos
+  // desincronizados podem gerar o MESMO número para ocorrências
+  // diferentes — e a coluna é UNIQUE no banco, então uma delas nunca
+  // sincroniza (silenciosamente).
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
+  }
   const dev = db.addDevolucao({
     carga_numero: document.getElementById('sac-carga-numero').value,
     veiculo_id: veicSel.value,
@@ -5775,6 +5910,18 @@ function handleSacAberturaSubmit(e) {
 
   uploadedFotosBase64 = [];
   uploadedVideosBase64 = [];
+
+  // Mesmo problema do cadastro de usuário e do import de escala (achados de
+  // 20/08/2026): o alert() logo abaixo bloqueia a aba até o usuário tocar
+  // OK, e o envio pra nuvem programado pelo save() (debounce de 1.5s) fica
+  // preso atrás desse bloqueio. Faltava aqui — achado de 21/08/2026,
+  // testando de verdade com dois aparelhos: a devolução ficava só no
+  // aparelho que criou, sem erro nenhum. Dispara o envio já, antes do
+  // alert(), pra requisição já estar em voo.
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    window.cloudStore.syncLocalToCloud().catch(() => {});
+  }
+
   alert(`✅ Ocorrência registrada!\nProtocolo: ${dev.numero_protocolo}`);
   switchTab('dashboard');
 }
@@ -8106,7 +8253,7 @@ function handleCdModalSubmit(e, devId) {
 
 function gerarRelatorioDivergencia(devId, itensDivergentes, dev, valorTotalDivergencia = 0) {
   return {
-    id: Date.now(),
+    id: db.gerarIdUnico(),
     ocorrencia_id: devId,
     protocolo: dev?.numero_protocolo || '',
     numero_devolucao: dev?.numero_devolucao || '',
@@ -8751,8 +8898,20 @@ function handleImportEscalaFile(event) {
 
   const fileName = file.name || 'FECHAMENTO.xlsx';
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
+      // O dedup de importViagens() compara contra db.data.controle_viagens
+      // (estado LOCAL deste aparelho). Se este aparelho ainda não puxou a
+      // nuvem (ex: cache limpo, primeiro acesso, ou pull automático dos
+      // 30s ainda não rodou), esse array está desatualizado/vazio e a
+      // checagem não vê viagens que já existem na nuvem — importando tudo
+      // de novo como "novo" e duplicando (achado de 21/08/2026: escala do
+      // dia 19 importada 2x, de aparelhos diferentes, virou 30 viagens em
+      // vez de 15). Forçamos um pull antes de checar duplicidade.
+      if (window.cloudStore && window.cloudStore.isConfigured()) {
+        try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
+      }
+
       const data = new Uint8Array(e.target.result);
       const workbook = XLSX.read(data, { type: 'array' });
       const viagensFormatadas = parseEscalaWorkbook(workbook, fileName);
@@ -8766,9 +8925,19 @@ function handleImportEscalaFile(event) {
       const qtd = typeof res === 'object' ? res.importados : res;
       const dup = typeof res === 'object' ? res.duplicados : 0;
 
-      if (window.cloudStore && window.cloudStore.isConfigured()) { window.cloudStore.syncLocalToCloud().catch(() => {}); }
-      
-            let msg = `✅ Sucesso! ${qtd} viagem(ns) importada(s) da escala (${fileName})!`;
+      // Mesmo problema do cadastro de usuário (achado de 20/08/2026): o
+      // alert() de sucesso logo abaixo bloqueia a aba até o usuário tocar
+      // OK, e o envio para a nuvem programado pelos save() do import (cada
+      // viagem chama addViagem -> save -> debounce de 1.5s) fica preso
+      // atrás desse bloqueio. Se um "pull" automático rodar antes do envio
+      // conseguir completar, a escala recém-importada é sobrescrita pelo
+      // que ainda está na nuvem e se perde. Disparamos o envio imediato
+      // aqui, antes do alert(), para a requisição já estar em voo.
+      if (window.cloudStore && window.cloudStore.isConfigured()) {
+        window.cloudStore.syncLocalToCloud().catch(() => {});
+      }
+
+      let msg = `✅ Sucesso! ${qtd} viagem(ns) importada(s) da escala (${fileName})!`;
       if (dup > 0) {
         msg += `\nℹ️ ${dup} registro(s) repetido(s) com todos os 6 campos idênticos (Carga, Rota, Placa, Motorista, Ajudante e Setor) foram ignorados para evitar duplicidade.`;
       }
@@ -10684,12 +10853,13 @@ function renderRotaVideosPreview() {
 function handleRotaFotosUpload(input) {
   if (input.files && input.files.length > 0) {
     Array.from(input.files).forEach(file => {
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        uploadedRotaFotos.push(e.target.result);
+      comprimirImagem(file).then(dataUrl => {
+        uploadedRotaFotos.push(dataUrl);
         renderRotaFotosPreview();
-      };
-      reader.readAsDataURL(file);
+      }).catch(err => {
+        console.warn('[Foto Rota] Falha ao processar imagem:', err.message);
+        showToast('Não foi possível processar uma das fotos selecionadas.', 'error');
+      });
     });
   }
   input.value = '';
@@ -12876,7 +13046,7 @@ function onOcRotaCargaSelect(cargaNum) {
   }
 }
 
-function handleNovaRotaSubmit(e) {
+async function handleNovaRotaSubmit(e) {
   e.preventDefault();
   const veicSel = document.getElementById('rota-veiculo-id');
   const veicOpt = veicSel ? veicSel.options[veicSel.selectedIndex] : null;
@@ -12906,6 +13076,15 @@ function handleNovaRotaSubmit(e) {
     return;
   }
 
+  // Mesma causa raiz do fix de importação de escala (21/08/2026): o número
+  // sequencial (ROT-2026-xxx) é gerado olhando só o estado LOCAL deste
+  // aparelho. Sem puxar a nuvem antes, dois aparelhos desincronizados
+  // podem gerar o MESMO número para ocorrências diferentes — e a coluna é
+  // UNIQUE no banco, então uma delas nunca sincroniza (silenciosamente).
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
+  }
+
   db.addOcorrenciaRota({
     carga_numero: cargaNum,
     veiculo_id: veicSel ? veicSel.value : null,
@@ -12924,6 +13103,13 @@ function handleNovaRotaSubmit(e) {
   uploadedRotaFotos = [];
   uploadedRotaVideos = [];
   closeModal();
+
+  // Mesmo problema do handleSacAberturaSubmit (ver comentário lá) — o
+  // alert() abaixo bloqueia o envio pendente de 1.5s.
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    window.cloudStore.syncLocalToCloud().catch(() => {});
+  }
+
   alert('✅ Ocorrência de frota em rota registrada com sucesso!');
   renderApp();
 }
@@ -13812,7 +13998,7 @@ function renderCadSubTabContent() {
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 hidden sm:table-cell">CNH</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${db.data.motoristas.map(m=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${m.id}</td><td class="p-2 font-semibold text-white">${m.nome}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.cnh||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('motoristas','${m.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${db.data.motoristas.filter(m=>!m.is_deleted).map(m=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${m.id}</td><td class="p-2 font-semibold text-white">${m.nome}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.cnh||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('motoristas','${m.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -13833,7 +14019,7 @@ function renderCadSubTabContent() {
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${db.data.ajudantes.map(a=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${a.id}</td><td class="p-2 font-semibold text-white">${a.nome}</td><td class="p-2 text-right"><button onclick="deleteCad('ajudantes','${a.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${db.data.ajudantes.filter(a=>!a.is_deleted).map(a=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${a.id}</td><td class="p-2 font-semibold text-white">${a.nome}</td><td class="p-2 text-right"><button onclick="deleteCad('ajudantes','${a.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -13855,7 +14041,7 @@ function renderCadSubTabContent() {
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Código</th><th class="p-2">Descrição</th><th class="p-2 hidden sm:table-cell">Categoria</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${db.data.produtos.map(p=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${p.codigo_produto}</td><td class="p-2 text-white text-[11px]">${p.descricao}</td><td class="p-2 text-slate-400 hidden sm:table-cell text-[10px]">${p.categoria||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('produtos','${p.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${db.data.produtos.filter(p=>!p.is_deleted).map(p=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${p.codigo_produto}</td><td class="p-2 text-white text-[11px]">${p.descricao}</td><td class="p-2 text-slate-400 hidden sm:table-cell text-[10px]">${p.categoria||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('produtos','${p.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -13885,7 +14071,7 @@ function renderCadSubTabContent() {
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Placa</th><th class="p-2">Grupo</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${db.data.veiculos.map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo}</td><td class="p-2"><span class="${v.situacao==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right"><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${db.data.veiculos.filter(v=>!v.is_deleted).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo}</td><td class="p-2"><span class="${v.situacao==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right"><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -14350,7 +14536,7 @@ function confirmarSalvarNovaOcorrenciaCD() {
   const resumo = db.getResumoDiarioCD(dt, turno);
   if (!resumo.ocorrencias_colaboradores) resumo.ocorrencias_colaboradores = [];
   resumo.ocorrencias_colaboradores.push({
-    id: Date.now(),
+    id: db.gerarIdUnico(),
     data: dt,
     funcionario: colab.toUpperCase().trim(),
     requisito: titulo.toUpperCase().trim(),
@@ -14942,7 +15128,7 @@ function renderPainelLiberados(retencoes) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 3B-action: Salva nova retenção a partir do formulário. */
-function salvarRetencaoFrota(event) {
+async function salvarRetencaoFrota(event) {
   event.preventDefault();
   const veiculoId  = document.getElementById('frt-veiculo-id')?.value;
   const placa      = document.getElementById('frt-placa-hidden')?.value;
@@ -14967,6 +15153,15 @@ function salvarRetencaoFrota(event) {
   // do link informado (ver extrairIdentificadorOsDoLink), já que clicar
   // no link já leva direto à OS correta na outra plataforma.
   const numeroOs = extrairIdentificadorOsDoLink(linkOsRaw);
+
+  // Mesma causa raiz do fix de importação de escala (21/08/2026): o número
+  // sequencial de retenção é gerado olhando só o estado LOCAL deste
+  // aparelho. Sem puxar a nuvem antes, dois aparelhos desincronizados
+  // podem gerar o MESMO número para retenções diferentes — e a coluna é
+  // UNIQUE no banco, então uma delas nunca sincroniza (silenciosamente).
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
+  }
 
   const result = db.addRetencaoFrota({
     veiculo_id:    veiculoId,
@@ -17143,7 +17338,7 @@ function confirmarSalvarFaltaResumo(data, turno) {
   const resumo = db.getResumoDiarioCD(data, turno);
   if (!resumo.faltas_condutas) resumo.faltas_condutas = [];
   resumo.faltas_condutas.push({
-    id: Date.now(),
+    id: db.gerarIdUnico(),
     nome: nome.toUpperCase().trim(),
     conduta: conduta.toUpperCase().trim(),
     avisado: avisado.toUpperCase().trim(),
@@ -17613,7 +17808,7 @@ function confirmarSalvarOcorrenciaColaboradorResumo(data, turno) {
   const resumo = db.getResumoDiarioCD(data, turno);
   if (!resumo.ocorrencias_colaboradores) resumo.ocorrencias_colaboradores = [];
   resumo.ocorrencias_colaboradores.push({
-    id: Date.now(),
+    id: db.gerarIdUnico(),
     data: dt,
     funcionario: funcionario.toUpperCase().trim(),
     requisito: requisito.toUpperCase().trim(),
@@ -21322,7 +21517,7 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
   container.classList.remove('hidden');
 }
 
-function handleConfirmarEmissaoDisciplinar(e) {
+async function handleConfirmarEmissaoDisciplinar(e) {
   e.preventDefault();
   const tipo = document.getElementById('disc-tipo')?.value || 'ADVERTENCIA';
   const gerarPdf = (document.getElementById('disc-gerar-pdf')?.value || 'true') === 'true';
@@ -21360,6 +21555,18 @@ function handleConfirmarEmissaoDisciplinar(e) {
   if (!nome || !motivo) {
     alert('Preencha o nome do colaborador e o detalhamento do motivo.');
     return;
+  }
+
+  // Mesma causa raiz do fix de importação de escala (21/08/2026): o número
+  // sequencial (MD-xxxx) é gerado olhando só o estado LOCAL deste
+  // aparelho. Sem puxar a nuvem antes, dois aparelhos desincronizados
+  // podem gerar o MESMO número para medidas diferentes — e a coluna é
+  // UNIQUE no banco, então uma delas nunca sincroniza (silenciosamente).
+  // Feito antes de qualquer gravação local desta função (inclusive o
+  // saveResumoDiarioCD logo abaixo) para não perder essa gravação caso o
+  // pull da nuvem sobrescreva o estado local em seguida.
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
   }
 
   if (parentData && parentTurno && parentType && parentIndexStr !== '') {

@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS motoristas (
     nome VARCHAR(120) NOT NULL,
     cnh VARCHAR(20) UNIQUE NOT NULL,
     telefone VARCHAR(20),
-    ativo BOOLEAN DEFAULT TRUE
+    ativo BOOLEAN DEFAULT TRUE,
+    data_admissao DATE,
+    data_desligamento DATE
 );
 
 CREATE TABLE IF NOT EXISTS ajudantes (
@@ -50,6 +52,8 @@ CREATE TABLE IF NOT EXISTS colaboradores_cd (
     funcao VARCHAR(80) NOT NULL,
     secao VARCHAR(100),
     ativo BOOLEAN DEFAULT TRUE,
+    data_admissao DATE,
+    data_desligamento DATE,
     is_deleted BOOLEAN DEFAULT FALSE,
     deleted_at TIMESTAMP NULL,
     deleted_by_usuario_id INT NULL REFERENCES usuarios(id),
@@ -172,7 +176,18 @@ CREATE TABLE IF NOT EXISTS relatorios_divergencia (
     rota_nome VARCHAR(100),
     cliente_nome VARCHAR(150),
     tipo VARCHAR(50) DEFAULT 'DESCONTO_MOTORISTA',
-    gerado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    gerado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- gravado por gerarRelatorioDivergencia() em app.js (nomes de campo diferentes das colunas acima)
+    ocorrencia_id BIGINT REFERENCES ocorrencias_devolucao(id) ON DELETE CASCADE,
+    protocolo VARCHAR(30),
+    motorista VARCHAR(120),
+    ajudante VARCHAR(120),
+    veiculo VARCHAR(20),
+    rota VARCHAR(100),
+    cliente VARCHAR(150),
+    tipo_erro VARCHAR(80),
+    itens_divergentes JSONB,
+    valor_total_divergencia DECIMAL(12,2)
 );
 
 CREATE TABLE IF NOT EXISTS itens_relatorio_divergencia (
@@ -233,15 +248,23 @@ CREATE TABLE IF NOT EXISTS trocas_veiculos (
 -- 9. AUDITORIA E IMPACTOS EM PRODUTIVIDADE
 CREATE TABLE IF NOT EXISTS auditoria_produtividade (
     id SERIAL PRIMARY KEY,
-    usuario_id INT NOT NULL REFERENCES usuarios(id),
-    setor_id INT NOT NULL REFERENCES setores(id),
+    usuario_id INT REFERENCES usuarios(id),
+    setor_id INT REFERENCES setores(id),
     ocorrencia_devolucao_id INT REFERENCES ocorrencias_devolucao(id),
     ocorrencia_rota_id INT REFERENCES ocorrencias_rota(id),
-    tipo_falha VARCHAR(80) NOT NULL,
+    tipo_falha VARCHAR(80),
     valor_prejuizo DECIMAL(10,2) DEFAULT 0.00,
     pontos_desconto INT DEFAULT 0,
     observacoes TEXT,
-    registrado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    registrado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- gravado por updateAcaoGestor() em store.js (identifica por nome, não por usuario_id)
+    protocolo VARCHAR(30),
+    separador_nome VARCHAR(120),
+    conferente_nome VARCHAR(120),
+    tipo_erro VARCHAR(80),
+    motivo_causa_raiz VARCHAR(150),
+    acao_gestor TEXT,
+    gestor_id BIGINT
 );
 
 -- =============================================================================
@@ -425,6 +448,67 @@ ALTER TABLE auditoria_produtividade ALTER COLUMN usuario_id TYPE BIGINT;
 ALTER TABLE auditoria_produtividade ALTER COLUMN ocorrencia_devolucao_id TYPE BIGINT;
 ALTER TABLE auditoria_produtividade ALTER COLUMN ocorrencia_rota_id TYPE BIGINT;
 ALTER TABLE audit_logs ALTER COLUMN usuario_id TYPE BIGINT;
+
+-- 10.6 CORREÇÃO DE TIPO (fase 2, achado em 20/08/2026) — completa a lista
+-- da seção 10.5: estas 5 tabelas também recebem id gerado no cliente
+-- (Date.now()) em store.js/app.js e ainda estavam com id SERIAL (INTEGER,
+-- 32 bits), o que derrubava a sincronização com "integer out of range"
+-- assim que o timestamp passasse de ~2,1 bilhões. audit_logs e
+-- registro_versoes ficaram de fora desta lista de propósito — já nasceram
+-- BIGSERIAL (seção 10.2/10.3) e não têm esse problema.
+--
+-- Mesma trava da seção 10.4b: mais de uma view de BI depende do "id" das
+-- tabelas abaixo (achado na prática — vw_bi_produtividade_equipe em
+-- auditoria_produtividade.id, vw_bi_devolucoes_causa_raiz em pelo menos
+-- itens_devolucao.id/relatorios_divergencia.id). Em vez de descobrir view
+-- por view a cada erro, derruba as 6 de uma vez (idempotente, IF EXISTS) —
+-- mesma lista da seção 10.4b. Rodar database/schema_views.sql (Query 2) de
+-- novo depois deste arquivo continua obrigatório.
+DROP VIEW IF EXISTS vw_bi_produtividade_equipe CASCADE;
+DROP VIEW IF EXISTS vw_bi_devolucoes_causa_raiz CASCADE;
+DROP VIEW IF EXISTS vw_bi_frota_veiculos_parados CASCADE;
+DROP VIEW IF EXISTS vw_bi_controle_cd_pendencias CASCADE;
+DROP VIEW IF EXISTS vw_bi_trocas_veiculos CASCADE;
+DROP VIEW IF EXISTS vw_bi_disponibilidade_frota CASCADE;
+ALTER TABLE setores ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE itens_devolucao ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE relatorios_divergencia ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE itens_relatorio_divergencia ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE auditoria_produtividade ALTER COLUMN id TYPE BIGINT;
+
+-- 10.7 COLUNAS QUE FALTAVAM (achado em 20/08/2026) — o app já lê/escreve
+-- estes campos ativamente, mas o schema remoto nunca teve as colunas.
+-- Como cloudStore.js envia o objeto local inteiro sem filtrar por coluna
+-- conhecida (ver upsert() em js/cloudStore.js), qualquer chave que não
+-- exista como coluna faz o PostgREST rejeitar o registro inteiro — a
+-- gravação "funciona" localmente e nunca chega na nuvem, sem aviso nenhum
+-- ao usuário.
+--
+-- veiculos.situacao: js/app.js filtra e exibe veículos por v.situacao
+-- ('Ativo'/'Inativo') em uma dezena de telas; a tabela só tinha a boolean
+-- "ativo", nunca usada pelo app. Backfill a partir de "ativo" para não
+-- perder o estado dos veículos já cadastrados.
+ALTER TABLE veiculos ADD COLUMN IF NOT EXISTS situacao VARCHAR(20) NOT NULL DEFAULT 'Ativo';
+UPDATE veiculos SET situacao = CASE WHEN ativo THEN 'Ativo' ELSE 'Inativo' END WHERE situacao = 'Ativo';
+
+-- ocorrencias_devolucao: js/app.js grava fotos_abertura/videos_abertura
+-- (upload na abertura da ocorrência) e lê também videos_investigacao —
+-- sempre como array. JSONB segue o mesmo padrão já usado em
+-- resumo_diario_cd (seção 14) para listas que o app já trata como
+-- array/objeto local, em vez de normalizar em tabelas à parte.
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS fotos_abertura JSONB;
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS videos_abertura JSONB;
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS videos_investigacao JSONB;
+
+-- motoristas.data_admissao/data_desligamento (achado em 20/08/2026, testando
+-- contra a nuvem de produção de verdade): js/app.js coleta e exibe essas
+-- datas no formulário e no dossiê do motorista (linhas 13533-13534 e
+-- 1048-1049/1395-1396), mas a tabela nunca teve essas colunas — TODO
+-- cadastro de motorista feito pelo app falhava a sincronização inteira com
+-- "Could not find the 'data_admissao' column" (PGRST204), silenciosamente,
+-- desde sempre. Motoristas reais provavelmente nunca chegaram na nuvem.
+ALTER TABLE motoristas ADD COLUMN IF NOT EXISTS data_admissao DATE;
+ALTER TABLE motoristas ADD COLUMN IF NOT EXISTS data_desligamento DATE;
 
 -- =============================================================================
 -- ÍNDICES PARA ALTA PERFORMANCE
@@ -757,3 +841,304 @@ ALTER TABLE ausencias_registros ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "acesso_total_anon" ON ausencias_registros;
 CREATE POLICY "acesso_total_anon" ON ausencias_registros FOR ALL TO anon USING (true) WITH CHECK (true);
 
+-- =============================================================================
+-- 16. COLUNAS QUE FALTAVAM (achado em 20/08/2026, auditoria externa) — mesmo
+-- padrão de sempre: js/store.js grava campos que nunca tiveram coluna no
+-- Supabase, então cloudStore.upsert() rejeita o registro inteiro
+-- (PGRST204) e a tabela inteira nunca sincroniza. colaboradores_cd tinha
+-- o mesmo bug de motoristas (data_admissao/data_desligamento).
+-- auditoria_produtividade tem DOIS formatos de registro diferentes vindos
+-- de dois pontos do código (updateAcaoGestor identifica por nome/protocolo;
+-- updateInvestigacao identifica por usuario_id/setor_id) — usuario_id e
+-- setor_id viram opcionais para caber os dois. relatorios_divergencia
+-- nunca teve NENHUMA das colunas que o app realmente grava (gerarRelatorioDivergencia
+-- em app.js usa nomes completamente diferentes dos que já existiam aqui:
+-- protocolo/motorista/veiculo/rota/cliente em vez de
+-- numero_protocolo/motorista_nome/veiculo_placa/rota_nome/cliente_nome, e
+-- itens_divergentes/valor_total_divergencia/tipo_erro não existiam de
+-- forma alguma). As colunas antigas ficam como legado, sem uso.
+ALTER TABLE colaboradores_cd ADD COLUMN IF NOT EXISTS data_admissao DATE;
+ALTER TABLE colaboradores_cd ADD COLUMN IF NOT EXISTS data_desligamento DATE;
+
+ALTER TABLE auditoria_produtividade ALTER COLUMN usuario_id DROP NOT NULL;
+ALTER TABLE auditoria_produtividade ALTER COLUMN setor_id DROP NOT NULL;
+ALTER TABLE auditoria_produtividade ALTER COLUMN tipo_falha DROP NOT NULL;
+ALTER TABLE auditoria_produtividade ADD COLUMN IF NOT EXISTS protocolo VARCHAR(30);
+ALTER TABLE auditoria_produtividade ADD COLUMN IF NOT EXISTS separador_nome VARCHAR(120);
+ALTER TABLE auditoria_produtividade ADD COLUMN IF NOT EXISTS conferente_nome VARCHAR(120);
+ALTER TABLE auditoria_produtividade ADD COLUMN IF NOT EXISTS tipo_erro VARCHAR(80);
+ALTER TABLE auditoria_produtividade ADD COLUMN IF NOT EXISTS motivo_causa_raiz VARCHAR(150);
+ALTER TABLE auditoria_produtividade ADD COLUMN IF NOT EXISTS acao_gestor TEXT;
+ALTER TABLE auditoria_produtividade ADD COLUMN IF NOT EXISTS gestor_id BIGINT;
+
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS ocorrencia_id BIGINT REFERENCES ocorrencias_devolucao(id) ON DELETE CASCADE;
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS protocolo VARCHAR(30);
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS motorista VARCHAR(120);
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS ajudante VARCHAR(120);
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS veiculo VARCHAR(20);
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS rota VARCHAR(100);
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS cliente VARCHAR(150);
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS tipo_erro VARCHAR(80);
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS itens_divergentes JSONB;
+ALTER TABLE relatorios_divergencia ADD COLUMN IF NOT EXISTS valor_total_divergencia DECIMAL(12,2);
+
+-- =============================================================================
+-- 17. MÓDULO: INVESTIGAÇÃO DE SINISTROS (achado em 20/08/2026, auditoria
+-- externa) — nunca teve tabela no Supabase; store.js/app.js já
+-- implementam um fluxo completo de 5 etapas (Motorista, Manutenção,
+-- Operações, Jurídico [condicional], Diretoria) com fotos por etapa, só
+-- que 100% preso em localStorage. id é string (gerado como
+-- "sinistro_<timestamp>_<random>" em store.js), não numérico — mesmo
+-- padrão de medidas_disciplinares/orientacoes_feedback acima. Campos de
+-- foto (arrays no app) viram JSONB, mesmo padrão de resumo_diario_cd.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS sinistros (
+    id VARCHAR(80) PRIMARY KEY,
+    numero_sinistro VARCHAR(20) UNIQUE,
+    ocorrencia_rota_id BIGINT REFERENCES ocorrencias_rota(id) ON DELETE SET NULL,
+    carga VARCHAR(60),
+    placa VARCHAR(10),
+    veiculo_id BIGINT REFERENCES veiculos(id) ON DELETE SET NULL,
+    motorista_nome VARCHAR(120),
+    motorista_id BIGINT REFERENCES motoristas(id) ON DELETE SET NULL,
+    data_acidente DATE,
+    local_acidente VARCHAR(200),
+
+    etapa_motorista_completa BOOLEAN DEFAULT FALSE,
+    etapa_manutencao_completa BOOLEAN DEFAULT FALSE,
+    etapa_operacoes_completa BOOLEAN DEFAULT FALSE,
+    juridico_necessario BOOLEAN DEFAULT FALSE,
+    etapa_juridico_completa BOOLEAN DEFAULT FALSE,
+    etapa_diretoria_completa BOOLEAN DEFAULT FALSE,
+    status_geral VARCHAR(20) DEFAULT 'PENDENTE',
+
+    -- Etapa 1: Motorista
+    motorista_cpf VARCHAR(14),
+    motorista_cnh VARCHAR(20),
+    motorista_cnh_validade DATE,
+    tipo_veiculo_jr_motorista VARCHAR(50),
+    veiculo_terceiro_condutor_nome VARCHAR(120),
+    veiculo_terceiro_placa VARCHAR(10),
+    veiculo_terceiro_renavam VARCHAR(20),
+    veiculo_terceiro_marca VARCHAR(80),
+    relato_motorista TEXT,
+    havia_sinalizacao_motorista BOOLEAN,
+    sinalizacao_relato_motorista TEXT,
+    motorista_assinatura_nome VARCHAR(120),
+    motorista_assinatura_data DATE,
+    fotos_danos_jr_motorista JSONB,
+    fotos_danos_terceiro_motorista JSONB,
+
+    -- Etapa 2: Manutenção
+    relato_manutencao TEXT,
+    havia_sinalizacao_manutencao BOOLEAN,
+    sinalizacao_relato_manutencao TEXT,
+    tem_testemunhas BOOLEAN,
+    testemunha_nome_contato VARCHAR(150),
+    parecer_manutencao TEXT,
+    manutencao_gestor_nome VARCHAR(120),
+    manutencao_data DATE,
+    fotos_danos_jr_manutencao JSONB,
+    fotos_danos_terceiro_manutencao JSONB,
+    orcamentos_anexos JSONB,
+    fotos_acidente_bo JSONB,
+
+    -- Etapa 3: Operações
+    parecer_operacoes TEXT,
+    operacoes_gestor_nome VARCHAR(120),
+    operacoes_data DATE,
+
+    -- Etapa 4: Jurídico (condicional)
+    parecer_juridico TEXT,
+    juridico_nome VARCHAR(120),
+    juridico_data DATE,
+
+    -- Etapa 5: Diretoria
+    responsabilidade_motorista BOOLEAN,
+    desconto_motorista BOOLEAN,
+    valor_desconto DECIMAL(10,2),
+    numero_parcelas INT,
+    diretoria_nome VARCHAR(120),
+    diretoria_data DATE,
+
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    atualizado_em TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP NULL
+);
+ALTER TABLE sinistros ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON sinistros;
+CREATE POLICY "acesso_total_anon" ON sinistros FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- =============================================================================
+-- 18. MÓDULO: ITENS AVULSOS DE DESTINAÇÃO (achado em 20/08/2026, auditoria
+-- externa) — item avariado/sobra identificado direto no CD, sem chamado
+-- formal de devolução associado. id é string (formato "avulso_<timestamp>_<random>").
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS itens_avulsos_destinacao (
+    id VARCHAR(60) PRIMARY KEY,
+    produto_codigo VARCHAR(40),
+    produto_descricao VARCHAR(200),
+    quantidade DECIMAL(10,2),
+    destino_item VARCHAR(50),
+    data_validade DATE,
+    observacao TEXT,
+    status_negociacao VARCHAR(30),
+    motivo_avulso VARCHAR(150),
+    divisoes_destino JSONB,
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP NULL
+);
+ALTER TABLE itens_avulsos_destinacao ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON itens_avulsos_destinacao;
+CREATE POLICY "acesso_total_anon" ON itens_avulsos_destinacao FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- =============================================================================
+-- 19. COLUNAS QUE FALTAVAM (achado em 21/08/2026, auditoria sistemática de
+-- todo campo gravado pelo app x toda coluna existente no banco, feita
+-- depois de confirmar por teste direto que uma Devolução SAC nunca
+-- sincronizava). Mesmo padrão de sempre (achados 16/17 acima): o app grava
+-- um campo que nunca teve coluna correspondente aqui, o PostgREST rejeita
+-- o envio INTEIRO daquela tabela (PGRST204) e ninguém percebe porque a
+-- gravação local funciona normalmente.
+--
+-- ocorrencias_rota: addOcorrenciaRota() em store.js grava 7 campos
+-- desnormalizados (usados pelas telas de lista/filtro sem precisar de
+-- join) que nunca tiveram coluna — ou seja, o módulo inteiro de "Frota /
+-- Chamado em Rota" nunca conseguiu sincronizar um único registro.
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS carga_numero VARCHAR(40);
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS veiculo_placa VARCHAR(20);
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS motorista_nome VARCHAR(120);
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS rota_nome VARCHAR(100);
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS motivo_resumido VARCHAR(100);
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS status_veiculo VARCHAR(50);
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS criado_por VARCHAR(120);
+
+-- retencoes_frota: addRetencaoFrota() grava numero_os/link_os (o Nº da OS é
+-- derivado automaticamente do link informado) — nenhuma das duas colunas
+-- existia.
+ALTER TABLE retencoes_frota ADD COLUMN IF NOT EXISTS numero_os VARCHAR(60);
+ALTER TABLE retencoes_frota ADD COLUMN IF NOT EXISTS link_os TEXT;
+
+-- resumo_diario_cd: saveResumoDiarioCD() grava atualizado_em em todo save,
+-- coluna nunca existiu.
+ALTER TABLE resumo_diario_cd ADD COLUMN IF NOT EXISTS atualizado_em TIMESTAMP;
+
+-- auditoria_produtividade: updateAcaoGestor() em store.js já foi corrigido
+-- para gravar separador_nome/conferente_nome (colunas que já existem desde
+-- o achado 16) em vez de separador/conferente (que nunca existiram) — nada
+-- a alterar aqui, registrado só para o histórico ficar completo.
+
+
+-- =============================================================================
+-- 22. CORRECAO DA SINCRONIZACAO (21/08/2026) - ver database/migration_22_fix_sync.sql
+-- Incorporado aqui para que uma instalacao NOVA ja nasca correta.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------
+-- 22.1 COLUNAS AUSENTES
+-- Confirmado por sondagem no banco de producao: estas colunas sao gravadas
+-- pelo store.js em TODA devolucao/resumo e nao existiam. Bastava uma delas
+-- para o PostgREST recusar o lote inteiro com PGRST204
+-- ("Could not find the 'X' column ... in the schema cache").
+-- -----------------------------------------------------------------------
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS motorista_id       BIGINT;
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS fotos_investigacao JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS itens              JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS atualizado_por     VARCHAR(120);
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS data_entrada_cd    TIMESTAMPTZ;
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS requisito          VARCHAR(120);
+
+-- resumo_diario_cd guarda os blocos do formulario como objeto aninhado
+ALTER TABLE resumo_diario_cd      ADD COLUMN IF NOT EXISTS recebimento        JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE resumo_diario_cd      ADD COLUMN IF NOT EXISTS expedicao          JSONB DEFAULT '{}'::jsonb;
+
+-- -----------------------------------------------------------------------
+-- 22.2 NOT NULL QUE O APP NAO CONSEGUE HONRAR
+-- store.js grava "parseInt(x) || null" nesses campos. Um unico registro
+-- sem carga/veiculo/motorista derrubava o lote inteiro (SQLSTATE 23502).
+-- -----------------------------------------------------------------------
+ALTER TABLE ocorrencias_rota ALTER COLUMN carga_id     DROP NOT NULL;
+ALTER TABLE ocorrencias_rota ALTER COLUMN veiculo_id   DROP NOT NULL;
+ALTER TABLE ocorrencias_rota ALTER COLUMN motorista_id DROP NOT NULL;
+ALTER TABLE itens_devolucao  ALTER COLUMN ocorrencia_devolucao_id DROP NOT NULL;
+ALTER TABLE itens_devolucao  ALTER COLUMN produto_id   DROP NOT NULL;
+
+-- -----------------------------------------------------------------------
+-- 22.3 CHAVES ESTRANGEIRAS - a causa mais estrutural
+--
+-- Este app e offline-first: cada aparelho gera os proprios ids e o
+-- cloudStore empurra TABELAS INTEIRAS, uma por vez, sem ordem topologica
+-- (ocorrencias_devolucao e a PRIMEIRA do array de mappings; cargas e
+-- clientes sao empurradas DEPOIS). Ou seja: o filho sempre chega antes do
+-- pai e o Postgres recusa com 23503 - em todo ciclo, para sempre.
+-- Reordenar o push (feito no cloudStore.js) resolve o caso normal, mas nao
+-- o caso real de dois aparelhos offline criando registros cruzados.
+--
+-- Decisao: manter as COLUNAS de relacionamento (relatorios e views
+-- continuam funcionando por JOIN) e remover a IMPOSICAO rigida da FK nas
+-- tabelas sincronizadas. A integridade passa a ser responsabilidade do
+-- app, que e quem detem a verdade nesse modelo. As FKs entre tabelas que
+-- NAO sincronizam continuam intactas.
+-- -----------------------------------------------------------------------
+ALTER TABLE cargas                DROP CONSTRAINT IF EXISTS cargas_motorista_id_fkey;
+ALTER TABLE cargas                DROP CONSTRAINT IF EXISTS cargas_ajudante_id_fkey;
+ALTER TABLE cargas                DROP CONSTRAINT IF EXISTS cargas_veiculo_id_fkey;
+ALTER TABLE cargas                DROP CONSTRAINT IF EXISTS cargas_deleted_by_usuario_id_fkey;
+
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_carga_id_fkey;
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_cliente_id_fkey;
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_veiculo_id_fkey;
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_separador_id_fkey;
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_conferente_id_fkey;
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_gestor_id_fkey;
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_setor_encaminhado_id_fkey;
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_criado_por_usuario_id_fkey;
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_deleted_by_usuario_id_fkey;
+
+ALTER TABLE itens_devolucao       DROP CONSTRAINT IF EXISTS itens_devolucao_ocorrencia_devolucao_id_fkey;
+ALTER TABLE itens_devolucao       DROP CONSTRAINT IF EXISTS itens_devolucao_produto_id_fkey;
+ALTER TABLE itens_devolucao       DROP CONSTRAINT IF EXISTS itens_devolucao_deleted_by_usuario_id_fkey;
+
+ALTER TABLE ocorrencias_rota      DROP CONSTRAINT IF EXISTS ocorrencias_rota_carga_id_fkey;
+ALTER TABLE ocorrencias_rota      DROP CONSTRAINT IF EXISTS ocorrencias_rota_veiculo_id_fkey;
+ALTER TABLE ocorrencias_rota      DROP CONSTRAINT IF EXISTS ocorrencias_rota_motorista_id_fkey;
+ALTER TABLE ocorrencias_rota      DROP CONSTRAINT IF EXISTS ocorrencias_rota_mecanico_responsavel_id_fkey;
+ALTER TABLE ocorrencias_rota      DROP CONSTRAINT IF EXISTS ocorrencias_rota_deleted_by_usuario_id_fkey;
+
+ALTER TABLE relatorios_divergencia  DROP CONSTRAINT IF EXISTS relatorios_divergencia_ocorrencia_devolucao_id_fkey;
+ALTER TABLE relatorios_divergencia  DROP CONSTRAINT IF EXISTS relatorios_divergencia_ocorrencia_id_fkey;
+
+ALTER TABLE auditoria_produtividade DROP CONSTRAINT IF EXISTS auditoria_produtividade_usuario_id_fkey;
+ALTER TABLE auditoria_produtividade DROP CONSTRAINT IF EXISTS auditoria_produtividade_setor_id_fkey;
+ALTER TABLE auditoria_produtividade DROP CONSTRAINT IF EXISTS auditoria_produtividade_ocorrencia_devolucao_id_fkey;
+ALTER TABLE auditoria_produtividade DROP CONSTRAINT IF EXISTS auditoria_produtividade_ocorrencia_rota_id_fkey;
+
+-- audit_logs.usuario_id grava 0 ("SISTEMA") quando nao ha usuario logado.
+-- 0 nao existe em usuarios, entao TODA a trilha de auditoria (ate 1000
+-- registros por lote) era recusada de uma vez so.
+ALTER TABLE audit_logs            DROP CONSTRAINT IF EXISTS audit_logs_usuario_id_fkey;
+
+ALTER TABLE colaboradores_cd      DROP CONSTRAINT IF EXISTS colaboradores_cd_deleted_by_usuario_id_fkey;
+ALTER TABLE usuarios              DROP CONSTRAINT IF EXISTS usuarios_setor_id_fkey;
+ALTER TABLE retencoes_frota       DROP CONSTRAINT IF EXISTS retencoes_frota_veiculo_id_fkey;
+ALTER TABLE trocas_veiculos       DROP CONSTRAINT IF EXISTS trocas_veiculos_deleted_by_usuario_id_fkey;
+ALTER TABLE veiculos              DROP CONSTRAINT IF EXISTS veiculos_deleted_by_usuario_id_fkey;
+ALTER TABLE motoristas            DROP CONSTRAINT IF EXISTS motoristas_deleted_by_usuario_id_fkey;
+ALTER TABLE ajudantes             DROP CONSTRAINT IF EXISTS ajudantes_deleted_by_usuario_id_fkey;
+ALTER TABLE clientes              DROP CONSTRAINT IF EXISTS clientes_deleted_by_usuario_id_fkey;
+ALTER TABLE produtos              DROP CONSTRAINT IF EXISTS produtos_deleted_by_usuario_id_fkey;
+
+-- indices para nao perder desempenho dos JOINs agora sem FK
+CREATE INDEX IF NOT EXISTS idx_dev_carga     ON ocorrencias_devolucao(carga_id);
+CREATE INDEX IF NOT EXISTS idx_dev_cliente   ON ocorrencias_devolucao(cliente_id);
+CREATE INDEX IF NOT EXISTS idx_dev_motorista ON ocorrencias_devolucao(motorista_id);
+CREATE INDEX IF NOT EXISTS idx_itens_dev     ON itens_devolucao(ocorrencia_devolucao_id);
+
+
+-- Recarrega o cache de schema do PostgREST - sem isso, colunas recem
+-- criadas continuam devolvendo PGRST204 por alguns minutos.
+NOTIFY pgrst, 'reload schema';

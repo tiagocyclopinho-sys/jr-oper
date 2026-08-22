@@ -4,7 +4,7 @@
 // Cache offline para funcionar sem internet
 // =================================================================
 
-const CACHE_NAME = 'jr-oper-v4.7.2';
+const CACHE_NAME = 'jr-oper-v4.7.4';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
@@ -55,16 +55,31 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Corta a espera pela rede depois de N segundos e cai pro cache — sem
+// isso, um 5G com sinal fraco em rota (alta latência, não uma falha de
+// verdade) deixava a tela em branco até o timeout default do navegador,
+// que pode passar de 30s (achado em 20/08/2026, auditoria externa).
+const FETCH_TIMEOUT_MS = 6000;
+function fetchComTimeout(request) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), FETCH_TIMEOUT_MS);
+    fetch(request).then(
+      (response) => { clearTimeout(timer); resolve(response); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
 // ESTRATÉGIA: Tenta buscar da internet primeiro, se falhar usa o cache (offline)
 self.addEventListener('fetch', (event) => {
   // Ignora requisições que não são GET (ex: POST para o Supabase)
   if (event.request.method !== 'GET') return;
-  
+
   // Ignora requisições para o Supabase (banco de dados online - não cacheável)
   if (event.request.url.includes('supabase.co')) return;
 
   event.respondWith(
-    fetch(event.request)
+    fetchComTimeout(event.request)
       .then((response) => {
         // Se deu certo online, salva uma cópia no cache e retorna
         if (response && response.status === 200) {

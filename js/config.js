@@ -25,8 +25,8 @@ window.JR_CONFIG = {
 
   // Configurações do Banco na Nuvem (Preencher quando criar a conta no Supabase - 100% Gratuito)
   supabase: {
-    url: "https://qxipgnkdbzxtfvuyupow.supabase.co",      // Ex: "https://xyzcompany.supabase.co"
-    anonKey: "sb_publishable_oX9VhXUCTJYqGJ-9MgusuQ_eKF-B0KN",  // Chave pública fornecida pelo Supabase
+    url: "https://qxipgnkdbzxtfvuyupow.supabase.co",
+    anonKey: "sb_publishable_oX9VhXUCTJYqGJ-9MgusuQ_eKF-B0KN",
     syncIntervalMs: 30000 // Sincronização automática a cada 30 segundos
   },
 
