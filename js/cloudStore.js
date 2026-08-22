@@ -351,6 +351,53 @@ class CloudStore {
   // zerava só localmente. Mantém cadastros mestre (usuarios, motoristas,
   // veiculos, clientes, produtos, setores) intactos.
   // ---------------------------------------------------------------
+  // ---------------------------------------------------------------
+  // CARIMBO DE RESET (tabela sync_control) — ver migration_23
+  // Resolve a ambiguidade do "vazio": nuvem vazia porque alguém apagou
+  // de propósito, ou porque o envio nunca funcionou? Sem esse carimbo o
+  // aparelho que ainda tem o dado no cache reenvia e desfaz o reset.
+  // ---------------------------------------------------------------
+  async _lerResetEpochNuvem() {
+    if (!this.isConfigured()) return 0;
+    try {
+      const resp = await fetch(`${this.config.url}/rest/v1/sync_control?select=reset_epoch&id=eq.1`, {
+        headers: this._headers()
+      });
+      if (!resp.ok) return 0; // tabela ainda não criada — comportamento antigo
+      const rows = await resp.json();
+      return (rows && rows[0] && Number(rows[0].reset_epoch)) || 0;
+    } catch(e) {
+      return 0;
+    }
+  }
+
+  async _publicarResetEpoch(quemFez) {
+    if (!this.isConfigured()) return false;
+    const epoch = Date.now();
+    try {
+      const resp = await fetch(`${this.config.url}/rest/v1/sync_control?id=eq.1`, {
+        method: 'PATCH',
+        headers: this._headers({ 'Prefer': 'return=minimal' }),
+        body: JSON.stringify({
+          reset_epoch: epoch,
+          reset_em: new Date(epoch).toISOString(),
+          reset_por: String(quemFez || 'SISTEMA').slice(0, 120)
+        })
+      });
+      if (!resp.ok) {
+        console.warn('[CloudStore] Não foi possível publicar o carimbo de reset:', resp.status, await resp.text());
+        return false;
+      }
+      // Este aparelho já está no estado pós-reset: registra para não
+      // tentar aplicar o próprio reset de volta em si mesmo.
+      try { localStorage.setItem('jr_reset_epoch', String(epoch)); } catch(e) {}
+      return true;
+    } catch(e) {
+      console.warn('[CloudStore] Falha de rede ao publicar o carimbo de reset:', e.message);
+      return false;
+    }
+  }
+
   async clearCloudTrainingData() {
     if (!this.isConfigured()) return { success: true, skipped: true };
     const tabelas = [
@@ -376,7 +423,17 @@ class CloudStore {
         console.warn(`[CloudStore] Falha na rede ao limpar ${t} na nuvem:`, e.message);
       }
     }
-    return { success: ok };
+
+    // Carimba o reset para que os OUTROS aparelhos saibam que este vazio é
+    // proposital e limpem o próprio cache em vez de reenviar o que tinham.
+    const carimbou = await this._publicarResetEpoch(
+      (window.db && window.db.currentUser && window.db.currentUser.nome) || 'ADMIN'
+    );
+    if (!carimbou) {
+      console.warn('[CloudStore] ATENÇÃO: o reset limpou a nuvem mas o carimbo não foi gravado. Outros aparelhos podem trazer os dados de volta. Rode a migration_23 e repita o reset.');
+    }
+
+    return { success: ok, carimbado: carimbou };
   }
 
   // ---------------------------------------------------------------
@@ -404,6 +461,15 @@ class CloudStore {
       { dbKey: 'veiculos',              localKey: 'jr_veiculos',          tableName: 'veiculos' },
       { dbKey: 'clientes',              localKey: 'jr_clientes',          tableName: 'clientes' },
       { dbKey: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  tableName: 'colaboradores_cd' },
+      // (achado de 21/08/2026) produtos e setores NUNCA estiveram nesta
+      // lista: existiam como tabela no banco e como coleção local, mas
+      // jamais saíam do aparelho que os cadastrou. Por isso a lista de
+      // produtos da Devolução aparecia vazia — e o campo, que é um
+      // <input list="produtos-list">, virava texto livre nos outros
+      // aparelhos. Também eram as duas tabelas cujas FKs nunca teriam como
+      // ser satisfeitas (ver migration_22).
+      { dbKey: 'produtos',              localKey: 'jr_produtos',          tableName: 'produtos' },
+      { dbKey: 'setores',               localKey: 'jr_setores',           tableName: 'setores' },
       // --- 2) cargas: depende de motorista/ajudante/veículo ---
       { dbKey: 'cargas',                localKey: 'jr_cargas',            tableName: 'cargas' },
       // --- 3) transacionais: dependem dos cadastros acima ---
@@ -496,6 +562,8 @@ class CloudStore {
       { tableName: 'veiculos',              localKey: 'jr_veiculos',          dbKey: 'veiculos' },
       { tableName: 'cargas',                localKey: 'jr_cargas',            dbKey: 'cargas' },
       { tableName: 'clientes',              localKey: 'jr_clientes',          dbKey: 'clientes' },
+      { tableName: 'produtos',              localKey: 'jr_produtos',          dbKey: 'produtos' },
+      { tableName: 'setores',               localKey: 'jr_setores',           dbKey: 'setores' },
       { tableName: 'usuarios',              localKey: 'jr_usuarios',          dbKey: 'usuarios' },
       { tableName: 'audit_logs',            localKey: 'jr_audit_logs',        dbKey: 'audit_logs' },
       { tableName: 'registro_versoes',      localKey: 'jr_registro_versoes',  dbKey: 'registro_versoes' },
@@ -513,6 +581,22 @@ class CloudStore {
       { tableName: 'sinistros',             localKey: 'jr_sinistros',         dbKey: 'sinistros' },
       { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' }
     ];
+
+    // Um Reset Global feito em OUTRO aparelho precisa ser reconhecido aqui
+    // antes de qualquer comparação, senão este aparelho reenvia o que o
+    // outro acabou de apagar. Ver sync_control em migration_23.
+    const epochNuvem = await this._lerResetEpochNuvem();
+    const epochLocal = Number(localStorage.getItem('jr_reset_epoch') || 0);
+    const resetRemotoPendente = epochNuvem > epochLocal;
+    if (resetRemotoPendente) {
+      console.warn(`[CloudStore] Reset Global detectado na nuvem (${new Date(epochNuvem).toLocaleString('pt-BR')}). Este aparelho vai adotar o estado da nuvem.`);
+      // As marcas de "já sincronizou" perdem validade após um reset.
+      try {
+        Object.keys(localStorage)
+          .filter(k => k.indexOf('jr_sync_ok_') === 0)
+          .forEach(k => localStorage.removeItem(k));
+      } catch(e) {}
+    }
 
     let anyChange = false;
     // Guarda só as tabelas que realmente mudaram (dbKey -> dado da nuvem),
@@ -563,7 +647,14 @@ class CloudStore {
             localTemDados = Array.isArray(parsed) && parsed.length > 0;
           } catch(e) {}
           const jaSincronizouAlgumaVez = !!localStorage.getItem('jr_sync_ok_' + m.tableName);
-          if (localTemDados && !jaSincronizouAlgumaVez) {
+          // Se houve um Reset Global mais recente do que o último que este
+          // aparelho aplicou, o vazio da nuvem é intencional: aceitar.
+          // Sem isso, o aparelho que ainda tinha os registros no cache os
+          // reenviava e ressuscitava tudo — foi o que aconteceu com as 15
+          // viagens em 21/08/2026.
+          if (resetRemotoPendente) {
+            console.warn(`[CloudStore] ${m.tableName}: Reset Global remoto detectado — aceitando o vazio da nuvem.`);
+          } else if (localTemDados && !jaSincronizouAlgumaVez) {
             console.warn(`[CloudStore] ${m.tableName}: nuvem vazia e esta tabela nunca subiu com sucesso — preservando o dado local e reenviando.`);
             this._tabelasPendentesDeEnvio.add(m.tableName);
             continue;
@@ -592,6 +683,13 @@ class CloudStore {
           window.db.data = fullDb;
         }
       } catch(e) {}
+    }
+
+    // Só marca o reset como aplicado depois que o pull inteiro terminou —
+    // se a rede cair no meio, o aparelho tenta de novo no próximo ciclo em
+    // vez de ficar num estado meio-aplicado.
+    if (resetRemotoPendente) {
+      try { localStorage.setItem('jr_reset_epoch', String(epochNuvem)); } catch(e) {}
     }
 
     if (anyChange) {

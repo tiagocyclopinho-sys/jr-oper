@@ -19,17 +19,20 @@ Tenha aberto:
 
 ## PASSO 1 — Atualizar o banco (Supabase)
 
-1. Supabase → menu lateral → **SQL Editor** → **New Query**
-2. Abra `database/migration_22_fix_sync.sql`, copie **todo** o conteúdo e cole
-3. Clique em **Run**
-4. Deve aparecer `Success. No rows returned`
+São **dois** scripts, nesta ordem. Supabase → **SQL Editor** → **New Query**,
+colar o conteúdo inteiro, **Run**, repetir com o segundo.
 
-O script é idempotente: se rodar duas vezes, não quebra nada.
+1. `database/migration_22_fix_sync.sql` — colunas ausentes, `NOT NULL` e FKs
+2. `database/migration_23_checks_e_reset.sql` — restrições `CHECK` e `sync_control`
 
-> **Por que:** o banco não tinha 8 colunas que o app grava, tinha `NOT NULL`
-> em campos que o app deixa vazios, e tinha chaves estrangeiras que o modelo
-> de sincronização não consegue respeitar. Era isso que fazia o Supabase
-> recusar todo registro de devolução, rota, auditoria e resumo do CD.
+Ambos são idempotentes: rodar duas vezes não quebra nada.
+
+> **Por que dois:** a 22 destravou as colunas e as chaves estrangeiras — depois
+> dela `itens_devolucao` e `cargas` passaram a receber dados. Mas a devolução
+> em si continuava sendo recusada por um motivo diferente: o app grava
+> `forma_acerto = ''` na abertura (quem define é o Financeiro, depois), e o
+> banco exigia já ali um dos valores finais da lista. A 23 corrige isso e
+> cria a tabela que faz o Reset Global valer entre aparelhos.
 
 ## PASSO 2 — Confirmar que o banco aceitou (NÃO PULE)
 
@@ -43,13 +46,18 @@ SELECT
                           'atualizado_por','data_entrada_cd','requisito')) AS colunas_devolucao,
   (SELECT count(*) FROM information_schema.columns
     WHERE table_name='resumo_diario_cd'
-      AND column_name IN ('recebimento','expedicao')) AS colunas_resumo;
+      AND column_name IN ('recebimento','expedicao')) AS colunas_resumo,
+  (SELECT count(*) FROM information_schema.tables
+    WHERE table_name='sync_control') AS tabela_sync_control,
+  (SELECT count(*) FROM pg_constraint
+    WHERE conname='ocorrencias_devolucao_forma_acerto_check'
+      AND pg_get_constraintdef(oid) LIKE '%''''%') AS check_aceita_vazio;
 ```
 
-**Resultado esperado: `colunas_devolucao = 6` e `colunas_resumo = 2`.**
+**Esperado: `6`, `2`, `1`, `1`.**
 
-Se vier número menor, o script não rodou inteiro — rode de novo e leia a
-mensagem de erro antes de seguir.
+Se `check_aceita_vazio` vier `0`, a migração 23 não rodou — a devolução vai
+continuar sendo recusada. Rode de novo e leia a mensagem de erro.
 
 ## PASSO 3 — Publicar o app atualizado
 
@@ -84,12 +92,19 @@ Ainda há dados de teste no banco. Decida o que é real antes de abrir a operaç
 | `motoristas` | 2 | avaliar |
 | `cargas` | 1 | treinamento |
 
-Em **um único aparelho**, use **Reset Global de Treinamento** no app. Ele agora
-limpa local **e** nuvem, e preserva os cadastros mestre (motoristas, veículos,
-ajudantes, clientes, usuários).
+Em **um único aparelho**, use **Reset Global de Treinamento** no app. Ele limpa
+local **e** nuvem, preserva os cadastros mestre (motoristas, veículos, ajudantes,
+clientes, produtos, usuários) e agora grava um **carimbo de reset** na nuvem.
 
-Depois do reset, recarregue os outros aparelhos (`Ctrl + Shift + R`) para eles
-receberem o estado limpo.
+Depois do reset, recarregue os outros aparelhos (`Ctrl + Shift + R`). Eles leem
+o carimbo, reconhecem que o vazio é proposital e limpam o próprio cache.
+
+> **Por que isso importa:** na primeira tentativa, as viagens apagadas no reset
+> voltaram nos dois aparelhos. O aparelho que ainda tinha os 15 registros no
+> cache não tinha como saber se a tabela vazia na nuvem significava "alguém
+> apagou" ou "o envio nunca funcionou" — e reenviava. O carimbo elimina a
+> dúvida. Ele só existe depois da migração 23; se o reset avisar que o carimbo
+> não foi gravado, a 23 não rodou.
 
 ## PASSO 6 — Teste de aceite (obrigatório, 5 minutos)
 
@@ -126,7 +141,20 @@ as telas, não o banco.
 Isso não impede o go-live, mas precisa entrar no plano — o caminho é Supabase
 Auth com policies por usuário, substituindo o acesso anônimo.
 
-### 3. Edição simultânea
+### 3. Listas de Carga e Produto aparecendo como texto livre
+
+O campo "Número da Carga" e o campo de Produto na Devolução são `<input list=...>`:
+viram texto livre quando a lista por trás está vazia. Não é um defeito do campo.
+
+- **Carga:** a lista vem de Cargas + Controle de Viagens + ocorrências anteriores.
+  O Reset Global zera tudo isso de propósito — a lista volta assim que a Largada
+  do dia for lançada.
+- **Produto:** a lista vem do cadastro de produtos, que **nunca era sincronizado**
+  (a tabela existia no banco, mas não estava na lista de envio nem na de leitura).
+  Corrigido: `produtos` e `setores` agora sincronizam como os demais cadastros.
+  Cadastre os produtos em um aparelho e eles aparecem nos outros.
+
+### 4. Edição simultânea
 
 A sincronização é por tabela inteira, a cada 30 segundos, e vale o último que
 gravou. Se duas pessoas editarem **a mesma devolução** dentro da mesma janela de
