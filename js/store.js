@@ -372,6 +372,30 @@ class Store {
       this.save();
     }
 
+    // Normalização do tipo_ocorrencia já gravado (22/08/2026, build 4.8.1).
+    //
+    // O mapeamento novo em _tipoOcorrenciaDoMotivo() cobre gravação e
+    // edição, mas não reescreve o que já está no cache. Sem esta passagem,
+    // toda ocorrência de rota criada ANTES da 4.8.1 continuaria com
+    // "AVARIA MECÂNICA" em tipo_ocorrencia e seguiria derrubando o lote
+    // inteiro no 23514 — a tabela ficaria travada do mesmo jeito, só que
+    // agora sem motivo aparente. Roda uma vez por aparelho e é idempotente:
+    // valor já normalizado passa direto pelo mapeamento sem mudar.
+    let precisaSalvarTipoOcorrencia = false;
+    (this.data.ocorrencias_rota || []).forEach(r => {
+      const normalizado = this._tipoOcorrenciaDoMotivo(r.tipo_ocorrencia);
+      if (r.tipo_ocorrencia !== normalizado) {
+        // O texto original não se perde: vai para motivo_resumido, que é o
+        // campo que as telas realmente exibem, se ele ainda estiver vazio.
+        if (!r.motivo_resumido && r.tipo_ocorrencia) r.motivo_resumido = r.tipo_ocorrencia;
+        r.tipo_ocorrencia = normalizado;
+        precisaSalvarTipoOcorrencia = true;
+      }
+    });
+    if (precisaSalvarTipoOcorrencia) {
+      this.save();
+    }
+
     // 4) Orientação Verbal deixou de ser uma medida administrativa
     //    (pedido de 19/08/2026): registros que já tinham sido emitidos
     //    como medida disciplinar são migrados para orientacoes_feedback
@@ -1011,7 +1035,12 @@ class Store {
   }
 
   addDevolucao(devolucaoData, itens) {
-    const id = Date.now();
+    // gerarIdUnico() em vez de Date.now() puro — mesmo motivo de
+    // addOcorrenciaRota: estes dois eram os pontos que a centralização de
+    // 20/08 não pegou. Dois aparelhos abrindo uma devolução no mesmo
+    // milissegundo geravam o mesmo id, e o merge-duplicates fazia um
+    // sobrescrever o outro sem erro nenhum.
+    const id = this.gerarIdUnico();
     const numero_protocolo = this.getNextSequenceNumber('ocorrencias_devolucao', 'numero_protocolo', 'DEV-2026-', 3);
     const numero_devolucao = this.getNextSequenceNumber('ocorrencias_devolucao', 'numero_devolucao', 'DEV-', 3);
     
@@ -1190,7 +1219,12 @@ class Store {
           const item = (this.data.itens_devolucao || []).find(i => i.id == idst.item_id);
           if (item) {
             item.destino_item = idst.destino || destino_cd;
-            item.data_validade = idst.data_validade || '';
+            // null, não '' (22/08/2026): a coluna data_validade nasce na
+            // migration_26 como VARCHAR justamente porque este campo vinha
+            // com string vazia para AVARIA_DESCARTE e RENEGOCIADO_ROTA, onde
+            // a tela dispensa a data. Gravando null, o campo passa a poder
+            // ser apertado para DATE numa próxima rodada, sem travar nada.
+            item.data_validade = idst.data_validade || null;
             item.observacao = idst.observacao || '';
             if (idst.destino === 'PRODUTOS_NEGOCIACAO') {
               item.status_negociacao = item.status_negociacao || 'EM_NEGOCIACAO';
@@ -1238,8 +1272,47 @@ class Store {
     }).sort((a, b) => new Date(b.data_chamado || b.criado_em || b.data || 0) - new Date(a.data_chamado || a.criado_em || a.data || 0));
   }
 
+  // Achado de 22/08/2026, rodando o sync de verdade: NENHUMA ocorrência de
+  // rota criada pela tela jamais chegou ao banco. O CHECK
+  // ocorrencias_rota_tipo_ocorrencia_check aceita '', MECANICA, OPERACIONAL,
+  // CONDUTA_INADEQUADA e ACIDENTE; a tela grava em tipo_ocorrencia o valor do
+  // dropdown "Motivo Resumido" (AVARIA MECÂNICA, ATRASO DE LARGADA,
+  // CHECKLIST, FALTA, SUBSTITUIÇÃO DE EQUIPE, CONDUTA OPERACIONAL, OUTRO).
+  // Interseção entre as duas listas: zero. Todo POST caía com 23514, e como
+  // o POST do PostgREST é uma transação só, derrubava o lote inteiro.
+  //
+  // É a MESMA doença dos 247 fantasmas: duas linguagens na mesma coluna,
+  // uma delas gravada por engano. Por isso o conserto não é alargar o CHECK
+  // (isso perpetuaria o problema) — é normalizar na escrita, aqui.
+  //
+  // Fica na store, e não na tela, pelo mesmo motivo da guarda de escrita do
+  // cloudStore: o problema não é uma tela, é qualquer caminho que grave
+  // este campo. Duas telas usam hoje; uma terceira que apareça amanhã já
+  // nasce coberta. `motivo_resumido` continua guardando o texto original,
+  // que é o que a interface toda lê (`r.motivo_resumido || r.tipo_ocorrencia`).
+  _tipoOcorrenciaDoMotivo(valor) {
+    const v = String(valor || '').toUpperCase().trim();
+    if (!v) return '';
+    // Já está no vocabulário do banco? Passa direto.
+    if (['MECANICA', 'OPERACIONAL', 'CONDUTA_INADEQUADA', 'ACIDENTE'].indexOf(v) !== -1) return v;
+    if (v.indexOf('ACIDENTE') !== -1 || v.indexOf('SINISTRO') !== -1) return 'ACIDENTE';
+    if (v.indexOf('CONDUTA') !== -1) return 'CONDUTA_INADEQUADA';
+    if (v.indexOf('MEC') !== -1 || v.indexOf('AVARIA') !== -1) return 'MECANICA';
+    // A lista de motivos é editável (db.data.motivos_ocorrencia), então um
+    // motivo novo cadastrado amanhã não pode voltar a travar a tabela.
+    // Qualquer coisa que não se encaixe cai em OPERACIONAL, que é válido —
+    // e o texto exato sobrevive intacto em motivo_resumido.
+    return 'OPERACIONAL';
+  }
+
   addOcorrenciaRota(rotaData) {
-    const id = Date.now();
+    // gerarIdUnico() em vez de Date.now() puro: este era um dos dois pontos
+    // que a centralização de 20/08 não pegou (o outro é addDevolucao). Sem o
+    // carimbo do aparelho, dois PCs criando um chamado no mesmo milissegundo
+    // geram o mesmo id — e como o envio usa resolution=merge-duplicates, um
+    // sobrescreve o outro em silêncio, sem erro nenhum. É o item 9 da Onda 2,
+    // que passou perto desta linha sem cobri-la.
+    const id = this.gerarIdUnico();
     const numero_protocolo = this.getNextSequenceNumber('ocorrencias_rota', 'numero_protocolo', 'ROT-2026-', 3);
     const statusVeic = rotaData.status_veiculo || 'Aguardando Manutenção';
     const isEmRota = statusVeic === 'Em Rota';
@@ -1254,7 +1327,7 @@ class Store {
       motorista_id: parseInt(rotaData.motorista_id) || null,
       motorista_nome: rotaData.motorista_nome || '',
       rota_nome: rotaData.rota_nome || '',
-      tipo_ocorrencia: rotaData.tipo_ocorrencia || 'MECANICA',
+      tipo_ocorrencia: this._tipoOcorrenciaDoMotivo(rotaData.tipo_ocorrencia || rotaData.motivo_resumido || 'MECANICA'),
       motivo_resumido: rotaData.motivo_resumido || rotaData.tipo_ocorrencia || 'AVARIA MECÂNICA',
       localizacao: (rotaData.localizacao || '').trim(),
       descricao: rotaData.descricao || '',
@@ -1304,7 +1377,7 @@ class Store {
       if (updateData.motorista_id !== undefined) r.motorista_id = parseInt(updateData.motorista_id) || r.motorista_id;
       if (updateData.motorista_nome !== undefined) r.motorista_nome = updateData.motorista_nome;
       if (updateData.rota_nome !== undefined) r.rota_nome = updateData.rota_nome;
-      if (updateData.tipo_ocorrencia !== undefined) r.tipo_ocorrencia = updateData.tipo_ocorrencia;
+      if (updateData.tipo_ocorrencia !== undefined) r.tipo_ocorrencia = this._tipoOcorrenciaDoMotivo(updateData.tipo_ocorrencia);
       if (updateData.motivo_resumido !== undefined) r.motivo_resumido = updateData.motivo_resumido;
       if (updateData.descricao !== undefined) r.descricao = updateData.descricao;
       if (updateData.midia_fotos !== undefined && Array.isArray(updateData.midia_fotos)) r.midia_fotos = updateData.midia_fotos;

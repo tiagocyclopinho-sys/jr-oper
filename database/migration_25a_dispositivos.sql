@@ -63,8 +63,42 @@ ALTER TABLE dispositivos ADD COLUMN IF NOT EXISTS criado_em           TIMESTAMPT
 ALTER TABLE dispositivos DISABLE ROW LEVEL SECURITY;
 
 -- =================================================================
+-- PASSO 2 — RODE ESTE BLOCO SOZINHO, EM UMA SEGUNDA EXECUÇÃO
+--
+-- Achado de 22/08/2026, na primeira execução real: mesmo com o
+-- "DISABLE ROW LEVEL SECURITY" acima no mesmo script, a tabela ficou com
+-- RLS LIGADO. O app então lia a tabela normalmente (GET 200, lista vazia)
+-- e era recusado ao gravar (POST 401) — que é exatamente como o Postgres
+-- se comporta com RLS ligado e nenhuma política: o SELECT não dá erro,
+-- devolve zero linha em silêncio; só o INSERT reclama.
+--
+-- Por isso o desligamento virou passo separado: rodar depois que a criação
+-- da tabela já foi confirmada, em execução própria.
+--
+-- Seguro rodar quantas vezes quiser.
+-- =================================================================
+
+ALTER TABLE public.dispositivos DISABLE ROW LEVEL SECURITY;
+
+GRANT SELECT, INSERT, UPDATE ON TABLE public.dispositivos TO anon, authenticated, service_role;
+
+-- Faz o PostgREST reler o schema na hora, em vez de esperar o cache virar.
+NOTIFY pgrst, 'reload schema';
+
+-- =================================================================
 -- CONFERÊNCIA — rode logo depois; tem que devolver 1
 -- =================================================================
+-- Esta é a que responde se o PASSO 2 pegou. "rls_ligado" tem que ser false:
+-- SELECT tablename, rowsecurity AS rls_ligado
+--   FROM pg_tables
+--  WHERE schemaname = 'public' AND tablename = 'dispositivos';
+--
+-- E esta mostra quem pode escrever — 'anon' precisa aparecer com INSERT:
+-- SELECT grantee, privilege_type
+--   FROM information_schema.role_table_grants
+--  WHERE table_name = 'dispositivos'
+--  ORDER BY grantee, privilege_type;
+--
 -- SELECT count(*) AS tabela_dispositivos
 --   FROM information_schema.tables
 --  WHERE table_name = 'dispositivos';

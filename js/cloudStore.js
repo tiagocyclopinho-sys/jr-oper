@@ -1437,7 +1437,7 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.8.0";
+CloudStore.BUILD = "sync-4.8.1";
 
 // Tamanho do bloco de leitura paginada (item 4). Deliberadamente ABAIXO do
 // corte padrão de 1.000 linhas do PostgREST: assim um bloco cheio sempre

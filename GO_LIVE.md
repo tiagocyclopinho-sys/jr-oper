@@ -645,8 +645,14 @@ por quê:**
   `controle_viagens` cujo `data_saida` não seja data (aceita ISO, dd/mm/aaaa,
   vazio e nulo — viagem lançada e ainda não saída é caso legítimo). O resto do
   lote sobe normalmente. A contagem de recusas aparece em
-  `jrDiagnosticoSync()`: **é ela que identifica, sem inventário manual, o
-  aparelho que carregava os 247 fantasmas.**
+  `jrDiagnosticoSync()` e na coluna RECUSADOS da tela de Aparelhos.
+  **Correção de 22/08, depois de rodar de verdade:** este texto dizia que a
+  contagem identificaria o aparelho de origem dos 247 fantasmas. Não
+  identifica — a contagem varre o cache local, e o cache local recebe os
+  fantasmas da própria nuvem no pull, então todo aparelho sincronizado
+  mostra o mesmo número. Ver o quadro na ETAPA 3. O valor real dela é outro
+  e permanece: depois da ETAPA 1 ela tem que ficar em zero, e qualquer
+  aparelho que volte a marcar acima de zero denuncia recontaminação.
 
 ### Onda 2 — fechar as portas do fantasma
 
@@ -747,10 +753,32 @@ SQL está pronto em
 [database/migration_25a_dispositivos.sql](database/migration_25a_dispositivos.sql)
 — é só abrir o arquivo, copiar tudo e colar.
 
-Depois de rodar, abra **Governança & Lixeira → Aparelhos** em um PC. A máquina
-em que você está tem que aparecer na lista em até 30 segundos. Se aparecer,
-a ETAPA 2b está feita — e a ETAPA 3 vira conferência de tela em vez de
-caminhada.
+**Rode em DUAS execuções, não em uma.** O arquivo agora tem um *PASSO 2*
+separado no fim. Motivo, descoberto na primeira execução real em 22/08: a
+tabela foi criada, mas ficou com **RLS ligado** mesmo com o
+`DISABLE ROW LEVEL SECURITY` no mesmo script. Rode o arquivo, confirme que a
+tabela existe, e só então rode o PASSO 2 sozinho.
+
+> **Como esse erro se parece, para reconhecer se voltar.** O app **lê** a
+> tabela sem reclamar e **falha ao gravar**:
+>
+> ```
+> POST .../rest/v1/dispositivos 401 (Unauthorized)
+> [CloudStore] Não foi possível registrar este aparelho (HTTP 401).
+> ```
+>
+> …e a tela de Aparelhos mostra *"Nenhum aparelho registrado ainda"* — e
+> **não** a tarja âmbar de "a tabela ainda não existe". Essa combinação é a
+> assinatura do RLS ligado sem política: sob RLS, o `SELECT` sem política
+> não dá erro, devolve zero linha em silêncio; só o `INSERT` reclama. Se
+> fosse tabela inexistente, o erro seria **404** e a tela mostraria a tarja
+> âmbar. **401 + lista vazia = permissão. 404 + tarja âmbar = tabela.**
+
+Depois de rodar, abra **Governança & Lixeira → Aparelhos** em um PC e clique
+em **↻ Atualizar**. A máquina em que você está tem que aparecer na lista em
+até 30 segundos, com `registros_recusados: 247` na ficha — é a confirmação
+de que a tela lê o que a guarda mede. Se aparecer, a ETAPA 2b está feita — e
+a ETAPA 3 vira conferência de tela em vez de caminhada.
 
 **Como conferir cada aparelho, PC e celular, passo a passo:**
 [CONFERIR_APARELHO.md](CONFERIR_APARELHO.md).
@@ -767,6 +795,64 @@ caminhada.
 > O **PASSO E** (inventário de aparelhos) é feito aqui, no dia, junto com a
 > limpeza — e não antes, como estava previsto. É também aqui que se descobre
 > qual aparelho carregava os 247 fantasmas.
+
+> **Achado de 22/08, logo depois do deploy — e a correção de uma premissa
+> errada do plano.** O primeiro `jrDiagnosticoSync()` na 4.8.0 devolveu
+> `247 registros de controle_viagens recusados`, o número exato da ETAPA 0.
+> A leitura inicial foi "achamos o aparelho culpado". **Está errada, e é
+> importante desfazer antes que alguém cace um culpado que não dá para
+> achar.**
+>
+> A contagem vem de `_auditarCacheLocal()`
+> ([cloudStore.js:718](js/cloudStore.js:718)), que varre `jr_controle_viagens`
+> no navegador. Só que os 247 estão **na nuvem** desde 20/08, e o pull grava
+> as linhas da nuvem nessa mesma chave
+> ([cloudStore.js:1265](js/cloudStore.js:1265)), sem filtrar fantasma. Logo:
+> **todo aparelho na 4.8.0 que sincronizar vai mostrar 247**, não por ser a
+> origem, mas por ter baixado o que está no banco. O número bater com a
+> ETAPA 0 não é impressão digital — é a mesma linha contada de dois lugares.
+>
+> Essa premissa já estava furada quando foi escrita: a partir do momento em
+> que os fantasmas chegaram à nuvem, deixou de existir sinal que separasse o
+> aparelho de origem dos demais. O único vestígio que sobra é indireto — os
+> ids são pequenos e sequenciais (42218 a 42222), nada parecido com o
+> `Date.now()` da build atual, o que confirma **origem em build antiga**,
+> mas não *qual* aparelho.
+>
+> **E não faz falta.** Achar o culpado nunca foi condição para nada: o que a
+> limpeza exige é que **nenhum** aparelho consiga reenviar fantasma, e isso
+> se resolve colocando todos na 4.8.0, que é o que esta etapa faz de
+> qualquer jeito. Identificar a origem economizaria trabalho; não
+> identificar não custa nada.
+>
+> **O que a coluna RECUSADOS realmente vale, e é bastante:** depois da
+> ETAPA 1, ela tem que ir a **zero em todos os aparelhos**. Se voltar a
+> subir em algum, é porque fantasma voltou para a nuvem — e só um aparelho
+> fora da 4.8.0 consegue fazer isso. Ela não é caça-culpado; é **detector
+> permanente de recontaminação**, que é o que o plano precisava desde o
+> começo.
+>
+> **Não espere o aviso sumir depois de limpar o cache — e isso está certo.**
+> Os 247 continuam **na nuvem** (é a ETAPA 1 que os apaga). Limpar o cache
+> deste PC não os elimina: o pull seguinte baixa os mesmos 247 de volta, e a
+> auditoria de cache volta a contar 247. O aviso só se cala depois da
+> `migration_25`. Conferido no código: a leitura não filtra fantasma
+> (`_mesclarPorRegistro` aceita o que a nuvem manda) e a janela operacional
+> não poda, porque o `criado_em` deles é 20/08 — recente.
+>
+> **E, depois da ETAPA 1, o cache se limpa sozinho.** Os 247 estão no mapa de
+> hashes como "confirmados pela nuvem"; quando a nuvem parar de devolvê-los,
+> a mesclagem os descarta como exclusão alheia, em vez de ressuscitá-los.
+> Ninguém precisa voltar aqui para limpar de novo.
+>
+> **O que isso muda no propósito desta etapa.** A justificativa original era
+> "esvaziar a fonte antes de limpar o destino". Com a guarda de pé, nenhum
+> aparelho **na 4.8.0** consegue reenviar fantasma — o cache sujo virou
+> inofensivo. O que continua valendo, e é o motivo real desta etapa: um
+> aparelho que **ainda não subiu para a 4.8.0** não tem guarda nenhuma, e
+> segue reenviando fantasma, reinjetando a planilha a cada 30s e
+> sobrescrevendo tabela inteira. A ETAPA 3 é sobre **colocar todo mundo na
+> 4.8.0**, não sobre o cache em si.
 
 Este passo existe uma última vez: os aparelhos ainda estão na build antiga, que
 **não conhece** a auto-atualização. A partir da próxima entrega, ele deixa de
