@@ -5910,6 +5910,18 @@ async function handleSacAberturaSubmit(e) {
 
   uploadedFotosBase64 = [];
   uploadedVideosBase64 = [];
+
+  // Mesmo problema do cadastro de usuário e do import de escala (achados de
+  // 20/08/2026): o alert() logo abaixo bloqueia a aba até o usuário tocar
+  // OK, e o envio pra nuvem programado pelo save() (debounce de 1.5s) fica
+  // preso atrás desse bloqueio. Faltava aqui — achado de 21/08/2026,
+  // testando de verdade com dois aparelhos: a devolução ficava só no
+  // aparelho que criou, sem erro nenhum. Dispara o envio já, antes do
+  // alert(), pra requisição já estar em voo.
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    window.cloudStore.syncLocalToCloud().catch(() => {});
+  }
+
   alert(`✅ Ocorrência registrada!\nProtocolo: ${dev.numero_protocolo}`);
   switchTab('dashboard');
 }
@@ -13091,6 +13103,13 @@ async function handleNovaRotaSubmit(e) {
   uploadedRotaFotos = [];
   uploadedRotaVideos = [];
   closeModal();
+
+  // Mesmo problema do handleSacAberturaSubmit (ver comentário lá) — o
+  // alert() abaixo bloqueia o envio pendente de 1.5s.
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    window.cloudStore.syncLocalToCloud().catch(() => {});
+  }
+
   alert('✅ Ocorrência de frota em rota registrada com sucesso!');
   renderApp();
 }

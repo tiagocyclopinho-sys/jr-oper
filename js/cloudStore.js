@@ -581,6 +581,35 @@ class CloudStore {
 
 window.cloudStore = new CloudStore();
 
+// Achado de 21/08/2026, testando de verdade com dois aparelhos: o padrão
+// "salva local -> alert() de sucesso -> usuário toca OK" existe em mais de
+// 20 telas diferentes do app (Devolução SAC, Frota, cadastros de
+// motorista/veículo/cliente/carga, reentregas, trocas de veículo, resumo
+// diário do CD...). Em TODAS elas, o envio pra nuvem programado pelo
+// debounce de 1.5s do save() (ver _scheduleCloudSync em store.js) fica
+// preso atrás do alert() — window.alert() trava a aba inteira, inclusive
+// timers pendentes, até o usuário tocar OK. Só 3 telas tinham sido
+// corrigidas uma a uma (import de escala, cadastro de usuário, Devolução
+// SAC) antes de perceber que era o MESMO bug em todo lugar que usa
+// alert() depois de salvar. Em vez de caçar e corrigir cada uma das
+// dezenas de telas individualmente (frágil — uma nova tela que apareça
+// no futuro cai na mesma armadilha), intercepta window.alert() uma única
+// vez aqui: sempre que qualquer alert() for chamado, dispara agora
+// (antes de bloquear) o envio de qualquer gravação pendente. Não troca o
+// texto nem o comportamento do alert() em si — só garante que a
+// requisição já esteja em voo antes da tela travar.
+(function interceptarAlertParaFlushDoSync() {
+  const alertOriginal = window.alert.bind(window);
+  window.alert = function(...args) {
+    try {
+      if (window.cloudStore && window.cloudStore.isConfigured()) {
+        window.cloudStore.syncLocalToCloud().catch(() => {});
+      }
+    } catch(e) {}
+    return alertOriginal(...args);
+  };
+})();
+
 // Inicia sincronização automática se já estiver configurado
 if (window.cloudStore.isConfigured()) {
   document.addEventListener('DOMContentLoaded', () => {
