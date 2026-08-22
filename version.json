@@ -1,0 +1,5 @@
+{
+  "build": "sync-4.8.0",
+  "publicado_em": "2026-08-22",
+  "resumo": "Ondas 1+2 — sincronizacao do Transporte: paginacao por cursor, envio so do que mudou, mesclagem por registro, exclusao duravel, janela operacional, alarme de cota, guarda na escrita, fim da reinjecao da planilha, id por aparelho, dedup por carga, auto-atualizacao e registro de aparelhos."
+}

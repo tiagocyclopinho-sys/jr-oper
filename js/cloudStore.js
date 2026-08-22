@@ -18,6 +18,10 @@ class CloudStore {
     // (b) mostrar o problema na tela em vez de escondê-lo no console.
     this._tabelasPendentesDeEnvio = new Set();
     this._ultimoErroSync = null;
+    // Preenchido pela guarda na escrita (item 7): quantos registros de
+    // cache contaminado este aparelho tentou empurrar. Zero em aparelho
+    // limpo — qualquer número aqui identifica a máquina da ETAPA 3.
+    this._bloqueadosNaEscrita = null;
   }
 
   // ---------------------------------------------------------------
@@ -58,7 +62,10 @@ class CloudStore {
       configurado: this.isConfigured(),
       status: this._connectionStatus,
       tabelasComPendencia: [...this._tabelasPendentesDeEnvio],
-      ultimoErro: this._ultimoErroSync
+      ultimoErro: this._ultimoErroSync,
+      // Item 7 (22/08/2026): registros recusados no envio por terem estado
+      // de checklist no lugar da data de saída. Ver _aplicarGuardaDeEscrita.
+      bloqueadosNaEscrita: this._bloqueadosNaEscrita
     };
   }
 
@@ -208,10 +215,92 @@ class CloudStore {
   }
 
   // ---------------------------------------------------------------
-  // LEITURA COMPLETA DE UMA TABELA (GET)
+  // LEITURA COMPLETA DE UMA TABELA (GET) — PAGINADA POR CURSOR EM id
+  //
+  // Onda 1, item 4 (ETAPA 2, 22/08/2026) — fecha o Teto 1.
+  //
+  // A leitura montava `select=*` sem `limit` e sem header `Range`. O
+  // PostgREST corta a resposta em 1.000 linhas por padrão e não avisa: ela
+  // chega com HTTP 200 e cara de completa. A ~400 viagens/mês,
+  // controle_viagens bate nisso em cerca de dois meses e meio — e aí o
+  // estrago não é "ver menos": o pull grava a lista truncada por cima do
+  // cache local e o push seguinte devolve essa lista truncada para a nuvem.
+  //
+  // Cursor em `id`, e não em `criado_em`: a ETAPA 0 mediu 24 linhas com
+  // `criado_em` nulo em controle_viagens, e linha com cursor nulo nunca
+  // entra em `id > último_lido` — some da leitura para sempre. `id` é
+  // PRIMARY KEY: nunca nulo, sem empate, e a ordem se mantém estável de um
+  // bloco para o seguinte, o que OFFSET não garante se alguém inserir no
+  // meio da leitura.
   // ---------------------------------------------------------------
   async getAll(tableName, filters = '') {
     if (!this.isConfigured()) return null;
+
+    // Se quem chamou já pediu ordem/limite próprios, a leitura é dele:
+    // paginar por cima mudaria o resultado que ele pediu.
+    if (/(^|&)(order|limit|offset)=/.test(filters)) {
+      return this._getPagina(tableName, filters);
+    }
+
+    const PAGINA = CloudStore.PAGINA_LEITURA;
+    const tudo = [];
+    let cursor = null;
+    let completou = false;
+
+    // 200 blocos = 100.000 linhas. Chegar lá é defeito (cursor que não
+    // anda), não volume real — a trava existe para não virar laço infinito.
+    for (let bloco = 0; bloco < 200; bloco++) {
+      const partes = [];
+      if (filters) partes.push(filters);
+      partes.push('order=id.asc');
+      partes.push(`limit=${PAGINA}`);
+      if (cursor !== null) partes.push(`id=gt.${encodeURIComponent(cursor)}`);
+
+      const pagina = await this._getPagina(tableName, partes.join('&'));
+
+      if (pagina === null) {
+        // Falhou logo no primeiro bloco: pode ser tabela sem coluna `id`
+        // (aí o `order=id.asc` volta 400). Recua para a leitura antiga, sem
+        // paginação, em vez de deixar a tabela sem sincronizar.
+        if (bloco === 0) return this._getPagina(tableName, filters);
+        // Falhou no meio: devolver o pedaço já lido é pior do que não
+        // devolver nada — o pull trataria o parcial como verdade e
+        // truncaria o cache local, que é exatamente o Teto 1 que este item
+        // veio fechar.
+        console.warn(`[CloudStore] Leitura de ${tableName} interrompida no bloco ${bloco + 1} — descartando o resultado parcial para não truncar o cache local.`);
+        return null;
+      }
+
+      tudo.push(...pagina);
+
+      // Bloco incompleto = acabou. PAGINA é 500 de propósito, abaixo do
+      // corte de 1.000 do servidor: assim um bloco cheio significa sempre
+      // "pode haver mais", nunca "o servidor cortou aqui".
+      if (pagina.length < PAGINA) { completou = true; break; }
+
+      const proximo = pagina[pagina.length - 1] ? pagina[pagina.length - 1].id : null;
+      if (proximo === null || proximo === undefined || String(proximo) === String(cursor)) {
+        console.warn(`[CloudStore] Leitura de ${tableName}: o cursor não avançou no bloco ${bloco + 1} — descartando o resultado parcial.`);
+        return null;
+      }
+      cursor = proximo;
+    }
+
+    if (!completou) {
+      console.warn(`[CloudStore] Leitura de ${tableName} atingiu a trava de 200 blocos — descartando o resultado parcial.`);
+      return null;
+    }
+
+    if (tudo.length > PAGINA) {
+      console.log(`[CloudStore] ${tableName}: ${tudo.length} linhas lidas em blocos de ${PAGINA}.`);
+    }
+    return tudo;
+  }
+
+  // Uma requisição só. É o corpo do getAll() antigo, isolado para servir de
+  // tijolo da paginação acima e de caminho de recuo quando ela não se
+  // aplica.
+  async _getPagina(tableName, filters = '') {
     try {
       const url = `${this.config.url}/rest/v1/${tableName}?select=*${filters ? '&' + filters : ''}`;
       const response = await fetch(url, { headers: this._headers() });
@@ -234,6 +323,28 @@ class CloudStore {
     if (!records || (Array.isArray(records) && records.length === 0)) return true;
 
     let data = Array.isArray(records) ? records : [records];
+
+    // -------------------------------------------------------------
+    // GUARDA NA ESCRITA (decisão 7 de 22/08/2026) — Onda 1, item 7
+    //
+    // A ETAPA 0 achou 247 das 331 linhas de controle_viagens com ESTADO DE
+    // CHECKLIST gravado no campo de data de saída: `data_saida` em
+    // ('INICIADO','NÃO INICIADO') junto com `status_viagem = 'FIN. NORMAL'`.
+    // Nesta build esses dois valores são legítimos — mas de OUTROS campos:
+    // fusion, checklist_saida e checklist_chegada (app.js:9265). É
+    // assinatura de uma build antiga gravando com o mapeamento de coluna
+    // trocado. `data_saida` é VARCHAR(20) no banco, então o Postgres aceita
+    // calado, e os dois vocabulários nunca se misturaram em 331 linhas.
+    //
+    // A guarda fica no envio, e não na tela: o problema não é o que este
+    // aparelho digita hoje, é o que ele ainda tem em cache de antes. E como
+    // o envio usa `resolution=merge-duplicates`, um único aparelho nessas
+    // condições desfaz a limpeza do banco no primeiro ciclo de 30s. É esta
+    // guarda que torna a `migration_25` definitiva sem depender de todo
+    // aparelho ter passado pela limpeza da ETAPA 3.
+    // -------------------------------------------------------------
+    data = this._aplicarGuardaDeEscrita(tableName, data);
+    if (data.length === 0) return true;
 
     // O PostgREST exige que, num envio em lote, todos os objetos do array
     // tenham exatamente as mesmas chaves — registros mais antigos (ex: os
@@ -284,6 +395,432 @@ class CloudStore {
     }
   }
 
+  // Guarda na escrita — decisão 7 de 22/08/2026 (Onda 1, item 7).
+  // Ver o comentário longo dentro de upsert(), onde ela é chamada.
+  //
+  // Recusa é local e silenciosa para o operador de propósito: o registro
+  // recusado é lixo de uma build antiga, não trabalho de alguém. Quem
+  // precisa saber é quem estiver fazendo a ETAPA 3 — por isso a contagem
+  // aparece em jrDiagnosticoSync(), e é ela que identifica o aparelho que
+  // carregava os 247 fantasmas, sem precisar sair andando pela empresa.
+  _aplicarGuardaDeEscrita(tableName, registros) {
+    if (tableName !== 'controle_viagens') return registros;
+
+    const aprovados = [];
+    const recusados = [];
+    for (const r of registros) {
+      if (r && !this._dataSaidaEhValida(r.data_saida)) recusados.push(r);
+      else aprovados.push(r);
+    }
+
+    if (recusados.length > 0) {
+      const amostra = recusados.slice(0, 5).map(r => `${r.carga || r.id}: data_saida="${r.data_saida}"`);
+      // O diagnóstico em si é preenchido por _auditarCacheLocal(), que varre
+      // o cache inteiro a cada ciclo — aqui só reforçamos com o que
+      // realmente tentou passar, para o caso de a auditoria não ter rodado.
+      if (!this._bloqueadosNaEscrita || this._bloqueadosNaEscrita.total < recusados.length) {
+        this._bloqueadosNaEscrita = {
+          tabela: tableName,
+          total: recusados.length,
+          exemplos: amostra,
+          quando: new Date().toISOString()
+        };
+      }
+      console.warn(
+        `[CloudStore] GUARDA NA ESCRITA: ${recusados.length} de ${registros.length} registros de ${tableName} recusados — ` +
+        `"data_saida" não é data. Este aparelho tem cache de uma build antiga (fantasmas da ETAPA 0). ` +
+        (aprovados.length > 0 ? `Os outros ${aprovados.length} seguiram normalmente. ` : 'Nada deste lote foi enviado. ') +
+        `Amostra: ${amostra.join(' | ')}`
+      );
+    }
+    return aprovados;
+  }
+
+  // Os dois formatos que esta build grava em data_saida: ISO (input
+  // type=date das telas de viagem e store.js) e dd/mm/aaaa (importação da
+  // escala, via normalizarDataImportacao). Vazio e nulo passam: é viagem
+  // lançada que ainda não saiu, e barrar isso travaria operação de verdade.
+  _dataSaidaEhValida(valor) {
+    if (valor === null || valor === undefined) return true;
+    const s = String(valor).trim();
+    if (s === '') return true;
+    return /^\d{4}-\d{2}-\d{2}([T ].*)?$/.test(s) || /^\d{2}\/\d{2}\/\d{4}$/.test(s);
+  }
+
+  // =================================================================
+  // O QUE MUDOU NESTE APARELHO — Onda 1, itens 1, 2 e 3 (22/08/2026)
+  //
+  // O defeito que isto fecha é o maior dos sete da ETAPA 0: QUALQUER
+  // gravação, em QUALQUER tela, reenviava as 25 tabelas inteiras a partir
+  // do cache local, e a leitura substituía a coleção inteira pela da nuvem.
+  // Resultado prático: a edição de um aparelho apagava a do outro sem
+  // aviso, e um aparelho com cache velho desfazia exclusão e ressuscitava
+  // registro só por existir.
+  //
+  // COMO FUNCIONA: guardamos, por registro, uma assinatura curta (hash) do
+  // estado que a nuvem confirmou — na leitura, o que veio de lá; no envio,
+  // o que subiu com sucesso. A partir daí:
+  //
+  //   registro com hash igual  -> a nuvem já tem esta versão. Não sobe, e
+  //                               na leitura a nuvem manda.
+  //   registro com hash difere -> foi mexido AQUI e ainda não subiu. Sobe,
+  //                               e na leitura o local é preservado.
+  //
+  // POR QUE NÃO USAMOS `atualizado_em` PARA DECIDIR, como o plano previa:
+  // (a) a coluna só nasce na migration_25, que roda por último — item 2
+  //     ficaria bloqueado por uma etapa posterior;
+  // (b) comparar carimbo de tempo entre aparelhos exige que os relógios
+  //     deles concordem, e celular com hora errada é comum. O hash não
+  //     depende de relógio nenhum.
+  //
+  // REGRA DE DESEMPATE, dita em voz alta: quando os dois lados mudaram,
+  // **o local vence** — porque o local é trabalho que ainda não subiu, e
+  // descartá-lo em silêncio é exatamente o erro que este projeto já
+  // cometeu vezes demais. O que a nuvem tem já está salvo em algum lugar;
+  // o que está só aqui, não.
+  // =================================================================
+
+  // JSON com as chaves sempre na mesma ordem — sem isso, o mesmo registro
+  // gera assinaturas diferentes só porque o navegador devolveu as
+  // propriedades em outra ordem.
+  _jsonEstavel(valor) {
+    if (valor === null || typeof valor !== 'object') return JSON.stringify(valor);
+    if (Array.isArray(valor)) return '[' + valor.map(v => this._jsonEstavel(v)).join(',') + ']';
+    const chaves = Object.keys(valor).sort();
+    return '{' + chaves.map(k => JSON.stringify(k) + ':' + this._jsonEstavel(valor[k])).join(',') + '}';
+  }
+
+  // FNV-1a de 32 bits. Não é criptografia — é só um jeito barato de dizer
+  // "este registro está diferente do que estava", em ~7 caracteres em vez
+  // de guardar o registro inteiro duas vezes.
+  _hashRegistro(rec) {
+    const s = this._jsonEstavel(rec);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h.toString(36);
+  }
+
+  _lerMapaSync() {
+    if (this._mapaSync) return this._mapaSync;
+    try {
+      this._mapaSync = JSON.parse(localStorage.getItem('jr_sync_hashes') || '{}');
+    } catch(e) {
+      this._mapaSync = {};
+    }
+    return this._mapaSync;
+  }
+
+  // Se a gravação do mapa falhar (cota estourada), o aparelho volta sozinho
+  // ao comportamento antigo — tudo parece mudado e tudo é reenviado. Perde
+  // eficiência, não perde dado. Por isso o erro é aviso, não exceção.
+  _gravarMapaSync() {
+    try {
+      localStorage.setItem('jr_sync_hashes', JSON.stringify(this._mapaSync || {}));
+    } catch(e) {
+      console.warn('[CloudStore] Não foi possível gravar o mapa de sincronização (o envio volta a mandar tudo):', e.message);
+    }
+  }
+
+  // Item 1 — separa, de uma coleção local, só o que mudou desde a última
+  // confirmação da nuvem.
+  _separarOQueMudou(tableName, registros) {
+    const mapa = this._lerMapaSync();
+    const conhecidos = mapa[tableName];
+    // Sem mapa ainda (primeira execução desta build, ou cota estourada):
+    // manda tudo, como antes. A partir do primeiro ciclo o mapa existe.
+    if (!conhecidos) return registros.slice();
+
+    const mudados = [];
+    for (const r of registros) {
+      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+      if (id === null) { mudados.push(r); continue; }   // sem id, não dá para saber: manda
+      if (conhecidos[id] !== this._hashRegistro(r)) mudados.push(r);
+    }
+    return mudados;
+  }
+
+  _confirmarEnvio(tableName, enviados) {
+    const mapa = this._lerMapaSync();
+    if (!mapa[tableName]) mapa[tableName] = {};
+    for (const r of enviados) {
+      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+      if (id !== null) mapa[tableName][id] = this._hashRegistro(r);
+    }
+    this._mapaSync = mapa;
+    this._gravarMapaSync();
+  }
+
+  // Item 2 — mesclagem por registro, no lugar de "a nuvem substitui a
+  // coleção inteira". Também é aqui que a exclusão vira durável (item 3):
+  // um registro que este aparelho não mexeu nunca sobrescreve o que veio de
+  // lá — nem para desfazer um is_deleted, nem para ressuscitar linha que
+  // sumiu da nuvem.
+  _mesclarPorRegistro(tableName, localRaw, cloudData) {
+    let locais = [];
+    try {
+      const p = localRaw ? JSON.parse(localRaw) : [];
+      locais = Array.isArray(p) ? p : Object.values(p);
+    } catch(e) { locais = []; }
+
+    const mapa = this._lerMapaSync();
+    const conhecidos = mapa[tableName];
+    const primeiraVez = !conhecidos;
+
+    const porId = new Map();
+    for (const r of locais) {
+      if (r && r.id !== undefined && r.id !== null) porId.set(String(r.id), r);
+    }
+
+    const resultado = [];
+    const novosHashes = {};
+    const idsNaNuvem = new Set();
+    // Registros que a janela operacional (item 5) não pode podar de jeito
+    // nenhum: os que ainda não subiram. Idade não importa se o dado só
+    // existe aqui.
+    const idsSeguros = new Set();
+    let preservados = 0, descartados = 0;
+
+    for (const nuvem of cloudData) {
+      const id = (nuvem && nuvem.id !== undefined && nuvem.id !== null) ? String(nuvem.id) : null;
+      if (id === null) { resultado.push(nuvem); continue; }
+      idsNaNuvem.add(id);
+
+      const local = porId.get(id);
+      if (!local) {
+        resultado.push(nuvem);
+        novosHashes[id] = this._hashRegistro(nuvem);
+        continue;
+      }
+
+      // "Sujo" = mexido aqui e ainda não confirmado pela nuvem. Na primeira
+      // execução não há como saber, e aí a nuvem manda: é o que impede um
+      // aparelho parado desde 20/08 de despejar o cache antigo por cima do
+      // que os outros já corrigiram.
+      const sujo = !primeiraVez
+        && conhecidos[id] !== undefined
+        && this._hashRegistro(local) !== conhecidos[id];
+
+      if (sujo) {
+        resultado.push(local);
+        novosHashes[id] = conhecidos[id];   // segue pendente até subir
+        idsSeguros.add(id);
+        preservados++;
+      } else {
+        resultado.push(nuvem);
+        novosHashes[id] = this._hashRegistro(nuvem);
+      }
+    }
+
+    // Registros que existem só aqui.
+    for (const [id, local] of porId) {
+      if (idsNaNuvem.has(id)) continue;
+      if (!primeiraVez && conhecidos[id] !== undefined) {
+        // A nuvem já confirmou este registro alguma vez e agora ele não
+        // está mais lá: foi apagado de verdade (Reset Global). Ressuscitar
+        // seria desfazer a exclusão de outra pessoa.
+        descartados++;
+        continue;
+      }
+      // Nunca subiu: é trabalho local pendente. Fica, e sobe no push.
+      resultado.push(local);
+      idsSeguros.add(id);
+    }
+
+    if (preservados > 0 || descartados > 0) {
+      console.log(`[CloudStore] ${tableName}: ${preservados} registro(s) local(is) preservado(s) por terem mudança não enviada; ${descartados} descartado(s) por terem sido apagados na nuvem.`);
+    }
+
+    const final = this._aplicarJanelaOperacional(tableName, resultado, novosHashes, idsSeguros);
+
+    mapa[tableName] = novosHashes;   // ids que sumiram dos dois lados saem do mapa
+    this._mapaSync = mapa;
+    this._gravarMapaSync();
+    return final;
+  }
+
+  // =================================================================
+  // JANELA OPERACIONAL — Onda 1, item 5 (22/08/2026)
+  //
+  // Teto 2: o catálogo estático já ocupa 2,9 MB de uma cota de ~5 MB, e
+  // viagem custa ~505 bytes. A 400 por mês são ~2,3 MB por ano só de
+  // viagem — o aparelho estoura e o save() falha (agora com alarme, item
+  // 6, mas falha). O histórico inteiro não precisa morar no celular: ele
+  // está na nuvem e no Power BI. Aqui fica a operação.
+  //
+  // O QUE NUNCA É PODADO, em nenhuma hipótese:
+  //   - registro que ainda não subiu para a nuvem (idsSeguros);
+  //   - registro sem data legível — na dúvida, guarda.
+  // Podar é apagar cópia, nunca original.
+  //
+  // ARMADILHA PARA QUEM MEXER DEPOIS: **não** transforme isto em filtro na
+  // leitura da nuvem (`id=gt.X` no getAll). A mesclagem trata "registro que
+  // eu conheço e não veio da nuvem" como registro apagado lá — um pull
+  // filtrado por data faria toda a base antiga parecer excluída. A poda é
+  // local, depois da mesclagem, de propósito.
+  // =================================================================
+  _aplicarJanelaOperacional(tableName, registros, hashes, idsSeguros) {
+    const dias = CloudStore.JANELA_OPERACIONAL_DIAS[tableName];
+    if (!dias) return registros;
+
+    const corte = Date.now() - (dias * 24 * 60 * 60 * 1000);
+    const mantidos = [];
+    let podados = 0;
+
+    for (const r of registros) {
+      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+      if (id === null || idsSeguros.has(id)) { mantidos.push(r); continue; }
+
+      const quando = this._momentoDoRegistro(r);
+      if (quando === null || quando >= corte) { mantidos.push(r); continue; }
+
+      delete hashes[id];   // sai do mapa junto, senão ele cresce sem parar
+      podados++;
+    }
+
+    if (podados > 0) {
+      console.log(`[CloudStore] ${tableName}: ${podados} registro(s) fora da janela de ${dias} dias saíram do aparelho (continuam na nuvem e no Power BI).`);
+    }
+    return mantidos;
+  }
+
+  // Quando o registro nasceu, em milissegundos. Ordem de preferência:
+  //
+  // 1. `criado_em`, quando existe e é legível. A ETAPA 0 achou 24 linhas
+  //    com ele nulo em controle_viagens — por isso não dá para depender só
+  //    dele (o conserto vem na migration_25, que roda depois disto).
+  // 2. o próprio `id`, que é relógio do aparelho. **São dois formatos**:
+  //    até 20/08/2026 o id era `Date.now()` (milissegundos, ~1,7e12); de
+  //    20/08 em diante é `gerarIdUnico()` = `Date.now() * 1000 + contador`
+  //    (~1,7e15). Confundir os dois joga o registro para o ano 57000 ou
+  //    para 1970 — e some da janela, ou nunca sai dela.
+  _momentoDoRegistro(r) {
+    if (r && r.criado_em) {
+      const t = Date.parse(r.criado_em);
+      if (!isNaN(t)) return t;
+    }
+    const id = Number(r && r.id);
+    if (!isFinite(id) || id <= 0) return null;
+    if (id > 1e14) return Math.floor(id / 1000);   // formato gerarIdUnico()
+    if (id > 1e11) return id;                       // formato Date.now() antigo
+    return null;                                    // id pequeno: não é relógio
+  }
+
+  // Varre o cache local em busca da impressão digital do fantasma,
+  // independentemente de haver algo a enviar naquele ciclo. Sem isto, o
+  // contador do diagnóstico só apareceria enquanto houvesse registro sujo
+  // para empurrar — e um aparelho contaminado que já tivesse sido marcado
+  // como "em dia" mostraria `null`, escondendo justamente o que a ETAPA 3
+  // precisa achar. Ver CONFERIR_APARELHO.md.
+  _auditarCacheLocal() {
+    let viagens = null;
+    try {
+      const bruto = localStorage.getItem('jr_controle_viagens');
+      if (bruto) {
+        const p = JSON.parse(bruto);
+        viagens = Array.isArray(p) ? p : Object.values(p);
+      }
+    } catch(e) { return; }
+    if (!viagens) return;
+
+    const contaminados = viagens.filter(v => v && !this._dataSaidaEhValida(v.data_saida));
+    if (contaminados.length === 0) {
+      this._bloqueadosNaEscrita = null;
+      return;
+    }
+    this._bloqueadosNaEscrita = {
+      tabela: 'controle_viagens',
+      total: contaminados.length,
+      exemplos: contaminados.slice(0, 5).map(r => `${r.carga || r.id}: data_saida="${r.data_saida}"`),
+      quando: new Date().toISOString()
+    };
+  }
+
+  // =================================================================
+  // REGISTRO DE APARELHO — Onda 2, item 12 (22/08/2026)
+  //
+  // Responde "qual máquina está em qual versão, e qual delas está com
+  // cache contaminado" sem ninguém sair andando pela empresa — e sobretudo
+  // sem depender do console, que **não existe em celular**. Cada aparelho
+  // publica a própria ficha; a tela fica em Governança → Aparelhos.
+  //
+  // NÃO usa upsert(): se a tabela ainda não existir (a ETAPA 2b roda logo
+  // depois do deploy), o upsert marcaria a tabela como pendente e acenderia
+  // o alerta vermelho de "dados não salvos" para todo mundo, por um
+  // problema que não é de dado do usuário. Aqui a falha é silenciosa de
+  // propósito — no máximo um aviso no console.
+  // =================================================================
+  _plataformaDoAparelho() {
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    const so = /Android/i.test(ua) ? 'Android'
+             : /iPhone|iPad|iPod/i.test(ua) ? 'iPhone/iPad'
+             : /Windows/i.test(ua) ? 'Windows'
+             : /Mac OS/i.test(ua) ? 'Mac'
+             : /Linux/i.test(ua) ? 'Linux' : 'Desconhecido';
+    const nav = /Edg\//.test(ua) ? 'Edge'
+              : /OPR\//.test(ua) ? 'Opera'
+              : /Chrome\//.test(ua) ? 'Chrome'
+              : /Firefox\//.test(ua) ? 'Firefox'
+              : /Safari\//.test(ua) ? 'Safari' : 'Navegador';
+    return so + ' / ' + nav;
+  }
+
+  apelidoDoAparelho() {
+    try {
+      const salvo = localStorage.getItem('jr_device_apelido');
+      if (salvo) return salvo;
+    } catch(e) {}
+    return this._plataformaDoAparelho();
+  }
+
+  nomearAparelho(apelido) {
+    const nome = String(apelido || '').trim().slice(0, 60);
+    if (!nome) return false;
+    try { localStorage.setItem('jr_device_apelido', nome); } catch(e) {}
+    this.registrarAparelho().catch(() => {});
+    return true;
+  }
+
+  async registrarAparelho() {
+    if (!this.isConfigured()) return false;
+    const ficha = {
+      id: CloudStore.idDoAparelho(),
+      apelido: this.apelidoDoAparelho(),
+      plataforma: this._plataformaDoAparelho(),
+      build: CloudStore.BUILD,
+      ultimo_usuario: (window.db && window.db.currentUser && window.db.currentUser.nome) || null,
+      ultimo_acesso: new Date().toISOString(),
+      // O número que identifica o aparelho da ETAPA 3. Zero é o esperado.
+      registros_recusados: this._bloqueadosNaEscrita ? this._bloqueadosNaEscrita.total : 0
+    };
+    try {
+      const resp = await fetch(`${this.config.url}/rest/v1/dispositivos`, {
+        method: 'POST',
+        headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+        body: JSON.stringify([ficha])
+      });
+      if (!resp.ok) {
+        // 404 = a ETAPA 2b ainda não rodou. Não é erro do usuário.
+        if (!this._avisouFaltaDispositivos) {
+          this._avisouFaltaDispositivos = true;
+          console.warn(`[CloudStore] Não foi possível registrar este aparelho (HTTP ${resp.status}). Se for 404, a tabela "dispositivos" ainda não foi criada — ver ETAPA 2b do GO_LIVE.md.`);
+        }
+        return false;
+      }
+      return true;
+    } catch(e) {
+      return false;
+    }
+  }
+
+  async listarAparelhos() {
+    const lista = await this.getAll('dispositivos');
+    if (!Array.isArray(lista)) return null;
+    return lista.sort((a, b) => String(b.ultimo_acesso || '').localeCompare(String(a.ultimo_acesso || '')));
+  }
+
   // Fase 4 (20/08/2026): motoristas.cnh e usuarios.email são UNIQUE no
   // banco. Quando dois aparelhos offline cadastram, cada um sem saber do
   // outro, o mesmo CNH/e-mail com ids diferentes, o upsert acima falha
@@ -314,6 +851,11 @@ class CloudStore {
   // problema de qualidade do dado, não de sincronização silenciosa).
   async _checkConflitoUnicidade(tableName, errBody, records) {
     const CAMPOS_UNICOS_POR_TABELA = {
+      // A migration_25 cria índice único parcial sobre controle_viagens.carga
+      // (decisão 1: uma carga, uma viagem). Sem esta linha, a colisão cairia
+      // no mesmo buraco silencioso que os números de protocolo caíam antes
+      // da Fase 5 — envio recusado, nada na aba "⚠️ Conflitos".
+      controle_viagens: 'carga',
       motoristas: 'cnh',
       usuarios: 'email',
       ocorrencias_devolucao: 'numero_protocolo',
@@ -540,6 +1082,10 @@ class CloudStore {
       { dbKey: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', tableName: 'itens_avulsos_destinacao' }
     ];
 
+    // Independe de haver algo a enviar: é o que mantém o diagnóstico do
+    // aparelho honesto para a ETAPA 3 (ver CONFERIR_APARELHO.md).
+    this._auditarCacheLocal();
+
     let fullDb = null;
     try {
       const rawFull = localStorage.getItem('jr_sac_db');
@@ -559,13 +1105,26 @@ class CloudStore {
           }
         }
         if (records && records.length > 0) {
-          await this.upsert(m.tableName, records);
+          // Item 1 (22/08/2026): antes, isto era `upsert(tabela, records)` —
+          // a tabela inteira, a cada gravação de qualquer tela. Agora sobe
+          // só o que mudou aqui desde a última confirmação da nuvem.
+          const mudados = this._separarOQueMudou(m.tableName, records);
+          if (mudados.length === 0) continue;
+          const enviou = await this.upsert(m.tableName, mudados);
+          // Só marca como confirmado se o POST passou. Envio recusado
+          // continua "sujo" e é tentado de novo no ciclo seguinte.
+          if (enviou) this._confirmarEnvio(m.tableName, mudados);
         }
       } catch(e) {
         console.warn(`[CloudStore] Erro ao sincronizar ${m.tableName}:`, e);
       }
     }
     
+    // Item 12: a ficha do aparelho sobe junto com o ciclo normal — assim o
+    // "visto por último" da tela de Aparelhos é sempre real, e a contagem de
+    // recusas acompanha o que a auditoria acabou de medir.
+    this.registrarAparelho().catch(() => {});
+
     this._setStatus('online');
     console.log('[CloudStore] Sincronização Local → Nuvem concluída:', new Date().toLocaleTimeString('pt-BR'));
   }
@@ -697,11 +1256,17 @@ class CloudStore {
           }
         }
 
-        const localStr = JSON.stringify(cloudData);
+        // Item 2 (22/08/2026): antes, isto era
+        // `localStorage.setItem(localKey, JSON.stringify(cloudData))` — a
+        // coleção da nuvem substituía a local inteira, e o que este
+        // aparelho tinha acabado de gravar sumia sem aviso. Agora a
+        // decisão é registro a registro.
+        const mesclado = this._mesclarPorRegistro(m.tableName, localRaw, cloudData);
+        const mescladoStr = JSON.stringify(mesclado);
 
-        if (localRaw !== localStr) {
-          localStorage.setItem(m.localKey, localStr);
-          pulledUpdates[m.dbKey] = cloudData;
+        if (localRaw !== mescladoStr) {
+          localStorage.setItem(m.localKey, mescladoStr);
+          pulledUpdates[m.dbKey] = mesclado;
           anyChange = true;
         }
       } catch(e) {
@@ -749,21 +1314,25 @@ class CloudStore {
       } catch(e) {}
     }
 
-    // FORA do "if (anyChange)" de propósito: quando a nuvem já está igual ao
-    // cache local (nenhuma mudança a aplicar), é justamente o caso em que a
-    // lista curta já se consolidou nos dois lados. É aí que a reposição mais
-    // precisa rodar.
-    if (window.db && typeof window.db.restaurarCadastrosDaPlanilha === 'function') {
-      try {
-        const repostos = window.db.restaurarCadastrosDaPlanilha();
-        if (repostos > 0) {
-          // save() persiste em jr_sac_db (de onde o push lê) e agenda o envio.
-          window.db.save();
-        }
-      } catch(e) {
-        console.warn('[CloudStore] Falha ao restaurar cadastros da planilha:', e);
-      }
-    }
+    // ITEM 8 (Onda 2, 22/08/2026) — AQUI RODAVA restaurarCadastrosDaPlanilha(),
+    // A CADA CICLO DE 30 SEGUNDOS. Foi removido de propósito; não recoloque.
+    //
+    // O que ele fazia: reinjetava as listas de motoristas/ajudantes/veículos
+    // embarcadas no mockData.js DESTE APARELHO em cima do que veio da nuvem.
+    // Nasceu como rede de proteção em 22/08, quando o UNIQUE da cnh derrubou
+    // os 39 motoristas e o pull reduziu a lista local a 2 registros.
+    //
+    // Por que sai: com ele no ciclo, (a) todo veículo vendido e todo
+    // motorista desligado voltava à vida a cada 30 segundos, porque a
+    // planilha embarcada não sabe de exclusão; e (b) UM aparelho com build
+    // antiga contaminava o cadastro da empresa inteira, republicando a
+    // lista velha dele para todo mundo. É a decisão 5: a planilha é a base
+    // inicial, o app é a fonte de verdade depois.
+    //
+    // O que ficou no lugar: a semeadura roda UMA VEZ, na primeira instalação
+    // do aparelho (store.js:init(), marcada em 'jr_seed_cadastros_v1'), e a
+    // mesclagem por registro (item 2) é o que agora protege contra o pull
+    // apagar cadastro — sem precisar reinjetar nada.
 
     // Só marca o reset como aplicado depois que o pull inteiro terminou —
     // se a rede cair no meio, o aparelho tenta de novo no próximo ciclo em
@@ -868,7 +1437,67 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.7.9";
+CloudStore.BUILD = "sync-4.8.0";
+
+// Tamanho do bloco de leitura paginada (item 4). Deliberadamente ABAIXO do
+// corte padrão de 1.000 linhas do PostgREST: assim um bloco cheio sempre
+// significa "pode haver mais", e nunca "o servidor cortou aqui" — que é o
+// jeito silencioso de truncar de novo.
+CloudStore.PAGINA_LEITURA = 500;
+
+// ---------------------------------------------------------------
+// IDENTIDADE DO APARELHO — Onda 2, itens 9 e 12 (22/08/2026)
+//
+// Um identificador estável por aparelho, criado na primeira vez e guardado
+// no próprio navegador. Serve para duas coisas: o carimbo que separa os ids
+// gerados por aparelhos diferentes (item 9) e o registro na tela de
+// Aparelhos (item 12).
+//
+// Vive aqui, e não no store.js, porque cloudStore.js é carregado ANTES
+// (index.html:596) — assim o store pode usá-lo com segurança.
+// ---------------------------------------------------------------
+CloudStore.idDoAparelho = function() {
+  try {
+    let id = localStorage.getItem('jr_device_id');
+    if (!id) {
+      const aleatorio = (typeof crypto !== 'undefined' && crypto.getRandomValues)
+        ? Array.from(crypto.getRandomValues(new Uint32Array(2))).map(n => n.toString(36)).join('')
+        : (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+      id = 'ap-' + aleatorio;
+      localStorage.setItem('jr_device_id', id);
+    }
+    return id;
+  } catch(e) {
+    // Navegador sem localStorage (aba anônima travada): identidade só desta
+    // sessão. Melhor do que id fixo, que colidiria com todo mundo.
+    if (!CloudStore._idVolatil) CloudStore._idVolatil = 'ap-tmp-' + Math.random().toString(36).slice(2);
+    return CloudStore._idVolatil;
+  }
+};
+
+// Os 3 últimos dígitos do id de cada registro. Dois aparelhos só colidem se
+// caírem no mesmo milissegundo E tirarem o mesmo número entre 0 e 999.
+CloudStore.carimboDoAparelho = function() {
+  if (CloudStore._carimbo !== undefined) return CloudStore._carimbo;
+  const s = CloudStore.idDoAparelho();
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  CloudStore._carimbo = h % 1000;
+  return CloudStore._carimbo;
+};
+
+// Item 5 — quantos dias de cada tabela transacional ficam NO APARELHO. O
+// resto continua na nuvem e no Power BI; só sai do cache local. Tabela que
+// não estiver aqui não é podada.
+//
+// 90 dias a 400 viagens/mês dá ~1.200 registros, ~600 KB — cabe folgado nos
+// ~2 MB que sobram da cota. Se a operação precisar enxergar mais tempo no
+// próprio app, é só aumentar o número; se a cota apertar (fotos de devolução
+// pesam muito mais que viagem), é só diminuir.
+CloudStore.JANELA_OPERACIONAL_DIAS = {
+  controle_viagens: 90,
+  ocorrencias_viagens: 90
+};
 
 window.cloudStore = new CloudStore();
 
@@ -879,6 +1508,14 @@ window.jrDiagnosticoSync = function() {
   const d = window.cloudStore.getDiagnostico();
   console.table(d.tabelasComPendencia.map(t => ({ tabela: t, estado: 'NAO SALVA NA NUVEM' })));
   if (d.ultimoErro) console.error('Último erro:', d.ultimoErro);
+  if (d.bloqueadosNaEscrita) {
+    console.warn(
+      `⚠️ Este aparelho tem cache de build antiga: ${d.bloqueadosNaEscrita.total} registro(s) de ` +
+      `${d.bloqueadosNaEscrita.tabela} foram recusados no envio (data de saída com estado de checklist). ` +
+      `Limpe o cache deste aparelho — é a ETAPA 3 do roteiro.`,
+      d.bloqueadosNaEscrita.exemplos
+    );
+  }
   if (!d.tabelasComPendencia.length) console.info('✅ Nenhuma tabela pendente — tudo que foi salvo aqui chegou ao banco.');
   return d;
 };
@@ -942,3 +1579,121 @@ window.addEventListener('offline', () => {
   console.log('[CloudStore] Conexão de rede perdida — voltando para modo local até reconectar.');
   if (window.cloudStore) window.cloudStore._setStatus('offline');
 });
+
+// =================================================================
+// AUTO-ATUALIZAÇÃO — Onda 2, item 11 (22/08/2026)
+//
+// Decisão 4: esta deve ser a última vez que alguém precisa limpar cache
+// aparelho por aparelho.
+//
+// ACHADO QUE MUDOU O DESENHO DESTE ITEM: o plano dizia que quem servia
+// arquivo velho era o service worker. **Não é** — o `sw.js` existe no
+// projeto mas NÃO É REGISTRADO EM LUGAR NENHUM, e o `setupPwa()`
+// (app.js:296) ainda por cima desregistra qualquer service worker que
+// encontre. Quem guarda o arquivo velho é o cache HTTP comum do navegador,
+// e o motivo é simples: nenhuma tag <script> tem versão na URL, então
+// `./js/app.js` continua sendo o mesmo endereço depois do deploy.
+//
+// (Consequência disso que fica anotada, fora do escopo desta rodada: sem
+// service worker, o app NÃO abre sem internet. O que a hospedagem manda
+// hoje é `max-age=0, must-revalidate`, então o servidor não é o problema.)
+//
+// COMO FUNCIONA: `version.json` é publicado junto com o deploy e diz qual
+// é a versão no ar. O app pergunta ao abrir, e de 15 em 15 minutos. Se a
+// versão de lá for diferente da que está rodando aqui, ele força o
+// navegador a rebaixar as cópias antigas (fetch com cache:'reload', que
+// substitui a entrada guardada para AQUELA MESMA URL) e recarrega.
+//
+// TRAVA CONTRA LAÇO: se depois de recarregar a versão ainda não bater
+// (arquivo velho preso num proxy da empresa, por exemplo), ele não tenta
+// de novo — mostra uma tarja pedindo Ctrl+Shift+R. Recarregar em laço
+// seria pior que a doença.
+// =================================================================
+CloudStore.ARQUIVOS_DO_APP = [
+  './index.html',
+  './js/app.js',
+  './js/store.js',
+  './js/cloudStore.js',
+  './js/config.js',
+  './js/mockData.js',
+  './manifest.json'
+];
+
+window.jrConferirVersaoPublicada = async function() {
+  let publicada = null;
+  try {
+    const resp = await fetch('./version.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!resp.ok) return null;
+    const info = await resp.json();
+    publicada = info && info.build;
+  } catch(e) {
+    return null;   // sem rede: segue com o que tem, sem incomodar ninguém
+  }
+  if (!publicada || publicada === CloudStore.BUILD) return publicada;
+
+  console.warn(`[CloudStore] Versão publicada (${publicada}) diferente da que está rodando aqui (${CloudStore.BUILD}). Atualizando...`);
+
+  let jaTentou = null;
+  try { jaTentou = sessionStorage.getItem('jr_update_tentado'); } catch(e) {}
+  if (jaTentou === publicada) {
+    jrAvisarAtualizacaoManual(publicada);
+    return publicada;
+  }
+  try { sessionStorage.setItem('jr_update_tentado', publicada); } catch(e) {}
+
+  // Rebaixa as cópias guardadas de cada arquivo do app. cache:'reload'
+  // busca da rede ignorando o que está guardado E substitui a entrada
+  // daquela URL — é isso que faz o reload seguinte pegar o arquivo novo.
+  // Sem query string de propósito: com ela seria outro endereço, e a
+  // entrada velha continuaria valendo para a tag <script>.
+  try {
+    await Promise.all(CloudStore.ARQUIVOS_DO_APP.map(
+      u => fetch(u, { cache: 'reload' }).catch(() => {})
+    ));
+  } catch(e) {}
+
+  // Se algum dia o service worker voltar a ser registrado, o cache dele
+  // também precisa sair da frente.
+  try {
+    if (typeof caches !== 'undefined') {
+      const nomes = await caches.keys();
+      await Promise.all(nomes.map(n => caches.delete(n)));
+    }
+  } catch(e) {}
+
+  location.reload();
+  return publicada;
+};
+
+function jrAvisarAtualizacaoManual(versaoPublicada) {
+  console.error(`[CloudStore] A atualização automática não pegou. Rodando ${CloudStore.BUILD}, publicada ${versaoPublicada}.`);
+  try {
+    if (typeof document === 'undefined' || !document.body) return;
+    let tarja = document.getElementById('jr-alerta-versao');
+    if (!tarja) {
+      tarja = document.createElement('div');
+      tarja.id = 'jr-alerta-versao';
+      tarja.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99998;background:#78350f;color:#fff;'
+        + 'padding:9px 14px;font-size:12px;font-weight:700;text-align:center;border-top:2px solid #f59e0b';
+      document.body.appendChild(tarja);
+    }
+    tarja.innerHTML = `⚠️ Este aparelho está numa versão antiga do app (${CloudStore.BUILD}; a atual é ${versaoPublicada}) `
+      + 'e a atualização automática não pegou. No PC: <b>Ctrl + Shift + R</b>. No celular: feche o app e abra de novo. '
+      + '<button onclick="this.parentElement.remove()" style="margin-left:8px;background:#fff;color:#78350f;border:0;'
+      + 'border-radius:4px;padding:2px 8px;font-weight:800;cursor:pointer">fechar</button>';
+  } catch(e) {}
+}
+
+if (window.cloudStore.isConfigured()) {
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => window.jrConferirVersaoPublicada(), 3000);
+    setInterval(() => window.jrConferirVersaoPublicada(), 15 * 60 * 1000);
+  });
+}
+
+// Atalho de console para batizar a máquina: jrNomearAparelho('CCO 1').
+window.jrNomearAparelho = function(apelido) {
+  const ok = window.cloudStore.nomearAparelho(apelido);
+  console.info(ok ? `Este aparelho agora se chama "${apelido}" na tela de Aparelhos.` : 'Informe um nome, ex: jrNomearAparelho("CCO 1")');
+  return ok;
+};

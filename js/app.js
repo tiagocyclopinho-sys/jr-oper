@@ -700,12 +700,19 @@ function renderLixeiraView() {
           <button onclick="switchLixeiraSubTab('conflitos')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='conflitos'?'bg-amber-600 text-white shadow':'text-slate-400 hover:text-white'}">
             ⚠️ Conflitos (${conflitos.length})
           </button>
+          <button onclick="switchLixeiraSubTab('aparelhos')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeSub==='aparelhos'?'bg-slate-600 text-white shadow':'text-slate-400 hover:text-white'}">
+            💻 Aparelhos
+          </button>
         </div>
       </div>
 
       ${renderStorageUsagePanel()}
 
-      ${activeSub === 'lixeira' ? renderLixeiraItemsContent(items) : (activeSub === 'auditoria' ? renderAuditLogsContent(logs) : (activeSub === 'versoes' ? renderVersoesContent(versoes) : renderConflitosContent(conflitos)))}
+      ${activeSub === 'lixeira' ? renderLixeiraItemsContent(items)
+        : activeSub === 'auditoria' ? renderAuditLogsContent(logs)
+        : activeSub === 'versoes' ? renderVersoesContent(versoes)
+        : activeSub === 'aparelhos' ? renderAparelhosContent()
+        : renderConflitosContent(conflitos)}
 
       <!-- PAINEL DE MANUTENÇÃO & RESET GLOBAL DE TREINAMENTO -->
       <div class="bg-red-950/30 border border-red-900/60 p-5 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-xs shadow-2xl">
@@ -2048,6 +2055,171 @@ function renderLixeiraItemsContent(items) {
 // Fase 4 (20/08/2026): fila de revisão manual para CNH/e-mail duplicados
 // entre aparelhos — ver registrarConflitoSincronizacao() em store.js e
 // _checkConflitoUnicidade() em cloudStore.js.
+// =================================================================
+// TELA DE APARELHOS — Onda 2, item 12 (22/08/2026)
+//
+// Responde, sem ninguém sair andando pela empresa: qual máquina está em
+// qual versão, quem não abre o app desde o deploy, e qual delas carrega o
+// cache contaminado dos 247 fantasmas da ETAPA 0.
+//
+// Vale principalmente para CELULAR: lá não existe console, então esta tela
+// é o único jeito de ler o estado do aparelho. Ver CONFERIR_APARELHO.md.
+// =================================================================
+window._aparelhosCache = window._aparelhosCache || { estado: 'vazio', lista: [], semTabela: false };
+
+function carregarAparelhos(forcar) {
+  const c = window._aparelhosCache;
+  if (c.estado === 'carregando') return;
+  if (c.estado === 'ok' && !forcar) return;
+  c.estado = 'carregando';
+  if (!window.cloudStore || !window.cloudStore.isConfigured()) {
+    window._aparelhosCache = { estado: 'offline', lista: [], semTabela: false };
+    return;
+  }
+  window.cloudStore.listarAparelhos()
+    .then(lista => {
+      window._aparelhosCache = {
+        estado: 'ok',
+        lista: Array.isArray(lista) ? lista : [],
+        // getAll() devolve null quando a leitura falha — o caso mais provável
+        // é a tabela ainda não existir (ETAPA 2b não rodou).
+        semTabela: lista === null
+      };
+      if (typeof renderApp === 'function') renderApp();
+    })
+    .catch(() => {
+      window._aparelhosCache = { estado: 'ok', lista: [], semTabela: true };
+      if (typeof renderApp === 'function') renderApp();
+    });
+}
+window.carregarAparelhos = carregarAparelhos;
+
+function atualizarListaAparelhos() {
+  carregarAparelhos(true);
+  if (typeof renderApp === 'function') renderApp();
+}
+window.atualizarListaAparelhos = atualizarListaAparelhos;
+
+function renomearEsteAparelho() {
+  const atual = window.cloudStore ? window.cloudStore.apelidoDoAparelho() : '';
+  const novo = prompt('Como este aparelho deve aparecer na lista?\n\nEx: "CCO 1", "PC da Expedição", "Celular do Monitoramento".', atual);
+  if (novo === null) return;
+  if (!window.cloudStore.nomearAparelho(novo)) {
+    alert('Informe um nome válido.');
+    return;
+  }
+  setTimeout(() => atualizarListaAparelhos(), 800);
+}
+window.renomearEsteAparelho = renomearEsteAparelho;
+
+function _tempoRelativo(iso) {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '—';
+  const min = Math.floor((Date.now() - t) / 60000);
+  if (min < 1) return 'agora';
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h} h`;
+  const d = Math.floor(h / 24);
+  return `há ${d} dia${d > 1 ? 's' : ''}`;
+}
+
+function renderAparelhosContent() {
+  const cache = window._aparelhosCache;
+  const buildAtual = (window.cloudStore && window.cloudStore.getDiagnostico) ? window.cloudStore.getDiagnostico().buildSync : '';
+  // via window.cloudStore.constructor, e não pelo nome CloudStore: o nome da
+  // classe é ligação léxica de script, e some se este bloco for avaliado fora
+  // do escopo de script (foi o que quebrou no teste automatizado).
+  const _CS = (window.cloudStore && window.cloudStore.constructor) || null;
+  const meuId = (_CS && _CS.idDoAparelho) ? _CS.idDoAparelho() : null;
+
+  if (cache.estado === 'vazio' || cache.estado === 'carregando') {
+    setTimeout(() => carregarAparelhos(false), 0);
+  }
+
+  const cabecalho = `
+      <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 text-xs border-b border-slate-800 pb-3">
+        <span class="font-bold text-white uppercase flex items-center gap-2"><span>💻</span> Aparelhos</span>
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">Versão no ar: <b class="text-emerald-400">${buildAtual}</b></span>
+          <button onclick="renomearEsteAparelho()" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold">✏️ Nomear este aparelho</button>
+          <button onclick="atualizarListaAparelhos()" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold">↻ Atualizar</button>
+        </div>
+      </div>`;
+
+  let corpo = '';
+
+  if (cache.estado === 'offline') {
+    corpo = '<div class="p-8 text-center text-slate-500">Este aparelho está em modo local (sem nuvem configurada). A lista de aparelhos vem do banco.</div>';
+  } else if (cache.estado !== 'ok') {
+    corpo = '<div class="p-8 text-center text-slate-500">Carregando aparelhos...</div>';
+  } else if (cache.semTabela) {
+    corpo = `
+      <div class="p-6 text-center space-y-2">
+        <div class="text-amber-400 font-bold">A tabela de aparelhos ainda não existe no banco.</div>
+        <div class="text-slate-400 text-[11px] leading-relaxed">
+          Rode a <b>ETAPA 2b</b> do roteiro de implantação — o arquivo
+          <code class="text-slate-200">database/migration_25a_dispositivos.sql</code>, colado no SQL Editor do
+          Supabase. É uma consulta só, e não altera nenhum dado existente.<br>
+          Depois disso, cada aparelho passa a aparecer aqui sozinho, em até 30 segundos.
+        </div>
+      </div>`;
+  } else if (cache.lista.length === 0) {
+    corpo = '<div class="p-8 text-center text-slate-500">Nenhum aparelho registrado ainda. Abra o app em cada máquina e volte aqui.</div>';
+  } else {
+    const desatualizados = cache.lista.filter(a => a.build !== buildAtual).length;
+    const contaminados = cache.lista.filter(a => (a.registros_recusados || 0) > 0).length;
+    corpo = `
+      ${(desatualizados > 0 || contaminados > 0) ? `
+      <div class="bg-amber-950/30 border border-amber-900/60 rounded-xl p-3 text-[11px] text-amber-200 space-y-1">
+        ${desatualizados > 0 ? `<div>⚠️ <b>${desatualizados}</b> aparelho(s) em versão antiga — peça para fechar e reabrir o app.</div>` : ''}
+        ${contaminados > 0 ? `<div>⛔ <b>${contaminados}</b> aparelho(s) com cache contaminado (registros recusados no envio) — é a limpeza da ETAPA 3.</div>` : ''}
+      </div>` : ''}
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead class="bg-slate-950 text-slate-300 text-[10px] uppercase border-b border-slate-800">
+            <tr>
+              <th class="p-3">Aparelho</th>
+              <th class="p-3">Sistema</th>
+              <th class="p-3">Versão</th>
+              <th class="p-3">Último usuário</th>
+              <th class="p-3">Visto por último</th>
+              <th class="p-3 text-right">Recusados</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800 text-[11px]">
+            ${cache.lista.map(a => {
+              const atual = a.build === buildAtual;
+              const recusados = a.registros_recusados || 0;
+              const sou = meuId && a.id === meuId;
+              return `
+              <tr class="hover:bg-slate-800/40 ${recusados > 0 ? 'bg-red-950/20' : ''}">
+                <td class="p-3 font-bold text-white">${a.apelido || a.id}${sou ? ' <span class="text-[9px] text-emerald-400 font-black">(este)</span>' : ''}</td>
+                <td class="p-3 text-slate-400">${a.plataforma || '—'}</td>
+                <td class="p-3"><span class="${atual ? 'text-emerald-400' : 'text-red-400 font-black'}">${a.build || '—'}</span></td>
+                <td class="p-3 text-slate-300">${a.ultimo_usuario || '—'}</td>
+                <td class="p-3 text-slate-400">${_tempoRelativo(a.ultimo_acesso)}</td>
+                <td class="p-3 text-right ${recusados > 0 ? 'text-red-400 font-black' : 'text-slate-500'}">${recusados}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="text-[10px] text-slate-500 leading-relaxed">
+        Um aparelho que <b>não aparece nesta lista</b> não abriu o app desde a última atualização — ele ainda tem o
+        cache antigo e não deve operar antes de aparecer aqui. Passo a passo em <b>CONFERIR_APARELHO.md</b>.
+      </div>`;
+  }
+
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl space-y-4 p-5">
+      ${cabecalho}
+      ${corpo}
+    </div>`;
+}
+window.renderAparelhosContent = renderAparelhosContent;
+
 function renderConflitosContent(conflitos) {
   const rotuloCampo = { cnh: 'CNH', email: 'E-mail' };
   const rotuloTabela = { motoristas: 'Motoristas', usuarios: 'Usuários' };

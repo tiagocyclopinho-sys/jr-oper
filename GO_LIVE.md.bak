@@ -1,0 +1,576 @@
+# Implantação — JR Oper
+
+Roteiro da rodada de correção decidida em **22/08/2026**, focada na
+sincronização do módulo de **Transporte**.
+
+Substitui o procedimento de go-live de 21/08 (migrações 22–24), que já foi
+executado — está resumido no fim deste arquivo, em *Histórico*.
+
+> **Leia isto antes de qualquer coisa.**
+> A **ETAPA 0 pode e deve ser feita hoje**: são consultas de leitura, não
+> alteram nada e não dependem de código novo.
+> As **ETAPAS 1 a 6 dependem da entrega das Ondas 1+2**, que ainda **não
+> foram implementadas**. Elas estão escritas aqui para que o roteiro já
+> exista quando o código chegar — e para que a ETAPA 0 seja feita sabendo
+> o que virá depois.
+
+---
+
+## Onde estamos hoje
+
+| Assunto | Situação |
+|---|---|
+| Sincronização de SAC, CD e Financeiro | Funcionando desde 21/08 |
+| Sincronização de **Transporte** | **Com defeito** — 7 mecanismos identificados em 22/08 |
+| Migrações 22, 23 e 24 | Aplicadas |
+| Cadastros mestre (39 motoristas, 38 ajudantes, 89 veículos) | Na nuvem, mas **reinjetados a cada 30s** pelo `mockData.js` embarcado |
+| Exclusão de registros | **Nunca chega à nuvem** — só o Reset Global apaga de verdade |
+| Volume de viagens | ~400/mês → **dois tetos técnicos já no horizonte** (ver abaixo) |
+| RLS do banco | Aberto para `anon` — dívida conhecida, fora desta rodada |
+
+---
+
+## Decisões tomadas em 22/08/2026
+
+1. **Uma carga não sai em duas datas, nem se divide em dois veículos.** A
+   chave de duplicidade da importação de escala continua sem a data, e o
+   número da carga vira **chave natural única** no banco: uma carga, uma
+   viagem, ponto. Toda carga repetida é duplicidade, sem exceção.
+2. **Volume real: ~400 viagens/mês.** Paginação e janela operacional deixam de
+   ser otimização e viram obrigação (ver *Os dois tetos*, logo abaixo).
+3. **Ondas 1 e 2 saem num único deploy.** Cada rodada de atualização é o
+   momento mais frágil da operação; fazer uma em vez de duas.
+4. **Quanto menos ação manual, melhor.** Esta deve ser a **última** vez que
+   alguém precisa limpar cache aparelho por aparelho — a auto-atualização
+   entra junto no mesmo deploy.
+5. **A planilha é a base inicial; o app é a fonte de verdade depois.**
+   Motoristas, ajudantes e veículos podem ser incluídos e excluídos pelo app,
+   e a exclusão precisa valer. O `restaurarCadastrosDaPlanilha()` deixa de
+   existir como rotina.
+6. **Levantamento antes de correção.** Sem a foto do estado atual não há como
+   provar que a correção funcionou.
+
+---
+
+## Os dois tetos técnicos
+
+O motivo de a ETAPA 0 vir antes de tudo. Nenhum dos dois dá aviso quando é
+atingido — os dois falham em silêncio.
+
+### Teto 1 — 1.000 linhas por leitura
+
+A leitura da nuvem (`cloudStore.getAll`) monta `select=*` **sem `limit` e sem
+header `Range`**. O padrão do PostgREST/Supabase corta a resposta em 1.000
+linhas.
+
+Quando `controle_viagens` passar disso, o aparelho baixa só as primeiras 1.000,
+o cache local é truncado — e o envio seguinte devolve a lista truncada para a
+nuvem. **A 400 viagens/mês, isso acontece em cerca de 2 meses e meio de
+operação.**
+
+### Teto 2 — cota do navegador
+
+Medido no repositório: o catálogo estático (`jr_sac_static`, com 15.139
+clientes e 4.010 produtos) ocupa **2,9 MB**. A cota conservadora de um
+navegador mobile é de ~5 MB. Sobram **~2 MB** para todo o resto.
+
+Uma viagem ocupa ~505 bytes em JSON. A 400 por mês: **~197 KB/mês, ~2,3 MB por
+ano** — só de viagens, sem contar as fotos das devoluções, que são gravadas em
+base64.
+
+Quando a cota estoura, `store.save()` retorna `false` e escreve no console.
+**Ninguém abre o console.** O operador continua trabalhando achando que salvou.
+
+---
+
+## ETAPA 0 — Levantamento (hoje, ~40 minutos, sem tocar em código)
+
+**O que é:** tirar uma foto do estado de hoje, antes de mexer em qualquer
+coisa. É o "antes" que vai provar se a correção funcionou — e é o que decide o
+tamanho do estrago que já existe no banco.
+
+**Você vai precisar de:** o login do Supabase e um PC. Não precisa saber SQL:
+é copiar, colar e apertar um botão.
+
+> ⚠️ **Nada aqui altera dado.** Todas as consultas começam com `SELECT`, que
+> em banco de dados significa "só me mostre". Não tem como quebrar nada
+> seguindo estes passos.
+
+---
+
+### PASSO A — Abrir a tela onde as consultas rodam (faz uma vez só)
+
+1. Abra <https://supabase.com> e faça login.
+2. Na lista de projetos, clique no projeto **`qxipgnkdbzxtfvuyupow`**.
+3. No menu da **esquerda**, procure o ícone do **SQL Editor** (parece uma
+   folha de papel com `SQL` escrito). Clique nele.
+4. Clique no botão **`+ New query`**, no alto.
+5. Vai abrir uma **caixa de texto grande e vazia**. É aí que você cola as
+   consultas.
+
+**Como rodar uma consulta, sempre igual:**
+
+- Cole o texto na caixa
+- Aperte o botão verde **`Run`** (ou `Ctrl + Enter`)
+- O resultado aparece **embaixo**, em forma de tabela
+- Para a próxima: **apague tudo** da caixa e cole a próxima consulta
+
+> Se aparecer uma tarja **vermelha** com erro, **não tente adivinhar o que
+> fazer**. Copie a mensagem inteira e me mande.
+
+---
+
+### PASSO B — Consulta 1: quanto tem de cada coisa
+
+Cole isto na caixa e aperte **Run**:
+
+```sql
+SELECT 'controle_viagens'    AS tabela, count(*) AS linhas, count(*) FILTER (WHERE is_deleted) AS excluidas FROM controle_viagens
+UNION ALL SELECT 'ocorrencias_viagens', count(*), count(*) FILTER (WHERE is_deleted) FROM ocorrencias_viagens
+UNION ALL SELECT 'cargas',              count(*), count(*) FILTER (WHERE is_deleted) FROM cargas
+UNION ALL SELECT 'retencoes_frota',     count(*), count(*) FILTER (WHERE is_deleted) FROM retencoes_frota
+UNION ALL SELECT 'trocas_veiculos',     count(*), count(*) FILTER (WHERE is_deleted) FROM trocas_veiculos
+UNION ALL SELECT 'veiculos',            count(*), count(*) FILTER (WHERE is_deleted) FROM veiculos
+UNION ALL SELECT 'motoristas',          count(*), count(*) FILTER (WHERE is_deleted) FROM motoristas
+UNION ALL SELECT 'ajudantes',           count(*), count(*) FILTER (WHERE is_deleted) FROM ajudantes
+ORDER BY linhas DESC;
+```
+
+Vai aparecer uma tabela com 8 linhas, três colunas: `tabela`, `linhas`,
+`excluidas`. **Tire um print ou copie tudo.**
+
+**Duas coisas para olhar agora:**
+
+**1. A linha `controle_viagens`, coluna `linhas`:**
+
+| Se aparecer | O que significa | O que fazer |
+|---|---|---|
+| Menos de **900** | Ainda há folga até o Teto 1 | Siga para o PASSO C |
+| **900 ou mais** | O teto de 1.000 linhas está chegando ou já chegou | **Pare e me avise.** A ordem das correções muda |
+
+**2. As linhas `motoristas`, `ajudantes` e `veiculos`:**
+
+O esperado, se ninguém mexeu, é **39, 38 e 89** — os números da planilha
+*Dados SAC*.
+
+- Número **maior** → alguém cadastrou pelo app (vamos preservar na ETAPA 4),
+  ou há registro duplicado com id diferente.
+- Número **menor** → alguém excluiu e a exclusão ainda não foi desfeita pelo
+  ciclo de reposição. Anote quais.
+
+De qualquer forma, **só anote**. Não precisa fazer nada com esses números
+agora.
+
+---
+
+### PASSO C — Consulta 2: cargas lançadas mais de uma vez
+
+Apague tudo da caixa, cole isto e aperte **Run**.
+
+Como uma carga não sai em duas datas nem em dois veículos, **toda carga que
+aparecer aqui é duplicidade** — seja de importação feita em dois aparelhos,
+seja de colisão de id entre máquinas.
+
+```sql
+SELECT carga,
+       count(*)                   AS vezes,
+       count(DISTINCT data_saida) AS datas_distintas,
+       count(DISTINCT placa)      AS placas_distintas,
+       string_agg(DISTINCT data_saida, ' | ') AS datas,
+       string_agg(DISTINCT placa, ' | ')      AS placas
+  FROM controle_viagens
+ WHERE is_deleted IS NOT TRUE
+   AND coalesce(carga,'') <> ''
+ GROUP BY carga
+HAVING count(*) > 1
+ ORDER BY vezes DESC, carga;
+```
+
+**Como ler o resultado:**
+
+- Se aparecer **`Success. No rows returned`** → ótimo, **nenhuma carga
+  duplicada**. Anote isso e siga.
+- Se aparecer **linhas** → cada linha é uma carga lançada mais de uma vez.
+  **Copie a tabela inteira.** A coluna `vezes` diz quantas vezes, e as colunas
+  `datas` e `placas` mostram o que cada cópia registrou.
+
+Não apague nada. A limpeza é feita na ETAPA 1, de forma controlada e
+reversível (as duplicatas vão para a Lixeira, não são destruídas).
+
+---
+
+### PASSO D — Só se o PASSO B mostrou 900 viagens ou mais
+
+**Se `controle_viagens` tem menos de 900 linhas, pule este passo.** O teto de
+1.000 ainda não é problema hoje.
+
+Se tem 900 ou mais, precisamos saber se a leitura da nuvem já está sendo
+cortada. Num PC:
+
+1. Abra o app JR Oper no navegador
+2. Aperte **`F12`** — abre um painel lateral ou inferior
+3. Clique na aba **`Console`**
+4. Clique na linha vazia ao lado do sinal `>`
+5. **Se o Chrome pedir**, digite `allow pasting` e aperte Enter (ele bloqueia
+   colagem no console na primeira vez, por segurança). Depois disso, cole:
+
+```
+cloudStore.getAll('controle_viagens').then(r => console.log('a API devolveu', r.length, 'linhas'))
+```
+
+6. Aperte Enter. Vai responder algo como `a API devolveu 1000 linhas`
+
+**Compare com o número da consulta do PASSO B.** Se a API devolver **menos**
+que o SQL, o Teto 1 já está ativo e há dado sendo perdido agora — me avise
+imediatamente.
+
+---
+
+### PASSO E — Lista de aparelhos
+
+**Primeiro, só escreva a lista.** Todo aparelho que abre o JR Oper: PC da
+largada, PC do monitoramento, PC da manutenção, o seu PC, celulares dos
+supervisores, tablet da portaria. Sem esquecer nenhum — um aparelho esquecido
+é justamente o que contamina o banco dos outros.
+
+| Aparelho | Quem usa | Tipo | Versão (`buildSync`) |
+|---|---|---|---|
+| | | PC / celular | |
+
+**Nos PCs**, dá para ler a versão:
+
+1. Abra o app, aperte **`F12`**, clique na aba **`Console`**
+2. Se o Chrome pedir, digite `allow pasting` e Enter
+3. Cole `jrDiagnosticoSync()` e aperte Enter
+4. Anote o valor de **`buildSync`** e de **`tabelasComPendencia`**
+
+**Nos celulares, não dá.** Não é falta de jeito: **a versão não aparece em
+nenhuma tela do app** — só existe no console, e celular não tem console
+acessível. Então, para os celulares:
+
+- **Não tente medir.** Só liste quais são e de quem são.
+- Todos eles vão ser atualizados na ETAPA 3 de qualquer forma, e o
+  procedimento é o mesmo esteja o aparelho velho ou novo.
+
+> **Respondendo à sua pergunta "como saber qual máquina está em qual
+> versão":** hoje, **não dá** — nem remotamente, nem em celular. O `buildSync`
+> só existe dentro do console do navegador, e nada é publicado na nuvem.
+>
+> Isso é falha de instrumentação, não limitação aceitável. É exatamente o que
+> as correções 10 e 11 da ETAPA 2 resolvem: o aparelho passa a publicar a
+> própria versão na nuvem, e você vê todos numa tela. **Esta é a última vez
+> que este levantamento precisa ser feito na mão.**
+
+**O que procurar nos PCs:** qualquer `buildSync` diferente de **`sync-4.7.9`**,
+ou a função respondendo `is not defined`. Esse PC está rodando código antigo —
+e, por causa do `restaurarCadastrosDaPlanilha()`, ele **reinjeta a lista de
+cadastros da versão antiga dele na nuvem a cada 30 segundos**, para todo mundo.
+É o candidato número um a ser a "máquina com importação antiga".
+
+---
+
+### O que me mandar no fim da ETAPA 0
+
+Um único bloco de texto (ou prints) com:
+
+1. A tabela inteira do **PASSO B** — as 8 linhas de contagem
+2. O resultado do **PASSO C** — as cargas duplicadas, ou "no rows returned"
+3. O número do **PASSO D**, se você precisou fazê-lo
+4. A tabela de aparelhos do **PASSO E**, com a versão dos PCs
+
+Com isso eu fecho o escopo das Ondas 1+2 em nível de arquivo e linha, e escrevo
+a `migration_25` com a limpeza das duplicatas dimensionada pelo número real.
+
+---
+
+## ETAPA 1 — `migration_25` (banco)
+
+> Depende da ETAPA 0. **Não escrever antes** — a chave natural já está
+> decidida (item 2 abaixo), mas é o PASSO C que dimensiona a limpeza de
+> duplicatas que precisa vir antes dela. Criar a chave única com duplicatas
+> ainda no banco faz a migração falhar.
+
+O que a migração vai fazer, na ordem:
+
+1. **Limpar as duplicatas** encontradas no PASSO C, mantendo a linha mais antiga de
+   cada grupo (a que foi lançada primeiro) e marcando as demais como
+   `is_deleted`, com registro de quem e por quê. Nada é apagado fisicamente.
+2. **Criar a chave natural** em `controle_viagens` — **decidido em 22/08**:
+   índice único **parcial** sobre `carga`, ignorando as excluídas e as em
+   branco:
+
+   ```sql
+   CREATE UNIQUE INDEX IF NOT EXISTS uq_controle_viagens_carga
+       ON controle_viagens (carga)
+    WHERE is_deleted IS NOT TRUE AND coalesce(carga,'') <> '';
+   ```
+
+   **Parcial de propósito**, e pelo mesmo motivo da migração 24: em Postgres,
+   várias strings **vazias** não convivem numa coluna única (vários `NULL`
+   convivem, string vazia não). Um `UNIQUE` simples derrubaria o lote inteiro
+   na primeira viagem sem número de carga. E ignorar as excluídas é o que
+   permite excluir uma viagem lançada errada e reimportar a carga certa.
+
+   É essa constraint que passa a barrar a duplicidade **no banco**, em vez de
+   depender de uma checagem em JavaScript que só enxerga o cache do próprio
+   aparelho.
+3. **Coluna `atualizado_em`** (`TIMESTAMPTZ`) nas tabelas transacionais que
+   ainda não têm, com índice. É o que permite a mesclagem por registro da
+   ETAPA 2 e, mais adiante, a sincronização incremental.
+4. **Tabela `dispositivos`** — id do aparelho, apelido, build, última vez
+   vista, último usuário. É o que responde "qual máquina está em qual versão"
+   sem ninguém sair andando pela empresa.
+5. **Índices de apoio:** `controle_viagens(data_saida)` e
+   `ocorrencias_viagens(data)`, para a janela operacional da ETAPA 2.
+
+Idempotente (`IF NOT EXISTS` / `ON CONFLICT`), no mesmo padrão das 22–24.
+
+**Conferência obrigatória depois de rodar**, no mesmo SQL Editor:
+
+```sql
+SELECT
+  (SELECT count(*) FROM pg_indexes
+    WHERE tablename='controle_viagens'
+      AND indexdef LIKE '%UNIQUE%'
+      AND indexdef LIKE '%carga%')                                       AS chave_natural,
+  (SELECT count(*) FROM information_schema.columns
+    WHERE table_name='controle_viagens' AND column_name='atualizado_em') AS coluna_atualizado_em,
+  (SELECT count(*) FROM information_schema.tables
+    WHERE table_name='dispositivos')                                     AS tabela_dispositivos;
+```
+
+**Esperado: `1`, `1`, `1`.** Qualquer zero → a migração não completou; leia a
+mensagem de erro antes de seguir para a ETAPA 2.
+
+---
+
+## ETAPA 2 — Deploy único (Ondas 1 + 2)
+
+> Depende da ETAPA 1. Um único deploy, conforme a decisão 3.
+
+### Onda 1 — parar a perda de dado
+
+| # | Correção | Problema que resolve |
+|---|---|---|
+| 1 | **Envio só do que mudou** — cada registro alterado é marcado, e só ele sobe | Hoje **toda** gravação, em **qualquer** tela, reenvia as 25 tabelas inteiras a partir do cache local. É por isso que a edição de um aparelho apaga a do outro sem aviso |
+| 2 | **Mesclagem por registro**, usando `atualizado_em` | A leitura hoje substitui a coleção inteira. Passa a comparar linha a linha: vence a versão mais nova, não o último a gravar |
+| 3 | **Exclusão que propaga** — soft delete padronizado e sincronizado | Existe **um** `DELETE` no sistema inteiro, e ele só roda no Reset Global. Hoje, esvaziar a Lixeira não apaga nada de verdade |
+| 4 | **Paginação na leitura** (header `Range`, em blocos) | Teto 1 |
+| 5 | **Janela operacional** — viagens e ocorrências dos últimos N dias ficam no aparelho; o histórico completo fica na nuvem e no Power BI | Teto 2 |
+| 6 | **Alarme de cota visível** — gravação que falha precisa aparecer na tela | Hoje falha em silêncio |
+
+### Onda 2 — fechar as portas do fantasma
+
+| # | Correção | Problema que resolve |
+|---|---|---|
+| 7 | **Remover o `restaurarCadastrosDaPlanilha()` da rotina de sincronização** | É o que ressuscita veículo vendido e motorista desligado a cada 30s, e o que faz uma máquina desatualizada contaminar o banco de todos. Decisão 5 |
+| 8 | **`id` à prova de colisão** — carimbo do aparelho junto do relógio | Dois aparelhos importando a escala no mesmo instante geram o mesmo id, e uma viagem sobrescreve a outra |
+| 9 | **Dedup da importação filtrando as excluídas** | Hoje uma viagem excluída bloqueia a reimportação daquela carga para sempre. A regra da data fica como está (decisão 1) |
+| 10 | **Auto-atualização** — o app confere a versão publicada ao abrir e se atualiza sozinho | Decisão 4. Acaba com o `Ctrl + Shift + R` aparelho por aparelho |
+| 11 | **Registro de aparelho** — cada aparelho publica build e último acesso na tabela `dispositivos`, com tela em Governança | Responde "qual máquina está em qual versão" sem inventário manual |
+
+### Por que a auto-atualização não era opcional
+
+O `sw.js` busca da rede primeiro, mas com **timeout de 6 segundos**: se a rede
+demorar mais que isso, ele entrega a versão em cache. Um celular em rota com
+sinal fraco cai nesse caminho **rotineiramente** — não é exceção.
+
+A hospedagem já manda o cabeçalho certo (`max-age=0, must-revalidate`, tanto no
+`vercel.json` quanto no `netlify.toml`); quem serve arquivo velho é o service
+worker, não o servidor. E como nenhuma tag `<script>` tem versão na URL, o
+arquivo antigo continua válido no cache do aparelho depois de um deploy novo.
+
+Somando com a correção 7: enquanto o `restaurarCadastrosDaPlanilha()` existir,
+**um** aparelho nessa condição basta para devolver os cadastros antigos ao
+banco inteiro, a cada 30 segundos.
+
+### Publicação
+
+Arraste a pasta `jr-sac-corrigido` para a Vercel/Netlify, como nos deploys
+anteriores, e aguarde o "Deploy concluído". A versão do cache no `sw.js` sobe
+junto na entrega.
+
+---
+
+## ETAPA 3 — A última limpeza manual de cache
+
+Este passo existe uma última vez: os aparelhos ainda estão na build antiga, que
+**não conhece** a auto-atualização. A partir da próxima entrega, ele deixa de
+ser necessário.
+
+- **PC:** abrir o site e pressionar `Ctrl + Shift + R`
+- **Celular:** fechar a aba do app, reabrir, puxar a tela para baixo
+
+Em **todos** os aparelhos da lista do PASSO E. Confirme um a um com
+`jrDiagnosticoSync()`: o `buildSync` precisa mostrar a versão nova.
+
+Depois disso, abra **Governança → Aparelhos** e confira — todos os aparelhos da
+sua lista precisam aparecer lá com a build nova. Se faltar algum, ele não abriu
+o app desde o deploy, e não deve operar até abrir.
+
+---
+
+## ETAPA 4 — Semeadura dos cadastros mestre
+
+> Decisão 5: a planilha é a base inicial; a partir daqui o app manda.
+
+Com a correção 7 no ar, nada mais repõe os cadastros automaticamente. Então é
+preciso garantir, **de uma vez**, que a nuvem tem a lista completa:
+
+1. Rodar `database/seed_cadastros_mestre.sql` (a ser gerado a partir do
+   `mockData.js`), com `ON CONFLICT (id) DO NOTHING` — **`DO NOTHING`, não
+   `DO UPDATE`**: quem já foi editado ou excluído pelo app não pode ser
+   sobrescrito pela planilha.
+2. Conferir de novo as contagens do PASSO B. O número precisa ser **igual ou maior**
+   que o de antes, nunca menor.
+3. A partir daqui, incluir e excluir motorista, ajudante e veículo é feito pela
+   tela de Cadastros, e vale para todos os aparelhos.
+
+O `mockData.js` continua no app apenas como **fallback de leitura** para a
+primeira abertura sem internet. Ele nunca mais envia nada para a nuvem.
+
+---
+
+## ETAPA 5 — Reset Global de Treinamento (só se você decidir)
+
+Só faz sentido se a ETAPA 0 mostrar que ainda há muito dado de treinamento
+misturado com dado real. Se a operação já está valendo, **pule esta etapa** —
+a limpeza cirúrgica da ETAPA 1.1 já terá removido as duplicatas.
+
+Se for fazer: em **um único aparelho**, e só depois que a ETAPA 3 estiver 100%
+concluída em todos. O reset preserva os cadastros mestre e grava um carimbo na
+nuvem (`sync_control`, migração 23) para que os outros aparelhos reconheçam que
+o vazio é proposital, em vez de reenviarem o que tinham em cache.
+
+---
+
+## ETAPA 6 — Teste de aceite (obrigatório)
+
+Com **dois aparelhos**, A e B, os dois já na build nova. Cada teste mira um
+defeito específico.
+
+**T1 — Edição concorrente** (mecanismo 1, o principal)
+1. A e B abrem a tela de Controle de Viagens, sem recarregar
+2. Em A, edite o horário de retorno da **viagem X**
+3. Em B, edite a observação da **viagem Y** e salve
+4. Aguarde 60s e recarregue os dois
+5. **As duas edições precisam estar lá.** Hoje uma some
+
+**T2 — Exclusão** (mecanismo 2)
+1. Em A, exclua uma viagem de teste
+2. Aguarde 60s, recarregue A e B
+3. **Ela não pode voltar** — nem agora, nem em 5 minutos
+
+**T3 — Cadastro excluído** (mecanismo 3)
+1. Em A, exclua um veículo de teste pela tela de Cadastros
+2. Aguarde 60s, recarregue A e B
+3. **Ele não pode voltar.** Hoje volta em 30 segundos
+
+**T4 — Importação simultânea** (mecanismos 5 e 6)
+1. A e B importam a **mesma** escala, ao mesmo tempo
+2. Aguarde 60s e recarregue os dois
+3. **A contagem precisa ser a da escala** — 15 viagens, não 30
+4. Rode a consulta do PASSO C: **nenhuma carga duplicada**
+
+**T5 — Volume** (Teto 1)
+1. Console: `cloudStore.getAll('controle_viagens').then(r => console.log(r.length))`
+2. Compare com `SELECT count(*) FROM controle_viagens;`
+3. **Os dois números precisam bater**, mesmo acima de 1.000
+
+**T6 — Auto-atualização** (decisão 4)
+1. Publique uma alteração mínima
+2. Em B, **sem** limpar cache, feche e reabra o app
+3. **A build precisa subir sozinha.** Confirme em Governança → Aparelhos
+
+Passou nos seis: a sincronização do transporte está de pé.
+
+---
+
+## Se algo der errado
+
+O sistema **não perde dado por falta de sincronização**: tudo é gravado no
+aparelho primeiro. Se a nuvem recusar, o dado continua lá e o indicador fica
+vermelho.
+
+1. Indicador vermelho → F12 → `jrDiagnosticoSync()` → mostra a tabela e o erro
+2. `PGRST204` → falta uma coluna no banco; a mensagem diz qual
+3. `23503` → chave estrangeira
+4. `23505` → violação de unicidade. Depois da ETAPA 1, pode ser a chave natural
+   barrando uma duplicidade — que é o comportamento desejado. Confira em
+   **Governança → Conflitos** antes de tratar como defeito
+5. `401` / `403` → chave ou policy do Supabase
+
+Enquanto isso, a operação continua normalmente em cada aparelho — só não
+compartilha até resolver.
+
+---
+
+## Decisões que continuam em aberto
+
+### 1. Segurança do banco (dívida conhecida)
+
+A policy é `FOR ALL TO anon USING (true)` e a chave está no JavaScript público.
+Na prática: **qualquer pessoa com o endereço do site pode ler, alterar e apagar
+o banco inteiro**, sem senha. A senha de administrador do app protege as telas,
+não o banco.
+
+Não bloqueia esta rodada, mas precisa de projeto próprio — Supabase Auth com
+policies por usuário, substituindo o acesso anônimo. Fica registrado aqui
+porque interage com o resto: enquanto isso existir, "dado que sumiu" tem uma
+causa possível que nenhuma correção de sincronização cobre.
+
+### 2. Produtos e clientes ainda fora da nuvem
+
+São 4.010 produtos e 15.139 clientes embarcados no `mockData.js` e guardados em
+`jr_sac_static` — os 2,9 MB do Teto 2. Um produto ou cliente cadastrado pela
+tela fica só naquele aparelho.
+
+Migrar as duas listas para o Supabase resolve a limitação **e** libera a maior
+parte da cota do navegador. É a onda seguinte a esta; não entra aqui.
+
+### 3. Badge "Modo Treinamento"
+
+`js/config.js` tem `dataInicioProducao: "2026-08-26"`. Antes dessa data o
+cabeçalho exibe "🧪 Modo Treinamento". É só informativo, mas confunde — ajuste
+para o dia real de início.
+
+### 4. Redesenho de tela a cada sincronização
+
+Toda vez que chega dado novo da nuvem, o app redesenha a tela inteira. Já
+existe uma proteção que adia o redesenho enquanto alguém está digitando num
+campo, mas posição de rolagem, modal aberto e filtro aplicado continuam se
+perdendo. Depois das Ondas 1+2 isso vai disparar bem menos — vale medir de novo
+antes de refatorar.
+
+---
+
+## Histórico — a rodada de 21/08/2026
+
+Contexto do que já foi feito, para não se repetir a investigação.
+
+Três migrações, aplicadas nesta ordem, cada uma destravando uma camada
+diferente do mesmo problema ("os dados não compartilham"):
+
+- **`migration_22_fix_sync.sql`** — colunas que o app gravava e que não
+  existiam, e chaves estrangeiras que a sincronização não tinha como
+  respeitar. Depois dela, `itens_devolucao` e `cargas` passaram a receber
+  dados.
+- **`migration_23_checks_e_reset.sql`** — o app grava `forma_acerto = ''` na
+  abertura da devolução (quem define é o Financeiro, depois) e o `CHECK` exigia
+  já ali um dos valores finais. Cria também o `sync_control`, que faz o Reset
+  Global valer entre aparelhos.
+- **`migration_24_unique_parcial.sql`** — dos 39 motoristas da planilha, só 2
+  estavam na nuvem, e os 2 eram de teste. A planilha não tem coluna de CNH,
+  então os 39 têm `cnh = ''` — e `cnh` era `UNIQUE`. Em Postgres vários `NULL`
+  convivem numa coluna única, mas várias strings **vazias** não. Da segunda
+  linha em diante, o lote todo caía.
+
+Também nessa rodada: a ordem de envio passou a mandar os cadastros mestre antes
+dos transacionais (evitando recusa por chave estrangeira), o erro de gravação
+passou a aparecer na tela em vez de só no console, e a leitura da nuvem deixou
+de substituir `db.data` inteiro — o que derrubava produtos e clientes da
+memória a cada ciclo.
+
+O `restaurarCadastrosDaPlanilha()` nasceu ali, como remendo para o problema da
+CNH da migração 24. Aquele problema está resolvido — e é por isso que a
+correção 7 desta rodada pode removê-lo.

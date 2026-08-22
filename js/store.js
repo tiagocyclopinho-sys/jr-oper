@@ -82,8 +82,7 @@ class Store {
     // Semente aleatória por instância (recarrega a cada abertura do app) —
     // usada por gerarIdUnico() para reduzir a chance de dois aparelhos
     // gerarem o mesmo id caso criem um registro no mesmíssimo milissegundo.
-    this._gerarIdContador = Math.floor(Math.random() * 900) + 1;
-    this._gerarIdUltimoMs = 0;
+    this._ultimoMsVirtual = 0;
     try {
       this.init();
     } catch(err) {
@@ -105,14 +104,47 @@ class Store {
   // seguinte; o contador (com semente aleatória por instância) garante
   // que duas chamadas no mesmo milissegundo, no mesmo aparelho, nunca
   // colidam.
+  // ITEM 9 (Onda 2, 22/08/2026) — id à prova de colisão entre aparelhos.
+  //
+  // O que estava errado: os 3 últimos dígitos vinham de um contador que
+  // começava aleatório A CADA ABERTURA do app e só andava dentro do mesmo
+  // milissegundo. Dois aparelhos que criassem um registro no mesmo
+  // milissegundo tinham chance real de produzir o MESMO id — e a ETAPA 0
+  // confirmou o que isso custa: `id` é PRIMARY KEY e o envio usa
+  // `Prefer: resolution=merge-duplicates`, então a colisão não dá erro:
+  // um registro **sobrescreve** o outro, em silêncio, para sempre.
+  //
+  // Como ficou:
+  //   - os 3 últimos dígitos passam a ser o CARIMBO DO APARELHO, fixo e
+  //     estável (CloudStore.carimboDoAparelho). Dois aparelhos diferentes
+  //     ocupam faixas diferentes;
+  //   - a unicidade dentro do próprio aparelho deixa de depender de
+  //     contador: cada chamada anda pelo menos um milissegundo "virtual"
+  //     para a frente. Uma importação de 400 linhas no mesmo milissegundo
+  //     real consome 400 ms virtuais — some 0,4 s ao id da última linha e
+  //     nada mais.
+  //
+  // O tamanho não muda: continua na casa de 1,7e15, bem abaixo do limite
+  // seguro do JavaScript (9,0e15) e dentro do BIGINT do Postgres.
   gerarIdUnico() {
     const agora = Date.now();
-    if (agora === this._gerarIdUltimoMs) {
-      this._gerarIdContador++;
-    } else {
-      this._gerarIdUltimoMs = agora;
-    }
-    return agora * 1000 + (this._gerarIdContador % 1000);
+    const proximo = Math.max(agora, (this._ultimoMsVirtual || 0) + 1);
+    this._ultimoMsVirtual = proximo;
+    return proximo * 1000 + this._carimboDoAparelho();
+  }
+
+  _carimboDoAparelho() {
+    if (this._carimbo !== undefined) return this._carimbo;
+    try {
+      const CS = (window.cloudStore && window.cloudStore.constructor) || null;
+      if (CS && typeof CS.carimboDoAparelho === 'function') {
+        this._carimbo = CS.carimboDoAparelho();
+        return this._carimbo;
+      }
+    } catch(e) {}
+    // cloudStore.js não carregou (modo local puro): carimbo só desta sessão.
+    this._carimbo = Math.floor(Math.random() * 1000);
+    return this._carimbo;
   }
 
   init() {
@@ -212,8 +244,24 @@ class Store {
       // Se repôs algo, força a gravação abaixo: o envio para a nuvem lê de
       // 'jr_sac_db', não da memória, então uma restauração que não for
       // persistida não chega a subir.
-      if (this.restaurarCadastrosDaPlanilha() > 0) {
-        legacyMonolithic = legacyMonolithic || {};
+      // ITEM 8 (Onda 2, 22/08/2026) — UMA VEZ SÓ, na primeira instalação.
+      //
+      // Isto rodava a cada abertura do app, e o gêmeo dele rodava a cada 30
+      // segundos dentro do pull (removido de cloudStore.js). Era o que
+      // ressuscitava veículo vendido e motorista desligado: a planilha
+      // embarcada não sabe o que foi excluído depois dela.
+      //
+      // Decisão 5: a planilha é a base inicial; daí em diante o app é a
+      // fonte de verdade, e exclusão precisa valer. Quem protege o cadastro
+      // de sumir num pull agora é a mesclagem por registro (item 2), não a
+      // reinjeção.
+      let jaSemeou = false;
+      try { jaSemeou = !!localStorage.getItem('jr_seed_cadastros_v1'); } catch(e) {}
+      if (!jaSemeou) {
+        if (this.restaurarCadastrosDaPlanilha() > 0) {
+          legacyMonolithic = legacyMonolithic || {};
+        }
+        try { localStorage.setItem('jr_seed_cadastros_v1', new Date().toISOString()); } catch(e) {}
       }
     }
 
@@ -464,14 +512,18 @@ class Store {
   // é preservado; e um registro que já existe não é sobrescrito, para não
   // desfazer edições feitas pela equipe.
   //
-  // Precisa ser chamada em DOIS momentos (achado de 22/08/2026):
-  //   1. na carga do app (load), e
-  //   2. logo depois de cada pull da nuvem.
+  // ATENÇÃO — ITEM 8 (Onda 2, 22/08/2026): esta função roda UMA VEZ SÓ, na
+  // primeira abertura do aparelho, protegida pela chave de localStorage
+  // 'jr_seed_cadastros_v1' (ver init()). NÃO volte a chamá-la depois de cada
+  // pull, como já foi feito: era isso que ressuscitava veículo vendido e
+  // motorista desligado a cada 30 segundos, e que deixava um aparelho em
+  // build antiga contaminar o cadastro de todo mundo.
   //
-  // Só no load não resolve: startAutoSync() puxa ANTES de empurrar, então o
-  // pull substituía a lista recém-restaurada pela lista curta da nuvem e o
-  // push seguinte subia essa lista curta. Os 39 motoristas eram restaurados
-  // e descartados no mesmo segundo, sem nunca chegar ao banco.
+  // O problema que a chamada por pull tentava resolver — o pull substituir a
+  // lista local pela lista curta da nuvem — foi resolvido de outro jeito:
+  // pela mesclagem por registro (item 2, _mesclarPorRegistro em
+  // cloudStore.js), que não substitui coleção inteira. Decisão 5: a planilha
+  // é a semente inicial; daí em diante o app é a fonte de verdade.
   restaurarCadastrosDaPlanilha() {
     if (typeof INITIAL_DATA === 'undefined') return 0;
     let reinseridos = 0;
@@ -538,9 +590,65 @@ class Store {
     return liberoualgo;
   }
 
+  // =================================================================
+  // ALARME DE COTA VISÍVEL — Onda 1, item 6 (22/08/2026)
+  //
+  // save() já devolvia false quando a gravação falhava, e escrevia no
+  // console. **Ninguém abre o console.** O operador continuava trabalhando
+  // achando que tinha salvo — e o dado não existia em lugar nenhum, nem
+  // aqui nem na nuvem. É a falha mais cara possível: silenciosa e com
+  // perda real.
+  //
+  // A partir daqui a falha aparece na tela, em toda tela, sem depender de
+  // nenhum módulo ter tratado o retorno do save(): uma tarja vermelha fixa
+  // no alto, que não some sozinha, mais um alerta na primeira vez (e no
+  // máximo um por minuto, para não virar tortura se o disco estiver cheio).
+  // =================================================================
+  _alertarFalhaDeGravacao(erro) {
+    const uso = (() => { try { return this.getStorageUsageInfo(); } catch(e) { return null; } })();
+    this.ultimaFalhaDeGravacao = {
+      quando: new Date().toISOString(),
+      detalhe: String((erro && erro.message) || erro || 'desconhecido').slice(0, 200),
+      usoKB: uso ? uso.totalKB : null,
+      percentual: uso ? uso.percentual : null
+    };
+    console.error('[Store] GRAVAÇÃO NÃO SALVA:', this.ultimaFalhaDeGravacao);
+
+    if (typeof document === 'undefined' || !document.body) return;
+
+    const texto = 'ATENÇÃO: o último registro NÃO foi salvo neste aparelho'
+      + (uso ? ` — a memória do navegador está em ${uso.percentual}% (${uso.totalKB} KB)` : '')
+      + '. Anote o que você acabou de lançar, avise o suporte e NÃO continue lançando neste aparelho.';
+
+    try {
+      let tarja = document.getElementById('jr-alerta-gravacao');
+      if (!tarja) {
+        tarja = document.createElement('div');
+        tarja.id = 'jr-alerta-gravacao';
+        tarja.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#7f1d1d;color:#fff;'
+          + 'padding:10px 14px;font-size:13px;font-weight:700;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.6);'
+          + 'border-bottom:2px solid #ef4444;line-height:1.35';
+        document.body.appendChild(tarja);
+      }
+      tarja.innerHTML = '⛔ ' + texto
+        + ' <button onclick="this.parentElement.remove()" style="margin-left:10px;background:#fff;color:#7f1d1d;'
+        + 'border:0;border-radius:4px;padding:2px 8px;font-weight:800;cursor:pointer">fechar</button>';
+    } catch(e) {}
+
+    // No máximo um alerta por minuto: a tarja é o aviso permanente, o
+    // alert() é o que faz a pessoa parar agora.
+    const agora = Date.now();
+    if (!this._ultimoAlertaGravacao || (agora - this._ultimoAlertaGravacao) > 60000) {
+      this._ultimoAlertaGravacao = agora;
+      try { if (typeof alert === 'function') alert('⛔ ' + texto); } catch(e) {}
+    }
+  }
+
   // Retorna true/false indicando se a gravação foi bem-sucedida. Em caso de
   // falha (incluindo estouro de cota), tenta liberar espaço automaticamente
   // e grava de novo antes de desistir — ver auditoria de 17/08/2026, item 0.1.
+  // Item 6 (22/08/2026): quando desiste, agora GRITA — ver
+  // _alertarFalhaDeGravacao() acima.
   save() {
     try {
       this.sortAll();
@@ -550,6 +658,14 @@ class Store {
     const payload = JSON.stringify(this._getOperationalSlice());
     try {
       localStorage.setItem('jr_sac_db', payload);
+      // Gravou: se havia tarja de falha na tela, o problema passou.
+      if (this.ultimaFalhaDeGravacao) {
+        this.ultimaFalhaDeGravacao = null;
+        try {
+          const t = (typeof document !== 'undefined') && document.getElementById('jr-alerta-gravacao');
+          if (t) t.remove();
+        } catch(e) {}
+      }
       this._scheduleCloudSync();
       return true;
     } catch(e) {
@@ -563,9 +679,11 @@ class Store {
           return true;
         } catch(e2) {
           console.error("[Store] Falha ao salvar mesmo após liberar espaço:", e2);
+          this._alertarFalhaDeGravacao(e2);
           return false;
         }
       }
+      this._alertarFalhaDeGravacao(e);
       return false;
     }
   }
@@ -1471,11 +1589,28 @@ class Store {
     let importCount = 0;
     let duplicadosCount = 0;
 
+    // ITEM 10 (Onda 2, 22/08/2026) — duas correções na checagem de
+    // duplicidade, e as duas vieram de dado medido na ETAPA 0.
+    //
+    // (a) A CHAVE ERA LARGA DEMAIS. Era
+    //     carga|rota|placa|motorista|ajudante|setor — bastava a escala vir
+    //     com o motorista trocado para a MESMA carga entrar de novo como
+    //     "nova". A ETAPA 0 achou 15 cargas repetidas até 4 vezes, a última
+    //     rodada às 01:18 de 22/08, depois do go-live. Decisão 1: uma carga,
+    //     uma viagem, sem exceção — inclusive transbordo, que é um caminhão
+    //     só. A chave passa a ser a carga, igual ao índice único que a
+    //     migration_25 cria no banco. Se as duas regras não forem a mesma, a
+    //     importação passa aqui e é recusada lá, em bloco.
+    //
+    // (b) EXCLUÍDAS CONTAVAM COMO EXISTENTES. Uma viagem lançada errada e
+    //     excluída bloqueava a reimportação daquela carga para sempre, sem
+    //     dizer por quê. Agora só as vivas contam.
     const norm = s => String(s || '').trim().toUpperCase();
-    const getKey = v => `${norm(v.carga)}|${norm(v.rota)}|${norm(v.placa)}|${norm(v.motorista)}|${norm(v.ajudante)}|${norm(v.setor)}`;
+    const getKey = v => norm(v.carga);
 
-    // Mapear viagens já existentes no banco
-    const existingKeys = new Set(this.data.controle_viagens.map(v => getKey(v)));
+    const existingKeys = new Set(
+      this.data.controle_viagens.filter(v => !v.is_deleted).map(v => getKey(v))
+    );
 
     novasViagens.forEach(v => {
       if (v.carga) {
