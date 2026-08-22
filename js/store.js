@@ -194,6 +194,35 @@ class Store {
         this.data.produtos = JSON.parse(JSON.stringify(INITIAL_DATA.produtos));
         legacyMonolithic = legacyMonolithic || {};
       }
+
+      // (achado de 22/08/2026) Motoristas, ajudantes e veículos também vêm da
+      // planilha Dados SAC — mas, ao contrário de clientes e produtos, ELES
+      // SINCRONIZAM com a nuvem. Isso os deixa expostos a um risco que os
+      // outros dois não correm: se a nuvem estiver incompleta, o pull
+      // substitui a lista local pela lista curta da nuvem e o cadastro
+      // "some" do aparelho, sem forma de voltar.
+      //
+      // Foi o que aconteceu: os 39 motoristas da planilha têm cnh vazia, e
+      // cnh era UNIQUE NOT NULL no banco — várias strings vazias colidem
+      // entre si (NULL não colidiria). Só os 2 registros de teste, que
+      // tinham CNH distinta, chegaram à nuvem; o pull então reduziu a lista
+      // local a esses 2. (Lado do banco corrigido na migration_24.)
+      //
+      // Aqui a rede de proteção: reinsere da planilha o que faltar, POR ID.
+      // Diferente do tratamento de clientes/produtos acima, este é uma
+      // MESCLA, não uma substituição — um motorista cadastrado pela tela do
+      // app tem id próprio e é preservado.
+      ['motoristas', 'ajudantes', 'veiculos'].forEach(colecao => {
+        const base = INITIAL_DATA[colecao];
+        if (!Array.isArray(base) || !base.length) return;
+        if (!Array.isArray(this.data[colecao])) this.data[colecao] = [];
+        const idsPresentes = new Set(this.data[colecao].map(r => String(r.id)));
+        const faltando = base.filter(r => !idsPresentes.has(String(r.id)));
+        if (faltando.length) {
+          this.data[colecao] = this.data[colecao].concat(JSON.parse(JSON.stringify(faltando)));
+          console.info(`[Store] ${faltando.length} ${colecao} restaurados da planilha Dados SAC (faltavam neste aparelho).`);
+        }
+      });
     }
 
     if (legacyMonolithic) {

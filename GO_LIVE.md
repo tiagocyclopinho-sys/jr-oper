@@ -19,20 +19,30 @@ Tenha aberto:
 
 ## PASSO 1 — Atualizar o banco (Supabase)
 
-São **dois** scripts, nesta ordem. Supabase → **SQL Editor** → **New Query**,
-colar o conteúdo inteiro, **Run**, repetir com o segundo.
+São **três** scripts, nesta ordem. Supabase → **SQL Editor** → **New Query**,
+colar o conteúdo inteiro, **Run**, repetir com o próximo.
 
 1. `database/migration_22_fix_sync.sql` — colunas ausentes, `NOT NULL` e FKs
 2. `database/migration_23_checks_e_reset.sql` — restrições `CHECK` e `sync_control`
+3. `database/migration_24_unique_parcial.sql` — `UNIQUE` que não tolera campo em branco
 
-Ambos são idempotentes: rodar duas vezes não quebra nada.
+Todos são idempotentes: rodar duas vezes não quebra nada.
 
-> **Por que dois:** a 22 destravou as colunas e as chaves estrangeiras — depois
-> dela `itens_devolucao` e `cargas` passaram a receber dados. Mas a devolução
-> em si continuava sendo recusada por um motivo diferente: o app grava
-> `forma_acerto = ''` na abertura (quem define é o Financeiro, depois), e o
-> banco exigia já ali um dos valores finais da lista. A 23 corrige isso e
-> cria a tabela que faz o Reset Global valer entre aparelhos.
+> **Por que três:** cada uma destravou uma camada diferente do mesmo problema —
+> o banco recusava o registro e o app não mostrava o erro.
+>
+> - **22** — colunas que o app grava e que não existiam, e chaves estrangeiras
+>   que a sincronização não tem como respeitar. Depois dela, `itens_devolucao`
+>   e `cargas` passaram a receber dados.
+> - **23** — a devolução continuava recusada: o app grava `forma_acerto = ''`
+>   na abertura (quem define é o Financeiro, depois) e o `CHECK` exigia já ali
+>   um dos valores finais. Cria também o `sync_control`, que faz o Reset Global
+>   valer entre aparelhos.
+> - **24** — dos 39 motoristas da planilha, só 2 estavam na nuvem, e os 2 eram
+>   de teste. A planilha não tem coluna de CNH, então os 39 têm `cnh = ''` — e
+>   `cnh` era `UNIQUE`. Em Postgres vários `NULL` convivem numa coluna única,
+>   mas várias strings **vazias** não. Da segunda linha em diante o lote todo
+>   caía. Passaram só os dois registros com CNH distinta, justamente os falsos.
 
 ## PASSO 2 — Confirmar que o banco aceitou (NÃO PULE)
 
@@ -51,13 +61,31 @@ SELECT
     WHERE table_name='sync_control') AS tabela_sync_control,
   (SELECT count(*) FROM pg_constraint
     WHERE conname='ocorrencias_devolucao_forma_acerto_check'
-      AND pg_get_constraintdef(oid) LIKE '%''''%') AS check_aceita_vazio;
+      AND pg_get_constraintdef(oid) LIKE '%''''%') AS check_aceita_vazio,
+  (SELECT count(*) FROM pg_indexes
+    WHERE indexname='uq_motoristas_cnh') AS unique_cnh_parcial;
 ```
 
-**Esperado: `6`, `2`, `1`, `1`.**
+**Esperado: `6`, `2`, `1`, `1`, `1`.**
 
-Se `check_aceita_vazio` vier `0`, a migração 23 não rodou — a devolução vai
-continuar sendo recusada. Rode de novo e leia a mensagem de erro.
+- `check_aceita_vazio = 0` → a migração 23 não rodou; a devolução continua sendo recusada.
+- `unique_cnh_parcial = 0` → a migração 24 não rodou; os motoristas continuam sem subir.
+
+Rode de novo e leia a mensagem de erro antes de seguir.
+
+### Conferir os motoristas depois de publicar
+
+Depois do PASSO 3 e do refresh, rode no SQL Editor:
+
+```sql
+SELECT count(*) AS total, count(*) FILTER (WHERE cnh <> '') AS com_cnh FROM motoristas;
+```
+
+Esperado: **`total = 39` ou mais**. Se ainda vier `2`, o aparelho não subiu a
+lista — confirme o `buildSync` no PASSO 4.
+
+Os dois registros artificiais (`A cadastrar` e `TESTE CLAUDE IGNORAR`) podem ser
+removidos com o bloco comentado no fim da `migration_24_unique_parcial.sql`.
 
 ## PASSO 3 — Publicar o app atualizado
 
@@ -65,9 +93,11 @@ Arraste a pasta `jr-sac-corrigido` para a Vercel/Netlify, como no deploy
 original, e aguarde o "Deploy concluído".
 
 Arquivos alterados nesta correção:
-- `js/cloudStore.js` — ordem de envio, proteção contra perda de dado, erro visível
-- `database/schema.sql` — correção incorporada (instalação nova nasce certa)
-- `sw.js` — versão de cache `v4.7.3` → `v4.7.4`
+- `js/cloudStore.js` — ordem de envio, trava de reset no push, mesclagem não
+  destrutiva no pull, erro de gravação visível na tela
+- `js/app.js` — telas de Cadastros não quebram mais se uma lista ainda não carregou
+- `database/schema.sql` — correções incorporadas (instalação nova nasce certa)
+- `sw.js` — versão de cache `v4.7.3` → `v4.7.8`
 
 ## PASSO 4 — Limpar o cache em cada aparelho
 
@@ -91,7 +121,7 @@ Faça em **todos** os aparelhos que vão operar.
 jrDiagnosticoSync()
 ```
 
-O campo `buildSync` tem que dizer **`sync-4.7.6`**. Se disser outra coisa, ou se
+O campo `buildSync` tem que dizer **`sync-4.7.8`**. Se disser outra coisa, ou se
 a função não existir ("is not defined"), aquele aparelho ainda está no código
 antigo — repita o refresh até aparecer. Não siga para o passo 5 antes disso.
 
@@ -105,7 +135,7 @@ Ainda há dados de teste no banco. Decida o que é real antes de abrir a operaç
 | `ajudantes` | 38 | equipe real — **manter** |
 | `controle_viagens` | 15 | treinamento — avaliar |
 | `usuarios` | 8 | avaliar um a um |
-| `motoristas` | 2 | avaliar |
+| `motoristas` | 2 → **39** | os 2 atuais são de teste; os 39 reais entram no primeiro sync após a migração 24 |
 | `cargas` | 1 | treinamento |
 
 Em **um único aparelho**, use **Reset Global de Treinamento** no app. Ele limpa
@@ -165,10 +195,21 @@ viram texto livre quando a lista por trás está vazia. Não é um defeito do ca
 - **Carga:** a lista vem de Cargas + Controle de Viagens + ocorrências anteriores.
   O Reset Global zera tudo isso de propósito — a lista volta assim que a Largada
   do dia for lançada.
-- **Produto:** a lista vem do cadastro de produtos, que **nunca era sincronizado**
-  (a tabela existia no banco, mas não estava na lista de envio nem na de leitura).
-  Corrigido: `produtos` e `setores` agora sincronizam como os demais cadastros.
-  Cadastre os produtos em um aparelho e eles aparecem nos outros.
+- **Produto e Cliente:** são **dados estáticos da planilha Dados SAC** (4.010
+  produtos e 15.139 clientes), embarcados no próprio app via `mockData.js` e
+  guardados na chave `jr_sac_static`, separada de `jr_sac_db`. Já vêm iguais em
+  todo aparelho — **não passam pela sincronização, e não devem passar.**
+
+  Se a lista aparecer vazia ou a tela de Cadastros der erro vermelho, não é a
+  planilha que sumiu: é o cache da tela. Um `Ctrl + Shift + R` recarrega de
+  `jr_sac_static` e resolve. Corrigido em 22/08/2026 — o pull estava
+  substituindo `db.data` inteiro pela fatia operacional e derrubando as duas
+  listas da memória a cada ciclo.
+
+  **Limitação conhecida:** um produto ou cliente cadastrado pela tela do app
+  fica só naquele aparelho. Para todos verem, ele precisa entrar na planilha
+  Dados SAC. Sincronizar essas duas listas exigiria um envio incremental (só o
+  que mudou) — enviar 19 mil linhas a cada 30 segundos não é viável.
 
 ### 4. Edição simultânea
 

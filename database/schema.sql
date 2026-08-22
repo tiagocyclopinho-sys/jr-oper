@@ -1262,3 +1262,97 @@ CREATE INDEX IF NOT EXISTS idx_clientes_cnpj   ON clientes(cnpj);
 
 
 NOTIFY pgrst, 'reload schema';
+
+-- =============================================================================
+-- 24. UNIQUE PARCIAL - branco nao colide (22/08/2026)
+-- ver database/migration_24_unique_parcial.sql
+-- =============================================================================
+-- Rode no SQL Editor do Supabase. E idempotente.
+-- =============================================================================
+
+
+-- -----------------------------------------------------------------------
+-- 24.1 MOTORISTAS - o bloqueio observado
+-- -----------------------------------------------------------------------
+ALTER TABLE motoristas DROP CONSTRAINT IF EXISTS motoristas_cnh_key;
+ALTER TABLE motoristas ALTER COLUMN cnh DROP NOT NULL;
+DROP INDEX IF EXISTS uq_motoristas_cnh;
+CREATE UNIQUE INDEX uq_motoristas_cnh
+  ON motoristas (cnh) WHERE cnh IS NOT NULL AND cnh <> '';
+
+-- -----------------------------------------------------------------------
+-- 24.2 MESMO PADRAO NOS DEMAIS CADASTROS
+-- ajudantes.cpf hoje escapa por acaso (o app nem envia a chave, entao vira
+-- NULL e varios NULL convivem). Basta alguem passar a gravar '' para cair
+-- no mesmo buraco.
+-- -----------------------------------------------------------------------
+ALTER TABLE ajudantes DROP CONSTRAINT IF EXISTS ajudantes_cpf_key;
+DROP INDEX IF EXISTS uq_ajudantes_cpf;
+CREATE UNIQUE INDEX uq_ajudantes_cpf
+  ON ajudantes (cpf) WHERE cpf IS NOT NULL AND cpf <> '';
+
+ALTER TABLE veiculos DROP CONSTRAINT IF EXISTS veiculos_placa_key;
+ALTER TABLE veiculos ALTER COLUMN placa DROP NOT NULL;
+DROP INDEX IF EXISTS uq_veiculos_placa;
+CREATE UNIQUE INDEX uq_veiculos_placa
+  ON veiculos (placa) WHERE placa IS NOT NULL AND placa <> '';
+
+ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_email_key;
+DROP INDEX IF EXISTS uq_usuarios_email;
+CREATE UNIQUE INDEX uq_usuarios_email
+  ON usuarios (email) WHERE email IS NOT NULL AND email <> '';
+
+ALTER TABLE cargas DROP CONSTRAINT IF EXISTS cargas_numero_carga_key;
+ALTER TABLE cargas ALTER COLUMN numero_carga DROP NOT NULL;
+DROP INDEX IF EXISTS uq_cargas_numero;
+CREATE UNIQUE INDEX uq_cargas_numero
+  ON cargas (numero_carga) WHERE numero_carga IS NOT NULL AND numero_carga <> '';
+
+ALTER TABLE produtos DROP CONSTRAINT IF EXISTS produtos_codigo_produto_key;
+DROP INDEX IF EXISTS uq_produtos_codigo;
+CREATE UNIQUE INDEX uq_produtos_codigo
+  ON produtos (codigo_produto) WHERE codigo_produto IS NOT NULL AND codigo_produto <> '';
+
+-- Numeros de protocolo/documento: continuam unicos quando preenchidos (e o
+-- 23505 continua alimentando a aba "Conflitos" do app), mas um registro
+-- ainda sem numero para de derrubar a tabela toda.
+ALTER TABLE ocorrencias_devolucao DROP CONSTRAINT IF EXISTS ocorrencias_devolucao_numero_protocolo_key;
+ALTER TABLE ocorrencias_devolucao ALTER COLUMN numero_protocolo DROP NOT NULL;
+DROP INDEX IF EXISTS uq_devolucao_protocolo;
+CREATE UNIQUE INDEX uq_devolucao_protocolo
+  ON ocorrencias_devolucao (numero_protocolo) WHERE numero_protocolo IS NOT NULL AND numero_protocolo <> '';
+
+ALTER TABLE ocorrencias_rota DROP CONSTRAINT IF EXISTS ocorrencias_rota_numero_protocolo_key;
+DROP INDEX IF EXISTS uq_rota_protocolo;
+CREATE UNIQUE INDEX uq_rota_protocolo
+  ON ocorrencias_rota (numero_protocolo) WHERE numero_protocolo IS NOT NULL AND numero_protocolo <> '';
+
+ALTER TABLE retencoes_frota DROP CONSTRAINT IF EXISTS retencoes_frota_numero_retencao_key;
+DROP INDEX IF EXISTS uq_retencao_numero;
+CREATE UNIQUE INDEX uq_retencao_numero
+  ON retencoes_frota (numero_retencao) WHERE numero_retencao IS NOT NULL AND numero_retencao <> '';
+
+ALTER TABLE sinistros DROP CONSTRAINT IF EXISTS sinistros_numero_sinistro_key;
+DROP INDEX IF EXISTS uq_sinistro_numero;
+CREATE UNIQUE INDEX uq_sinistro_numero
+  ON sinistros (numero_sinistro) WHERE numero_sinistro IS NOT NULL AND numero_sinistro <> '';
+
+
+NOTIFY pgrst, 'reload schema';
+
+-- =============================================================================
+-- 24.3 LIMPEZA DOS DOIS MOTORISTAS DE TESTE  (OPCIONAL - LEIA ANTES)
+--
+-- Sao os unicos 2 registros que a nuvem tem hoje em motoristas, e ambos sao
+-- artificiais: o placeholder do script de carga inicial e um registro de
+-- teste. Os 39 motoristas reais entram sozinhos no primeiro sync depois
+-- desta migracao.
+--
+-- Rode o bloco abaixo SEPARADAMENTE, depois de conferir com o SELECT que
+-- sao mesmo esses dois. Se algum motorista real ja tiver sido cadastrado
+-- pela tela com esses nomes, NAO rode.
+--
+--   SELECT id, nome, cnh FROM motoristas;
+--
+--   DELETE FROM motoristas WHERE nome IN ('A cadastrar', 'TESTE CLAUDE IGNORAR');
+-- =============================================================================

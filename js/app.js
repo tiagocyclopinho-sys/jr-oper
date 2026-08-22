@@ -4535,7 +4535,7 @@ function renderDashboardView() {
 
 // ===== MÓDULO 1: ABERTURA SAC =====
 function renderSacAberturaView() {
-  const veiculos = db.data.veiculos.filter(v => v.situacao !== 'Inativo');
+  const veiculos = (db.data.veiculos||[]).filter(v => v.situacao !== 'Inativo');
   const motivos = db.data.motivos_devolucao;
   const motoristas = db.data.motoristas;
   const ajudantes = db.data.ajudantes;
@@ -9000,7 +9000,7 @@ function renderRetornoFisicoBadge(v) {
 
 function renderViagensLargadaSubTab() {
   const todasViagens = db.getControleViagens();
-  const veiculos = db.data.veiculos.filter(v => v.situacao !== 'Inativo');
+  const veiculos = (db.data.veiculos||[]).filter(v => v.situacao !== 'Inativo');
   const motoristas = db.data.motoristas;
   const ajudantes = db.data.ajudantes;
   const rotas = db.data.rotas || [];
@@ -9782,7 +9782,7 @@ function abrirModalNovaReentrega(dados = {}) {
   const rotas = db.data.rotas || [];
   const motoristas = db.data.motoristas || [];
   const ajudantes = db.data.ajudantes || [];
-  const veiculos = db.data.veiculos ? db.data.veiculos.filter(v => v.situacao !== 'Inativo') : [];
+  const veiculos = db.data.veiculos ? (db.data.veiculos||[]).filter(v => v.situacao !== 'Inativo') : [];
   const motivos = db.data.motivos_ocorrencia || [
     "DEVOLUÇÃO TOTAL",
     "DEVOLUÇÃO PARCIAL",
@@ -9971,7 +9971,7 @@ function abrirModalEditarReentrega(id) {
   const rotas = db.data.rotas || [];
   const motoristas = db.data.motoristas || [];
   const ajudantes = db.data.ajudantes || [];
-  const veiculos = db.data.veiculos ? db.data.veiculos.filter(v => v.situacao !== 'Inativo') : [];
+  const veiculos = db.data.veiculos ? (db.data.veiculos||[]).filter(v => v.situacao !== 'Inativo') : [];
   const motivos = db.data.motivos_ocorrencia || [
     "DEVOLUÇÃO TOTAL",
     "DEVOLUÇÃO PARCIAL",
@@ -13387,7 +13387,7 @@ function editarOcorrenciaRotaModal(id) {
   const container = document.getElementById('modal-container');
   if (!container) return;
 
-  const veiculos = db.data.veiculos ? db.data.veiculos.filter(v => v.situacao !== 'Inativo' || v.id == item.veiculo_id) : [];
+  const veiculos = db.data.veiculos ? (db.data.veiculos||[]).filter(v => v.situacao !== 'Inativo' || v.id == item.veiculo_id) : [];
   const motoristas = db.data.motoristas || [];
   const rotasNomes = db.data.rotas || [];
   const motivosResumidos = db.data.motivos_ocorrencia || ["AVARIA MECÂNICA", "ATRASO DE LARGADA", "CHECKLIST", "FALTA", "SUBSTITUIÇÃO DE EQUIPE", "CONDUTA OPERACIONAL", "OUTRO"];
@@ -13998,7 +13998,7 @@ function renderCadSubTabContent() {
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 hidden sm:table-cell">CNH</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${db.data.motoristas.filter(m=>!m.is_deleted).map(m=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${m.id}</td><td class="p-2 font-semibold text-white">${m.nome}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.cnh||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('motoristas','${m.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${(db.data.motoristas||[]).filter(m=>!m.is_deleted).map(m=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${m.id}</td><td class="p-2 font-semibold text-white">${m.nome}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.cnh||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('motoristas','${m.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -14019,7 +14019,7 @@ function renderCadSubTabContent() {
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${db.data.ajudantes.filter(a=>!a.is_deleted).map(a=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${a.id}</td><td class="p-2 font-semibold text-white">${a.nome}</td><td class="p-2 text-right"><button onclick="deleteCad('ajudantes','${a.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${(db.data.ajudantes||[]).filter(a=>!a.is_deleted).map(a=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${a.id}</td><td class="p-2 font-semibold text-white">${a.nome}</td><td class="p-2 text-right"><button onclick="deleteCad('ajudantes','${a.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -14041,7 +14041,7 @@ function renderCadSubTabContent() {
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Código</th><th class="p-2">Descrição</th><th class="p-2 hidden sm:table-cell">Categoria</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${db.data.produtos.filter(p=>!p.is_deleted).map(p=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${p.codigo_produto}</td><td class="p-2 text-white text-[11px]">${p.descricao}</td><td class="p-2 text-slate-400 hidden sm:table-cell text-[10px]">${p.categoria||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('produtos','${p.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${(db.data.produtos||[]).filter(p=>!p.is_deleted).map(p=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${p.codigo_produto}</td><td class="p-2 text-white text-[11px]">${p.descricao}</td><td class="p-2 text-slate-400 hidden sm:table-cell text-[10px]">${p.categoria||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('produtos','${p.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -14071,7 +14071,7 @@ function renderCadSubTabContent() {
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Placa</th><th class="p-2">Grupo</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${db.data.veiculos.filter(v=>!v.is_deleted).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo}</td><td class="p-2"><span class="${v.situacao==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right"><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${(db.data.veiculos||[]).filter(v=>!v.is_deleted).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo}</td><td class="p-2"><span class="${v.situacao==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right"><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>

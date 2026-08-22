@@ -501,7 +501,6 @@ class CloudStore {
       { dbKey: 'motoristas',            localKey: 'jr_motoristas',        tableName: 'motoristas' },
       { dbKey: 'ajudantes',             localKey: 'jr_ajudantes',         tableName: 'ajudantes' },
       { dbKey: 'veiculos',              localKey: 'jr_veiculos',          tableName: 'veiculos' },
-      { dbKey: 'clientes',              localKey: 'jr_clientes',          tableName: 'clientes' },
       { dbKey: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  tableName: 'colaboradores_cd' },
       // (achado de 21/08/2026) produtos e setores NUNCA estiveram nesta
       // lista: existiam como tabela no banco e como coleção local, mas
@@ -510,8 +509,6 @@ class CloudStore {
       // <input list="produtos-list">, virava texto livre nos outros
       // aparelhos. Também eram as duas tabelas cujas FKs nunca teriam como
       // ser satisfeitas (ver migration_22).
-      { dbKey: 'produtos',              localKey: 'jr_produtos',          tableName: 'produtos' },
-      { dbKey: 'setores',               localKey: 'jr_setores',           tableName: 'setores' },
       // --- 2) cargas: depende de motorista/ajudante/veículo ---
       { dbKey: 'cargas',                localKey: 'jr_cargas',            tableName: 'cargas' },
       // --- 3) transacionais: dependem dos cadastros acima ---
@@ -603,9 +600,6 @@ class CloudStore {
       { tableName: 'ajudantes',             localKey: 'jr_ajudantes',         dbKey: 'ajudantes' },
       { tableName: 'veiculos',              localKey: 'jr_veiculos',          dbKey: 'veiculos' },
       { tableName: 'cargas',                localKey: 'jr_cargas',            dbKey: 'cargas' },
-      { tableName: 'clientes',              localKey: 'jr_clientes',          dbKey: 'clientes' },
-      { tableName: 'produtos',              localKey: 'jr_produtos',          dbKey: 'produtos' },
-      { tableName: 'setores',               localKey: 'jr_setores',           dbKey: 'setores' },
       { tableName: 'usuarios',              localKey: 'jr_usuarios',          dbKey: 'usuarios' },
       { tableName: 'audit_logs',            localKey: 'jr_audit_logs',        dbKey: 'audit_logs' },
       { tableName: 'registro_versoes',      localKey: 'jr_registro_versoes',  dbKey: 'registro_versoes' },
@@ -721,7 +715,24 @@ class CloudStore {
         const fullDb = rawFullNow ? JSON.parse(rawFullNow) : {};
         Object.assign(fullDb, pulledUpdates);
         localStorage.setItem('jr_sac_db', JSON.stringify(fullDb));
-        if (window.db) {
+
+        // NÃO substituir window.db.data por fullDb (achado de 22/08/2026,
+        // erro "Cannot read properties of undefined (reading 'filter')" na
+        // tela de Cadastros).
+        //
+        // 'jr_sac_db' guarda só a FATIA OPERACIONAL: store.js:_getOperationalSlice()
+        // remove clientes e produtos de propósito antes de gravar, porque são
+        // 15.139 clientes e 4.010 produtos vindos da planilha Dados SAC e ficam
+        // na chave separada 'jr_sac_static' (foi isso que derrubou o tamanho de
+        // cada gravação de ~3MB para dezenas de KB).
+        //
+        // Trocar db.data por fullDb apagava clientes e produtos da memória a
+        // cada pull — a lista de clientes sumia e db.data.produtos virava
+        // undefined, quebrando a tela de Cadastros. Mesclamos apenas as chaves
+        // que realmente vieram da nuvem, preservando o resto de db.data.
+        if (window.db && window.db.data) {
+          Object.assign(window.db.data, pulledUpdates);
+        } else if (window.db) {
           window.db.data = fullDb;
         }
       } catch(e) {}
@@ -830,7 +841,7 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.7.6";
+CloudStore.BUILD = "sync-4.7.8";
 
 window.cloudStore = new CloudStore();
 
