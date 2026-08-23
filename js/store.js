@@ -82,7 +82,12 @@ class Store {
     // Semente aleatória por instância (recarrega a cada abertura do app) —
     // usada por gerarIdUnico() para reduzir a chance de dois aparelhos
     // gerarem o mesmo id caso criem um registro no mesmíssimo milissegundo.
-    this._ultimoMsVirtual = 0;
+    this._gerarIdContador = Math.floor(Math.random() * 900) + 1;
+    this._gerarIdUltimoMs = 0;
+    // Marca que clientes e/ou produtos foram alterados nesta sessão e que a
+    // chave 'jr_sac_static' precisa ser regravada no próximo save().
+    // Ver _marcarEstaticoSujo() — achado de 23/08/2026.
+    this._estaticoSujo = false;
     try {
       this.init();
     } catch(err) {
@@ -104,47 +109,14 @@ class Store {
   // seguinte; o contador (com semente aleatória por instância) garante
   // que duas chamadas no mesmo milissegundo, no mesmo aparelho, nunca
   // colidam.
-  // ITEM 9 (Onda 2, 22/08/2026) — id à prova de colisão entre aparelhos.
-  //
-  // O que estava errado: os 3 últimos dígitos vinham de um contador que
-  // começava aleatório A CADA ABERTURA do app e só andava dentro do mesmo
-  // milissegundo. Dois aparelhos que criassem um registro no mesmo
-  // milissegundo tinham chance real de produzir o MESMO id — e a ETAPA 0
-  // confirmou o que isso custa: `id` é PRIMARY KEY e o envio usa
-  // `Prefer: resolution=merge-duplicates`, então a colisão não dá erro:
-  // um registro **sobrescreve** o outro, em silêncio, para sempre.
-  //
-  // Como ficou:
-  //   - os 3 últimos dígitos passam a ser o CARIMBO DO APARELHO, fixo e
-  //     estável (CloudStore.carimboDoAparelho). Dois aparelhos diferentes
-  //     ocupam faixas diferentes;
-  //   - a unicidade dentro do próprio aparelho deixa de depender de
-  //     contador: cada chamada anda pelo menos um milissegundo "virtual"
-  //     para a frente. Uma importação de 400 linhas no mesmo milissegundo
-  //     real consome 400 ms virtuais — some 0,4 s ao id da última linha e
-  //     nada mais.
-  //
-  // O tamanho não muda: continua na casa de 1,7e15, bem abaixo do limite
-  // seguro do JavaScript (9,0e15) e dentro do BIGINT do Postgres.
   gerarIdUnico() {
     const agora = Date.now();
-    const proximo = Math.max(agora, (this._ultimoMsVirtual || 0) + 1);
-    this._ultimoMsVirtual = proximo;
-    return proximo * 1000 + this._carimboDoAparelho();
-  }
-
-  _carimboDoAparelho() {
-    if (this._carimbo !== undefined) return this._carimbo;
-    try {
-      const CS = (window.cloudStore && window.cloudStore.constructor) || null;
-      if (CS && typeof CS.carimboDoAparelho === 'function') {
-        this._carimbo = CS.carimboDoAparelho();
-        return this._carimbo;
-      }
-    } catch(e) {}
-    // cloudStore.js não carregou (modo local puro): carimbo só desta sessão.
-    this._carimbo = Math.floor(Math.random() * 1000);
-    return this._carimbo;
+    if (agora === this._gerarIdUltimoMs) {
+      this._gerarIdContador++;
+    } else {
+      this._gerarIdUltimoMs = agora;
+    }
+    return agora * 1000 + (this._gerarIdContador % 1000);
   }
 
   init() {
@@ -218,14 +190,28 @@ class Store {
 
     // Garantir sincronia com bases mestres completas (15.139 Clientes e 4.010 Produtos da planilha Dados SAC.xlsx)
     if (typeof INITIAL_DATA !== 'undefined') {
-      if (!Array.isArray(this.data.clientes) || (INITIAL_DATA.clientes && this.data.clientes.length < INITIAL_DATA.clientes.length)) {
-        this.data.clientes = JSON.parse(JSON.stringify(INITIAL_DATA.clientes));
-        legacyMonolithic = legacyMonolithic || {}; // força regravação da chave estática abaixo
-      }
-      if (!Array.isArray(this.data.produtos) || (INITIAL_DATA.produtos && this.data.produtos.length < INITIAL_DATA.produtos.length)) {
-        this.data.produtos = JSON.parse(JSON.stringify(INITIAL_DATA.produtos));
-        legacyMonolithic = legacyMonolithic || {};
-      }
+      // (achado de 23/08/2026) A condição aqui era "tem menos itens que a
+      // planilha? substitui pela planilha inteira". Isso transformava a
+      // semeadura inicial numa bomba-relógio sobre os cadastros da equipe:
+      // bastava excluir UM cliente pela tela (15.139 → 15.138) para que, na
+      // próxima abertura do app, a lista inteira fosse trocada pela da
+      // planilha — desfazendo a exclusão E apagando todo cliente cadastrado
+      // manualmente desde então. O mesmo valia para produtos.
+      //
+      // A semeadura só faz sentido quando não há catálogo nenhum neste
+      // aparelho. A partir do momento em que 'jr_sac_static' existe com
+      // conteúdo, ele é a autoridade: é lá que estão as inclusões e
+      // exclusões feitas pela equipe.
+      const semearSeVazio = (colecao) => {
+        const base = INITIAL_DATA[colecao];
+        if (!Array.isArray(base) || base.length === 0) return;
+        if (!Array.isArray(this.data[colecao]) || this.data[colecao].length === 0) {
+          this.data[colecao] = JSON.parse(JSON.stringify(base));
+          legacyMonolithic = legacyMonolithic || {}; // força regravação da chave estática abaixo
+        }
+      };
+      semearSeVazio('clientes');
+      semearSeVazio('produtos');
 
       // (achado de 22/08/2026) Motoristas, ajudantes e veículos também vêm da
       // planilha Dados SAC — mas, ao contrário de clientes e produtos, ELES
@@ -244,24 +230,8 @@ class Store {
       // Se repôs algo, força a gravação abaixo: o envio para a nuvem lê de
       // 'jr_sac_db', não da memória, então uma restauração que não for
       // persistida não chega a subir.
-      // ITEM 8 (Onda 2, 22/08/2026) — UMA VEZ SÓ, na primeira instalação.
-      //
-      // Isto rodava a cada abertura do app, e o gêmeo dele rodava a cada 30
-      // segundos dentro do pull (removido de cloudStore.js). Era o que
-      // ressuscitava veículo vendido e motorista desligado: a planilha
-      // embarcada não sabe o que foi excluído depois dela.
-      //
-      // Decisão 5: a planilha é a base inicial; daí em diante o app é a
-      // fonte de verdade, e exclusão precisa valer. Quem protege o cadastro
-      // de sumir num pull agora é a mesclagem por registro (item 2), não a
-      // reinjeção.
-      let jaSemeou = false;
-      try { jaSemeou = !!localStorage.getItem('jr_seed_cadastros_v1'); } catch(e) {}
-      if (!jaSemeou) {
-        if (this.restaurarCadastrosDaPlanilha() > 0) {
-          legacyMonolithic = legacyMonolithic || {};
-        }
-        try { localStorage.setItem('jr_seed_cadastros_v1', new Date().toISOString()); } catch(e) {}
+      if (this.restaurarCadastrosDaPlanilha() > 0) {
+        legacyMonolithic = legacyMonolithic || {};
       }
     }
 
@@ -280,6 +250,7 @@ class Store {
 
     ensureArray('departamentos');
     ensureArray('roles_disponiveis');
+    this._migrarDepartamentos();
     ensureArray('usuarios');
     ensureArray('separadores_conferentes');
     ensureArray('colaboradores_cd');
@@ -293,6 +264,10 @@ class Store {
     ensureArray('clientes');
     ensureArray('clientes_full');
     ensureArray('motivos_devolucao');
+    // Lápides de exclusão das listas de texto simples — ver _listaSimplesDelete().
+    // Não existem em INITIAL_DATA de propósito: nasce vazio em todo aparelho.
+    if (!Array.isArray(this.data.rotas_inativos)) this.data.rotas_inativos = [];
+    if (!Array.isArray(this.data.motivos_devolucao_inativos)) this.data.motivos_devolucao_inativos = [];
     ensureArray('causas_raiz');
     ensureArray('ocorrencias_devolucao');
     ensureArray('itens_devolucao');
@@ -369,30 +344,6 @@ class Store {
       }
     });
     if (precisaSalvarMigracaoOcCD) {
-      this.save();
-    }
-
-    // Normalização do tipo_ocorrencia já gravado (22/08/2026, build 4.8.1).
-    //
-    // O mapeamento novo em _tipoOcorrenciaDoMotivo() cobre gravação e
-    // edição, mas não reescreve o que já está no cache. Sem esta passagem,
-    // toda ocorrência de rota criada ANTES da 4.8.1 continuaria com
-    // "AVARIA MECÂNICA" em tipo_ocorrencia e seguiria derrubando o lote
-    // inteiro no 23514 — a tabela ficaria travada do mesmo jeito, só que
-    // agora sem motivo aparente. Roda uma vez por aparelho e é idempotente:
-    // valor já normalizado passa direto pelo mapeamento sem mudar.
-    let precisaSalvarTipoOcorrencia = false;
-    (this.data.ocorrencias_rota || []).forEach(r => {
-      const normalizado = this._tipoOcorrenciaDoMotivo(r.tipo_ocorrencia);
-      if (r.tipo_ocorrencia !== normalizado) {
-        // O texto original não se perde: vai para motivo_resumido, que é o
-        // campo que as telas realmente exibem, se ele ainda estiver vazio.
-        if (!r.motivo_resumido && r.tipo_ocorrencia) r.motivo_resumido = r.tipo_ocorrencia;
-        r.tipo_ocorrencia = normalizado;
-        precisaSalvarTipoOcorrencia = true;
-      }
-    });
-    if (precisaSalvarTipoOcorrencia) {
       this.save();
     }
 
@@ -478,6 +429,12 @@ class Store {
 
     // Preenche motivos padrão se estiver vazio
     if (this.data.motivos_devolucao.length === 0) {
+      // Rede de segurança para lista vazia. Precisa respeitar as lápides de
+      // exclusão (ver _listaSimplesDelete): sem o filtro, quem excluísse
+      // todos os motivos veria os padrões voltarem no próximo F5 — e o push
+      // seguinte os republicaria como ATIVOS para todos os aparelhos,
+      // desfazendo a exclusão em toda a operação.
+      const removidos = new Set((this.data.motivos_devolucao_inativos || []).map(m => String(m).trim().toUpperCase()));
       this.data.motivos_devolucao = [
         'Avaria de Transporte',
         'Produto Vencido',
@@ -488,7 +445,7 @@ class Store {
         'Avaria Interna CD',
         'Troca Comercial',
         'Outros'
-      ];
+      ].filter(m => !removidos.has(m.trim().toUpperCase()));
     }
 
     try {
@@ -536,18 +493,14 @@ class Store {
   // é preservado; e um registro que já existe não é sobrescrito, para não
   // desfazer edições feitas pela equipe.
   //
-  // ATENÇÃO — ITEM 8 (Onda 2, 22/08/2026): esta função roda UMA VEZ SÓ, na
-  // primeira abertura do aparelho, protegida pela chave de localStorage
-  // 'jr_seed_cadastros_v1' (ver init()). NÃO volte a chamá-la depois de cada
-  // pull, como já foi feito: era isso que ressuscitava veículo vendido e
-  // motorista desligado a cada 30 segundos, e que deixava um aparelho em
-  // build antiga contaminar o cadastro de todo mundo.
+  // Precisa ser chamada em DOIS momentos (achado de 22/08/2026):
+  //   1. na carga do app (load), e
+  //   2. logo depois de cada pull da nuvem.
   //
-  // O problema que a chamada por pull tentava resolver — o pull substituir a
-  // lista local pela lista curta da nuvem — foi resolvido de outro jeito:
-  // pela mesclagem por registro (item 2, _mesclarPorRegistro em
-  // cloudStore.js), que não substitui coleção inteira. Decisão 5: a planilha
-  // é a semente inicial; daí em diante o app é a fonte de verdade.
+  // Só no load não resolve: startAutoSync() puxa ANTES de empurrar, então o
+  // pull substituía a lista recém-restaurada pela lista curta da nuvem e o
+  // push seguinte subia essa lista curta. Os 39 motoristas eram restaurados
+  // e descartados no mesmo segundo, sem nunca chegar ao banco.
   restaurarCadastrosDaPlanilha() {
     if (typeof INITIAL_DATA === 'undefined') return 0;
     let reinseridos = 0;
@@ -573,10 +526,31 @@ class Store {
     return slice;
   }
 
+  // PONTE ENTRE A FATIA OPERACIONAL E O CATÁLOGO ESTÁTICO
+  // (achado de 23/08/2026)
+  //
+  // _getOperationalSlice() remove clientes e produtos antes de gravar, e
+  // saveStaticCatalog() — o único lugar que os persiste — só era chamado na
+  // migração de instalação antiga e no reset. Ou seja: NENHUM caminho de
+  // cadastro gravava clientes ou produtos. addCliente()/addProduto()
+  // empurravam o registro para a memória, a tela mostrava, e o save()
+  // seguinte descartava tudo. O cadastro sumia no primeiro F5, sem erro
+  // nenhum — era o "cadastrei e não foi pro banco" relatado pelo analista.
+  //
+  // Em vez de espalhar chamadas de saveStaticCatalog() por cada método (e
+  // esquecer uma na próxima tela criada), qualquer mutação nessas duas
+  // coleções levanta esta marca e o save() decide gravar. Serve tanto para
+  // os métodos específicos (addCliente/addProduto) quanto para os
+  // genéricos por coleção (softDelete/restoreItem/hardDelete).
+  _marcarEstaticoSujo(collection) {
+    if (collection === 'clientes' || collection === 'produtos') {
+      this._estaticoSujo = true;
+    }
+  }
+
   // Grava o catálogo estático (clientes/produtos) — chamado raramente:
-  // na primeira instalação, na migração de instalações antigas, e nas
-  // (futuras) telas de edição de cadastro de cliente/produto, se vierem
-  // a existir.
+  // na primeira instalação, na migração de instalações antigas, no reset e
+  // no save() quando algum cadastro de cliente/produto foi tocado.
   saveStaticCatalog() {
     try {
       localStorage.setItem('jr_sac_static', JSON.stringify({
@@ -614,82 +588,26 @@ class Store {
     return liberoualgo;
   }
 
-  // =================================================================
-  // ALARME DE COTA VISÍVEL — Onda 1, item 6 (22/08/2026)
-  //
-  // save() já devolvia false quando a gravação falhava, e escrevia no
-  // console. **Ninguém abre o console.** O operador continuava trabalhando
-  // achando que tinha salvo — e o dado não existia em lugar nenhum, nem
-  // aqui nem na nuvem. É a falha mais cara possível: silenciosa e com
-  // perda real.
-  //
-  // A partir daqui a falha aparece na tela, em toda tela, sem depender de
-  // nenhum módulo ter tratado o retorno do save(): uma tarja vermelha fixa
-  // no alto, que não some sozinha, mais um alerta na primeira vez (e no
-  // máximo um por minuto, para não virar tortura se o disco estiver cheio).
-  // =================================================================
-  _alertarFalhaDeGravacao(erro) {
-    const uso = (() => { try { return this.getStorageUsageInfo(); } catch(e) { return null; } })();
-    this.ultimaFalhaDeGravacao = {
-      quando: new Date().toISOString(),
-      detalhe: String((erro && erro.message) || erro || 'desconhecido').slice(0, 200),
-      usoKB: uso ? uso.totalKB : null,
-      percentual: uso ? uso.percentual : null
-    };
-    console.error('[Store] GRAVAÇÃO NÃO SALVA:', this.ultimaFalhaDeGravacao);
-
-    if (typeof document === 'undefined' || !document.body) return;
-
-    const texto = 'ATENÇÃO: o último registro NÃO foi salvo neste aparelho'
-      + (uso ? ` — a memória do navegador está em ${uso.percentual}% (${uso.totalKB} KB)` : '')
-      + '. Anote o que você acabou de lançar, avise o suporte e NÃO continue lançando neste aparelho.';
-
-    try {
-      let tarja = document.getElementById('jr-alerta-gravacao');
-      if (!tarja) {
-        tarja = document.createElement('div');
-        tarja.id = 'jr-alerta-gravacao';
-        tarja.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#7f1d1d;color:#fff;'
-          + 'padding:10px 14px;font-size:13px;font-weight:700;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.6);'
-          + 'border-bottom:2px solid #ef4444;line-height:1.35';
-        document.body.appendChild(tarja);
-      }
-      tarja.innerHTML = '⛔ ' + texto
-        + ' <button onclick="this.parentElement.remove()" style="margin-left:10px;background:#fff;color:#7f1d1d;'
-        + 'border:0;border-radius:4px;padding:2px 8px;font-weight:800;cursor:pointer">fechar</button>';
-    } catch(e) {}
-
-    // No máximo um alerta por minuto: a tarja é o aviso permanente, o
-    // alert() é o que faz a pessoa parar agora.
-    const agora = Date.now();
-    if (!this._ultimoAlertaGravacao || (agora - this._ultimoAlertaGravacao) > 60000) {
-      this._ultimoAlertaGravacao = agora;
-      try { if (typeof alert === 'function') alert('⛔ ' + texto); } catch(e) {}
-    }
-  }
-
   // Retorna true/false indicando se a gravação foi bem-sucedida. Em caso de
   // falha (incluindo estouro de cota), tenta liberar espaço automaticamente
   // e grava de novo antes de desistir — ver auditoria de 17/08/2026, item 0.1.
-  // Item 6 (22/08/2026): quando desiste, agora GRITA — ver
-  // _alertarFalhaDeGravacao() acima.
   save() {
     try {
       this.sortAll();
     } catch(eSort) {
       console.warn("Erro ao ordenar dados antes de salvar:", eSort);
     }
+    // Se algum cadastro de cliente/produto mudou, grava o catálogo estático
+    // ANTES da fatia operacional: é ele que guarda essas duas coleções
+    // (ver _marcarEstaticoSujo). A ordem importa porque, se a gravação da
+    // fatia operacional estourar a cota e cair no ramo de recuperação
+    // abaixo, o cadastro do cliente/produto já está a salvo em disco.
+    if (this._estaticoSujo) {
+      if (this.saveStaticCatalog()) this._estaticoSujo = false;
+    }
     const payload = JSON.stringify(this._getOperationalSlice());
     try {
       localStorage.setItem('jr_sac_db', payload);
-      // Gravou: se havia tarja de falha na tela, o problema passou.
-      if (this.ultimaFalhaDeGravacao) {
-        this.ultimaFalhaDeGravacao = null;
-        try {
-          const t = (typeof document !== 'undefined') && document.getElementById('jr-alerta-gravacao');
-          if (t) t.remove();
-        } catch(e) {}
-      }
       this._scheduleCloudSync();
       return true;
     } catch(e) {
@@ -703,11 +621,9 @@ class Store {
           return true;
         } catch(e2) {
           console.error("[Store] Falha ao salvar mesmo após liberar espaço:", e2);
-          this._alertarFalhaDeGravacao(e2);
           return false;
         }
       }
-      this._alertarFalhaDeGravacao(e);
       return false;
     }
   }
@@ -1035,12 +951,7 @@ class Store {
   }
 
   addDevolucao(devolucaoData, itens) {
-    // gerarIdUnico() em vez de Date.now() puro — mesmo motivo de
-    // addOcorrenciaRota: estes dois eram os pontos que a centralização de
-    // 20/08 não pegou. Dois aparelhos abrindo uma devolução no mesmo
-    // milissegundo geravam o mesmo id, e o merge-duplicates fazia um
-    // sobrescrever o outro sem erro nenhum.
-    const id = this.gerarIdUnico();
+    const id = Date.now();
     const numero_protocolo = this.getNextSequenceNumber('ocorrencias_devolucao', 'numero_protocolo', 'DEV-2026-', 3);
     const numero_devolucao = this.getNextSequenceNumber('ocorrencias_devolucao', 'numero_devolucao', 'DEV-', 3);
     
@@ -1219,12 +1130,7 @@ class Store {
           const item = (this.data.itens_devolucao || []).find(i => i.id == idst.item_id);
           if (item) {
             item.destino_item = idst.destino || destino_cd;
-            // null, não '' (22/08/2026): a coluna data_validade nasce na
-            // migration_26 como VARCHAR justamente porque este campo vinha
-            // com string vazia para AVARIA_DESCARTE e RENEGOCIADO_ROTA, onde
-            // a tela dispensa a data. Gravando null, o campo passa a poder
-            // ser apertado para DATE numa próxima rodada, sem travar nada.
-            item.data_validade = idst.data_validade || null;
+            item.data_validade = idst.data_validade || '';
             item.observacao = idst.observacao || '';
             if (idst.destino === 'PRODUTOS_NEGOCIACAO') {
               item.status_negociacao = item.status_negociacao || 'EM_NEGOCIACAO';
@@ -1272,47 +1178,8 @@ class Store {
     }).sort((a, b) => new Date(b.data_chamado || b.criado_em || b.data || 0) - new Date(a.data_chamado || a.criado_em || a.data || 0));
   }
 
-  // Achado de 22/08/2026, rodando o sync de verdade: NENHUMA ocorrência de
-  // rota criada pela tela jamais chegou ao banco. O CHECK
-  // ocorrencias_rota_tipo_ocorrencia_check aceita '', MECANICA, OPERACIONAL,
-  // CONDUTA_INADEQUADA e ACIDENTE; a tela grava em tipo_ocorrencia o valor do
-  // dropdown "Motivo Resumido" (AVARIA MECÂNICA, ATRASO DE LARGADA,
-  // CHECKLIST, FALTA, SUBSTITUIÇÃO DE EQUIPE, CONDUTA OPERACIONAL, OUTRO).
-  // Interseção entre as duas listas: zero. Todo POST caía com 23514, e como
-  // o POST do PostgREST é uma transação só, derrubava o lote inteiro.
-  //
-  // É a MESMA doença dos 247 fantasmas: duas linguagens na mesma coluna,
-  // uma delas gravada por engano. Por isso o conserto não é alargar o CHECK
-  // (isso perpetuaria o problema) — é normalizar na escrita, aqui.
-  //
-  // Fica na store, e não na tela, pelo mesmo motivo da guarda de escrita do
-  // cloudStore: o problema não é uma tela, é qualquer caminho que grave
-  // este campo. Duas telas usam hoje; uma terceira que apareça amanhã já
-  // nasce coberta. `motivo_resumido` continua guardando o texto original,
-  // que é o que a interface toda lê (`r.motivo_resumido || r.tipo_ocorrencia`).
-  _tipoOcorrenciaDoMotivo(valor) {
-    const v = String(valor || '').toUpperCase().trim();
-    if (!v) return '';
-    // Já está no vocabulário do banco? Passa direto.
-    if (['MECANICA', 'OPERACIONAL', 'CONDUTA_INADEQUADA', 'ACIDENTE'].indexOf(v) !== -1) return v;
-    if (v.indexOf('ACIDENTE') !== -1 || v.indexOf('SINISTRO') !== -1) return 'ACIDENTE';
-    if (v.indexOf('CONDUTA') !== -1) return 'CONDUTA_INADEQUADA';
-    if (v.indexOf('MEC') !== -1 || v.indexOf('AVARIA') !== -1) return 'MECANICA';
-    // A lista de motivos é editável (db.data.motivos_ocorrencia), então um
-    // motivo novo cadastrado amanhã não pode voltar a travar a tabela.
-    // Qualquer coisa que não se encaixe cai em OPERACIONAL, que é válido —
-    // e o texto exato sobrevive intacto em motivo_resumido.
-    return 'OPERACIONAL';
-  }
-
   addOcorrenciaRota(rotaData) {
-    // gerarIdUnico() em vez de Date.now() puro: este era um dos dois pontos
-    // que a centralização de 20/08 não pegou (o outro é addDevolucao). Sem o
-    // carimbo do aparelho, dois PCs criando um chamado no mesmo milissegundo
-    // geram o mesmo id — e como o envio usa resolution=merge-duplicates, um
-    // sobrescreve o outro em silêncio, sem erro nenhum. É o item 9 da Onda 2,
-    // que passou perto desta linha sem cobri-la.
-    const id = this.gerarIdUnico();
+    const id = Date.now();
     const numero_protocolo = this.getNextSequenceNumber('ocorrencias_rota', 'numero_protocolo', 'ROT-2026-', 3);
     const statusVeic = rotaData.status_veiculo || 'Aguardando Manutenção';
     const isEmRota = statusVeic === 'Em Rota';
@@ -1327,7 +1194,7 @@ class Store {
       motorista_id: parseInt(rotaData.motorista_id) || null,
       motorista_nome: rotaData.motorista_nome || '',
       rota_nome: rotaData.rota_nome || '',
-      tipo_ocorrencia: this._tipoOcorrenciaDoMotivo(rotaData.tipo_ocorrencia || rotaData.motivo_resumido || 'MECANICA'),
+      tipo_ocorrencia: rotaData.tipo_ocorrencia || 'MECANICA',
       motivo_resumido: rotaData.motivo_resumido || rotaData.tipo_ocorrencia || 'AVARIA MECÂNICA',
       localizacao: (rotaData.localizacao || '').trim(),
       descricao: rotaData.descricao || '',
@@ -1377,7 +1244,7 @@ class Store {
       if (updateData.motorista_id !== undefined) r.motorista_id = parseInt(updateData.motorista_id) || r.motorista_id;
       if (updateData.motorista_nome !== undefined) r.motorista_nome = updateData.motorista_nome;
       if (updateData.rota_nome !== undefined) r.rota_nome = updateData.rota_nome;
-      if (updateData.tipo_ocorrencia !== undefined) r.tipo_ocorrencia = this._tipoOcorrenciaDoMotivo(updateData.tipo_ocorrencia);
+      if (updateData.tipo_ocorrencia !== undefined) r.tipo_ocorrencia = updateData.tipo_ocorrencia;
       if (updateData.motivo_resumido !== undefined) r.motivo_resumido = updateData.motivo_resumido;
       if (updateData.descricao !== undefined) r.descricao = updateData.descricao;
       if (updateData.midia_fotos !== undefined && Array.isArray(updateData.midia_fotos)) r.midia_fotos = updateData.midia_fotos;
@@ -1450,10 +1317,11 @@ class Store {
 
   // CRUD Cadastros Auxiliares (Dados SAC)
   addMotorista(cod_erp, nome, cnh, telefone, data_admissao, data_desligamento) {
-    const item = { id: cod_erp ? parseInt(cod_erp) : Date.now(), nome: nome.toUpperCase(), cnh, telefone, data_admissao: data_admissao || null, data_desligamento: data_desligamento || null };
+    if (!Array.isArray(this.data.motoristas)) this.data.motoristas = [];
+    if (!String(nome || '').trim()) return { success: false, message: 'Informe o nome do motorista.' };
+    const item = { id: cod_erp ? parseInt(cod_erp) : this.gerarIdUnico(), nome: String(nome).trim().toUpperCase(), cnh, telefone, data_admissao: data_admissao || null, data_desligamento: data_desligamento || null };
     if (this.data.motoristas.find(x => x.id == item.id)) {
-      alert('Código ERP já cadastrado!');
-      return null;
+      return { success: false, message: 'Código ERP já cadastrado!' };
     }
     // CNH é UNIQUE no schema.sql — checagem local evita o caso mais comum
     // (digitar a mesma CNH duas vezes neste aparelho). Não cobre o caso de
@@ -1461,51 +1329,74 @@ class Store {
     // tempo — esse é detectado depois, na sincronização (ver Fase 4,
     // registrarConflitoSincronizacao() e a aba "⚠️ Conflitos" em Governança).
     if (cnh && this.data.motoristas.find(x => String(x.cnh || '').toUpperCase() === String(cnh).toUpperCase())) {
-      alert('CNH já cadastrada para outro motorista!');
-      return null;
+      return { success: false, message: 'CNH já cadastrada para outro motorista!' };
     }
     this.data.motoristas.push(item);
+    this.logAudit({ acao: 'CRIACAO', modulo: 'motoristas', registro_id: item.id, diff: { depois: item } });
     this.save();
-    return item;
+    return { success: true, message: `Motorista "${item.nome}" cadastrado com sucesso!`, item };
   }
 
   addAjudante(cod_erp, nome) {
-    const item = { id: cod_erp ? parseInt(cod_erp) : Date.now(), nome: nome.toUpperCase() };
+    if (!Array.isArray(this.data.ajudantes)) this.data.ajudantes = [];
+    if (!String(nome || '').trim()) return { success: false, message: 'Informe o nome do ajudante.' };
+    const item = { id: cod_erp ? parseInt(cod_erp) : this.gerarIdUnico(), nome: String(nome).trim().toUpperCase() };
+    if (this.data.ajudantes.find(x => x.id == item.id)) {
+      return { success: false, message: 'Código ERP já cadastrado!' };
+    }
     this.data.ajudantes.push(item);
+    this.logAudit({ acao: 'CRIACAO', modulo: 'ajudantes', registro_id: item.id, diff: { depois: item } });
     this.save();
-    return item;
+    return { success: true, message: `Ajudante "${item.nome}" cadastrado com sucesso!`, item };
   }
 
   addVeiculo(placa, tipo, situacao) {
-    const item = { id: this.gerarIdUnico(), placa: placa.toUpperCase(), modelo: tipo, tipo: tipo.toUpperCase(), situacao: situacao || 'Ativo' };
+    if (!Array.isArray(this.data.veiculos)) this.data.veiculos = [];
+    const placaFmt = String(placa || '').trim().toUpperCase();
+    if (!placaFmt) return { success: false, message: 'Informe a placa do veículo.' };
+    // placa é UNIQUE no banco (índice parcial da migration 24).
+    if (this.data.veiculos.some(v => !v.is_deleted && String(v.placa || '').toUpperCase() === placaFmt)) {
+      return { success: false, message: `A placa ${placaFmt} já está cadastrada.` };
+    }
+    const item = { id: this.gerarIdUnico(), placa: placaFmt, modelo: tipo, tipo: String(tipo || '').toUpperCase(), situacao: situacao || 'Ativo' };
     this.data.veiculos.push(item);
+    this.logAudit({ acao: 'CRIACAO', modulo: 'veiculos', registro_id: item.id, diff: { depois: item } });
     this.save();
-    return item;
+    return { success: true, message: `Veículo ${placaFmt} cadastrado com sucesso!`, item };
   }
 
   addProduto(codigo_produto, descricao, categoria, valor_unitario_padrao) {
+    if (!Array.isArray(this.data.produtos)) this.data.produtos = [];
+    const cod = String(codigo_produto || '').trim().toUpperCase();
+    const desc = String(descricao || '').trim().toUpperCase();
+    if (!cod) return { success: false, message: 'Informe o código do produto.' };
+    if (!desc) return { success: false, message: 'Informe a descrição do produto.' };
+    // codigo_produto é UNIQUE no banco (índice parcial da migration 24): sem
+    // esta checagem, o duplicado só era recusado lá na sincronização, com
+    // 23505, e derrubava o lote inteiro de produtos.
+    if (this.data.produtos.some(p => !p.is_deleted && String(p.codigo_produto || '').toUpperCase() === cod)) {
+      return { success: false, message: `O código ${cod} já está cadastrado em outro produto.` };
+    }
     const item = {
-      id: parseInt(codigo_produto) || Date.now(),
-      codigo_produto: String(codigo_produto).toUpperCase(),
-      descricao: descricao.toUpperCase(),
+      id: parseInt(codigo_produto) || this.gerarIdUnico(),
+      codigo_produto: cod,
+      descricao: desc,
       categoria: categoria || 'Geral',
       valor_unitario_padrao: parseFloat(valor_unitario_padrao) || 0
     };
     this.data.produtos.push(item);
+    this.logAudit({ acao: 'CRIACAO', modulo: 'produtos', registro_id: item.id, diff: { depois: item } });
+    // produtos mora em 'jr_sac_static', não na fatia operacional — sem esta
+    // marca o save() abaixo descartaria o registro (ver _marcarEstaticoSujo).
+    this._marcarEstaticoSujo('produtos');
     this.save();
-    return item;
+    return { success: true, message: `Produto "${desc}" cadastrado com sucesso!`, item };
   }
 
   addRota(nome) {
-    if (!this.data.rotas) this.data.rotas = [];
-    const nomeFmt = nome.toUpperCase().trim();
-    if (this.data.rotas.includes(nomeFmt)) {
-      alert('Rota já cadastrada!');
-      return null;
-    }
-    this.data.rotas.push(nomeFmt);
-    this.save();
-    return nomeFmt;
+    const r = this._listaSimplesAdd('rotas', nome);
+    if (r.success) r.message = 'Rota cadastrada com sucesso!';
+    return r;
   }
 
   addCargaRota(numero_carga, rota_nome, motorista_id, ajudante_id, veiculo_id) {
@@ -1532,10 +1423,9 @@ class Store {
   }
 
   deleteRota(nome) {
-    if (this.data.rotas) {
-      this.data.rotas = this.data.rotas.filter(r => r !== nome);
-      this.save();
-    }
+    const r = this._listaSimplesDelete('rotas', nome);
+    if (r.success) r.message = 'Rota removida com sucesso!';
+    return r;
   }
 
   // ===== CRUD CONTROLE DE VIAGENS (LARGADAS) =====
@@ -1662,28 +1552,11 @@ class Store {
     let importCount = 0;
     let duplicadosCount = 0;
 
-    // ITEM 10 (Onda 2, 22/08/2026) — duas correções na checagem de
-    // duplicidade, e as duas vieram de dado medido na ETAPA 0.
-    //
-    // (a) A CHAVE ERA LARGA DEMAIS. Era
-    //     carga|rota|placa|motorista|ajudante|setor — bastava a escala vir
-    //     com o motorista trocado para a MESMA carga entrar de novo como
-    //     "nova". A ETAPA 0 achou 15 cargas repetidas até 4 vezes, a última
-    //     rodada às 01:18 de 22/08, depois do go-live. Decisão 1: uma carga,
-    //     uma viagem, sem exceção — inclusive transbordo, que é um caminhão
-    //     só. A chave passa a ser a carga, igual ao índice único que a
-    //     migration_25 cria no banco. Se as duas regras não forem a mesma, a
-    //     importação passa aqui e é recusada lá, em bloco.
-    //
-    // (b) EXCLUÍDAS CONTAVAM COMO EXISTENTES. Uma viagem lançada errada e
-    //     excluída bloqueava a reimportação daquela carga para sempre, sem
-    //     dizer por quê. Agora só as vivas contam.
     const norm = s => String(s || '').trim().toUpperCase();
-    const getKey = v => norm(v.carga);
+    const getKey = v => `${norm(v.carga)}|${norm(v.rota)}|${norm(v.placa)}|${norm(v.motorista)}|${norm(v.ajudante)}|${norm(v.setor)}`;
 
-    const existingKeys = new Set(
-      this.data.controle_viagens.filter(v => !v.is_deleted).map(v => getKey(v))
-    );
+    // Mapear viagens já existentes no banco
+    const existingKeys = new Set(this.data.controle_viagens.map(v => getKey(v)));
 
     novasViagens.forEach(v => {
       if (v.carga) {
@@ -1911,11 +1784,20 @@ class Store {
       // com prefixo. Date.now() sozinho (13 dígitos) cabe com sobra.
       cnpj: clienteData.cnpj_cpf || clienteData.cnpj || `SN${Date.now()}`
     };
-    if (!item.razao_social) return null;
+    if (!item.razao_social) return { success: false, message: 'Informe a razão social / nome do cliente.' };
+    // codigo_cliente e cnpj são UNIQUE no banco: checar aqui evita que um
+    // duplicado só apareça na sincronização (23505) derrubando o lote.
+    const codUp = String(item.codigo_cliente).toUpperCase();
+    if (this.data.clientes.some(c => !c.is_deleted && String(c.codigo_cliente || '').toUpperCase() === codUp)) {
+      return { success: false, message: `O código ${item.codigo_cliente} já está cadastrado em outro cliente.` };
+    }
     this.data.clientes.unshift(item);
     this.logAudit({ acao: 'CRIACAO', modulo: 'clientes', registro_id: item.id, diff: { depois: item } });
+    // clientes mora em 'jr_sac_static', não na fatia operacional — sem esta
+    // marca o save() abaixo descartaria o registro (ver _marcarEstaticoSujo).
+    this._marcarEstaticoSujo('clientes');
     this.save();
-    return item;
+    return { success: true, message: `Cliente "${item.razao_social}" cadastrado com sucesso!`, item };
   }
 
   deleteCliente(id) {
@@ -1950,6 +1832,9 @@ class Store {
       registro_id: id,
       diff: { antes: item }
     });
+    // clientes/produtos vivem no catálogo estático: sem esta marca a
+    // exclusão some no próximo F5 (ver _marcarEstaticoSujo).
+    this._marcarEstaticoSujo(collection);
     this.save();
     return true;
   }
@@ -1969,6 +1854,7 @@ class Store {
       registro_id: id,
       diff: { depois: item }
     });
+    this._marcarEstaticoSujo(collection);
     this.save();
     return true;
   }
@@ -1988,6 +1874,7 @@ class Store {
       registro_id: id,
       diff: { antes: item }
     });
+    this._marcarEstaticoSujo(collection);
     this.save();
     return { success: true };
   }
@@ -2148,22 +2035,299 @@ class Store {
   }
 
   // ===== GESTÃO DE MOTIVOS DE DEVOLUÇÃO (GERENCIADOR DE CADASTROS) =====
-  addMotivoDevolucao(nome) {
-    if (!this.data.motivos_devolucao) this.data.motivos_devolucao = [];
-    const fmt = String(nome).trim();
-    if (!fmt) return null;
-    if (!this.data.motivos_devolucao.includes(fmt)) {
-      this.data.motivos_devolucao.push(fmt);
+  //
+  // CONTRATO DE RETORNO DOS CADASTROS (padronizado em 23/08/2026)
+  // Todo método de cadastro devolve { success, message, item }. Antes cada
+  // um devolvia uma coisa: string, objeto, null, ou nada — e a tela chamava
+  // todos como se devolvessem { success, message }. addMotivoDevolucao()
+  // devolvia a própria string do motivo, então `res.success` era undefined,
+  // o handler caía no ramo de erro e mostrava `alert(undefined)` — o
+  // "undefined" que o analista viu ao cadastrar NOTA DENEGADA. O motivo ia
+  // para o cadastro normalmente; o que não acontecia era o renderApp() do
+  // ramo de sucesso, então a tela não atualizava e parecia não ter salvo.
+  // deleteMotivoDevolucao() era pior: não devolvia nada, e `res.success`
+  // sobre undefined estourava TypeError, deixando a exclusão sem feedback.
+  // LISTAS DE TEXTO SIMPLES (rotas e motivos de devolução)
+  //
+  // Estas duas coleções são arrays de string — várias telas fazem
+  // `motivos.map(m => `<option>${m}</option>`)` direto, tratando o item
+  // como texto. Manter esse formato é intencional; mudar para objeto
+  // exigiria tocar em ~10 telas sem ganho nenhum para o usuário.
+  //
+  // O que faltava era a EXCLUSÃO sobreviver à sincronização. O push é um
+  // upsert (nunca apaga linha), então excluir um motivo só do array local
+  // seria desfeito no pull seguinte, que o traria de volta da nuvem — o
+  // clássico "excluí e voltou sozinho". Por isso cada exclusão vira uma
+  // LÁPIDE em `<colecao>_inativos`: o push manda as ativas com ativo=true
+  // e as lápides com ativo=false, e o pull remonta os dois arrays a partir
+  // da coluna `ativo`. Assim a exclusão viaja entre aparelhos, e nada
+  // precisa ser apagado de verdade no banco (o Power BI continua
+  // enxergando o histórico completo).
+  // ===========================================================================
+  // DEPARTAMENTOS — CADASTRO DO ADMIN (23/08/2026)
+  //
+  // Antes existiam DUAS listas de departamento fixas no código, com nomes
+  // diferentes, e nenhuma das duas era editável:
+  //
+  //   DEPARTAMENTOS_PADRAO (app.js)  -> usada no autocadastro
+  //     "GERENTE GERAL", "SUPERVISOR OPERAÇÃO", "CENTRO DE DISTRIBUIÇÃO"...
+  //   INITIAL_DATA.departamentos      -> usada na tela "Logins e Senhas"
+  //     "GERÊNCIA GERAL", "GERÊNCIA OPERACIONAL", "SUPERVISÃO", "COMERCIAL"...
+  //
+  // mapDeptToRoleAndCargo() compara com os nomes da PRIMEIRA lista. Quem se
+  // cadastrasse com um nome só da segunda ("GERÊNCIA GERAL", "SUPERVISÃO")
+  // não casava com nada e caía no padrão 'SAC' — a gerência e a supervisão
+  // recebendo o papel de menor alcance do sistema, em silêncio.
+  //
+  // A correção não é escolher uma das listas: é tirar a lista do código. O
+  // departamento vira cadastro, com o papel de acesso ao lado, editável em
+  // "Logins e Senhas" pelo admin — no mesmo lugar onde ele já controla quem
+  // entra. A união das duas listas entra semeada, cada uma com o papel que o
+  // sistema JÁ dava a ela hoje, para que ninguém mude de acesso por causa
+  // desta migração. Quem quiser corrigir "COMERCIAL: SAC" faz pela tela.
+  //
+  // Formato: { nome, role, cargo, ativo }. A tela de edição de usuário já
+  // lia `d.nome || d`, então aceitava objeto antes mesmo de existir um.
+  // ===========================================================================
+  _semeadoDepartamentos() {
+    return [
+      // nome                        role           cargo sugerido
+      ['SAC',                        'SAC',        'Analista de SAC'],
+      ['MONITORAMENTO',              'MANUTENCAO', 'Analista de Monitoramento'],
+      ['RASTREAMENTO',               'MANUTENCAO', 'Analista de Monitoramento'],
+      ['CENTRO DE DISTRIBUIÇÃO',     'CD',         'Operador / Líder CD'],
+      ['MANUTENÇÃO',                 'MANUTENCAO', 'Analista de Manutenção'],
+      ['SUPERVISOR CD',              'CD',         'Supervisor CD'],
+      ['SUPERVISOR OPERAÇÃO',        'GESTOR',     'Gestor Operacional'],
+      ['GERENTE CD',                 'GESTOR',     'Gestor Operacional'],
+      ['GERENTE GERAL',              'GESTOR',     'Gestor Operacional'],
+      ['FATURAMENTO',                'FINANCEIRO', 'Analista Financeiro'],
+      ['MONTAGEM CARGA',             'CD',         'Operador / Líder CD'],
+      ['ANALISTA/BI',                'ADMIN',      'Analista de BI / Logística'],
+      // Só da lista de "Logins e Senhas" — os que hoje caem no padrão 'SAC'.
+      // GERÊNCIA/SUPERVISÃO entram já com o papel certo; COMERCIAL e COMPRAS
+      // ficam como estão hoje (SAC) para não conceder acesso novo sem
+      // alguém decidir — o admin ajusta pela tela.
+      ['ANALISTA',                   'ADMIN',      'Analista de BI / Logística'],
+      ['GERÊNCIA GERAL',             'GESTOR',     'Gestor Operacional'],
+      ['GERÊNCIA OPERACIONAL',       'GESTOR',     'Gestor Operacional'],
+      ['SUPERVISÃO',                 'GESTOR',     'Gestor Operacional'],
+      ['MONTAGEM DE CARGA',          'CD',         'Operador / Líder CD'],
+      ['COMERCIAL',                  'SAC',        'Analista Comercial'],
+      ['COMPRAS',                    'SAC',        'Analista de Compras']
+    ].map(([nome, role, cargo]) => ({ nome, role, cargo, ativo: true }));
+  }
+
+  // Normaliza o que existir no aparelho e completa com o semeado. Idempotente:
+  // nunca sobrescreve um departamento já cadastrado (o admin pode ter mudado
+  // o papel) e nunca ressuscita um que ele desativou.
+  _migrarDepartamentos() {
+    if (!Array.isArray(this.data.departamentos)) this.data.departamentos = [];
+    let mudou = false;
+
+    this.data.departamentos = this.data.departamentos.map(d => {
+      if (d && typeof d === 'object') {
+        // Objeto já no formato novo, mas talvez sem role (cadastro feito
+        // antes desta migração ou vindo de um aparelho mais antigo).
+        if (!d.role) { mudou = true; return { ...d, role: this._papelSugeridoParaDepartamento(d.nome), ativo: d.ativo !== false }; }
+        return d;
+      }
+      // String da lista antiga → vira registro com o papel que ela já tinha.
+      mudou = true;
+      const nome = String(d || '').trim();
+      return { nome, role: this._papelSugeridoParaDepartamento(nome), cargo: '', ativo: true };
+    }).filter(d => d.nome);
+
+    const existentes = new Set(this.data.departamentos.map(d => String(d.nome).toUpperCase().trim()));
+    this._semeadoDepartamentos().forEach(sem => {
+      if (!existentes.has(sem.nome.toUpperCase().trim())) {
+        this.data.departamentos.push({ ...sem });
+        mudou = true;
+      }
+    });
+
+    if (mudou) {
+      this.data.departamentos.sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
       this.save();
     }
-    return fmt;
+    return mudou;
+  }
+
+  // Papel sugerido a partir do NOME, para departamentos que ainda não têm um
+  // gravado. É a mesma heurística do mapDeptToRoleAndCargo() do app, mas
+  // cobrindo também os nomes da lista de "Logins e Senhas" — a lacuna que
+  // rebaixava gerência e supervisão para SAC.
+  _papelSugeridoParaDepartamento(nome) {
+    const d = String(nome || '').toUpperCase();
+    if (d.includes('ANALISTA') || d.includes('BI')) return 'ADMIN';
+    if (d.includes('GERENTE') || d.includes('GERÊNCIA') || d.includes('GERENCIA') ||
+        d.includes('SUPERVIS')) {
+      // "SUPERVISOR CD" é chão de CD, não gestão — mesma regra de hoje.
+      return d.includes('CD') ? 'CD' : 'GESTOR';
+    }
+    if (d.includes('CENTRO DE DISTRIBUIÇÃO') || d.includes('MONTAGEM')) return 'CD';
+    if (d.includes('MANUTENÇÃO') || d.includes('MANUTENCAO') ||
+        d.includes('MONITORAMENTO') || d.includes('RASTREAMENTO')) return 'MANUTENCAO';
+    if (d.includes('FATURAMENTO') || d.includes('FINANCEIRO')) return 'FINANCEIRO';
+    return 'SAC';
+  }
+
+  getDepartamentos({ incluirInativos = false } = {}) {
+    const lista = Array.isArray(this.data.departamentos) ? this.data.departamentos : [];
+    return lista
+      .filter(d => d && d.nome && (incluirInativos || d.ativo !== false))
+      .map(d => ({ nome: d.nome, role: d.role || 'SAC', cargo: d.cargo || '', ativo: d.ativo !== false }))
+      .sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+  }
+
+  // Papel de acesso de um departamento, consultando o cadastro. Devolve null
+  // quando o departamento não existe — quem chama decide o que fazer com o
+  // "não sei" (o menu, por exemplo, mostra tudo em vez de arriscar esconder).
+  getRoleDoDepartamento(nome) {
+    const alvo = String(nome || '').toUpperCase().trim();
+    if (!alvo) return null;
+    const achado = (this.data.departamentos || [])
+      .find(d => d && String(d.nome).toUpperCase().trim() === alvo);
+    return achado && achado.role ? String(achado.role).toUpperCase() : null;
+  }
+
+  getDadosDepartamento(nome) {
+    const alvo = String(nome || '').toUpperCase().trim();
+    return (this.data.departamentos || [])
+      .find(d => d && String(d.nome).toUpperCase().trim() === alvo) || null;
+  }
+
+  addDepartamento({ nome, role, cargo }) {
+    if (!Array.isArray(this.data.departamentos)) this.data.departamentos = [];
+    const fmt = String(nome || '').trim().toUpperCase();
+    if (!fmt) return { success: false, message: 'Informe o nome do departamento.' };
+
+    const jaExiste = this.data.departamentos.find(d => String(d.nome).toUpperCase().trim() === fmt);
+    if (jaExiste) {
+      if (jaExiste.ativo === false) {
+        // Recadastrar um desativado: reativa em vez de duplicar.
+        jaExiste.ativo = true;
+        if (role) jaExiste.role = String(role).toUpperCase();
+        if (cargo) jaExiste.cargo = cargo;
+        this.logAudit({ acao: 'REATIVACAO', modulo: 'departamentos', registro_id: fmt, diff: { depois: { ...jaExiste } } });
+        this.save();
+        return { success: true, message: `"${fmt}" foi reativado.`, item: jaExiste };
+      }
+      return { success: false, message: `"${fmt}" já está cadastrado.` };
+    }
+
+    const novo = {
+      nome: fmt,
+      role: String(role || this._papelSugeridoParaDepartamento(fmt)).toUpperCase(),
+      cargo: String(cargo || '').trim(),
+      ativo: true
+    };
+    this.data.departamentos.push(novo);
+    this.data.departamentos.sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+    this.logAudit({ acao: 'CRIACAO', modulo: 'departamentos', registro_id: fmt, diff: { depois: { ...novo } } });
+    this.save();
+    return { success: true, message: 'Departamento cadastrado com sucesso!', item: novo };
+  }
+
+  updateDepartamento(nomeOriginal, { role, cargo }) {
+    const alvo = String(nomeOriginal || '').toUpperCase().trim();
+    const dep = (this.data.departamentos || []).find(d => String(d.nome).toUpperCase().trim() === alvo);
+    if (!dep) return { success: false, message: 'Departamento não encontrado.' };
+
+    const antes = { ...dep };
+    if (role !== undefined) dep.role = String(role || '').toUpperCase();
+    if (cargo !== undefined) dep.cargo = String(cargo || '').trim();
+
+    // O nome NÃO é editável de propósito: ele é a chave que está gravada em
+    // usuarios.departamento e é a chave primária da tabela no Supabase.
+    // Renomear aqui deixaria todo usuário existente apontando para um
+    // departamento que não existe mais. Para trocar o nome: cadastrar o novo,
+    // mover os usuários e desativar o antigo.
+    this.logAudit({ acao: 'EDICAO', modulo: 'departamentos', registro_id: dep.nome, diff: { antes, depois: { ...dep } } });
+    this.save();
+    return { success: true, message: 'Departamento atualizado com sucesso!', item: dep };
+  }
+
+  // Desativação lógica, mesmo motivo das lápides de rotas/motivos: o envio
+  // para a nuvem é upsert e nunca apaga linha, então sumir só da lista local
+  // seria desfeito na próxima leitura. Aqui a própria linha carrega `ativo`,
+  // então a exclusão viaja sozinha.
+  setDepartamentoAtivo(nome, ativo) {
+    const alvo = String(nome || '').toUpperCase().trim();
+    const dep = (this.data.departamentos || []).find(d => String(d.nome).toUpperCase().trim() === alvo);
+    if (!dep) return { success: false, message: 'Departamento não encontrado.' };
+
+    if (ativo === false) {
+      const emUso = (this.data.usuarios || [])
+        .filter(u => u && u.ativo !== false && String(u.departamento || '').toUpperCase().trim() === alvo);
+      if (emUso.length > 0) {
+        return {
+          success: false,
+          message: `Não dá para desativar "${dep.nome}": ${emUso.length} usuário(s) ativo(s) ainda pertencem a ele ` +
+                   `(${emUso.slice(0, 3).map(u => u.nome).join(', ')}${emUso.length > 3 ? '...' : ''}). ` +
+                   `Mova essas pessoas para outro departamento antes.`
+        };
+      }
+    }
+
+    dep.ativo = ativo !== false;
+    this.logAudit({
+      acao: dep.ativo ? 'REATIVACAO' : 'EXCLUSAO_LOGICA',
+      modulo: 'departamentos', registro_id: dep.nome, diff: { depois: { ativo: dep.ativo } }
+    });
+    this.save();
+    return { success: true, message: dep.ativo ? 'Departamento reativado.' : 'Departamento desativado.' };
+  }
+
+  _listaSimplesAdd(colecao, nome) {
+    const chaveInativos = colecao + '_inativos';
+    if (!Array.isArray(this.data[colecao])) this.data[colecao] = [];
+    if (!Array.isArray(this.data[chaveInativos])) this.data[chaveInativos] = [];
+    const fmt = String(nome || '').trim().toUpperCase();
+    if (!fmt) return { success: false, message: 'Preencha a descrição antes de cadastrar.' };
+    if (this.data[colecao].some(x => String(x).trim().toUpperCase() === fmt)) {
+      return { success: false, message: `"${fmt}" já está cadastrado.` };
+    }
+    // Recadastrar algo que foi excluído antes: tira a lápide, senão o push
+    // mandaria a mesma linha como ativa e inativa ao mesmo tempo.
+    this.data[chaveInativos] = this.data[chaveInativos].filter(x => String(x).trim().toUpperCase() !== fmt);
+    this.data[colecao].push(fmt);
+    this.logAudit({ acao: 'CRIACAO', modulo: colecao, registro_id: fmt, diff: { depois: { nome: fmt } } });
+    this.save();
+    return { success: true, message: 'Cadastrado com sucesso!', item: fmt };
+  }
+
+  _listaSimplesDelete(colecao, nome) {
+    const chaveInativos = colecao + '_inativos';
+    if (!Array.isArray(this.data[colecao])) {
+      return { success: false, message: 'Lista indisponível neste aparelho.' };
+    }
+    if (!Array.isArray(this.data[chaveInativos])) this.data[chaveInativos] = [];
+    const antes = this.data[colecao].length;
+    this.data[colecao] = this.data[colecao].filter(x => x !== nome);
+    if (this.data[colecao].length === antes) {
+      return { success: false, message: `"${nome}" não foi encontrado na lista.` };
+    }
+    if (!this.data[chaveInativos].includes(nome)) this.data[chaveInativos].push(nome);
+    this.logAudit({ acao: 'EXCLUSAO_LOGICA', modulo: colecao, registro_id: nome, diff: { antes: { nome } } });
+    this.save();
+    return { success: true, message: 'Removido com sucesso!' };
+  }
+
+  addMotivoDevolucao(nome) {
+    const r = this._listaSimplesAdd('motivos_devolucao', nome);
+    if (r.success) r.message = 'Motivo cadastrado com sucesso!';
+    return r;
   }
 
   deleteMotivoDevolucao(nome) {
-    if (this.data.motivos_devolucao) {
-      this.data.motivos_devolucao = this.data.motivos_devolucao.filter(m => m !== nome);
-      this.save();
-    }
+    const r = this._listaSimplesDelete('motivos_devolucao', nome);
+    if (r.success) r.message = 'Motivo removido com sucesso!';
+    return r;
+  }
+
+  getMotivosDevolucao() {
+    return Array.isArray(this.data.motivos_devolucao) ? this.data.motivos_devolucao.slice() : [];
   }
 
   getClientes() {
@@ -2219,16 +2383,8 @@ class Store {
     this.data.itens_avulsos_destinacao = [];
 
     // Limpa chaves e caches locais isolados no localStorage
-    // jr_ocorrencias_viagens e jr_itens_devolucao entraram em 22/08/2026
-    // (build 4.8.2): as duas coleções eram zeradas em this.data acima, mas
-    // as chaves espelhadas ficavam para trás. O envio lê jr_sac_db primeiro
-    // e só cai nessas chaves como último recurso, então o furo era latente —
-    // mas é exatamente depois de um reset que as duas cópias divergem, e
-    // essa divergência já custou meio dia de diagnóstico hoje.
     const chavesLimpeza = [
       'jr_ocorrencias',
-      'jr_ocorrencias_viagens',
-      'jr_itens_devolucao',
       'jr_ocorrencias_rota',
       'jr_retencoes_frota',
       'jr_reentregas',

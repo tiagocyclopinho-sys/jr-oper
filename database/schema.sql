@@ -1356,3 +1356,18 @@ NOTIFY pgrst, 'reload schema';
 --
 --   DELETE FROM motoristas WHERE nome IN ('A cadastrar', 'TESTE CLAUDE IGNORAR');
 -- =============================================================================
+
+-- =============================================================================
+-- 25/26. CADASTROS QUE NASCERAM NAS MIGRACOES (23/08/2026)
+--
+-- ATENCAO PARA INSTALACAO NOVA: as tabelas das migracoes 25 (rotas,
+-- motivos_devolucao) e 26 (departamentos) NAO estao replicadas aqui. Ate a
+-- 24 o schema vinha sendo mantido em dia; da 25 em diante nao foi.
+--
+-- Para uma instalacao nova nascer completa, rode NESTA ORDEM:
+--   1. este schema.sql
+--   2. database/migration_25_cadastros_mestres.sql
+--   3. database/migration_26_departamentos.sql
+--
+-- As duas sao idempotentes: rodar em banco que ja as tem nao quebra nada.
+-- =============================================================================

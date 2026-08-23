@@ -18,10 +18,6 @@ class CloudStore {
     // (b) mostrar o problema na tela em vez de escondê-lo no console.
     this._tabelasPendentesDeEnvio = new Set();
     this._ultimoErroSync = null;
-    // Preenchido pela guarda na escrita (item 7): quantos registros de
-    // cache contaminado este aparelho tentou empurrar. Zero em aparelho
-    // limpo — qualquer número aqui identifica a máquina da ETAPA 3.
-    this._bloqueadosNaEscrita = null;
   }
 
   // ---------------------------------------------------------------
@@ -62,10 +58,7 @@ class CloudStore {
       configurado: this.isConfigured(),
       status: this._connectionStatus,
       tabelasComPendencia: [...this._tabelasPendentesDeEnvio],
-      ultimoErro: this._ultimoErroSync,
-      // Item 7 (22/08/2026): registros recusados no envio por terem estado
-      // de checklist no lugar da data de saída. Ver _aplicarGuardaDeEscrita.
-      bloqueadosNaEscrita: this._bloqueadosNaEscrita
+      ultimoErro: this._ultimoErroSync
     };
   }
 
@@ -145,21 +138,6 @@ class CloudStore {
         localStorage.setItem('jr_sac_db', JSON.stringify(db));
         console.log('[CloudStore] Dados transacionais zerados para início de produção.');
       }
-
-      // Zerava só jr_sac_db, deixando para trás a memória e os espelhos por
-      // tabela — as outras duas cópias das mesmas coleções. Passou a
-      // importar em 23/08/2026: desde a correção da autoridade do pull,
-      // window.db.data é a PRIMEIRA fonte consultada na mesclagem, então
-      // dado de treinamento esquecido ali voltaria a ser tratado como
-      // trabalho local deste aparelho. Zerar as três juntas é o mesmo que
-      // store.js:resetTrainingData() já fazia no caminho do Reset Global.
-      transactionalKeys.forEach(key => {
-        if (window.db && window.db.data && Array.isArray(window.db.data[key])) {
-          window.db.data[key] = [];
-        }
-        const espelho = (CloudStore.MAPA_TABELAS.find(m => m.dbKey === key) || {}).localKey;
-        if (espelho) { try { localStorage.removeItem(espelho); } catch(e) {} }
-      });
     } catch(e) {
       console.warn('[CloudStore] Erro ao zerar dados transacionais:', e);
     }
@@ -230,92 +208,94 @@ class CloudStore {
   }
 
   // ---------------------------------------------------------------
-  // LEITURA COMPLETA DE UMA TABELA (GET) — PAGINADA POR CURSOR EM id
-  //
-  // Onda 1, item 4 (ETAPA 2, 22/08/2026) — fecha o Teto 1.
-  //
-  // A leitura montava `select=*` sem `limit` e sem header `Range`. O
-  // PostgREST corta a resposta em 1.000 linhas por padrão e não avisa: ela
-  // chega com HTTP 200 e cara de completa. A ~400 viagens/mês,
-  // controle_viagens bate nisso em cerca de dois meses e meio — e aí o
-  // estrago não é "ver menos": o pull grava a lista truncada por cima do
-  // cache local e o push seguinte devolve essa lista truncada para a nuvem.
-  //
-  // Cursor em `id`, e não em `criado_em`: a ETAPA 0 mediu 24 linhas com
-  // `criado_em` nulo em controle_viagens, e linha com cursor nulo nunca
-  // entra em `id > último_lido` — some da leitura para sempre. `id` é
-  // PRIMARY KEY: nunca nulo, sem empate, e a ordem se mantém estável de um
-  // bloco para o seguinte, o que OFFSET não garante se alguém inserir no
-  // meio da leitura.
+  // LEITURA COMPLETA DE UMA TABELA (GET)
   // ---------------------------------------------------------------
-  async getAll(tableName, filters = '') {
-    if (!this.isConfigured()) return null;
-
-    // Se quem chamou já pediu ordem/limite próprios, a leitura é dele:
-    // paginar por cima mudaria o resultado que ele pediu.
-    if (/(^|&)(order|limit|offset)=/.test(filters)) {
-      return this._getPagina(tableName, filters);
+  // ---------------------------------------------------------------
+  // IMPRESSÃO DIGITAL DE UMA TABELA (23/08/2026)
+  //
+  // O push reenviava TODAS as tabelas inteiras a cada ciclo de 30s, mesmo
+  // sem nenhuma alteração. Isso já era desperdício; com clientes e produtos
+  // entrando na lista (19 mil linhas somadas) passaria a ser 38 requisições
+  // por ciclo transportando megabytes à toa — cota do Supabase e plano de
+  // dados do celular da equipe.
+  //
+  // Guardamos um hash barato do conteúdo já enviado com sucesso e pulamos a
+  // tabela quando ele não mudou. É djb2 sobre o JSON: uma varredura linear,
+  // alguns milissegundos mesmo nos 3MB do catálogo de clientes — muito mais
+  // barato que a requisição que ele evita.
+  _impressaoDigital(texto) {
+    let h = 5381;
+    for (let i = 0; i < texto.length; i++) {
+      h = ((h << 5) + h + texto.charCodeAt(i)) | 0;
     }
-
-    const PAGINA = CloudStore.PAGINA_LEITURA;
-    const tudo = [];
-    let cursor = null;
-    let completou = false;
-
-    // 200 blocos = 100.000 linhas. Chegar lá é defeito (cursor que não
-    // anda), não volume real — a trava existe para não virar laço infinito.
-    for (let bloco = 0; bloco < 200; bloco++) {
-      const partes = [];
-      if (filters) partes.push(filters);
-      partes.push('order=id.asc');
-      partes.push(`limit=${PAGINA}`);
-      if (cursor !== null) partes.push(`id=gt.${encodeURIComponent(cursor)}`);
-
-      const pagina = await this._getPagina(tableName, partes.join('&'));
-
-      if (pagina === null) {
-        // Falhou logo no primeiro bloco: pode ser tabela sem coluna `id`
-        // (aí o `order=id.asc` volta 400). Recua para a leitura antiga, sem
-        // paginação, em vez de deixar a tabela sem sincronizar.
-        if (bloco === 0) return this._getPagina(tableName, filters);
-        // Falhou no meio: devolver o pedaço já lido é pior do que não
-        // devolver nada — o pull trataria o parcial como verdade e
-        // truncaria o cache local, que é exatamente o Teto 1 que este item
-        // veio fechar.
-        console.warn(`[CloudStore] Leitura de ${tableName} interrompida no bloco ${bloco + 1} — descartando o resultado parcial para não truncar o cache local.`);
-        return null;
-      }
-
-      tudo.push(...pagina);
-
-      // Bloco incompleto = acabou. PAGINA é 500 de propósito, abaixo do
-      // corte de 1.000 do servidor: assim um bloco cheio significa sempre
-      // "pode haver mais", nunca "o servidor cortou aqui".
-      if (pagina.length < PAGINA) { completou = true; break; }
-
-      const proximo = pagina[pagina.length - 1] ? pagina[pagina.length - 1].id : null;
-      if (proximo === null || proximo === undefined || String(proximo) === String(cursor)) {
-        console.warn(`[CloudStore] Leitura de ${tableName}: o cursor não avançou no bloco ${bloco + 1} — descartando o resultado parcial.`);
-        return null;
-      }
-      cursor = proximo;
-    }
-
-    if (!completou) {
-      console.warn(`[CloudStore] Leitura de ${tableName} atingiu a trava de 200 blocos — descartando o resultado parcial.`);
-      return null;
-    }
-
-    if (tudo.length > PAGINA) {
-      console.log(`[CloudStore] ${tableName}: ${tudo.length} linhas lidas em blocos de ${PAGINA}.`);
-    }
-    return tudo;
+    return String(h >>> 0) + ':' + texto.length;
   }
 
-  // Uma requisição só. É o corpo do getAll() antigo, isolado para servir de
-  // tijolo da paginação acima e de caminho de recuo quando ela não se
-  // aplica.
-  async _getPagina(tableName, filters = '') {
+  // ---------------------------------------------------------------
+  // LEITURA PAGINADA
+  //
+  // O PostgREST corta a resposta no limite de linhas do projeto (1.000 por
+  // padrão no Supabase) e devolve 206 Partial Content sem avisar mais nada.
+  // Um GET simples em clientes traria 1.000 das 15.139 linhas — e o pull,
+  // que trata o que veio como a verdade, apagaria as outras 14.139 do
+  // aparelho. Por isso toda tabela grande é lida por faixas até vir uma
+  // página menor que o tamanho pedido.
+  // ---------------------------------------------------------------
+  // Quantos registros esta coleção tem NESTE aparelho, lendo a fonte real
+  // (não a chave-espelho 'jr_<tabela>', que só existe depois do primeiro
+  // pull e por isso responderia zero justamente no cenário mais perigoso:
+  // aparelho cheio de dados que ainda não conseguiu enviar nada).
+  _contarLocal(m) {
+    try {
+      if (m.estatico) {
+        const raw = localStorage.getItem('jr_sac_static');
+        const obj = raw ? JSON.parse(raw) : null;
+        return (obj && Array.isArray(obj[m.dbKey])) ? obj[m.dbKey].length : 0;
+      }
+      const raw = localStorage.getItem('jr_sac_db');
+      const obj = raw ? JSON.parse(raw) : null;
+      if (obj && Array.isArray(obj[m.dbKey])) {
+        const inativos = (m.listaSimples && Array.isArray(obj[m.dbKey + '_inativos'])) ? obj[m.dbKey + '_inativos'].length : 0;
+        return obj[m.dbKey].length + inativos;
+      }
+      const espelho = localStorage.getItem(m.localKey);
+      const parsed = espelho ? JSON.parse(espelho) : null;
+      return Array.isArray(parsed) ? parsed.length : 0;
+    } catch(e) {
+      return 0;
+    }
+  }
+
+  async getAllPaginado(tableName, tamanhoPagina = 1000) {
+    if (!this.isConfigured()) return null;
+    const todos = [];
+    let inicio = 0;
+    for (let guarda = 0; guarda < 500; guarda++) { // teto de segurança: 500 páginas
+      const fim = inicio + tamanhoPagina - 1;
+      try {
+        const response = await fetch(`${this.config.url}/rest/v1/${tableName}?select=*`, {
+          headers: this._headers({ 'Range-Unit': 'items', 'Range': `${inicio}-${fim}` })
+        });
+        if (!response.ok && response.status !== 206) {
+          console.warn(`[CloudStore] Erro ao ler ${tableName} (faixa ${inicio}-${fim}):`, response.status);
+          return null; // parcial não serve: devolver metade seria pior que não ler
+        }
+        const pagina = await response.json();
+        if (!Array.isArray(pagina)) return null;
+        todos.push(...pagina);
+        if (pagina.length < tamanhoPagina) return todos;
+        inicio += tamanhoPagina;
+      } catch(err) {
+        console.warn(`[CloudStore] Falha na rede ao ler ${tableName}:`, err.message);
+        return null;
+      }
+    }
+    console.warn(`[CloudStore] Leitura de ${tableName} interrompida no teto de segurança de páginas.`);
+    return todos;
+  }
+
+  async getAll(tableName, filters = '') {
+    if (!this.isConfigured()) return null;
     try {
       const url = `${this.config.url}/rest/v1/${tableName}?select=*${filters ? '&' + filters : ''}`;
       const response = await fetch(url, { headers: this._headers() });
@@ -339,28 +319,6 @@ class CloudStore {
 
     let data = Array.isArray(records) ? records : [records];
 
-    // -------------------------------------------------------------
-    // GUARDA NA ESCRITA (decisão 7 de 22/08/2026) — Onda 1, item 7
-    //
-    // A ETAPA 0 achou 247 das 331 linhas de controle_viagens com ESTADO DE
-    // CHECKLIST gravado no campo de data de saída: `data_saida` em
-    // ('INICIADO','NÃO INICIADO') junto com `status_viagem = 'FIN. NORMAL'`.
-    // Nesta build esses dois valores são legítimos — mas de OUTROS campos:
-    // fusion, checklist_saida e checklist_chegada (app.js:9265). É
-    // assinatura de uma build antiga gravando com o mapeamento de coluna
-    // trocado. `data_saida` é VARCHAR(20) no banco, então o Postgres aceita
-    // calado, e os dois vocabulários nunca se misturaram em 331 linhas.
-    //
-    // A guarda fica no envio, e não na tela: o problema não é o que este
-    // aparelho digita hoje, é o que ele ainda tem em cache de antes. E como
-    // o envio usa `resolution=merge-duplicates`, um único aparelho nessas
-    // condições desfaz a limpeza do banco no primeiro ciclo de 30s. É esta
-    // guarda que torna a `migration_25` definitiva sem depender de todo
-    // aparelho ter passado pela limpeza da ETAPA 3.
-    // -------------------------------------------------------------
-    data = this._aplicarGuardaDeEscrita(tableName, data);
-    if (data.length === 0) return true;
-
     // O PostgREST exige que, num envio em lote, todos os objetos do array
     // tenham exatamente as mesmas chaves — registros mais antigos (ex: os
     // 5 usuários padrão, sem o campo "departamento") misturados com
@@ -380,17 +338,34 @@ class CloudStore {
       });
     }
 
+    // ENVIO EM LOTES (23/08/2026)
+    //
+    // O POST era um só, com a tabela inteira no corpo. Funcionava enquanto
+    // as tabelas eram pequenas; ao ligar clientes (15.139 linhas) e produtos
+    // (4.010) na sincronização isso viraria um corpo de vários MB por
+    // requisição — tempo de resposta alto, risco de timeout no celular e,
+    // pior, um único registro problemático derrubando as 15 mil linhas de
+    // uma vez (o POST é tudo-ou-nada). Em lotes, uma falha isolada afeta
+    // apenas o seu lote e o resto da tabela chega ao banco.
+    const TAMANHO_LOTE = 500;
+    const lotes = [];
+    for (let i = 0; i < data.length; i += TAMANHO_LOTE) {
+      lotes.push(data.slice(i, i + TAMANHO_LOTE));
+    }
+
     try {
-      const response = await fetch(`${this.config.url}/rest/v1/${tableName}`, {
-        method: 'POST',
-        headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
-        body: JSON.stringify(data)
-      });
-      if (!response.ok) {
-        const errBody = await response.text();
-        this._registrarFalhaSync(tableName, response.status, errBody);
-        this._checkConflitoUnicidade(tableName, errBody, data).catch(() => {});
-        return false;
+      for (const lote of lotes) {
+        const response = await fetch(`${this.config.url}/rest/v1/${tableName}`, {
+          method: 'POST',
+          headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+          body: JSON.stringify(lote)
+        });
+        if (!response.ok) {
+          const errBody = await response.text();
+          this._registrarFalhaSync(tableName, response.status, errBody);
+          this._checkConflitoUnicidade(tableName, errBody, lote).catch(() => {});
+          return false;
+        }
       }
       this._tabelasPendentesDeEnvio.delete(tableName);
       // Marca que esta tabela JÁ conseguiu subir deste aparelho. É o que
@@ -408,743 +383,6 @@ class CloudStore {
       console.warn(`[CloudStore] Falha na rede ao salvar em ${tableName}:`, err.message);
       return false;
     }
-  }
-
-  // Guarda na escrita — decisão 7 de 22/08/2026 (Onda 1, item 7).
-  // Ver o comentário longo dentro de upsert(), onde ela é chamada.
-  //
-  // Recusa é local e silenciosa para o operador de propósito: o registro
-  // recusado é lixo de uma build antiga, não trabalho de alguém. Quem
-  // precisa saber é quem estiver fazendo a ETAPA 3 — por isso a contagem
-  // aparece em jrDiagnosticoSync(), e é ela que identifica o aparelho que
-  // carregava os 247 fantasmas, sem precisar sair andando pela empresa.
-  _aplicarGuardaDeEscrita(tableName, registros) {
-    if (tableName !== 'controle_viagens') return registros;
-
-    const aprovados = [];
-    const recusados = [];
-    for (const r of registros) {
-      if (r && !this._dataSaidaEhValida(r.data_saida)) recusados.push(r);
-      else aprovados.push(r);
-    }
-
-    if (recusados.length > 0) {
-      const amostra = recusados.slice(0, 5).map(r => `${r.carga || r.id}: data_saida="${r.data_saida}"`);
-      // O diagnóstico em si é preenchido por _auditarCacheLocal(), que varre
-      // o cache inteiro a cada ciclo — aqui só reforçamos com o que
-      // realmente tentou passar, para o caso de a auditoria não ter rodado.
-      if (!this._bloqueadosNaEscrita || this._bloqueadosNaEscrita.total < recusados.length) {
-        this._bloqueadosNaEscrita = {
-          tabela: tableName,
-          total: recusados.length,
-          exemplos: amostra,
-          quando: new Date().toISOString()
-        };
-      }
-      console.warn(
-        `[CloudStore] GUARDA NA ESCRITA: ${recusados.length} de ${registros.length} registros de ${tableName} recusados — ` +
-        `"data_saida" não é data. Este aparelho tem cache de uma build antiga (fantasmas da ETAPA 0). ` +
-        (aprovados.length > 0 ? `Os outros ${aprovados.length} seguiram normalmente. ` : 'Nada deste lote foi enviado. ') +
-        `Amostra: ${amostra.join(' | ')}`
-      );
-    }
-    return aprovados;
-  }
-
-  // Os dois formatos que esta build grava em data_saida: ISO (input
-  // type=date das telas de viagem e store.js) e dd/mm/aaaa (importação da
-  // escala, via normalizarDataImportacao). Vazio e nulo passam: é viagem
-  // lançada que ainda não saiu, e barrar isso travaria operação de verdade.
-  _dataSaidaEhValida(valor) {
-    if (valor === null || valor === undefined) return true;
-    const s = String(valor).trim();
-    if (s === '') return true;
-    return /^\d{4}-\d{2}-\d{2}([T ].*)?$/.test(s) || /^\d{2}\/\d{2}\/\d{4}$/.test(s);
-  }
-
-  // =================================================================
-  // O QUE MUDOU NESTE APARELHO — Onda 1, itens 1, 2 e 3 (22/08/2026)
-  //
-  // O defeito que isto fecha é o maior dos sete da ETAPA 0: QUALQUER
-  // gravação, em QUALQUER tela, reenviava as 25 tabelas inteiras a partir
-  // do cache local, e a leitura substituía a coleção inteira pela da nuvem.
-  // Resultado prático: a edição de um aparelho apagava a do outro sem
-  // aviso, e um aparelho com cache velho desfazia exclusão e ressuscitava
-  // registro só por existir.
-  //
-  // COMO FUNCIONA: guardamos, por registro, uma assinatura curta (hash) do
-  // estado que a nuvem confirmou — na leitura, o que veio de lá; no envio,
-  // o que subiu com sucesso. A partir daí:
-  //
-  //   registro com hash igual  -> a nuvem já tem esta versão. Não sobe, e
-  //                               na leitura a nuvem manda.
-  //   registro com hash difere -> foi mexido AQUI e ainda não subiu. Sobe,
-  //                               e na leitura o local é preservado.
-  //
-  // POR QUE NÃO USAMOS `atualizado_em` PARA DECIDIR, como o plano previa:
-  // (a) a coluna só nasce na migration_25, que roda por último — item 2
-  //     ficaria bloqueado por uma etapa posterior;
-  // (b) comparar carimbo de tempo entre aparelhos exige que os relógios
-  //     deles concordem, e celular com hora errada é comum. O hash não
-  //     depende de relógio nenhum.
-  //
-  // REGRA DE DESEMPATE, dita em voz alta: quando os dois lados mudaram,
-  // **o local vence** — porque o local é trabalho que ainda não subiu, e
-  // descartá-lo em silêncio é exatamente o erro que este projeto já
-  // cometeu vezes demais. O que a nuvem tem já está salvo em algum lugar;
-  // o que está só aqui, não.
-  // =================================================================
-
-  // JSON com as chaves sempre na mesma ordem — sem isso, o mesmo registro
-  // gera assinaturas diferentes só porque o navegador devolveu as
-  // propriedades em outra ordem.
-  _jsonEstavel(valor) {
-    if (valor === null || typeof valor !== 'object') return JSON.stringify(valor);
-    if (Array.isArray(valor)) return '[' + valor.map(v => this._jsonEstavel(v)).join(',') + ']';
-    const chaves = Object.keys(valor).sort();
-    return '{' + chaves.map(k => JSON.stringify(k) + ':' + this._jsonEstavel(valor[k])).join(',') + '}';
-  }
-
-  // FNV-1a de 32 bits. Não é criptografia — é só um jeito barato de dizer
-  // "este registro está diferente do que estava", em ~7 caracteres em vez
-  // de guardar o registro inteiro duas vezes.
-  _hashRegistro(rec) {
-    const s = this._jsonEstavel(rec);
-    let h = 0x811c9dc5;
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-    }
-    return h.toString(36);
-  }
-
-  _lerMapaSync() {
-    if (this._mapaSync) return this._mapaSync;
-    try {
-      this._mapaSync = JSON.parse(localStorage.getItem('jr_sync_hashes') || '{}');
-    } catch(e) {
-      this._mapaSync = {};
-    }
-    return this._mapaSync;
-  }
-
-  // Se a gravação do mapa falhar (cota estourada), o aparelho volta sozinho
-  // ao comportamento antigo — tudo parece mudado e tudo é reenviado. Perde
-  // eficiência, não perde dado. Por isso o erro é aviso, não exceção.
-  _gravarMapaSync() {
-    try {
-      localStorage.setItem('jr_sync_hashes', JSON.stringify(this._mapaSync || {}));
-    } catch(e) {
-      console.warn('[CloudStore] Não foi possível gravar o mapa de sincronização (o envio volta a mandar tudo):', e.message);
-    }
-  }
-
-  // Item 1 — separa, de uma coleção local, só o que mudou desde a última
-  // confirmação da nuvem.
-  _separarOQueMudou(tableName, registros) {
-    const mapa = this._lerMapaSync();
-    const conhecidos = mapa[tableName];
-    // Sem mapa ainda (primeira execução desta build, ou cota estourada):
-    // manda tudo, como antes. A partir do primeiro ciclo o mapa existe.
-    if (!conhecidos) return registros.slice();
-
-    const mudados = [];
-    for (const r of registros) {
-      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
-      if (id === null) { mudados.push(r); continue; }   // sem id, não dá para saber: manda
-      if (conhecidos[id] !== this._hashRegistro(r)) mudados.push(r);
-    }
-    return mudados;
-  }
-
-  _confirmarEnvio(tableName, enviados) {
-    const mapa = this._lerMapaSync();
-    if (!mapa[tableName]) mapa[tableName] = {};
-    for (const r of enviados) {
-      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
-      if (id !== null) mapa[tableName][id] = this._hashRegistro(r);
-    }
-    this._mapaSync = mapa;
-    this._gravarMapaSync();
-  }
-
-  // Item 2 — mesclagem por registro, no lugar de "a nuvem substitui a
-  // coleção inteira". Também é aqui que a exclusão vira durável (item 3):
-  // um registro que este aparelho não mexeu nunca sobrescreve o que veio de
-  // lá — nem para desfazer um is_deleted, nem para ressuscitar linha que
-  // sumiu da nuvem.
-  _mesclarPorRegistro(tableName, localRaw, cloudData) {
-    let locais = [];
-    try {
-      const p = localRaw ? JSON.parse(localRaw) : [];
-      locais = Array.isArray(p) ? p : Object.values(p);
-    } catch(e) { locais = []; }
-
-    const mapa = this._lerMapaSync();
-    const conhecidos = mapa[tableName];
-    const primeiraVez = !conhecidos;
-
-    const porId = new Map();
-    for (const r of locais) {
-      if (r && r.id !== undefined && r.id !== null) porId.set(String(r.id), r);
-    }
-
-    const resultado = [];
-    const novosHashes = {};
-    const idsNaNuvem = new Set();
-    // Registros que a janela operacional (item 5) não pode podar de jeito
-    // nenhum: os que ainda não subiram. Idade não importa se o dado só
-    // existe aqui.
-    const idsSeguros = new Set();
-    let preservados = 0, descartados = 0;
-
-    for (const nuvem of cloudData) {
-      const id = (nuvem && nuvem.id !== undefined && nuvem.id !== null) ? String(nuvem.id) : null;
-      if (id === null) { resultado.push(nuvem); continue; }
-      idsNaNuvem.add(id);
-
-      const local = porId.get(id);
-      if (!local) {
-        resultado.push(nuvem);
-        novosHashes[id] = this._hashRegistro(nuvem);
-        continue;
-      }
-
-      // "Sujo" = mexido aqui e ainda não confirmado pela nuvem. Na primeira
-      // execução não há como saber, e aí a nuvem manda: é o que impede um
-      // aparelho parado desde 20/08 de despejar o cache antigo por cima do
-      // que os outros já corrigiram.
-      const sujo = !primeiraVez
-        && conhecidos[id] !== undefined
-        && this._hashRegistro(local) !== conhecidos[id];
-
-      if (sujo) {
-        resultado.push(local);
-        novosHashes[id] = conhecidos[id];   // segue pendente até subir
-        idsSeguros.add(id);
-        preservados++;
-      } else {
-        resultado.push(nuvem);
-        novosHashes[id] = this._hashRegistro(nuvem);
-      }
-    }
-
-    // Registros que existem só aqui.
-    for (const [id, local] of porId) {
-      if (idsNaNuvem.has(id)) continue;
-      if (!primeiraVez && conhecidos[id] !== undefined) {
-        // A nuvem já confirmou este registro alguma vez e agora ele não
-        // está mais lá: foi apagado de verdade (Reset Global). Ressuscitar
-        // seria desfazer a exclusão de outra pessoa.
-        descartados++;
-        continue;
-      }
-      // Nunca subiu: é trabalho local pendente. Fica, e sobe no push.
-      resultado.push(local);
-      idsSeguros.add(id);
-    }
-
-    if (preservados > 0 || descartados > 0) {
-      console.log(`[CloudStore] ${tableName}: ${preservados} registro(s) local(is) preservado(s) por terem mudança não enviada; ${descartados} descartado(s) por terem sido apagados na nuvem.`);
-    }
-
-    const final = this._aplicarJanelaOperacional(tableName, resultado, novosHashes, idsSeguros);
-
-    mapa[tableName] = novosHashes;   // ids que sumiram dos dois lados saem do mapa
-    this._mapaSync = mapa;
-    this._gravarMapaSync();
-    return final;
-  }
-
-  // =================================================================
-  // JANELA OPERACIONAL — Onda 1, item 5 (22/08/2026)
-  //
-  // Teto 2: o catálogo estático já ocupa 2,9 MB de uma cota de ~5 MB, e
-  // viagem custa ~505 bytes. A 400 por mês são ~2,3 MB por ano só de
-  // viagem — o aparelho estoura e o save() falha (agora com alarme, item
-  // 6, mas falha). O histórico inteiro não precisa morar no celular: ele
-  // está na nuvem e no Power BI. Aqui fica a operação.
-  //
-  // O QUE NUNCA É PODADO, em nenhuma hipótese:
-  //   - registro que ainda não subiu para a nuvem (idsSeguros);
-  //   - registro sem data legível — na dúvida, guarda.
-  // Podar é apagar cópia, nunca original.
-  //
-  // ARMADILHA PARA QUEM MEXER DEPOIS: **não** transforme isto em filtro na
-  // leitura da nuvem (`id=gt.X` no getAll). A mesclagem trata "registro que
-  // eu conheço e não veio da nuvem" como registro apagado lá — um pull
-  // filtrado por data faria toda a base antiga parecer excluída. A poda é
-  // local, depois da mesclagem, de propósito.
-  // =================================================================
-  _aplicarJanelaOperacional(tableName, registros, hashes, idsSeguros) {
-    const dias = CloudStore.JANELA_OPERACIONAL_DIAS[tableName];
-    if (!dias) return registros;
-
-    const corte = Date.now() - (dias * 24 * 60 * 60 * 1000);
-    const mantidos = [];
-    let podados = 0;
-
-    for (const r of registros) {
-      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
-      if (id === null || idsSeguros.has(id)) { mantidos.push(r); continue; }
-
-      const quando = this._momentoDoRegistro(r);
-      if (quando === null || quando >= corte) { mantidos.push(r); continue; }
-
-      delete hashes[id];   // sai do mapa junto, senão ele cresce sem parar
-      podados++;
-    }
-
-    if (podados > 0) {
-      console.log(`[CloudStore] ${tableName}: ${podados} registro(s) fora da janela de ${dias} dias saíram do aparelho (continuam na nuvem e no Power BI).`);
-    }
-    return mantidos;
-  }
-
-  // Quando o registro nasceu, em milissegundos. Ordem de preferência:
-  //
-  // 1. `criado_em`, quando existe e é legível. A ETAPA 0 achou 24 linhas
-  //    com ele nulo em controle_viagens — por isso não dá para depender só
-  //    dele (o conserto vem na migration_25, que roda depois disto).
-  // 2. o próprio `id`, que é relógio do aparelho. **São dois formatos**:
-  //    até 20/08/2026 o id era `Date.now()` (milissegundos, ~1,7e12); de
-  //    20/08 em diante é `gerarIdUnico()` = `Date.now() * 1000 + contador`
-  //    (~1,7e15). Confundir os dois joga o registro para o ano 57000 ou
-  //    para 1970 — e some da janela, ou nunca sai dela.
-  _momentoDoRegistro(r) {
-    if (r && r.criado_em) {
-      const t = Date.parse(r.criado_em);
-      if (!isNaN(t)) return t;
-    }
-    const id = Number(r && r.id);
-    if (!isFinite(id) || id <= 0) return null;
-    if (id > 1e14) return Math.floor(id / 1000);   // formato gerarIdUnico()
-    if (id > 1e11) return id;                       // formato Date.now() antigo
-    return null;                                    // id pequeno: não é relógio
-  }
-
-  // Varre o cache local em busca da impressão digital do fantasma,
-  // independentemente de haver algo a enviar naquele ciclo. Sem isto, o
-  // contador do diagnóstico só apareceria enquanto houvesse registro sujo
-  // para empurrar — e um aparelho contaminado que já tivesse sido marcado
-  // como "em dia" mostraria `null`, escondendo justamente o que a ETAPA 3
-  // precisa achar. Ver CONFERIR_APARELHO.md.
-  _auditarCacheLocal() {
-    // Lia 'jr_controle_viagens' — o espelho — e o espelho só é escrito pelo
-    // pull. Entre um ciclo e outro ele não reflete o que o aparelho guarda,
-    // então este contador podia dizer "limpo" com fantasma na fatia
-    // operacional, e o contrário também (correção de 23/08/2026, junto com
-    // a autoridade do pull). É este número que decide se uma máquina pode
-    // operar antes do Reset Global — ele precisa contar o que ela realmente
-    // tem, na mesma ordem de confiança usada no pull.
-    let viagens = null;
-    if (window.db && window.db.data && Array.isArray(window.db.data.controle_viagens)) {
-      viagens = window.db.data.controle_viagens;
-    } else {
-      try {
-        const raw = localStorage.getItem('jr_sac_db');
-        const fatia = raw ? JSON.parse(raw) : null;
-        if (fatia && Array.isArray(fatia.controle_viagens)) viagens = fatia.controle_viagens;
-      } catch(e) {}
-    }
-    if (viagens === null) {
-      try {
-        const bruto = localStorage.getItem('jr_controle_viagens');
-        if (bruto) {
-          const p = JSON.parse(bruto);
-          viagens = Array.isArray(p) ? p : Object.values(p);
-        }
-      } catch(e) { return; }
-    }
-    if (!viagens) return;
-
-    // Ignora as já excluídas (22/08/2026, build 4.8.2). O GO_LIVE.md previa
-    // que este contador zerasse sozinho depois da migration_25 — não zerou, e
-    // o motivo é aqui: a migração marca os 247 fantasmas como is_deleted, mas
-    // getAll() faz `select=*` sem filtrar a flag, então eles continuam
-    // descendo no pull e ficando no cache. Contando-os, o alarme nunca
-    // apagava.
-    //
-    // Uma linha com is_deleted não é "cache contaminado" em nenhum sentido
-    // acionável: não aparece em tela nenhuma, e a guarda de escrita a
-    // recusaria de qualquer forma. Contá-la custava caro — não pelo número
-    // errado, mas porque um detector que fica permanentemente vermelho é um
-    // detector que ninguém mais olha. Este número precisa significar
-    // exatamente uma coisa: fantasma VIVO chegou ao cache deste aparelho.
-    const contaminados = viagens.filter(v => v && !v.is_deleted && !this._dataSaidaEhValida(v.data_saida));
-    if (contaminados.length === 0) {
-      this._bloqueadosNaEscrita = null;
-      return;
-    }
-    this._bloqueadosNaEscrita = {
-      tabela: 'controle_viagens',
-      total: contaminados.length,
-      exemplos: contaminados.slice(0, 5).map(r => `${r.carga || r.id}: data_saida="${r.data_saida}"`),
-      quando: new Date().toISOString()
-    };
-  }
-
-
-  // =================================================================
-  // DETECTOR DE RESQUÍCIO — build 4.8.3 (23/08/2026)
-  //
-  // O diagnóstico que existia até aqui responde sempre no nível da TABELA
-  // ("a nuvem recusou alguma?"), e tem um único detector de conteúdo, preso
-  // a controle_viagens (_auditarCacheLocal). Nenhum dos dois enxerga o que
-  // foi relatado em 23/08/2026: uma devolução lançada que chega na nuvem e
-  // nos outros aparelhos, mas some — ou fica velha — em um deles. Por isso
-  // jrDiagnosticoSync() diz "tudo chegou ao banco" e a tela mostra outra
-  // coisa: as duas frases são verdadeiras, sobre camadas diferentes.
-  //
-  // O MESMO registro mora em QUATRO lugares dentro deste aparelho:
-  //
-  //   1. window.db.data[dbKey]            memória — é o que a tela desenha
-  //   2. localStorage['jr_sac_db'][dbKey] a fatia operacional — é o que
-  //                                       db.save() grava (store.js:682)
-  //   3. localStorage[localKey]           o ESPELHO por tabela
-  //                                       ('jr_ocorrencias', 'jr_cargas'...)
-  //   4. localStorage['jr_sync_hashes']   a assinatura do que a nuvem
-  //                                       confirmou, registro a registro
-  //
-  // E aqui está o furo: db.save() escreve (1) e (2), e NUNCA (3). Quem
-  // escreve o espelho é só o pull (syncCloudToLocal) — que também LÊ o
-  // espelho como se ele fosse "o que este aparelho tem", e mescla a nuvem
-  // contra uma cópia que pode estar horas atrasada. Entre um pull e o
-  // seguinte, (2) e (3) discordam por construção, e não por falha de rede.
-  //
-  // A consequência ruim é silenciosa: um registro que está em (2) e não em
-  // (3) e ainda não subiu não aparece em porId dentro de _mesclarPorRegistro
-  // — não é preservado, não é descartado, simplesmente não é considerado. O
-  // resultado da mesclagem é gravado por cima das duas chaves, e o registro
-  // some. Sem erro, sem recusa, sem entrar em tabelasComPendencia. Na
-  // prática o envio quase sempre ganha a corrida (debounce de 1,5s mais o
-  // flush no alert()), e é por isso que o sintoma é UM lançamento perdido no
-  // meio de cinco que passaram.
-  //
-  // "Resquício de cache" não é uma coisa só: é uma DISCORDÂNCIA entre duas
-  // dessas camadas, e cada par tem causa e conserto diferentes. Este método
-  // não conserta nada — ele diz qual par discorda, e em quais registros,
-  // para que se pare de adivinhar. É leitura pura: não toca na rede.
-  // =================================================================
-  _lerColecaoEspelho(localKey) {
-    try {
-      const raw = localStorage.getItem(localKey);
-      if (raw === null) return null;          // nunca existiu: não é divergência
-      const p = JSON.parse(raw);
-      return Array.isArray(p) ? p : Object.values(p);
-    } catch(e) { return null; }
-  }
-
-  _porId(lista) {
-    const m = new Map();
-    if (!Array.isArray(lista)) return m;
-    for (const r of lista) {
-      if (r && r.id !== undefined && r.id !== null) m.set(String(r.id), r);
-    }
-    return m;
-  }
-
-  conferirCamadas() {
-    let sacDb = {};
-    try { sacDb = JSON.parse(localStorage.getItem('jr_sac_db') || '{}') || {}; } catch(e) {}
-    const memoria = (window.db && window.db.data) || {};
-    const mapa = this._lerMapaSync();
-
-    const tabelas = [];
-    let totalDivergentes = 0;
-    let totalEmRisco = 0;
-
-    for (const m of CloudStore.MAPA_TABELAS) {
-      const camadas = {
-        memoria:  Array.isArray(memoria[m.dbKey]) ? memoria[m.dbKey] : null,
-        sacDb:    Array.isArray(sacDb[m.dbKey])   ? sacDb[m.dbKey]   : null,
-        espelho:  this._lerColecaoEspelho(m.localKey)
-      };
-      const idx = {
-        memoria: this._porId(camadas.memoria),
-        sacDb:   this._porId(camadas.sacDb),
-        espelho: this._porId(camadas.espelho)
-      };
-      const conhecidos = (mapa && mapa[m.tableName]) || null;
-
-      // Universo = todo id visto em qualquer camada que EXISTA. Camada
-      // ausente (null) não vota: aparelho que ainda não completou um pull
-      // desta tabela não tem espelho, e isso é normal no primeiro dia.
-      const universo = new Set();
-      ['memoria', 'sacDb', 'espelho'].forEach(c => {
-        if (camadas[c]) idx[c].forEach((_, id) => universo.add(id));
-      });
-
-      const achados = [];
-      for (const id of universo) {
-        const onde = {};
-        let algumFalta = false, algumDifere = false;
-        let ref = null;
-        ['memoria', 'sacDb', 'espelho'].forEach(c => {
-          if (!camadas[c]) { onde[c] = 'n/a'; return; }
-          const r = idx[c].get(id);
-          if (!r) { onde[c] = 'FALTA'; algumFalta = true; return; }
-          const h = this._hashRegistro(r);
-          if (ref === null) ref = h;
-          else if (ref !== h) algumDifere = true;
-          onde[c] = h;
-        });
-        if (!algumFalta && !algumDifere) continue;
-
-        // O caso perigoso, e o único que pede ação imediata: o registro está
-        // na fatia operacional (foi salvo aqui), NÃO está no espelho, e o
-        // mapa de sincronização não o conhece — ou seja, ainda não subiu. O
-        // próximo pull vai mesclar a nuvem contra o espelho, que não o
-        // contém, e gravar o resultado por cima de jr_sac_db.
-        const emRisco = onde.sacDb !== 'FALTA' && onde.sacDb !== 'n/a'
-          && onde.espelho === 'FALTA'
-          && (!conhecidos || conhecidos[id] === undefined);
-        if (emRisco) totalEmRisco++;
-        totalDivergentes++;
-
-        const amostra = idx.sacDb.get(id) || idx.memoria.get(id) || idx.espelho.get(id) || {};
-        achados.push({ id, emRisco, onde, rotulo: this._rotuloDoRegistro(amostra) });
-      }
-
-      if (achados.length > 0) {
-        tabelas.push({
-          tabela: m.tableName,
-          espelho: m.localKey,
-          // Ordena para o que exige ação aparecer primeiro na tela e no
-          // console — lista longa sem ordem é lista que ninguém lê.
-          divergentes: achados.sort((a, b) => (b.emRisco - a.emRisco)).slice(0, 50),
-          total: achados.length,
-          emRisco: achados.filter(a => a.emRisco).length,
-          contagens: {
-            memoria: camadas.memoria ? camadas.memoria.length : null,
-            sacDb:   camadas.sacDb   ? camadas.sacDb.length   : null,
-            espelho: camadas.espelho ? camadas.espelho.length : null
-          }
-        });
-      }
-    }
-
-    return {
-      quando: new Date().toISOString(),
-      build: CloudStore.BUILD,
-      totalDivergentes,
-      totalEmRisco,
-      tabelas: tabelas.sort((a, b) => (b.emRisco - a.emRisco) || (b.total - a.total))
-    };
-  }
-
-  // Um jeito humano de reconhecer o registro na lista, sem despejar o objeto
-  // inteiro: placa, carga, cliente, nome — o que houver, nessa ordem.
-  _rotuloDoRegistro(r) {
-    if (!r || typeof r !== 'object') return '';
-    const campos = ['veiculo_placa', 'placa', 'carga_numero', 'carga', 'carga_rota',
-                    'protocolo', 'nota_fiscal', 'cliente_nome', 'motorista_nome',
-                    'nome', 'colaborador', 'data'];
-    const partes = [];
-    for (const c of campos) {
-      if (r[c] !== undefined && r[c] !== null && String(r[c]).trim() !== '') {
-        partes.push(String(r[c]).trim());
-        if (partes.length === 2) break;
-      }
-    }
-    return partes.join(' / ');
-  }
-
-  // =================================================================
-  // RASTREAR UM REGISTRO — a pergunta que ninguém conseguia fazer
-  //
-  // Recebe o que o operador tem na mão (uma placa, uma carga, uma NF, um
-  // protocolo, um id) e devolve, para cada cópia encontrada, o estado nas
-  // quatro camadas locais MAIS o que a nuvem tem de fato — lido agora,
-  // direto, sem passar por cache nenhum.
-  //
-  // É a única leitura do sistema que compara os cinco lugares ao mesmo
-  // tempo, e por isso é a única que consegue dizer QUAL deles está velho.
-  // =================================================================
-  async rastrearRegistro(termo) {
-    const alvo = String(termo || '').trim().toUpperCase();
-    if (!alvo) return { termo: '', achados: [], erro: 'Informe uma placa, carga, NF, protocolo ou id.' };
-
-    let sacDb = {};
-    try { sacDb = JSON.parse(localStorage.getItem('jr_sac_db') || '{}') || {}; } catch(e) {}
-    const memoria = (window.db && window.db.data) || {};
-    const mapa = this._lerMapaSync();
-
-    const bate = (r) => {
-      if (!r || typeof r !== 'object') return false;
-      if (String(r.id) === alvo) return true;
-      for (const k of Object.keys(r)) {
-        const v = r[k];
-        if (v === null || v === undefined || typeof v === 'object') continue;
-        if (String(v).trim().toUpperCase() === alvo) return true;
-      }
-      return false;
-    };
-
-    const achados = [];
-    for (const m of CloudStore.MAPA_TABELAS) {
-      const camadas = {
-        memoria:  Array.isArray(memoria[m.dbKey]) ? memoria[m.dbKey] : null,
-        sacDb:    Array.isArray(sacDb[m.dbKey])   ? sacDb[m.dbKey]   : null,
-        espelho:  this._lerColecaoEspelho(m.localKey)
-      };
-      const ids = new Set();
-      ['memoria', 'sacDb', 'espelho'].forEach(c => {
-        (camadas[c] || []).forEach(r => { if (bate(r) && r.id != null) ids.add(String(r.id)); });
-      });
-      if (ids.size === 0) continue;
-
-      const idx = {
-        memoria: this._porId(camadas.memoria),
-        sacDb:   this._porId(camadas.sacDb),
-        espelho: this._porId(camadas.espelho)
-      };
-      const conhecidos = (mapa && mapa[m.tableName]) || null;
-
-      for (const id of ids) {
-        const linha = { tabela: m.tableName, id, camadas: {} };
-        ['memoria', 'sacDb', 'espelho'].forEach(c => {
-          if (!camadas[c]) { linha.camadas[c] = { estado: 'n/a' }; return; }
-          const r = idx[c].get(id);
-          linha.camadas[c] = r
-            ? { estado: 'presente', hash: this._hashRegistro(r), rotulo: this._rotuloDoRegistro(r) }
-            : { estado: 'ausente' };
-        });
-        linha.camadas.hashMap = (!conhecidos || conhecidos[id] === undefined)
-          ? { estado: 'nunca confirmado' }
-          : { estado: 'confirmado', hash: conhecidos[id] };
-
-        // A nuvem, agora, sem cache. O filtro id=eq. desvia da paginação de
-        // propósito: aqui se quer UMA linha, não a tabela inteira.
-        let naNuvem = { estado: 'nao consultada' };
-        if (this.isConfigured()) {
-          const linhas = await this._getPagina(m.tableName, 'id=eq.' + encodeURIComponent(id));
-          if (linhas === null) naNuvem = { estado: 'falha ao consultar' };
-          else if (linhas.length === 0) naNuvem = { estado: 'ausente' };
-          else naNuvem = { estado: 'presente', hash: this._hashRegistro(linhas[0]), registro: linhas[0] };
-        }
-        linha.camadas.nuvem = naNuvem;
-        linha.veredito = this._vereditoDoRastreio(linha.camadas);
-        achados.push(linha);
-      }
-    }
-
-    return { termo: alvo, quando: new Date().toISOString(), achados };
-  }
-
-  // Traduz a combinação das cinco camadas numa frase acionável. A ordem dos
-  // testes é a ordem da gravidade: o primeiro que casar é o que manda.
-  _vereditoDoRastreio(c) {
-    const presente = (x) => c[x] && c[x].estado === 'presente';
-    const ausente  = (x) => c[x] && c[x].estado === 'ausente';
-
-    if (ausente('nuvem') && presente('sacDb') && ausente('espelho')
-        && c.hashMap.estado === 'nunca confirmado') {
-      return { nivel: 'CRITICO', texto: 'Salvo neste aparelho, ainda nao subiu, e o espelho nao o tem: o proximo pull apaga este registro. Force o envio antes de fechar o app.' };
-    }
-    if (ausente('nuvem') && c.hashMap.estado === 'confirmado') {
-      return { nivel: 'CRITICO', texto: 'O mapa de sincronizacao diz que a nuvem ja confirmou este registro, mas ele nao esta la. Nunca mais sera reenviado sozinho, e o proximo pull o trata como apagado.' };
-    }
-    if (ausente('nuvem')) {
-      return { nivel: 'ATENCAO', texto: 'So existe neste aparelho. Ainda nao subiu: normal por alguns segundos, problema se persistir depois de um ciclo de 30s.' };
-    }
-    if (presente('nuvem') && ausente('sacDb') && ausente('memoria')) {
-      return { nivel: 'ATENCAO', texto: 'Esta na nuvem e nao neste aparelho. Pode ser a janela operacional (90 dias) ou um pull que ainda nao rodou.' };
-    }
-    if (presente('nuvem') && presente('memoria') && c.memoria.hash !== c.nuvem.hash
-        && c.hashMap.estado === 'confirmado' && c.hashMap.hash === c.nuvem.hash) {
-      return { nivel: 'ATENCAO', texto: 'A tela mostra uma versao diferente da que esta na nuvem, e a diferenca nao esta marcada como alteracao local. E resquicio de tela: recarregue.' };
-    }
-    if (presente('sacDb') && presente('espelho') && c.sacDb.hash !== c.espelho.hash) {
-      return { nivel: 'ATENCAO', texto: 'As duas copias locais discordam entre si. O espelho esta velho, e e essa diferenca que o proximo pull vai resolver, nem sempre a favor do que esta na tela.' };
-    }
-    if (presente('memoria') && presente('sacDb') && c.memoria.hash !== c.sacDb.hash) {
-      return { nivel: 'ATENCAO', texto: 'A memoria e o que esta gravado discordam. A tela esta desenhando algo que nao foi salvo.' };
-    }
-    return { nivel: 'OK', texto: 'As copias batem entre si e com a nuvem.' };
-  }
-
-  // =================================================================
-  // REGISTRO DE APARELHO — Onda 2, item 12 (22/08/2026)
-  //
-  // Responde "qual máquina está em qual versão, e qual delas está com
-  // cache contaminado" sem ninguém sair andando pela empresa — e sobretudo
-  // sem depender do console, que **não existe em celular**. Cada aparelho
-  // publica a própria ficha; a tela fica em Governança → Aparelhos.
-  //
-  // NÃO usa upsert(): se a tabela ainda não existir (a ETAPA 2b roda logo
-  // depois do deploy), o upsert marcaria a tabela como pendente e acenderia
-  // o alerta vermelho de "dados não salvos" para todo mundo, por um
-  // problema que não é de dado do usuário. Aqui a falha é silenciosa de
-  // propósito — no máximo um aviso no console.
-  // =================================================================
-  _plataformaDoAparelho() {
-    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
-    const so = /Android/i.test(ua) ? 'Android'
-             : /iPhone|iPad|iPod/i.test(ua) ? 'iPhone/iPad'
-             : /Windows/i.test(ua) ? 'Windows'
-             : /Mac OS/i.test(ua) ? 'Mac'
-             : /Linux/i.test(ua) ? 'Linux' : 'Desconhecido';
-    const nav = /Edg\//.test(ua) ? 'Edge'
-              : /OPR\//.test(ua) ? 'Opera'
-              : /Chrome\//.test(ua) ? 'Chrome'
-              : /Firefox\//.test(ua) ? 'Firefox'
-              : /Safari\//.test(ua) ? 'Safari' : 'Navegador';
-    return so + ' / ' + nav;
-  }
-
-  apelidoDoAparelho() {
-    try {
-      const salvo = localStorage.getItem('jr_device_apelido');
-      if (salvo) return salvo;
-    } catch(e) {}
-    return this._plataformaDoAparelho();
-  }
-
-  nomearAparelho(apelido) {
-    const nome = String(apelido || '').trim().slice(0, 60);
-    if (!nome) return false;
-    try { localStorage.setItem('jr_device_apelido', nome); } catch(e) {}
-    this.registrarAparelho().catch(() => {});
-    return true;
-  }
-
-  async registrarAparelho() {
-    if (!this.isConfigured()) return false;
-    const ficha = {
-      id: CloudStore.idDoAparelho(),
-      apelido: this.apelidoDoAparelho(),
-      plataforma: this._plataformaDoAparelho(),
-      build: CloudStore.BUILD,
-      ultimo_usuario: (window.db && window.db.currentUser && window.db.currentUser.nome) || null,
-      ultimo_acesso: new Date().toISOString(),
-      // O número que identifica o aparelho da ETAPA 3. Zero é o esperado.
-      registros_recusados: this._bloqueadosNaEscrita ? this._bloqueadosNaEscrita.total : 0
-    };
-    try {
-      const resp = await fetch(`${this.config.url}/rest/v1/dispositivos`, {
-        method: 'POST',
-        headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
-        body: JSON.stringify([ficha])
-      });
-      if (!resp.ok) {
-        // 404 = a ETAPA 2b ainda não rodou. Não é erro do usuário.
-        if (!this._avisouFaltaDispositivos) {
-          this._avisouFaltaDispositivos = true;
-          console.warn(`[CloudStore] Não foi possível registrar este aparelho (HTTP ${resp.status}). Se for 404, a tabela "dispositivos" ainda não foi criada — ver ETAPA 2b do GO_LIVE.md.`);
-        }
-        return false;
-      }
-      return true;
-    } catch(e) {
-      return false;
-    }
-  }
-
-  async listarAparelhos() {
-    const lista = await this.getAll('dispositivos');
-    if (!Array.isArray(lista)) return null;
-    return lista.sort((a, b) => String(b.ultimo_acesso || '').localeCompare(String(a.ultimo_acesso || '')));
   }
 
   // Fase 4 (20/08/2026): motoristas.cnh e usuarios.email são UNIQUE no
@@ -1177,11 +415,6 @@ class CloudStore {
   // problema de qualidade do dado, não de sincronização silenciosa).
   async _checkConflitoUnicidade(tableName, errBody, records) {
     const CAMPOS_UNICOS_POR_TABELA = {
-      // A migration_25 cria índice único parcial sobre controle_viagens.carga
-      // (decisão 1: uma carga, uma viagem). Sem esta linha, a colisão cairia
-      // no mesmo buraco silencioso que os números de protocolo caíam antes
-      // da Fase 5 — envio recusado, nada na aba "⚠️ Conflitos".
-      controle_viagens: 'carga',
       motoristas: 'cnh',
       usuarios: 'email',
       ocorrencias_devolucao: 'numero_protocolo',
@@ -1370,13 +603,47 @@ class CloudStore {
       { dbKey: 'ajudantes',             localKey: 'jr_ajudantes',         tableName: 'ajudantes' },
       { dbKey: 'veiculos',              localKey: 'jr_veiculos',          tableName: 'veiculos' },
       { dbKey: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  tableName: 'colaboradores_cd' },
-      // (achado de 21/08/2026) produtos e setores NUNCA estiveram nesta
-      // lista: existiam como tabela no banco e como coleção local, mas
-      // jamais saíam do aparelho que os cadastrou. Por isso a lista de
-      // produtos da Devolução aparecia vazia — e o campo, que é um
-      // <input list="produtos-list">, virava texto livre nos outros
-      // aparelhos. Também eram as duas tabelas cujas FKs nunca teriam como
-      // ser satisfeitas (ver migration_22).
+      { dbKey: 'setores',               localKey: 'jr_setores',           tableName: 'setores' },
+      // (achado de 21/08/2026, corrigido em 23/08/2026) produtos e setores
+      // NUNCA estiveram nesta lista: existiam como tabela no banco e como
+      // coleção local, mas jamais saíam do aparelho que os cadastrou. Por
+      // isso a lista de produtos da Devolução aparecia vazia — e o campo,
+      // que é um <input list="produtos-list">, virava texto livre nos
+      // outros aparelhos. Também eram as duas tabelas cujas FKs nunca
+      // teriam como ser satisfeitas (ver migration_22).
+      //
+      // Junto entram as quatro coleções que fecham a aba "Cadastros
+      // Mestres" (achado de 23/08/2026 — metade das abas não chegava ao
+      // banco):
+      //   estatico: mora em 'jr_sac_static', não na fatia operacional.
+      //   listaSimples: array de string local ↔ linhas {nome, ativo} no
+      //                 banco (rotas e motivos de devolução).
+      //   colunas: whitelist do que a tabela realmente tem. O upsert manda
+      //            o registro como está, e clientes/produtos carregam
+      //            campos que só existem no app (codigo, nome) — um deles
+      //            basta para o PostgREST recusar o lote com PGRST204.
+      { dbKey: 'rotas',                 localKey: 'jr_rotas',             tableName: 'rotas',              listaSimples: true },
+      { dbKey: 'motivos_devolucao',     localKey: 'jr_motivos_devolucao', tableName: 'motivos_devolucao',  listaSimples: true },
+      // departamentos: cadastro do admin (nome + papel de acesso + cargo).
+      // Não é listaSimples: carrega role/cargo além do nome, e é justamente
+      // o role que precisa viajar entre aparelhos — o admin muda
+      // "SUPERVISÃO: SAC" para "SUPERVISÃO: GESTOR" no PC e isso tem de
+      // valer no celular de todo mundo.
+      //
+      // `usuarios.departamento` continua sendo TEXTO LIVRE, sem FK para cá,
+      // e isso é deliberado: `usuarios` sobe ANTES desta tabela na ordem de
+      // envio, e uma FK faria o Postgres recusar todo usuário cujo
+      // departamento ainda não tivesse chegado. É exatamente a armadilha
+      // documentada na migração 22 ("chaves estrangeiras que a sincronização
+      // não tem como respeitar"), e ela custou uma semana. Aqui a tabela é
+      // consultada, não imposta: departamento desconhecido não quebra o
+      // cadastro do usuário, só faz o menu falhar aberto.
+      { dbKey: 'departamentos',         localKey: 'jr_departamentos',     tableName: 'departamentos',
+        colunas: ['nome','role','cargo','ativo'] },
+      { dbKey: 'clientes',              localKey: 'jr_clientes',          tableName: 'clientes',           estatico: true,
+        colunas: ['id','codigo_cliente','razao_social','cnpj','cidade','uf','is_deleted','deleted_at','deleted_by_usuario_id','deleted_by_nome'] },
+      { dbKey: 'produtos',              localKey: 'jr_produtos',          tableName: 'produtos',           estatico: true,
+        colunas: ['id','codigo_produto','descricao','categoria','valor_unitario_padrao','is_deleted','deleted_at','deleted_by_usuario_id','deleted_by_nome'] },
       // --- 2) cargas: depende de motorista/ajudante/veículo ---
       { dbKey: 'cargas',                localKey: 'jr_cargas',            tableName: 'cargas' },
       // --- 3) transacionais: dependem dos cadastros acima ---
@@ -1408,48 +675,78 @@ class CloudStore {
       { dbKey: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', tableName: 'itens_avulsos_destinacao' }
     ];
 
-    // Independe de haver algo a enviar: é o que mantém o diagnóstico do
-    // aparelho honesto para a ETAPA 3 (ver CONFERIR_APARELHO.md).
-    this._auditarCacheLocal();
-
     let fullDb = null;
     try {
       const rawFull = localStorage.getItem('jr_sac_db');
       if (rawFull) fullDb = JSON.parse(rawFull);
     } catch(e) {}
 
+    // clientes e produtos não estão em 'jr_sac_db' de propósito — vivem na
+    // chave separada 'jr_sac_static' (ver store.js:_getOperationalSlice).
+    let staticDb = null;
+    try {
+      const rawStatic = localStorage.getItem('jr_sac_static');
+      if (rawStatic) staticDb = JSON.parse(rawStatic);
+    } catch(e) {}
+
     for (const m of mappings) {
       try {
         let records = [];
-        if (fullDb && Array.isArray(fullDb[m.dbKey])) {
-          records = fullDb[m.dbKey];
-        } else {
+        const origem = m.estatico ? staticDb : fullDb;
+        if (origem && Array.isArray(origem[m.dbKey])) {
+          records = origem[m.dbKey];
+        } else if (!m.estatico && !m.listaSimples) {
+          // Só as tabelas comuns caem no atalho da chave própria. Para
+          // estatico/listaSimples a chave 'jr_<tabela>' guarda o formato do
+          // BANCO (o espelho do último pull), não o formato do app — usá-la
+          // aqui reenviaria linha já convertida como se fosse dado local.
           const raw = localStorage.getItem(m.localKey);
           if (raw) {
             const parsed = JSON.parse(raw);
             records = Array.isArray(parsed) ? parsed : Object.values(parsed);
           }
         }
-        if (records && records.length > 0) {
-          // Item 1 (22/08/2026): antes, isto era `upsert(tabela, records)` —
-          // a tabela inteira, a cada gravação de qualquer tela. Agora sobe
-          // só o que mudou aqui desde a última confirmação da nuvem.
-          const mudados = this._separarOQueMudou(m.tableName, records);
-          if (mudados.length === 0) continue;
-          const enviou = await this.upsert(m.tableName, mudados);
-          // Só marca como confirmado se o POST passou. Envio recusado
-          // continua "sujo" e é tentado de novo no ciclo seguinte.
-          if (enviou) this._confirmarEnvio(m.tableName, mudados);
+
+        // Lista de texto simples → linhas do banco. As ativas vão com
+        // ativo=true; as excluídas ("lápides", ver store.js:_listaSimplesDelete)
+        // vão com ativo=false, que é como a exclusão viaja entre aparelhos
+        // sem que o upsert precise apagar linha nenhuma.
+        if (m.listaSimples) {
+          const inativos = (fullDb && Array.isArray(fullDb[m.dbKey + '_inativos'])) ? fullDb[m.dbKey + '_inativos'] : [];
+          records = [
+            ...records.map(nome => ({ nome: String(nome), ativo: true })),
+            ...inativos.map(nome => ({ nome: String(nome), ativo: false }))
+          ].filter(r => r.nome.trim() !== '');
         }
+
+        // Descarta campos que só existem no app antes de enviar.
+        if (m.colunas && records.length > 0) {
+          records = records.map(r => {
+            const limpo = {};
+            m.colunas.forEach(c => { if (c in r) limpo[c] = r[c]; });
+            return limpo;
+          });
+        }
+
+        if (!records || records.length === 0) continue;
+
+        // Nada mudou desde o último envio bem-sucedido? Não gasta requisição.
+        const corpo = JSON.stringify(records);
+        const digital = this._impressaoDigital(corpo);
+        const chaveDigital = 'jr_sync_hash_' + m.tableName;
+        let digitalAnterior = null;
+        try { digitalAnterior = localStorage.getItem(chaveDigital); } catch(e) {}
+        if (digitalAnterior === digital && !this._tabelasPendentesDeEnvio.has(m.tableName)) continue;
+
+        const ok = await this.upsert(m.tableName, records);
+        try {
+          if (ok) localStorage.setItem(chaveDigital, digital);
+          else localStorage.removeItem(chaveDigital); // falhou: tentar de novo no próximo ciclo
+        } catch(e) {}
       } catch(e) {
         console.warn(`[CloudStore] Erro ao sincronizar ${m.tableName}:`, e);
       }
     }
-    
-    // Item 12: a ficha do aparelho sobe junto com o ciclo normal — assim o
-    // "visto por último" da tela de Aparelhos é sempre real, e a contagem de
-    // recusas acompanha o que a auditoria acabou de medir.
-    this.registrarAparelho().catch(() => {});
 
     this._setStatus('online');
     console.log('[CloudStore] Sincronização Local → Nuvem concluída:', new Date().toLocaleTimeString('pt-BR'));
@@ -1475,14 +772,41 @@ class CloudStore {
       try { await this.syncLocalToCloud(); } catch(e) {}
     }
 
-    // A lista mora em CloudStore.MAPA_TABELAS, no fim do arquivo, porque o
-    // detector de resquicio (conferirCamadas/rastrearRegistro) precisa dela
-    // tambem — e uma terceira copia do mapeamento envelheceria sozinha, que
-    // e exatamente como 'produtos' e 'setores' passaram semanas sem sair do
-    // aparelho que os cadastrou. Aqui a ordem nao importa: cada tabela e
-    // lida por conta propria. No ENVIO importa (chave estrangeira), e por
-    // isso syncLocalToCloud mantem a lista ordenada dele.
-    const mappings = CloudStore.MAPA_TABELAS;
+    const mappings = [
+      { tableName: 'ocorrencias_devolucao', localKey: 'jr_ocorrencias',       dbKey: 'ocorrencias_devolucao' },
+      { tableName: 'ocorrencias_rota',      localKey: 'jr_ocorrencias_rota',  dbKey: 'ocorrencias_rota' },
+      { tableName: 'retencoes_frota',       localKey: 'jr_retencoes_frota',   dbKey: 'retencoes_frota' },
+      { tableName: 'reentregas_rota',       localKey: 'jr_reentregas',        dbKey: 'reentregas' },
+      { tableName: 'trocas_veiculos',       localKey: 'jr_trocas_veiculos',   dbKey: 'trocas_veiculos' },
+      { tableName: 'motoristas',            localKey: 'jr_motoristas',        dbKey: 'motoristas' },
+      { tableName: 'ajudantes',             localKey: 'jr_ajudantes',         dbKey: 'ajudantes' },
+      { tableName: 'veiculos',              localKey: 'jr_veiculos',          dbKey: 'veiculos' },
+      { tableName: 'cargas',                localKey: 'jr_cargas',            dbKey: 'cargas' },
+      { tableName: 'usuarios',              localKey: 'jr_usuarios',          dbKey: 'usuarios' },
+      { tableName: 'audit_logs',            localKey: 'jr_audit_logs',        dbKey: 'audit_logs' },
+      { tableName: 'registro_versoes',      localKey: 'jr_registro_versoes',  dbKey: 'registro_versoes' },
+      { tableName: 'controle_viagens',      localKey: 'jr_controle_viagens',  dbKey: 'controle_viagens' },
+      { tableName: 'ocorrencias_viagens',   localKey: 'jr_ocorrencias_viagens', dbKey: 'ocorrencias_viagens' },
+      { tableName: 'resumo_diario_cd',      localKey: 'jr_resumo_diario_cd',  dbKey: 'resumo_diario_cd' },
+      { tableName: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', dbKey: 'medidas_disciplinares' },
+      { tableName: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', dbKey: 'orientacoes_feedback' },
+      { tableName: 'atestados_medicos',     localKey: 'jr_atestados_medicos', dbKey: 'atestados_medicos' },
+      { tableName: 'ausencias_registros',   localKey: 'jr_ausencias_registros', dbKey: 'ausencias_registros' },
+      { tableName: 'itens_devolucao',       localKey: 'jr_itens_devolucao',   dbKey: 'itens_devolucao' },
+      { tableName: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  dbKey: 'colaboradores_cd' },
+      { tableName: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', dbKey: 'relatorios_divergencia' },
+      { tableName: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', dbKey: 'auditoria_produtividade' },
+      { tableName: 'sinistros',             localKey: 'jr_sinistros',         dbKey: 'sinistros' },
+      { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' },
+      // Cadastros mestre que passaram a sincronizar em 23/08/2026 — ver a
+      // explicação das marcas (listaSimples/estatico) no push acima.
+      { tableName: 'setores',               localKey: 'jr_setores',           dbKey: 'setores' },
+      { tableName: 'rotas',                 localKey: 'jr_rotas',             dbKey: 'rotas',    listaSimples: true },
+      { tableName: 'motivos_devolucao',     localKey: 'jr_motivos_devolucao', dbKey: 'motivos_devolucao', listaSimples: true },
+      { tableName: 'departamentos',         localKey: 'jr_departamentos',     dbKey: 'departamentos' },
+      { tableName: 'clientes',              localKey: 'jr_clientes',          dbKey: 'clientes', estatico: true },
+      { tableName: 'produtos',              localKey: 'jr_produtos',          dbKey: 'produtos', estatico: true }
+    ];
 
     // Um Reset Global feito em OUTRO aparelho precisa ser reconhecido aqui
     // antes de qualquer comparação, senão este aparelho reenvia o que o
@@ -1493,9 +817,14 @@ class CloudStore {
     if (resetRemotoPendente) {
       console.warn(`[CloudStore] Reset Global detectado na nuvem (${new Date(epochNuvem).toLocaleString('pt-BR')}). Este aparelho vai adotar o estado da nuvem.`);
       // As marcas de "já sincronizou" perdem validade após um reset.
+      // As impressões digitais do push (jr_sync_hash_*) também: elas dizem
+      // "esta tabela já está na nuvem exatamente assim" e, depois de um
+      // reset que esvaziou a nuvem, isso deixou de ser verdade. Sem limpar,
+      // o push pularia justamente as tabelas que precisam ser reenviadas e
+      // a nuvem ficaria vazia até alguém editar algum registro.
       try {
         Object.keys(localStorage)
-          .filter(k => k.indexOf('jr_sync_ok_') === 0)
+          .filter(k => k.indexOf('jr_sync_ok_') === 0 || k.indexOf('jr_sync_hash_') === 0)
           .forEach(k => localStorage.removeItem(k));
       } catch(e) {}
     }
@@ -1514,66 +843,22 @@ class CloudStore {
     // aviso: o dado simplesmente sumia. Agora só relemos e mesclamos por
     // cima do jr_sac_db mais atual no final, não do snapshot do início.
     const pulledUpdates = {};
-
-    // Relê jr_sac_db a CADA chamada, e não uma vez no início, pelo mesmo
-    // motivo do comentário acima: o laço leva segundos e um save() no meio
-    // dele precisa ser enxergado. Só é usada quando não há window.db
-    // (bancada de teste, ou o cloudStore rodando sem o store).
-    const lerFatiaOperacional = (dbKey) => {
-      try {
-        const raw = localStorage.getItem('jr_sac_db');
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        return (parsed && Array.isArray(parsed[dbKey])) ? JSON.stringify(parsed[dbKey]) : null;
-      } catch(e) { return null; }
-    };
+    // clientes/produtos não podem entrar em 'jr_sac_db' — são os 3MB que a
+    // divisão de chaves tirou de lá justamente para não estourar a cota.
+    // Quando o pull traz mudança neles, a gravação vai para 'jr_sac_static'.
+    let estaticoAtualizado = false;
 
     for (const m of mappings) {
       try {
-        const cloudData = await this.getAll(m.tableName);
+        // Tabelas grandes precisam de leitura paginada: um GET simples
+        // pararia no limite de linhas do PostgREST (1.000) e o pull trataria
+        // essa página como a tabela inteira, apagando o resto do aparelho.
+        const cloudData = m.estatico
+          ? await this.getAllPaginado(m.tableName)
+          : await this.getAll(m.tableName);
         if (!cloudData) continue;
 
-        // QUEM É "O QUE ESTE APARELHO TEM" — correção de 23/08/2026
-        //
-        // Era `localStorage.getItem(m.localKey)`: o ESPELHO. E o espelho é
-        // escrito só aqui, no pull — db.save() grava window.db.data e
-        // jr_sac_db, e NUNCA ele (store.js:682). Ou seja: a mesclagem
-        // comparava a nuvem contra uma cópia que podia estar horas atrasada,
-        // e um lançamento salvo depois do último pull simplesmente não
-        // existia para _mesclarPorRegistro. Não era preservado nem
-        // descartado — não era considerado. O resultado da mesclagem era
-        // gravado por cima de jr_sac_db e o registro sumia, sem erro e sem
-        // aparecer em tabelasComPendencia. Achado em 23/08/2026 ao investigar
-        // um relato de divergência entre aparelhos; está reproduzido em
-        // testes/06_pull_nao_apaga_lancamento.js.
-        //
-        // NÃO confundir com o sintoma oposto — registro que APARECE sem
-        // ninguém ter lançado. Aquilo é aparelho com cache antigo
-        // republicando, ou registro que já estava na nuvem e só ficou
-        // visível pelo filtro de período da tela. Causa diferente, conserto
-        // diferente; ver PARTE 4 do CONFERIR_APARELHO.md.
-        //
-        // O ENVIO já tratava jr_sac_db como a verdade (syncLocalToCloud lê
-        // fullDb primeiro e só cai no espelho como último recurso). A
-        // correção é fazer a LEITURA concordar com a ESCRITA — as duas
-        // metades do mesmo ciclo estavam olhando para cópias diferentes.
-        //
-        // A memória vem antes de jr_sac_db de propósito: se um save()
-        // estourou a cota, window.db.data tem o registro e jr_sac_db não, e
-        // na dúvida se preserva o trabalho do operador.
-        //
-        // O espelho continua sendo escrito no fim deste bloco. Ele deixa de
-        // ser autoridade, não deixa de existir: syncLocalToCloud ainda o usa
-        // como último recurso, e o detector (conferirCamadas) precisa dele
-        // para conseguir enxergar divergência.
-        const espelhoRaw = localStorage.getItem(m.localKey);
-        let localRaw = espelhoRaw;
-        if (window.db && window.db.data && Array.isArray(window.db.data[m.dbKey])) {
-          localRaw = JSON.stringify(window.db.data[m.dbKey]);
-        } else {
-          const daFatia = lerFatiaOperacional(m.dbKey);
-          if (daFatia !== null) localRaw = daFatia;
-        }
+        const localRaw = localStorage.getItem(m.localKey);
 
         // (achado de 21/08/2026, diagnóstico da causa raiz) getAll() devolve
         // [] — não null — quando a tabela existe mas está VAZIA na nuvem. E
@@ -1596,11 +881,7 @@ class CloudStore {
         // Distinguimos pela marca gravada abaixo, no upsert: ela só existe
         // se esta tabela JÁ subiu com sucesso alguma vez neste aparelho.
         if (Array.isArray(cloudData) && cloudData.length === 0) {
-          let localTemDados = false;
-          try {
-            const parsed = localRaw ? JSON.parse(localRaw) : null;
-            localTemDados = Array.isArray(parsed) && parsed.length > 0;
-          } catch(e) {}
+          const localTemDados = this._contarLocal(m) > 0;
           const jaSincronizouAlgumaVez = !!localStorage.getItem('jr_sync_ok_' + m.tableName);
           // Se houve um Reset Global mais recente do que o último que este
           // aparelho aplicou, o vazio da nuvem é intencional: aceitar.
@@ -1616,24 +897,52 @@ class CloudStore {
           }
         }
 
-        // Item 2 (22/08/2026): antes, isto era
-        // `localStorage.setItem(localKey, JSON.stringify(cloudData))` — a
-        // coleção da nuvem substituía a local inteira, e o que este
-        // aparelho tinha acabado de gravar sumia sem aviso. Agora a
-        // decisão é registro a registro.
-        const mesclado = this._mesclarPorRegistro(m.tableName, localRaw, cloudData);
-        const mescladoStr = JSON.stringify(mesclado);
-
-        // Duas decisões separadas, porque as duas cópias entram diferentes:
-        // o espelho é atualizado sempre que estiver atrás (é o que o mantém
-        // útil para o diagnóstico), e a fatia operacional só é marcada como
-        // mudada se a mesclagem realmente mudar algo em relação ao que este
-        // aparelho tem — que é o que dispara o redesenho da tela.
-        if (espelhoRaw !== mescladoStr) {
-          localStorage.setItem(m.localKey, mescladoStr);
+        // MESMO RACIOCÍNIO, PARA NUVEM PARCIALMENTE CHEIA (23/08/2026)
+        //
+        // O bloco acima só reconhece a nuvem COMPLETAMENTE vazia. Com o
+        // envio em lotes isso deixa de bastar: o catálogo de clientes sobe
+        // em 31 lotes de 500, e se o lote 3 for recusado a nuvem fica com
+        // 1.000 linhas — não zero. Nesse estado o pull trataria as 1.000
+        // como a verdade e apagaria as outras 14.139 deste aparelho,
+        // consolidando a perda no ciclo seguinte.
+        //
+        // Enquanto a tabela nunca tiver subido INTEIRA com sucesso, uma
+        // nuvem menor que o local é sintoma de envio incompleto, não de
+        // exclusão. Depois do primeiro envio completo a marca existe e o
+        // encolhimento volta a ser aceito normalmente (é uma exclusão real
+        // feita em outro aparelho).
+        if (Array.isArray(cloudData) && cloudData.length > 0 && !localStorage.getItem('jr_sync_ok_' + m.tableName) && !resetRemotoPendente) {
+          const qtdLocal = this._contarLocal(m);
+          if (qtdLocal > cloudData.length) {
+            console.warn(`[CloudStore] ${m.tableName}: nuvem tem ${cloudData.length} linhas contra ${qtdLocal} locais e esta tabela nunca subiu inteira — envio incompleto. Preservando o dado local e reenviando.`);
+            this._tabelasPendentesDeEnvio.add(m.tableName);
+            continue;
+          }
         }
-        if (localRaw !== mescladoStr) {
-          pulledUpdates[m.dbKey] = mesclado;
+
+        const localStr = JSON.stringify(cloudData);
+
+        if (localRaw !== localStr) {
+          localStorage.setItem(m.localKey, localStr);
+          if (m.listaSimples) {
+            // Linhas {nome, ativo} → os dois arrays de texto do app.
+            // `ativo === false` é a exclusão feita em outro aparelho
+            // chegando aqui; ela precisa entrar em _inativos, não sumir,
+            // senão o push seguinte devolveria o item como ativo.
+            const ativos = [];
+            const inativos = [];
+            cloudData.forEach(linha => {
+              const nome = String(linha && linha.nome || '').trim();
+              if (!nome) return;
+              if (linha.ativo === false) inativos.push(nome);
+              else ativos.push(nome);
+            });
+            pulledUpdates[m.dbKey] = ativos;
+            pulledUpdates[m.dbKey + '_inativos'] = inativos;
+          } else {
+            pulledUpdates[m.dbKey] = cloudData;
+          }
+          if (m.estatico) estaticoAtualizado = true;
           anyChange = true;
         }
       } catch(e) {
@@ -1643,10 +952,26 @@ class CloudStore {
 
     if (anyChange) {
       try {
+        // Separa o que vai para cada chave: clientes/produtos em
+        // 'jr_sac_static', todo o resto na fatia operacional.
+        const atualizacoesEstaticas = {};
+        const atualizacoesOperacionais = {};
+        Object.keys(pulledUpdates).forEach(k => {
+          if (k === 'clientes' || k === 'produtos') atualizacoesEstaticas[k] = pulledUpdates[k];
+          else atualizacoesOperacionais[k] = pulledUpdates[k];
+        });
+
         const rawFullNow = localStorage.getItem('jr_sac_db');
         const fullDb = rawFullNow ? JSON.parse(rawFullNow) : {};
-        Object.assign(fullDb, pulledUpdates);
+        Object.assign(fullDb, atualizacoesOperacionais);
         localStorage.setItem('jr_sac_db', JSON.stringify(fullDb));
+
+        if (estaticoAtualizado) {
+          const rawStaticNow = localStorage.getItem('jr_sac_static');
+          const staticDb = rawStaticNow ? JSON.parse(rawStaticNow) : {};
+          Object.assign(staticDb, atualizacoesEstaticas);
+          localStorage.setItem('jr_sac_static', JSON.stringify(staticDb));
+        }
 
         // NÃO substituir window.db.data por fullDb (achado de 22/08/2026,
         // erro "Cannot read properties of undefined (reading 'filter')" na
@@ -1681,25 +1006,21 @@ class CloudStore {
       } catch(e) {}
     }
 
-    // ITEM 8 (Onda 2, 22/08/2026) — AQUI RODAVA restaurarCadastrosDaPlanilha(),
-    // A CADA CICLO DE 30 SEGUNDOS. Foi removido de propósito; não recoloque.
-    //
-    // O que ele fazia: reinjetava as listas de motoristas/ajudantes/veículos
-    // embarcadas no mockData.js DESTE APARELHO em cima do que veio da nuvem.
-    // Nasceu como rede de proteção em 22/08, quando o UNIQUE da cnh derrubou
-    // os 39 motoristas e o pull reduziu a lista local a 2 registros.
-    //
-    // Por que sai: com ele no ciclo, (a) todo veículo vendido e todo
-    // motorista desligado voltava à vida a cada 30 segundos, porque a
-    // planilha embarcada não sabe de exclusão; e (b) UM aparelho com build
-    // antiga contaminava o cadastro da empresa inteira, republicando a
-    // lista velha dele para todo mundo. É a decisão 5: a planilha é a base
-    // inicial, o app é a fonte de verdade depois.
-    //
-    // O que ficou no lugar: a semeadura roda UMA VEZ, na primeira instalação
-    // do aparelho (store.js:init(), marcada em 'jr_seed_cadastros_v1'), e a
-    // mesclagem por registro (item 2) é o que agora protege contra o pull
-    // apagar cadastro — sem precisar reinjetar nada.
+    // FORA do "if (anyChange)" de propósito: quando a nuvem já está igual ao
+    // cache local (nenhuma mudança a aplicar), é justamente o caso em que a
+    // lista curta já se consolidou nos dois lados. É aí que a reposição mais
+    // precisa rodar.
+    if (window.db && typeof window.db.restaurarCadastrosDaPlanilha === 'function') {
+      try {
+        const repostos = window.db.restaurarCadastrosDaPlanilha();
+        if (repostos > 0) {
+          // save() persiste em jr_sac_db (de onde o push lê) e agenda o envio.
+          window.db.save();
+        }
+      } catch(e) {
+        console.warn('[CloudStore] Falha ao restaurar cadastros da planilha:', e);
+      }
+    }
 
     // Só marca o reset como aplicado depois que o pull inteiro terminou —
     // se a rede cair no meio, o aparelho tenta de novo no próximo ciclo em
@@ -1804,99 +1125,7 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.8.9";
-
-// As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
-//   tableName -> a tabela no Supabase
-//   localKey  -> a chave ESPELHO no localStorage ('jr_ocorrencias' etc.)
-//   dbKey     -> a colecao dentro de jr_sac_db e de window.db.data
-CloudStore.MAPA_TABELAS = [
-  { tableName: 'ocorrencias_devolucao', localKey: 'jr_ocorrencias',       dbKey: 'ocorrencias_devolucao' },
-  { tableName: 'ocorrencias_rota',      localKey: 'jr_ocorrencias_rota',  dbKey: 'ocorrencias_rota' },
-  { tableName: 'retencoes_frota',       localKey: 'jr_retencoes_frota',   dbKey: 'retencoes_frota' },
-  { tableName: 'reentregas_rota',       localKey: 'jr_reentregas',        dbKey: 'reentregas' },
-  { tableName: 'trocas_veiculos',       localKey: 'jr_trocas_veiculos',   dbKey: 'trocas_veiculos' },
-  { tableName: 'motoristas',            localKey: 'jr_motoristas',        dbKey: 'motoristas' },
-  { tableName: 'ajudantes',             localKey: 'jr_ajudantes',         dbKey: 'ajudantes' },
-  { tableName: 'veiculos',              localKey: 'jr_veiculos',          dbKey: 'veiculos' },
-  { tableName: 'cargas',                localKey: 'jr_cargas',            dbKey: 'cargas' },
-  { tableName: 'usuarios',              localKey: 'jr_usuarios',          dbKey: 'usuarios' },
-  { tableName: 'audit_logs',            localKey: 'jr_audit_logs',        dbKey: 'audit_logs' },
-  { tableName: 'registro_versoes',      localKey: 'jr_registro_versoes',  dbKey: 'registro_versoes' },
-  { tableName: 'controle_viagens',      localKey: 'jr_controle_viagens',  dbKey: 'controle_viagens' },
-  { tableName: 'ocorrencias_viagens',   localKey: 'jr_ocorrencias_viagens', dbKey: 'ocorrencias_viagens' },
-  { tableName: 'resumo_diario_cd',      localKey: 'jr_resumo_diario_cd',  dbKey: 'resumo_diario_cd' },
-  { tableName: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', dbKey: 'medidas_disciplinares' },
-  { tableName: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', dbKey: 'orientacoes_feedback' },
-  { tableName: 'atestados_medicos',     localKey: 'jr_atestados_medicos', dbKey: 'atestados_medicos' },
-  { tableName: 'ausencias_registros',   localKey: 'jr_ausencias_registros', dbKey: 'ausencias_registros' },
-  { tableName: 'itens_devolucao',       localKey: 'jr_itens_devolucao',   dbKey: 'itens_devolucao' },
-  { tableName: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  dbKey: 'colaboradores_cd' },
-  { tableName: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', dbKey: 'relatorios_divergencia' },
-  { tableName: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', dbKey: 'auditoria_produtividade' },
-  { tableName: 'sinistros',             localKey: 'jr_sinistros',         dbKey: 'sinistros' },
-  { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' }
-];
-
-// Tamanho do bloco de leitura paginada (item 4). Deliberadamente ABAIXO do
-// corte padrão de 1.000 linhas do PostgREST: assim um bloco cheio sempre
-// significa "pode haver mais", e nunca "o servidor cortou aqui" — que é o
-// jeito silencioso de truncar de novo.
-CloudStore.PAGINA_LEITURA = 500;
-
-// ---------------------------------------------------------------
-// IDENTIDADE DO APARELHO — Onda 2, itens 9 e 12 (22/08/2026)
-//
-// Um identificador estável por aparelho, criado na primeira vez e guardado
-// no próprio navegador. Serve para duas coisas: o carimbo que separa os ids
-// gerados por aparelhos diferentes (item 9) e o registro na tela de
-// Aparelhos (item 12).
-//
-// Vive aqui, e não no store.js, porque cloudStore.js é carregado ANTES
-// (index.html:596) — assim o store pode usá-lo com segurança.
-// ---------------------------------------------------------------
-CloudStore.idDoAparelho = function() {
-  try {
-    let id = localStorage.getItem('jr_device_id');
-    if (!id) {
-      const aleatorio = (typeof crypto !== 'undefined' && crypto.getRandomValues)
-        ? Array.from(crypto.getRandomValues(new Uint32Array(2))).map(n => n.toString(36)).join('')
-        : (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
-      id = 'ap-' + aleatorio;
-      localStorage.setItem('jr_device_id', id);
-    }
-    return id;
-  } catch(e) {
-    // Navegador sem localStorage (aba anônima travada): identidade só desta
-    // sessão. Melhor do que id fixo, que colidiria com todo mundo.
-    if (!CloudStore._idVolatil) CloudStore._idVolatil = 'ap-tmp-' + Math.random().toString(36).slice(2);
-    return CloudStore._idVolatil;
-  }
-};
-
-// Os 3 últimos dígitos do id de cada registro. Dois aparelhos só colidem se
-// caírem no mesmo milissegundo E tirarem o mesmo número entre 0 e 999.
-CloudStore.carimboDoAparelho = function() {
-  if (CloudStore._carimbo !== undefined) return CloudStore._carimbo;
-  const s = CloudStore.idDoAparelho();
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  CloudStore._carimbo = h % 1000;
-  return CloudStore._carimbo;
-};
-
-// Item 5 — quantos dias de cada tabela transacional ficam NO APARELHO. O
-// resto continua na nuvem e no Power BI; só sai do cache local. Tabela que
-// não estiver aqui não é podada.
-//
-// 90 dias a 400 viagens/mês dá ~1.200 registros, ~600 KB — cabe folgado nos
-// ~2 MB que sobram da cota. Se a operação precisar enxergar mais tempo no
-// próprio app, é só aumentar o número; se a cota apertar (fotos de devolução
-// pesam muito mais que viagem), é só diminuir.
-CloudStore.JANELA_OPERACIONAL_DIAS = {
-  controle_viagens: 90,
-  ocorrencias_viagens: 90
-};
+CloudStore.BUILD = "sync-4.7.9";
 
 window.cloudStore = new CloudStore();
 
@@ -1907,117 +1136,8 @@ window.jrDiagnosticoSync = function() {
   const d = window.cloudStore.getDiagnostico();
   console.table(d.tabelasComPendencia.map(t => ({ tabela: t, estado: 'NAO SALVA NA NUVEM' })));
   if (d.ultimoErro) console.error('Último erro:', d.ultimoErro);
-  if (d.bloqueadosNaEscrita) {
-    console.warn(
-      `⚠️ Este aparelho tem cache de build antiga: ${d.bloqueadosNaEscrita.total} registro(s) de ` +
-      `${d.bloqueadosNaEscrita.tabela} foram recusados no envio (data de saída com estado de checklist). ` +
-      `Limpe o cache deste aparelho — é a ETAPA 3 do roteiro.`,
-      d.bloqueadosNaEscrita.exemplos
-    );
-  }
   if (!d.tabelasComPendencia.length) console.info('✅ Nenhuma tabela pendente — tudo que foi salvo aqui chegou ao banco.');
   return d;
-};
-
-
-// Detector de resquício, pelo console (PC). No celular, o mesmo resultado
-// sai pelo botão em Governança & Lixeira -> Aparelhos, que é onde ele
-// realmente precisa estar: celular não tem F12.
-//
-// Não confundir com jrDiagnosticoSync(), que responde "a nuvem recusou
-// alguma tabela?". Este aqui responde outra pergunta, que era cega até
-// hoje: "as cópias que este aparelho guarda do mesmo registro concordam
-// entre si?". Um aparelho pode passar no primeiro e falhar no segundo — foi
-// exatamente o caso do lançamento de 23/08/2026.
-window.jrConferirCamadas = function() {
-  const r = window.cloudStore.conferirCamadas();
-  window.jrUltimaConferenciaCamadas = r;
-  if (r.totalDivergentes === 0) {
-    console.info('✅ Nenhuma divergência entre as cópias locais deste aparelho.');
-    return r;
-  }
-  console.warn(
-    `⚠️ ${r.totalDivergentes} registro(s) com cópias que não batem entre si neste aparelho` +
-    (r.totalEmRisco > 0
-      ? ` — e ${r.totalEmRisco} deles some(m) no próximo pull se não subirem antes.`
-      : '.')
-  );
-  console.table(r.tabelas.map(t => ({
-    tabela: t.tabela,
-    divergentes: t.total,
-    'em risco': t.emRisco,
-    'na memória': t.contagens.memoria,
-    'em jr_sac_db': t.contagens.sacDb,
-    'no espelho': t.contagens.espelho
-  })));
-  r.tabelas.forEach(t => {
-    console.groupCollapsed(`${t.tabela} (espelho: ${t.espelho})`);
-    console.table(t.divergentes.map(d => ({
-      id: d.id, registro: d.rotulo, 'em risco': d.emRisco ? 'SIM' : '',
-      memoria: d.onde.memoria, jr_sac_db: d.onde.sacDb, espelho: d.onde.espelho
-    })));
-    console.groupEnd();
-  });
-  return r;
-};
-
-// Rastreia UM registro pelas cinco camadas. Aceita placa, carga, NF,
-// protocolo ou id: jrRastrear('OLI2E18')
-window.jrRastrear = async function(termo) {
-  const r = await window.cloudStore.rastrearRegistro(termo);
-  window.jrUltimoRastreio = r;
-  if (r.erro) { console.warn(r.erro); return r; }
-  if (!r.achados.length) {
-    console.warn(`Nada encontrado para "${r.termo}" em nenhuma das cópias locais deste aparelho.`);
-    return r;
-  }
-  r.achados.forEach(a => {
-    const emoji = a.veredito.nivel === 'CRITICO' ? '⛔' : a.veredito.nivel === 'ATENCAO' ? '⚠️' : '✅';
-    console.group(`${emoji} ${a.tabela} #${a.id} — ${a.veredito.texto}`);
-    console.table({
-      'memória (tela)':      { estado: a.camadas.memoria.estado,  assinatura: a.camadas.memoria.hash  || '' },
-      'jr_sac_db (salvo)':   { estado: a.camadas.sacDb.estado,    assinatura: a.camadas.sacDb.hash    || '' },
-      'espelho (pull)':      { estado: a.camadas.espelho.estado,  assinatura: a.camadas.espelho.hash  || '' },
-      'mapa de envio':       { estado: a.camadas.hashMap.estado,  assinatura: a.camadas.hashMap.hash  || '' },
-      'nuvem (agora)':       { estado: a.camadas.nuvem.estado,    assinatura: a.camadas.nuvem.hash    || '' }
-    });
-    console.groupEnd();
-  });
-  return r;
-};
-
-// Captura de TODOS os erros de envio, e não só do último (22/08/2026).
-//
-// getDiagnostico() guarda um único _ultimoErroSync. Quando quatro tabelas
-// falham no mesmo ciclo, ele mostra a quarta e esconde as três primeiras —
-// foi assim que a investigação de 22/08 começou olhando um 23503 de
-// sinistros que era mera consequência de um 23514 em ocorrencias_rota.
-// Diagnosticar uma por vez custou horas.
-//
-// Roda um ciclo de envio com todas as falhas registradas e devolve a lista
-// inteira. O array fica em window.jrUltimosErrosSync para a tela de
-// Aparelhos ler — que é o único caminho que funciona no celular, onde não
-// existe console.
-window.jrErrosSync = async function() {
-  const cs = window.cloudStore;
-  if (!cs || !cs.isConfigured()) { console.warn('Nuvem não configurada neste aparelho.'); return []; }
-  const capturados = [];
-  const original = cs._registrarFalhaSync.bind(cs);
-  cs._registrarFalhaSync = function(tabela, status, corpo) {
-    let detalhe = corpo;
-    try { const j = JSON.parse(corpo); detalhe = j.message || j.hint || corpo; } catch(e) {}
-    capturados.push({ tabela, status, detalhe: String(detalhe || '').slice(0, 300) });
-    return original(tabela, status, corpo);
-  };
-  try {
-    await cs.syncLocalToCloud();
-  } finally {
-    cs._registrarFalhaSync = original;
-  }
-  window.jrUltimosErrosSync = { erros: capturados, quando: new Date().toISOString() };
-  if (capturados.length === 0) console.info('✅ Nenhuma tabela recusada — o envio passou inteiro.');
-  else console.table(capturados);
-  return capturados;
 };
 
 // Achado de 21/08/2026, testando de verdade com dois aparelhos: o padrão
@@ -2079,121 +1199,3 @@ window.addEventListener('offline', () => {
   console.log('[CloudStore] Conexão de rede perdida — voltando para modo local até reconectar.');
   if (window.cloudStore) window.cloudStore._setStatus('offline');
 });
-
-// =================================================================
-// AUTO-ATUALIZAÇÃO — Onda 2, item 11 (22/08/2026)
-//
-// Decisão 4: esta deve ser a última vez que alguém precisa limpar cache
-// aparelho por aparelho.
-//
-// ACHADO QUE MUDOU O DESENHO DESTE ITEM: o plano dizia que quem servia
-// arquivo velho era o service worker. **Não é** — o `sw.js` existe no
-// projeto mas NÃO É REGISTRADO EM LUGAR NENHUM, e o `setupPwa()`
-// (app.js:296) ainda por cima desregistra qualquer service worker que
-// encontre. Quem guarda o arquivo velho é o cache HTTP comum do navegador,
-// e o motivo é simples: nenhuma tag <script> tem versão na URL, então
-// `./js/app.js` continua sendo o mesmo endereço depois do deploy.
-//
-// (Consequência disso que fica anotada, fora do escopo desta rodada: sem
-// service worker, o app NÃO abre sem internet. O que a hospedagem manda
-// hoje é `max-age=0, must-revalidate`, então o servidor não é o problema.)
-//
-// COMO FUNCIONA: `version.json` é publicado junto com o deploy e diz qual
-// é a versão no ar. O app pergunta ao abrir, e de 15 em 15 minutos. Se a
-// versão de lá for diferente da que está rodando aqui, ele força o
-// navegador a rebaixar as cópias antigas (fetch com cache:'reload', que
-// substitui a entrada guardada para AQUELA MESMA URL) e recarrega.
-//
-// TRAVA CONTRA LAÇO: se depois de recarregar a versão ainda não bater
-// (arquivo velho preso num proxy da empresa, por exemplo), ele não tenta
-// de novo — mostra uma tarja pedindo Ctrl+Shift+R. Recarregar em laço
-// seria pior que a doença.
-// =================================================================
-CloudStore.ARQUIVOS_DO_APP = [
-  './index.html',
-  './js/app.js',
-  './js/store.js',
-  './js/cloudStore.js',
-  './js/config.js',
-  './js/mockData.js',
-  './manifest.json'
-];
-
-window.jrConferirVersaoPublicada = async function() {
-  let publicada = null;
-  try {
-    const resp = await fetch('./version.json?t=' + Date.now(), { cache: 'no-store' });
-    if (!resp.ok) return null;
-    const info = await resp.json();
-    publicada = info && info.build;
-  } catch(e) {
-    return null;   // sem rede: segue com o que tem, sem incomodar ninguém
-  }
-  if (!publicada || publicada === CloudStore.BUILD) return publicada;
-
-  console.warn(`[CloudStore] Versão publicada (${publicada}) diferente da que está rodando aqui (${CloudStore.BUILD}). Atualizando...`);
-
-  let jaTentou = null;
-  try { jaTentou = sessionStorage.getItem('jr_update_tentado'); } catch(e) {}
-  if (jaTentou === publicada) {
-    jrAvisarAtualizacaoManual(publicada);
-    return publicada;
-  }
-  try { sessionStorage.setItem('jr_update_tentado', publicada); } catch(e) {}
-
-  // Rebaixa as cópias guardadas de cada arquivo do app. cache:'reload'
-  // busca da rede ignorando o que está guardado E substitui a entrada
-  // daquela URL — é isso que faz o reload seguinte pegar o arquivo novo.
-  // Sem query string de propósito: com ela seria outro endereço, e a
-  // entrada velha continuaria valendo para a tag <script>.
-  try {
-    await Promise.all(CloudStore.ARQUIVOS_DO_APP.map(
-      u => fetch(u, { cache: 'reload' }).catch(() => {})
-    ));
-  } catch(e) {}
-
-  // Se algum dia o service worker voltar a ser registrado, o cache dele
-  // também precisa sair da frente.
-  try {
-    if (typeof caches !== 'undefined') {
-      const nomes = await caches.keys();
-      await Promise.all(nomes.map(n => caches.delete(n)));
-    }
-  } catch(e) {}
-
-  location.reload();
-  return publicada;
-};
-
-function jrAvisarAtualizacaoManual(versaoPublicada) {
-  console.error(`[CloudStore] A atualização automática não pegou. Rodando ${CloudStore.BUILD}, publicada ${versaoPublicada}.`);
-  try {
-    if (typeof document === 'undefined' || !document.body) return;
-    let tarja = document.getElementById('jr-alerta-versao');
-    if (!tarja) {
-      tarja = document.createElement('div');
-      tarja.id = 'jr-alerta-versao';
-      tarja.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99998;background:#78350f;color:#fff;'
-        + 'padding:9px 14px;font-size:12px;font-weight:700;text-align:center;border-top:2px solid #f59e0b';
-      document.body.appendChild(tarja);
-    }
-    tarja.innerHTML = `⚠️ Este aparelho está numa versão antiga do app (${CloudStore.BUILD}; a atual é ${versaoPublicada}) `
-      + 'e a atualização automática não pegou. No PC: <b>Ctrl + Shift + R</b>. No celular: feche o app e abra de novo. '
-      + '<button onclick="this.parentElement.remove()" style="margin-left:8px;background:#fff;color:#78350f;border:0;'
-      + 'border-radius:4px;padding:2px 8px;font-weight:800;cursor:pointer">fechar</button>';
-  } catch(e) {}
-}
-
-if (window.cloudStore.isConfigured()) {
-  document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(() => window.jrConferirVersaoPublicada(), 3000);
-    setInterval(() => window.jrConferirVersaoPublicada(), 15 * 60 * 1000);
-  });
-}
-
-// Atalho de console para batizar a máquina: jrNomearAparelho('CCO 1').
-window.jrNomearAparelho = function(apelido) {
-  const ok = window.cloudStore.nomearAparelho(apelido);
-  console.info(ok ? `Este aparelho agora se chama "${apelido}" na tela de Aparelhos.` : 'Informe um nome, ex: jrNomearAparelho("CCO 1")');
-  return ok;
-};

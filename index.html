@@ -376,17 +376,23 @@
       border-color: #065f46 !important;
       color: #ffffff !important;
     }
-    html.light #btn-theme-toggle {
+    html.light #btn-theme-toggle,
+    html.light #btn-notificacoes {
       background-color: #047857 !important;
       border-color: #065f46 !important;
       color: #ffffff !important;
     }
 
     /* Header Dropdown Menu & Notifications */
-    html.light #mobile-menu-dropdown {
+    html.light #mobile-menu-dropdown,
+    html.light #dropdown-notificacoes {
       background-color: #ffffff !important;
       border-color: #cbd5e1 !important;
       box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15) !important;
+    }
+    html.light #dropdown-notificacoes .bg-slate-950 {
+      background-color: #f8fafc !important;
+      border-color: #e2e8f0 !important;
     }
     html.light #mobile-menu-dropdown .bg-slate-950 {
       background-color: #f8fafc !important;
@@ -519,14 +525,16 @@
           <span id="theme-icon" class="text-base leading-none">☀️</span>
         </button>
 
-        <!-- AQUI FICAVA O SINO DE NOTIFICAÇÕES. Removido em 23/08/2026, a
-             pedido: ele repetia, num painel que precisava ser aberto, os
-             mesmos alertas que o Dashboard Executivo já mostra abertos na
-             tela. Duas cópias do mesmo aviso, atualizadas por caminhos
-             diferentes — e foi uma delas ficando para trás que custou meia
-             manhã de investigação. O lugar dos alertas é o bloco
-             "ALERTAS & PENDÊNCIAS CRÍTICAS EM TEMPO REAL" do Dashboard, que
-             é calculado na hora em que a tela é desenhada. Não recolocar. -->
+        <!-- SINO DE NOTIFICAÇÕES GLOBAL -->
+        <div class="relative" id="sino-notificacoes-container">
+          <button id="btn-notificacoes" onclick="toggleDropdownNotificacoes()" class="relative bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 p-1.5 sm:p-2 rounded-lg text-xs font-bold flex items-center justify-center transition shadow shrink-0" title="Central de Alertas & Notificações">
+            <span class="text-base leading-none">🔔</span>
+            <span id="notif-badge-count" class="hidden absolute -top-1.5 -right-1.5 bg-red-600 text-white font-black text-[10px] w-4 h-4 sm:w-5 sm:h-5 rounded-full flex items-center justify-center border-2 border-slate-900 shadow-md">0</span>
+          </button>
+          <!-- DROPDOWN DE NOTIFICAÇÕES (POPUP) -->
+          <div id="dropdown-notificacoes" class="hidden absolute right-0 top-full mt-2 w-[calc(100vw-24px)] max-w-sm sm:w-96 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl z-50 p-3 sm:p-4 space-y-3">
+          </div>
+        </div>
 
         <button id="btn-pwa-install" class="hidden bg-amber-500 hover:bg-amber-400 text-amber-950 font-black text-xs px-2 py-1.5 rounded-lg shadow-lg animate-bounce flex items-center gap-1 shrink-0">
           📱 <span class="hidden sm:inline">Instalar</span>

@@ -4,7 +4,12 @@
 // Cache offline para funcionar sem internet
 // =================================================================
 
-const CACHE_NAME = 'jr-oper-v4.8.9';
+// Subir esta versão a cada deploy que mexe nos arquivos de js/: o handler de
+// 'activate' apaga todo cache com nome diferente deste, então é o que garante
+// que nenhum aparelho continue servindo a cópia antiga de store.js/app.js
+// guardada de antes. v4.8.1 = Cadastros Mestres + filtro de período do
+// Dashboard/Boletim + revisão do Tipo de Erro (23/08/2026).
+const CACHE_NAME = 'jr-oper-v4.8.3';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
