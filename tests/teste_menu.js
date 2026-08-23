@@ -103,6 +103,43 @@ secao('3. Sub-abas de Controle de Viagens deixaram de ser invisíveis');
 }
 
 // ---------------------------------------------------------------
+secao('3b. A setinha do grupo não pode fechar a gaveta (bug de 23/08)');
+{
+  // Sintoma relatado: clicar na setinha que abre/fecha um grupo fechava o
+  // menu inteiro.
+  //
+  // Causa: toggleNavGrupo() chama renderNavMenu(), que reconstrói o
+  // innerHTML do menu — dentro do onclick, ou seja, ANTES de o clique
+  // terminar de subir até o listener de "clicar fora". Quando ele chega lá,
+  // o botão clicado já não existe, e menu.contains(alvo) responde `false`
+  // para um nó solto: o clique de dentro vira clique de fora.
+  const i = ORIGEM.indexOf("// Fechar menu ao clicar fora ou no overlay");
+  const listener = i > -1 ? ORIGEM.slice(i, i + 1800) : '';
+
+  ok(listener.length > 0, 'o listener de clique-fora foi localizado');
+  ok(/if \(!document\.contains\(e\.target\)\) return;/.test(listener),
+     'o listener ignora clique cujo alvo já saiu do documento');
+
+  // A guarda tem que vir ANTES da decisão de fechar, senão não serve.
+  const posGuarda = listener.indexOf('!document.contains(e.target)');
+  const posFechar = listener.indexOf('toggleMobileMenu(false)');
+  ok(posGuarda > -1 && posFechar > -1 && posGuarda < posFechar,
+     'a guarda vem antes do fechamento');
+
+  // O grupo da tela ativa NÃO pode ser forçado a ficar aberto a cada render:
+  // isso deixava a setinha dele sem efeito visível, e setinha que não
+  // responde parece defeito. A abertura automática acontece só na TROCA de
+  // tela, para o item ativo não ficar escondido.
+  const j = ORIGEM.indexOf('const aberto = !!window._navGruposAbertos[grupo.id]');
+  const linhaAberto = j > -1 ? ORIGEM.slice(j, ORIGEM.indexOf('\n', j)) : '';
+  ok(j > -1, 'a decisão de expandir o grupo foi localizada');
+  ok(linhaAberto.indexOf('grupoDaTelaAtiva') < 0,
+     'o grupo da tela ativa não é forçado aberto a cada render', linhaAberto);
+  ok(/_navUltimaTabRenderizada !== activeTab/.test(ORIGEM),
+     'a abertura automática só dispara quando a tela muda');
+}
+
+// ---------------------------------------------------------------
 secao('4. Papel do usuário: role gravado é a autoridade');
 {
   ok(navPapelDoUsuario({ role: 'CD', departamento: 'SAC' }) === 'CD',

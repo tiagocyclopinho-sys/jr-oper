@@ -217,4 +217,4 @@ normal, e o cadastro ficaria só no aparelho até o SQL rodar.
 node tests/teste_cadastros.js && node tests/teste_sync.js && node tests/teste_boletim_e_tipoerro.js && node tests/teste_menu.js && node tests/teste_departamentos.js
 ```
 
-Todos devem terminar com `0 falharam` — hoje são 236 no total.
+Todos devem terminar com `0 falharam` — hoje são 242 no total.

@@ -2680,9 +2680,18 @@ function renderNavMenu() {
     window._navGruposAbertos[doPapel] = true;
   }
 
-  // O grupo que contém a tela aberta fica sempre expandido — senão o item
-  // ativo ficaria escondido dentro de um grupo fechado.
   const grupoDaTelaAtiva = (NAV_GRUPOS.find(g => g.itens.some(i => i.tab === activeTab)) || {}).id;
+
+  // Ao MUDAR de tela, o grupo da tela nova abre sozinho — senão o item ativo
+  // ficaria escondido dentro de um grupo fechado.
+  //
+  // Mas isso vale só no momento da troca, não a cada render: manter o grupo
+  // ativo aberto à força deixaria a setinha dele sem efeito visível, e uma
+  // setinha que não responde parece defeito.
+  if (window._navUltimaTabRenderizada !== activeTab) {
+    if (grupoDaTelaAtiva) window._navGruposAbertos[grupoDaTelaAtiva] = true;
+    window._navUltimaTabRenderizada = activeTab;
+  }
 
   const gruposVisiveis = NAV_GRUPOS
     .map(g => ({ grupo: g, itens: g.itens.filter(i => navItemVisivel(i, papel)) }))
@@ -2693,7 +2702,7 @@ function renderNavMenu() {
   const temItemOculto = itensMostrados < totalItens;
 
   const htmlGrupos = gruposVisiveis.map(({ grupo, itens }) => {
-    const aberto = !!window._navGruposAbertos[grupo.id] || grupo.id === grupoDaTelaAtiva;
+    const aberto = !!window._navGruposAbertos[grupo.id];
     const temAtivo = itens.some(i => i.tab === activeTab);
 
     const htmlItens = itens.map(i => {
@@ -3218,10 +3227,27 @@ document.addEventListener('click', (e) => {
   const menu = document.getElementById('mobile-menu-dropdown');
   const btn = document.getElementById('hamburger-btn');
   const overlay = document.getElementById('nav-menu-overlay');
-  if (menu && menu.classList.contains('open')) {
-    if ((!menu.contains(e.target) && btn && !btn.contains(e.target)) || (overlay && e.target === overlay)) {
-      toggleMobileMenu(false);
-    }
+  if (!menu || !menu.classList.contains('open')) return;
+
+  // CLIQUE QUE SE DESTRÓI A SI MESMO (achado de 23/08/2026)
+  //
+  // Sintoma: clicar na setinha que abre/fecha um grupo do menu fechava a
+  // gaveta inteira, em vez de só expandir o grupo.
+  //
+  // Causa: `toggleNavGrupo()` chama `renderNavMenu()`, que reconstrói o
+  // innerHTML do menu. Isso acontece no onclick do botão — ou seja, ANTES
+  // de o clique terminar de subir até este listener. Quando ele chega aqui,
+  // o botão clicado já foi destruído pelo re-render, e
+  // `menu.contains(e.target)` responde `false` para um elemento solto:
+  // o clique de dentro passa a ser lido como clique de fora.
+  //
+  // O teste certo não é "o alvo está dentro do menu?", é "o alvo ainda
+  // existe?". Se ele não está mais no documento, quem o removeu foi o
+  // próprio clique — nunca é um clique fora.
+  if (!document.contains(e.target)) return;
+
+  if ((!menu.contains(e.target) && btn && !btn.contains(e.target)) || (overlay && e.target === overlay)) {
+    toggleMobileMenu(false);
   }
 });
 
