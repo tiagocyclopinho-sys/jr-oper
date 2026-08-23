@@ -3832,9 +3832,48 @@ function setDashboardPeriodo(tipo) {
   renderApp();
 }
 
+// Converte para 'AAAA-MM-DD' o que quer que venha, porque a comparação
+// abaixo é de TEXTO e só funciona nesse formato.
+//
+// Correção de 23/08/2026, e o erro foi meu: ao fazer o filtro de período
+// passar a olhar campos que existem de verdade, entrou o `data_saida` das
+// viagens — que é gravado em dd/mm/aaaa pela importação da escala. Comparado
+// como texto, "23/08/2026" é MAIOR que "2026-08-23" (o '3' da posição 1
+// perde só para... nada; '3' > '0'), então toda viagem caía fora do período
+// e "Este Mês" mostrava 0 viagens onde o histórico mostrava 15.
+//
+// Comparar data como string é frágil por natureza, mas trocar isso por
+// objetos Date em ~8 lugares no meio de uma implantação é risco maior que o
+// problema. Normalizar na entrada resolve os dois formatos que o sistema
+// realmente grava, e deixa a porta aberta para o resto.
+function _paraIsoDeComparacao(val) {
+  if (val === null || val === undefined || val === '') return '';
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? '' : val.toISOString().split('T')[0];
+  }
+  const s = String(val).trim();
+  if (!s) return '';
+  // Já é ISO (com ou sem hora): fica como está.
+  const iso = s.split('T')[0].trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  // dd/mm/aaaa — o formato da importação da escala e das telas em pt-BR.
+  const br = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+  // Serial do Excel (ex: 45518), que aparece em planilha importada.
+  if (/^\d{5}(\.\d+)?$/.test(s)) {
+    const t = new Date(Date.UTC(1899, 11, 30) + Number(s) * 86400000);
+    return isNaN(t.getTime()) ? '' : t.toISOString().split('T')[0];
+  }
+  const t = new Date(s);
+  return isNaN(t.getTime()) ? '' : t.toISOString().split('T')[0];
+}
+
 function dataNoPeriodo(dStr, de, ate) {
   if (!dStr) return true;
-  const d = String(dStr).split('T')[0].trim();
+  const d = _paraIsoDeComparacao(dStr);
+  // Não deu para entender a data: deixa passar. Esconder um registro por
+  // causa de um formato que não reconhecemos seria pior do que mostrá-lo.
+  if (!d) return true;
   if (de && d < de) return false;
   if (ate && d > ate) return false;
   return true;
@@ -3988,7 +4027,12 @@ function getMaisAntigaPendente(list, campos, limites) {
       // resolvia o problema de saber quando cobrar — conta a partir da
       // primeira vez que este aparelho viu o registro.
       semData++;
-      ms = _vistoPrimeiroEm(item && item.id);
+      // A chave do carimbo cai para o protocolo quando nao ha id. Registro
+      // sem id existe (importacao, ou linha que perdeu o campo no caminho) e
+      // era o unico caso que ainda terminava sem SLA nenhum na tela.
+      const chaveCarimbo = (item && (item.id !== undefined && item.id !== null ? item.id
+                            : (item.numero_protocolo || item.numero_devolucao || null)));
+      ms = _vistoPrimeiroEm(chaveCarimbo);
       if (ms === null) return;
       veioDoCarimbo = true;
     }
@@ -4044,6 +4088,19 @@ function _linhaSla(sla, rotulo) {
 }
 
 function renderDashboardView() {
+  // ABRE NO DIA DE HOJE (pedido de 23/08/2026). O botao "Hoje" saiu da barra
+  // justamente porque virou o padrao — ter um botao para o estado inicial so
+  // ocupava espaco.
+  //
+  // A checagem e por `undefined`, e nao por vazio, de proposito: "✕ Limpar"
+  // grava string vazia, que significa "quero o historico completo". Se
+  // testassemos por vazio, o filtro de hoje voltaria sozinho a cada
+  // redesenho e seria impossivel ver o historico.
+  if (window._dashFiltroDe === undefined && window._dashFiltroAte === undefined) {
+    const hoje = new Date().toISOString().split('T')[0];
+    window._dashFiltroDe = hoje;
+    window._dashFiltroAte = hoje;
+  }
   const fDe = window._dashFiltroDe || '';
   const fAte = window._dashFiltroAte || '';
 
@@ -4111,12 +4168,34 @@ function renderDashboardView() {
   const abertasCausaRaiz = devs.filter(d => !d.motivo_real_causa_raiz || !d.acao_tomada);
   const slaAnalise = getSlaBreakdown(abertasCausaRaiz, 'criado_em');
   const slaPendCd = getSlaBreakdown(devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO'), 'criado_em');
+
+  // =================================================================
+  // ALERTA NÃO SE FILTRA POR PERÍODO — decisão de 23/08/2026
+  //
+  // Os KPIs da página respondem "como foi no período que escolhi". Os
+  // ALERTAS respondem outra coisa: "o que está pendente AGORA". Uma
+  // pendência não deixa de existir porque o gestor olhou para o mês
+  // passado — e, pior, filtrar o alerta ESCONDE justamente a pendência
+  // mais antiga, que é a que mais precisa de cobrança.
+  //
+  // Por isso os alertas usam as listas COMPLETAS (all*), e não as
+  // filtradas. Eles somem quando o registro deixa de estar pendente, e
+  // só por isso.
+  //
+  // As variáveis com sufixo Alerta existem porque as MESMAS contagens
+  // aparecem também como KPI mais abaixo na página — e ali elas devem,
+  // sim, seguir o filtro. Mesmo número, duas perguntas diferentes.
+  // =================================================================
+  const pendCdAlerta = allDevs.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
+  const abertasCausaRaizAlerta = allDevs.filter(d => !d.motivo_real_causa_raiz || !d.acao_tomada);
+  const veicParadosAlerta = allRotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO');
+
   // Idade da ocorrência pendente mais antiga em cada painel de alerta —
   // complementa a contagem por faixa (🔴🟡🟢) com "há quanto tempo está
   // parado o pior caso", que é o que mais importa para priorização.
-  const maisAntigaPendCd = getMaisAntigaPendente(devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO'), ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
-  const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaiz, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
-  const maisAntigaVeicParadoRota = getMaisAntigaPendente(rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO'), ['criado_em', 'data_chamado', 'data'], { atencao: 4, estourado: 8 });
+  const maisAntigaPendCd = getMaisAntigaPendente(pendCdAlerta, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
+  const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaizAlerta, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
+  const maisAntigaVeicParadoRota = getMaisAntigaPendente(veicParadosAlerta, ['criado_em', 'data_chamado', 'data'], { atencao: 4, estourado: 8 });
   const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
   const sinistrosPendentesDash = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
   const maisAntigoSinistroDash = getMaisAntigaPendente(sinistrosPendentesDash, ['data_acidente', 'criado_em', 'data'], { atencao: 24, estourado: 48 });
@@ -4129,7 +4208,8 @@ function renderDashboardView() {
   // ===== REENTREGAS NO PERÍODO =====
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
   const reentregasPeriodo = todasReentregas.filter(r => dataNoPeriodo(r.data || r.criado_em, fDe, fAte));
-  const reentregasPendentes = reentregasPeriodo.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
+  // Alerta: pendencia atual, sem filtro de periodo (ver bloco acima).
+  const reentregasPendentes = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
   const maisAntigaReentregaDash = getMaisAntigaPendente(reentregasPendentes, ['criado_em', 'data'], { atencao: 24, estourado: 48 });
   const totalQtdReentregas = reentregasPeriodo.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
   const indiceReentregaViagemPct = viagensIniciadas > 0 ? ((reentregasPeriodo.length / viagensIniciadas) * 100).toFixed(1) : '0.0';
@@ -4343,7 +4423,11 @@ function renderDashboardView() {
     return item;
   }).sort((a,b) => (b.gravidadeMatriz.ordem - a.gravidadeMatriz.ordem) || (b.qtd - a.qtd) || (b.valor - a.valor));
 
-  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParados > 0 || veicRetidos > 0 || pendCd > 0 || abertasCausaRaiz.length > 0 || sinistrosPendentesDash.length > 0);
+  // O painel de alertas aparece se ha PENDENCIA AGORA — pelas listas
+  // completas, nao pelas filtradas. Antes, escolher um periodo sem
+  // pendencia fazia o painel inteiro sumir, escondendo o que ainda estava
+  // em aberto (23/08/2026).
+  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || sinistrosPendentesDash.length > 0);
 
   return `
     <div class="space-y-6">
@@ -4356,36 +4440,6 @@ function renderDashboardView() {
         <div class="flex gap-2 flex-wrap">
           <button onclick="switchTab('sac_abertura')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2 rounded-lg shadow flex items-center gap-1.5">+ Nova Devolução</button>
           <button onclick="switchTab('rota_ocorrencias')" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-3 py-2 rounded-lg shadow flex items-center gap-1.5">🚨 Frota / Chamado em Rota</button>
-        </div>
-      </div>
-
-      <!-- BARRA DE FILTRO PERIÓDICO (DATA DE ATÉ DATA) -->
-      <div class="bg-slate-900 border border-slate-800 p-3.5 rounded-xl shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div class="flex items-center gap-3">
-          <div class="bg-emerald-600/20 p-2 rounded-lg border border-emerald-500/30 text-emerald-400 text-lg font-bold">📅</div>
-          <div>
-            <div class="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
-              FILTRO POR PERÍODO (DATA A DATA)
-              ${(fDe || fAte) ? `<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">FILTRO ATIVO</span>` : `<span class="bg-slate-800 text-slate-400 text-[10px] px-2 py-0.5 rounded font-medium">HISTÓRICO COMPLETO</span>`}
-            </div>
-            <p class="text-[11px] text-slate-400 font-medium">Selecione o período inicial e final para visualizar os dados consolidados do painel</p>
-          </div>
-        </div>
-
-        <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <div class="flex items-center gap-2 bg-slate-950 p-1.5 rounded-lg border border-slate-800 shrink-0">
-            <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">De:</span>
-            <input type="date" value="${fDe}" onchange="window._dashFiltroDe=this.value; renderApp()" class="bg-slate-900 border border-slate-700 text-white text-xs rounded p-1 font-bold">
-            <span class="text-[10px] text-slate-400 font-bold uppercase">Até:</span>
-            <input type="date" value="${fAte}" onchange="window._dashFiltroAte=this.value; renderApp()" class="bg-slate-900 border border-slate-700 text-white text-xs rounded p-1 font-bold">
-          </div>
-
-          <div class="flex items-center gap-1 shrink-0">
-            <button onclick="setDashboardPeriodo('hoje')" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold text-[11px] px-2.5 py-1.5 rounded border border-emerald-800/60 shadow">Hoje</button>
-            <button onclick="setDashboardPeriodo('semana')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-amber-800/60 shadow">Esta Semana</button>
-            <button onclick="setDashboardPeriodo('mes')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-blue-800/60 shadow">Este Mês</button>
-            ${(fDe || fAte) ? `<button onclick="setDashboardPeriodo('limpar')" class="bg-red-950 hover:bg-red-900 text-red-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-red-800 shadow" title="Limpar Filtro">✕ Limpar</button>` : ''}
-          </div>
         </div>
       </div>
 
@@ -4443,12 +4497,12 @@ function renderDashboardView() {
               </div>` : ''}
 
             <!-- ALERTA VEÍCULOS PARADOS EM ROTA -->
-            ${veicParados > 0 ? `
+            ${veicParadosAlerta.length > 0 ? `
               <div class="bg-slate-950 border border-red-900/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
                   <div class="w-9 h-9 rounded-lg bg-red-950 border border-red-800 text-red-400 flex items-center justify-center shrink-0 text-base font-bold">🚨</div>
                   <div class="truncate">
-                    <div class="text-xs font-black text-red-300 truncate">${veicParados} Veículo(s) Parado(s)</div>
+                    <div class="text-xs font-black text-red-300 truncate">${veicParadosAlerta.length} Veículo(s) Parado(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Socorro / Chamado em rota</div>
                     ${_linhaSla(maisAntigaVeicParadoRota, 'Parado há')}
                   </div>
@@ -4471,12 +4525,12 @@ function renderDashboardView() {
               </div>` : ''}
 
             <!-- ALERTA RETORNOS PENDENTES CD -->
-            ${pendCd > 0 ? `
+            ${pendCdAlerta.length > 0 ? `
               <div class="bg-slate-950 border border-amber-900/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
                   <div class="w-9 h-9 rounded-lg bg-amber-950 border border-amber-800 text-amber-400 flex items-center justify-center shrink-0 text-base font-bold">📦</div>
                   <div class="truncate">
-                    <div class="text-xs font-black text-amber-300 truncate">${pendCd} Retorno(s) Pendente(s) CD</div>
+                    <div class="text-xs font-black text-amber-300 truncate">${pendCdAlerta.length} Retorno(s) Pendente(s) CD</div>
                     <div class="text-[10px] text-slate-400 truncate">Aguardando entrada física</div>
                     ${_linhaSla(maisAntigaPendCd, 'Mais antiga')}
                   </div>
@@ -4485,12 +4539,12 @@ function renderDashboardView() {
               </div>` : ''}
 
             <!-- ALERTA ANÁLISES PENDENTES -->
-            ${abertasCausaRaiz.length > 0 ? `
+            ${abertasCausaRaizAlerta.length > 0 ? `
               <div class="bg-slate-950 border border-orange-900/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
                   <div class="w-9 h-9 rounded-lg bg-orange-950 border border-orange-800 text-orange-400 flex items-center justify-center shrink-0 text-base font-bold">⏳</div>
                   <div class="truncate">
-                    <div class="text-xs font-black text-orange-300 truncate">${abertasCausaRaiz.length} Análise(s) Pendente(s)</div>
+                    <div class="text-xs font-black text-orange-300 truncate">${abertasCausaRaizAlerta.length} Análise(s) Pendente(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Causa raiz não apurada</div>
                     ${_linhaSla(maisAntigaAnalise, 'Mais antiga')}
                   </div>
@@ -4513,6 +4567,41 @@ function renderDashboardView() {
               </div>` : ''}
           </div>
         </div>` : ''}
+
+      <!-- A BARRA DE FILTRO FICA AQUI, ABAIXO DOS ALERTAS, de proposito
+           (23/08/2026): assim fica visualmente subentendido que ela vale
+           "dali para baixo". Os alertas acima NAO seguem o filtro - eles
+           mostram o que esta pendente agora e somem quando deixa de estar.
+           Ver o bloco pendCdAlerta / abertasCausaRaizAlerta em
+           renderDashboardView. -->
+      <!-- BARRA DE FILTRO PERIÓDICO (DATA DE ATÉ DATA) -->
+      <div class="bg-slate-900 border border-slate-800 p-3.5 rounded-xl shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+          <div class="bg-emerald-600/20 p-2 rounded-lg border border-emerald-500/30 text-emerald-400 text-lg font-bold">📅</div>
+          <div>
+            <div class="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
+              FILTRO POR PERÍODO (DATA A DATA)
+              ${(fDe || fAte) ? `<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">FILTRO ATIVO</span>` : `<span class="bg-slate-800 text-slate-400 text-[10px] px-2 py-0.5 rounded font-medium">HISTÓRICO COMPLETO</span>`}
+            </div>
+            <p class="text-[11px] text-slate-400 font-medium">Selecione o período inicial e final para visualizar os dados consolidados do painel</p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+          <div class="flex items-center gap-2 bg-slate-950 p-1.5 rounded-lg border border-slate-800 shrink-0">
+            <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">De:</span>
+            <input type="date" value="${fDe}" onchange="window._dashFiltroDe=this.value; renderApp()" class="bg-slate-900 border border-slate-700 text-white text-xs rounded p-1 font-bold">
+            <span class="text-[10px] text-slate-400 font-bold uppercase">Até:</span>
+            <input type="date" value="${fAte}" onchange="window._dashFiltroAte=this.value; renderApp()" class="bg-slate-900 border border-slate-700 text-white text-xs rounded p-1 font-bold">
+          </div>
+
+          <div class="flex items-center gap-1 shrink-0">
+            <button onclick="setDashboardPeriodo('semana')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-amber-800/60 shadow">Esta Semana</button>
+            <button onclick="setDashboardPeriodo('mes')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-blue-800/60 shadow">Este Mês</button>
+            ${(fDe || fAte) ? `<button onclick="setDashboardPeriodo('limpar')" class="bg-red-950 hover:bg-red-900 text-red-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-red-800 shadow" title="Limpar Filtro">✕ Limpar</button>` : ''}
+          </div>
+        </div>
+      </div>
 
       <!-- ==================== SEÇÃO 1: MÓDULO TRANSPORTE ==================== -->
       <div class="bg-slate-900 border border-blue-900/60 rounded-2xl p-5 shadow-2xl space-y-4">

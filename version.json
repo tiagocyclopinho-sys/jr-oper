@@ -1,5 +1,5 @@
 {
-  "build": "sync-4.8.7",
+  "build": "sync-4.8.8",
   "publicado_em": "2026-08-23",
-  "resumo": "O filtro por periodo do Dashboard (Hoje / Esta Semana / Este Mes) voltou a filtrar: procurava campos de data que nenhuma tela grava (data_abertura, data_chamado, data_viagem, data_troca) e, sem data, tudo passava — o painel mostrava sempre o historico inteiro. Agora usa criado_em, que todas as colecoes tem. Junto: SLA sempre presente nos cards de alerta, com semaforo e meta por area."
+  "resumo": "Dashboard: alertas deixam de seguir o filtro de periodo (mostram o que esta pendente agora e somem quando deixa de estar); a barra de filtro desceu para baixo dos alertas; botao Hoje removido e o painel passa a abrir ja filtrado no dia; e a comparacao de datas entende dd/mm/aaaa, que era o motivo de Este Mes mostrar 0 viagens onde o historico mostrava 15."
 }

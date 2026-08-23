@@ -17,7 +17,7 @@ global.localStorage = {
 // Extrai da app.js só o bloco das funções de SLA — o arquivo inteiro depende
 // de dezenas de globais que não existem aqui.
 const app = fs.readFileSync(__dirname + '/../js/app.js', 'utf8');
-const ini = app.indexOf('function dataNoPeriodo');   // dataNoPeriodo vem logo antes do bloco de SLA
+const ini = app.indexOf('function _paraIsoDeComparacao');  // vem logo antes de dataNoPeriodo e do bloco de SLA
 const fim = app.indexOf('function renderDashboardView()');
 if (ini < 0 || fim < 0) { console.error('bloco de SLA nao encontrado'); process.exit(1); }
 eval(app.slice(ini, fim));
@@ -188,6 +188,37 @@ conferir('e o mes que CONTEM o registro inclui',
                 '2026-08-01', '2026-08-31') === true);
 conferir('sem filtro nenhum, continua passando',
   dataNoPeriodo(devolucaoReal.criado_em, '', '') === true);
+
+console.log('\n== Formatos de data que o filtro precisa entender ==');
+// A regressao de 23/08: data_saida das viagens vem em dd/mm/aaaa, e a
+// comparacao e de TEXTO. "23/08/2026" > "2026-08-23" em ordem alfabetica,
+// entao toda viagem caia fora do periodo e "Este Mes" mostrava 0 de 15.
+conferir('dd/mm/aaaa vira ISO', _paraIsoDeComparacao('23/08/2026') === '2026-08-23', _paraIsoDeComparacao('23/08/2026'));
+conferir('ISO continua ISO', _paraIsoDeComparacao('2026-08-23') === '2026-08-23');
+conferir('ISO com hora perde a hora', _paraIsoDeComparacao('2026-08-23T13:38:42.142') === '2026-08-23');
+conferir('objeto Date funciona', _paraIsoDeComparacao(new Date('2026-08-23T10:00:00Z')) === '2026-08-23');
+conferir('serial do Excel funciona', _paraIsoDeComparacao('46257') === '2026-08-23', _paraIsoDeComparacao('46257'));
+conferir('texto sem sentido nao vira data', _paraIsoDeComparacao('INICIADO') === '', _paraIsoDeComparacao('INICIADO'));
+conferir('vazio nao vira data', _paraIsoDeComparacao('') === '' && _paraIsoDeComparacao(null) === '');
+
+console.log('\n== A viagem de dd/mm/aaaa volta a entrar no periodo ==');
+const viagem = { id: 1, data_saida: '23/08/2026' };
+conferir('agosto/2026 INCLUI a viagem',
+  dataNoPeriodo(viagem.data_saida, '2026-08-01', '2026-08-23') === true);
+conferir('janeiro/2026 exclui a viagem',
+  dataNoPeriodo(viagem.data_saida, '2026-01-01', '2026-01-31') === false);
+// A viagem fantasma, com estado de checklist no lugar da data: nao da para
+// interpretar, entao passa — esconder seria pior do que mostrar.
+conferir('viagem com "INICIADO" no lugar da data nao e escondida',
+  dataNoPeriodo('INICIADO', '2026-08-01', '2026-08-23') === true);
+
+console.log('\n== Registro sem id: ultimo buraco fechado ==');
+r = getMaisAntigaPendente([{ numero_protocolo: 'DEV-2026-001' }], ['criado_em'], ADM);
+conferir('sem id, mas com protocolo: ainda recebe SLA', r.item !== null && r.estimado, r);
+conferir('e a linha nao diz "sem referencia"',
+  _linhaSla(r, 'Mais antiga').indexOf('sem referência') < 0, _linhaSla(r, 'Mais antiga'));
+r = getMaisAntigaPendente([{ nada: true }], ['criado_em'], ADM);
+conferir('sem id E sem protocolo: ai sim assume que nao sabe', r.nivel === 'indefinido', r);
 
 console.log(falhas === 0 ? '\nTODOS OS TESTES PASSARAM' : `\n${falhas} TESTE(S) FALHARAM`);
 process.exit(falhas === 0 ? 0 : 1);
