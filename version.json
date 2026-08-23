@@ -1,5 +1,5 @@
 {
-  "build": "sync-4.8.2",
-  "publicado_em": "2026-08-22",
-  "resumo": "Ondas 1+2 — sincronizacao do Transporte: paginacao por cursor, envio so do que mudou, mesclagem por registro, exclusao duravel, janela operacional, alarme de cota, guarda na escrita, fim da reinjecao da planilha, id por aparelho, dedup por carga, auto-atualizacao e registro de aparelhos."
+  "build": "sync-4.8.3",
+  "publicado_em": "2026-08-23",
+  "resumo": "Correcao: o pull passou a mesclar contra a fatia operacional (memoria/jr_sac_db) em vez do espelho por tabela, que so ele proprio escrevia — era o que apagava um lancamento recem-salvo quando outro aparelho mandava algo na mesma tabela. Junto: contador de fantasmas e zeramento de treinamento passam a olhar as tres copias. E o detector de resquicio (conferir as copias e rastrear um lancamento pelas cinco camadas), no console e na tela de Aparelhos."
 }

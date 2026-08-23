@@ -145,6 +145,21 @@ class CloudStore {
         localStorage.setItem('jr_sac_db', JSON.stringify(db));
         console.log('[CloudStore] Dados transacionais zerados para início de produção.');
       }
+
+      // Zerava só jr_sac_db, deixando para trás a memória e os espelhos por
+      // tabela — as outras duas cópias das mesmas coleções. Passou a
+      // importar em 23/08/2026: desde a correção da autoridade do pull,
+      // window.db.data é a PRIMEIRA fonte consultada na mesclagem, então
+      // dado de treinamento esquecido ali voltaria a ser tratado como
+      // trabalho local deste aparelho. Zerar as três juntas é o mesmo que
+      // store.js:resetTrainingData() já fazia no caminho do Reset Global.
+      transactionalKeys.forEach(key => {
+        if (window.db && window.db.data && Array.isArray(window.db.data[key])) {
+          window.db.data[key] = [];
+        }
+        const espelho = (CloudStore.MAPA_TABELAS.find(m => m.dbKey === key) || {}).localKey;
+        if (espelho) { try { localStorage.removeItem(espelho); } catch(e) {} }
+      });
     } catch(e) {
       console.warn('[CloudStore] Erro ao zerar dados transacionais:', e);
     }
@@ -715,14 +730,32 @@ class CloudStore {
   // como "em dia" mostraria `null`, escondendo justamente o que a ETAPA 3
   // precisa achar. Ver CONFERIR_APARELHO.md.
   _auditarCacheLocal() {
+    // Lia 'jr_controle_viagens' — o espelho — e o espelho só é escrito pelo
+    // pull. Entre um ciclo e outro ele não reflete o que o aparelho guarda,
+    // então este contador podia dizer "limpo" com fantasma na fatia
+    // operacional, e o contrário também (correção de 23/08/2026, junto com
+    // a autoridade do pull). É este número que decide se uma máquina pode
+    // operar antes do Reset Global — ele precisa contar o que ela realmente
+    // tem, na mesma ordem de confiança usada no pull.
     let viagens = null;
-    try {
-      const bruto = localStorage.getItem('jr_controle_viagens');
-      if (bruto) {
-        const p = JSON.parse(bruto);
-        viagens = Array.isArray(p) ? p : Object.values(p);
-      }
-    } catch(e) { return; }
+    if (window.db && window.db.data && Array.isArray(window.db.data.controle_viagens)) {
+      viagens = window.db.data.controle_viagens;
+    } else {
+      try {
+        const raw = localStorage.getItem('jr_sac_db');
+        const fatia = raw ? JSON.parse(raw) : null;
+        if (fatia && Array.isArray(fatia.controle_viagens)) viagens = fatia.controle_viagens;
+      } catch(e) {}
+    }
+    if (viagens === null) {
+      try {
+        const bruto = localStorage.getItem('jr_controle_viagens');
+        if (bruto) {
+          const p = JSON.parse(bruto);
+          viagens = Array.isArray(p) ? p : Object.values(p);
+        }
+      } catch(e) { return; }
+    }
     if (!viagens) return;
 
     // Ignora as já excluídas (22/08/2026, build 4.8.2). O GO_LIVE.md previa
@@ -749,6 +782,286 @@ class CloudStore {
       exemplos: contaminados.slice(0, 5).map(r => `${r.carga || r.id}: data_saida="${r.data_saida}"`),
       quando: new Date().toISOString()
     };
+  }
+
+
+  // =================================================================
+  // DETECTOR DE RESQUÍCIO — build 4.8.3 (23/08/2026)
+  //
+  // O diagnóstico que existia até aqui responde sempre no nível da TABELA
+  // ("a nuvem recusou alguma?"), e tem um único detector de conteúdo, preso
+  // a controle_viagens (_auditarCacheLocal). Nenhum dos dois enxerga o que
+  // foi relatado em 23/08/2026: uma devolução lançada que chega na nuvem e
+  // nos outros aparelhos, mas some — ou fica velha — em um deles. Por isso
+  // jrDiagnosticoSync() diz "tudo chegou ao banco" e a tela mostra outra
+  // coisa: as duas frases são verdadeiras, sobre camadas diferentes.
+  //
+  // O MESMO registro mora em QUATRO lugares dentro deste aparelho:
+  //
+  //   1. window.db.data[dbKey]            memória — é o que a tela desenha
+  //   2. localStorage['jr_sac_db'][dbKey] a fatia operacional — é o que
+  //                                       db.save() grava (store.js:682)
+  //   3. localStorage[localKey]           o ESPELHO por tabela
+  //                                       ('jr_ocorrencias', 'jr_cargas'...)
+  //   4. localStorage['jr_sync_hashes']   a assinatura do que a nuvem
+  //                                       confirmou, registro a registro
+  //
+  // E aqui está o furo: db.save() escreve (1) e (2), e NUNCA (3). Quem
+  // escreve o espelho é só o pull (syncCloudToLocal) — que também LÊ o
+  // espelho como se ele fosse "o que este aparelho tem", e mescla a nuvem
+  // contra uma cópia que pode estar horas atrasada. Entre um pull e o
+  // seguinte, (2) e (3) discordam por construção, e não por falha de rede.
+  //
+  // A consequência ruim é silenciosa: um registro que está em (2) e não em
+  // (3) e ainda não subiu não aparece em porId dentro de _mesclarPorRegistro
+  // — não é preservado, não é descartado, simplesmente não é considerado. O
+  // resultado da mesclagem é gravado por cima das duas chaves, e o registro
+  // some. Sem erro, sem recusa, sem entrar em tabelasComPendencia. Na
+  // prática o envio quase sempre ganha a corrida (debounce de 1,5s mais o
+  // flush no alert()), e é por isso que o sintoma é UM lançamento perdido no
+  // meio de cinco que passaram.
+  //
+  // "Resquício de cache" não é uma coisa só: é uma DISCORDÂNCIA entre duas
+  // dessas camadas, e cada par tem causa e conserto diferentes. Este método
+  // não conserta nada — ele diz qual par discorda, e em quais registros,
+  // para que se pare de adivinhar. É leitura pura: não toca na rede.
+  // =================================================================
+  _lerColecaoEspelho(localKey) {
+    try {
+      const raw = localStorage.getItem(localKey);
+      if (raw === null) return null;          // nunca existiu: não é divergência
+      const p = JSON.parse(raw);
+      return Array.isArray(p) ? p : Object.values(p);
+    } catch(e) { return null; }
+  }
+
+  _porId(lista) {
+    const m = new Map();
+    if (!Array.isArray(lista)) return m;
+    for (const r of lista) {
+      if (r && r.id !== undefined && r.id !== null) m.set(String(r.id), r);
+    }
+    return m;
+  }
+
+  conferirCamadas() {
+    let sacDb = {};
+    try { sacDb = JSON.parse(localStorage.getItem('jr_sac_db') || '{}') || {}; } catch(e) {}
+    const memoria = (window.db && window.db.data) || {};
+    const mapa = this._lerMapaSync();
+
+    const tabelas = [];
+    let totalDivergentes = 0;
+    let totalEmRisco = 0;
+
+    for (const m of CloudStore.MAPA_TABELAS) {
+      const camadas = {
+        memoria:  Array.isArray(memoria[m.dbKey]) ? memoria[m.dbKey] : null,
+        sacDb:    Array.isArray(sacDb[m.dbKey])   ? sacDb[m.dbKey]   : null,
+        espelho:  this._lerColecaoEspelho(m.localKey)
+      };
+      const idx = {
+        memoria: this._porId(camadas.memoria),
+        sacDb:   this._porId(camadas.sacDb),
+        espelho: this._porId(camadas.espelho)
+      };
+      const conhecidos = (mapa && mapa[m.tableName]) || null;
+
+      // Universo = todo id visto em qualquer camada que EXISTA. Camada
+      // ausente (null) não vota: aparelho que ainda não completou um pull
+      // desta tabela não tem espelho, e isso é normal no primeiro dia.
+      const universo = new Set();
+      ['memoria', 'sacDb', 'espelho'].forEach(c => {
+        if (camadas[c]) idx[c].forEach((_, id) => universo.add(id));
+      });
+
+      const achados = [];
+      for (const id of universo) {
+        const onde = {};
+        let algumFalta = false, algumDifere = false;
+        let ref = null;
+        ['memoria', 'sacDb', 'espelho'].forEach(c => {
+          if (!camadas[c]) { onde[c] = 'n/a'; return; }
+          const r = idx[c].get(id);
+          if (!r) { onde[c] = 'FALTA'; algumFalta = true; return; }
+          const h = this._hashRegistro(r);
+          if (ref === null) ref = h;
+          else if (ref !== h) algumDifere = true;
+          onde[c] = h;
+        });
+        if (!algumFalta && !algumDifere) continue;
+
+        // O caso perigoso, e o único que pede ação imediata: o registro está
+        // na fatia operacional (foi salvo aqui), NÃO está no espelho, e o
+        // mapa de sincronização não o conhece — ou seja, ainda não subiu. O
+        // próximo pull vai mesclar a nuvem contra o espelho, que não o
+        // contém, e gravar o resultado por cima de jr_sac_db.
+        const emRisco = onde.sacDb !== 'FALTA' && onde.sacDb !== 'n/a'
+          && onde.espelho === 'FALTA'
+          && (!conhecidos || conhecidos[id] === undefined);
+        if (emRisco) totalEmRisco++;
+        totalDivergentes++;
+
+        const amostra = idx.sacDb.get(id) || idx.memoria.get(id) || idx.espelho.get(id) || {};
+        achados.push({ id, emRisco, onde, rotulo: this._rotuloDoRegistro(amostra) });
+      }
+
+      if (achados.length > 0) {
+        tabelas.push({
+          tabela: m.tableName,
+          espelho: m.localKey,
+          // Ordena para o que exige ação aparecer primeiro na tela e no
+          // console — lista longa sem ordem é lista que ninguém lê.
+          divergentes: achados.sort((a, b) => (b.emRisco - a.emRisco)).slice(0, 50),
+          total: achados.length,
+          emRisco: achados.filter(a => a.emRisco).length,
+          contagens: {
+            memoria: camadas.memoria ? camadas.memoria.length : null,
+            sacDb:   camadas.sacDb   ? camadas.sacDb.length   : null,
+            espelho: camadas.espelho ? camadas.espelho.length : null
+          }
+        });
+      }
+    }
+
+    return {
+      quando: new Date().toISOString(),
+      build: CloudStore.BUILD,
+      totalDivergentes,
+      totalEmRisco,
+      tabelas: tabelas.sort((a, b) => (b.emRisco - a.emRisco) || (b.total - a.total))
+    };
+  }
+
+  // Um jeito humano de reconhecer o registro na lista, sem despejar o objeto
+  // inteiro: placa, carga, cliente, nome — o que houver, nessa ordem.
+  _rotuloDoRegistro(r) {
+    if (!r || typeof r !== 'object') return '';
+    const campos = ['veiculo_placa', 'placa', 'carga_numero', 'carga', 'carga_rota',
+                    'protocolo', 'nota_fiscal', 'cliente_nome', 'motorista_nome',
+                    'nome', 'colaborador', 'data'];
+    const partes = [];
+    for (const c of campos) {
+      if (r[c] !== undefined && r[c] !== null && String(r[c]).trim() !== '') {
+        partes.push(String(r[c]).trim());
+        if (partes.length === 2) break;
+      }
+    }
+    return partes.join(' / ');
+  }
+
+  // =================================================================
+  // RASTREAR UM REGISTRO — a pergunta que ninguém conseguia fazer
+  //
+  // Recebe o que o operador tem na mão (uma placa, uma carga, uma NF, um
+  // protocolo, um id) e devolve, para cada cópia encontrada, o estado nas
+  // quatro camadas locais MAIS o que a nuvem tem de fato — lido agora,
+  // direto, sem passar por cache nenhum.
+  //
+  // É a única leitura do sistema que compara os cinco lugares ao mesmo
+  // tempo, e por isso é a única que consegue dizer QUAL deles está velho.
+  // =================================================================
+  async rastrearRegistro(termo) {
+    const alvo = String(termo || '').trim().toUpperCase();
+    if (!alvo) return { termo: '', achados: [], erro: 'Informe uma placa, carga, NF, protocolo ou id.' };
+
+    let sacDb = {};
+    try { sacDb = JSON.parse(localStorage.getItem('jr_sac_db') || '{}') || {}; } catch(e) {}
+    const memoria = (window.db && window.db.data) || {};
+    const mapa = this._lerMapaSync();
+
+    const bate = (r) => {
+      if (!r || typeof r !== 'object') return false;
+      if (String(r.id) === alvo) return true;
+      for (const k of Object.keys(r)) {
+        const v = r[k];
+        if (v === null || v === undefined || typeof v === 'object') continue;
+        if (String(v).trim().toUpperCase() === alvo) return true;
+      }
+      return false;
+    };
+
+    const achados = [];
+    for (const m of CloudStore.MAPA_TABELAS) {
+      const camadas = {
+        memoria:  Array.isArray(memoria[m.dbKey]) ? memoria[m.dbKey] : null,
+        sacDb:    Array.isArray(sacDb[m.dbKey])   ? sacDb[m.dbKey]   : null,
+        espelho:  this._lerColecaoEspelho(m.localKey)
+      };
+      const ids = new Set();
+      ['memoria', 'sacDb', 'espelho'].forEach(c => {
+        (camadas[c] || []).forEach(r => { if (bate(r) && r.id != null) ids.add(String(r.id)); });
+      });
+      if (ids.size === 0) continue;
+
+      const idx = {
+        memoria: this._porId(camadas.memoria),
+        sacDb:   this._porId(camadas.sacDb),
+        espelho: this._porId(camadas.espelho)
+      };
+      const conhecidos = (mapa && mapa[m.tableName]) || null;
+
+      for (const id of ids) {
+        const linha = { tabela: m.tableName, id, camadas: {} };
+        ['memoria', 'sacDb', 'espelho'].forEach(c => {
+          if (!camadas[c]) { linha.camadas[c] = { estado: 'n/a' }; return; }
+          const r = idx[c].get(id);
+          linha.camadas[c] = r
+            ? { estado: 'presente', hash: this._hashRegistro(r), rotulo: this._rotuloDoRegistro(r) }
+            : { estado: 'ausente' };
+        });
+        linha.camadas.hashMap = (!conhecidos || conhecidos[id] === undefined)
+          ? { estado: 'nunca confirmado' }
+          : { estado: 'confirmado', hash: conhecidos[id] };
+
+        // A nuvem, agora, sem cache. O filtro id=eq. desvia da paginação de
+        // propósito: aqui se quer UMA linha, não a tabela inteira.
+        let naNuvem = { estado: 'nao consultada' };
+        if (this.isConfigured()) {
+          const linhas = await this._getPagina(m.tableName, 'id=eq.' + encodeURIComponent(id));
+          if (linhas === null) naNuvem = { estado: 'falha ao consultar' };
+          else if (linhas.length === 0) naNuvem = { estado: 'ausente' };
+          else naNuvem = { estado: 'presente', hash: this._hashRegistro(linhas[0]), registro: linhas[0] };
+        }
+        linha.camadas.nuvem = naNuvem;
+        linha.veredito = this._vereditoDoRastreio(linha.camadas);
+        achados.push(linha);
+      }
+    }
+
+    return { termo: alvo, quando: new Date().toISOString(), achados };
+  }
+
+  // Traduz a combinação das cinco camadas numa frase acionável. A ordem dos
+  // testes é a ordem da gravidade: o primeiro que casar é o que manda.
+  _vereditoDoRastreio(c) {
+    const presente = (x) => c[x] && c[x].estado === 'presente';
+    const ausente  = (x) => c[x] && c[x].estado === 'ausente';
+
+    if (ausente('nuvem') && presente('sacDb') && ausente('espelho')
+        && c.hashMap.estado === 'nunca confirmado') {
+      return { nivel: 'CRITICO', texto: 'Salvo neste aparelho, ainda nao subiu, e o espelho nao o tem: o proximo pull apaga este registro. Force o envio antes de fechar o app.' };
+    }
+    if (ausente('nuvem') && c.hashMap.estado === 'confirmado') {
+      return { nivel: 'CRITICO', texto: 'O mapa de sincronizacao diz que a nuvem ja confirmou este registro, mas ele nao esta la. Nunca mais sera reenviado sozinho, e o proximo pull o trata como apagado.' };
+    }
+    if (ausente('nuvem')) {
+      return { nivel: 'ATENCAO', texto: 'So existe neste aparelho. Ainda nao subiu: normal por alguns segundos, problema se persistir depois de um ciclo de 30s.' };
+    }
+    if (presente('nuvem') && ausente('sacDb') && ausente('memoria')) {
+      return { nivel: 'ATENCAO', texto: 'Esta na nuvem e nao neste aparelho. Pode ser a janela operacional (90 dias) ou um pull que ainda nao rodou.' };
+    }
+    if (presente('nuvem') && presente('memoria') && c.memoria.hash !== c.nuvem.hash
+        && c.hashMap.estado === 'confirmado' && c.hashMap.hash === c.nuvem.hash) {
+      return { nivel: 'ATENCAO', texto: 'A tela mostra uma versao diferente da que esta na nuvem, e a diferenca nao esta marcada como alteracao local. E resquicio de tela: recarregue.' };
+    }
+    if (presente('sacDb') && presente('espelho') && c.sacDb.hash !== c.espelho.hash) {
+      return { nivel: 'ATENCAO', texto: 'As duas copias locais discordam entre si. O espelho esta velho, e e essa diferenca que o proximo pull vai resolver, nem sempre a favor do que esta na tela.' };
+    }
+    if (presente('memoria') && presente('sacDb') && c.memoria.hash !== c.sacDb.hash) {
+      return { nivel: 'ATENCAO', texto: 'A memoria e o que esta gravado discordam. A tela esta desenhando algo que nao foi salvo.' };
+    }
+    return { nivel: 'OK', texto: 'As copias batem entre si e com a nuvem.' };
   }
 
   // =================================================================
@@ -1162,33 +1475,14 @@ class CloudStore {
       try { await this.syncLocalToCloud(); } catch(e) {}
     }
 
-    const mappings = [
-      { tableName: 'ocorrencias_devolucao', localKey: 'jr_ocorrencias',       dbKey: 'ocorrencias_devolucao' },
-      { tableName: 'ocorrencias_rota',      localKey: 'jr_ocorrencias_rota',  dbKey: 'ocorrencias_rota' },
-      { tableName: 'retencoes_frota',       localKey: 'jr_retencoes_frota',   dbKey: 'retencoes_frota' },
-      { tableName: 'reentregas_rota',       localKey: 'jr_reentregas',        dbKey: 'reentregas' },
-      { tableName: 'trocas_veiculos',       localKey: 'jr_trocas_veiculos',   dbKey: 'trocas_veiculos' },
-      { tableName: 'motoristas',            localKey: 'jr_motoristas',        dbKey: 'motoristas' },
-      { tableName: 'ajudantes',             localKey: 'jr_ajudantes',         dbKey: 'ajudantes' },
-      { tableName: 'veiculos',              localKey: 'jr_veiculos',          dbKey: 'veiculos' },
-      { tableName: 'cargas',                localKey: 'jr_cargas',            dbKey: 'cargas' },
-      { tableName: 'usuarios',              localKey: 'jr_usuarios',          dbKey: 'usuarios' },
-      { tableName: 'audit_logs',            localKey: 'jr_audit_logs',        dbKey: 'audit_logs' },
-      { tableName: 'registro_versoes',      localKey: 'jr_registro_versoes',  dbKey: 'registro_versoes' },
-      { tableName: 'controle_viagens',      localKey: 'jr_controle_viagens',  dbKey: 'controle_viagens' },
-      { tableName: 'ocorrencias_viagens',   localKey: 'jr_ocorrencias_viagens', dbKey: 'ocorrencias_viagens' },
-      { tableName: 'resumo_diario_cd',      localKey: 'jr_resumo_diario_cd',  dbKey: 'resumo_diario_cd' },
-      { tableName: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', dbKey: 'medidas_disciplinares' },
-      { tableName: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', dbKey: 'orientacoes_feedback' },
-      { tableName: 'atestados_medicos',     localKey: 'jr_atestados_medicos', dbKey: 'atestados_medicos' },
-      { tableName: 'ausencias_registros',   localKey: 'jr_ausencias_registros', dbKey: 'ausencias_registros' },
-      { tableName: 'itens_devolucao',       localKey: 'jr_itens_devolucao',   dbKey: 'itens_devolucao' },
-      { tableName: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  dbKey: 'colaboradores_cd' },
-      { tableName: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', dbKey: 'relatorios_divergencia' },
-      { tableName: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', dbKey: 'auditoria_produtividade' },
-      { tableName: 'sinistros',             localKey: 'jr_sinistros',         dbKey: 'sinistros' },
-      { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' }
-    ];
+    // A lista mora em CloudStore.MAPA_TABELAS, no fim do arquivo, porque o
+    // detector de resquicio (conferirCamadas/rastrearRegistro) precisa dela
+    // tambem — e uma terceira copia do mapeamento envelheceria sozinha, que
+    // e exatamente como 'produtos' e 'setores' passaram semanas sem sair do
+    // aparelho que os cadastrou. Aqui a ordem nao importa: cada tabela e
+    // lida por conta propria. No ENVIO importa (chave estrangeira), e por
+    // isso syncLocalToCloud mantem a lista ordenada dele.
+    const mappings = CloudStore.MAPA_TABELAS;
 
     // Um Reset Global feito em OUTRO aparelho precisa ser reconhecido aqui
     // antes de qualquer comparação, senão este aparelho reenvia o que o
@@ -1221,12 +1515,65 @@ class CloudStore {
     // cima do jr_sac_db mais atual no final, não do snapshot do início.
     const pulledUpdates = {};
 
+    // Relê jr_sac_db a CADA chamada, e não uma vez no início, pelo mesmo
+    // motivo do comentário acima: o laço leva segundos e um save() no meio
+    // dele precisa ser enxergado. Só é usada quando não há window.db
+    // (bancada de teste, ou o cloudStore rodando sem o store).
+    const lerFatiaOperacional = (dbKey) => {
+      try {
+        const raw = localStorage.getItem('jr_sac_db');
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return (parsed && Array.isArray(parsed[dbKey])) ? JSON.stringify(parsed[dbKey]) : null;
+      } catch(e) { return null; }
+    };
+
     for (const m of mappings) {
       try {
         const cloudData = await this.getAll(m.tableName);
         if (!cloudData) continue;
 
-        const localRaw = localStorage.getItem(m.localKey);
+        // QUEM É "O QUE ESTE APARELHO TEM" — correção de 23/08/2026
+        //
+        // Era `localStorage.getItem(m.localKey)`: o ESPELHO. E o espelho é
+        // escrito só aqui, no pull — db.save() grava window.db.data e
+        // jr_sac_db, e NUNCA ele (store.js:682). Ou seja: a mesclagem
+        // comparava a nuvem contra uma cópia que podia estar horas atrasada,
+        // e um lançamento salvo depois do último pull simplesmente não
+        // existia para _mesclarPorRegistro. Não era preservado nem
+        // descartado — não era considerado. O resultado da mesclagem era
+        // gravado por cima de jr_sac_db e o registro sumia, sem erro e sem
+        // aparecer em tabelasComPendencia. Achado em 23/08/2026 ao investigar
+        // um relato de divergência entre aparelhos; está reproduzido em
+        // testes/06_pull_nao_apaga_lancamento.js.
+        //
+        // NÃO confundir com o sintoma oposto — registro que APARECE sem
+        // ninguém ter lançado. Aquilo é aparelho com cache antigo
+        // republicando, ou registro que já estava na nuvem e só ficou
+        // visível pelo filtro de período da tela. Causa diferente, conserto
+        // diferente; ver PARTE 4 do CONFERIR_APARELHO.md.
+        //
+        // O ENVIO já tratava jr_sac_db como a verdade (syncLocalToCloud lê
+        // fullDb primeiro e só cai no espelho como último recurso). A
+        // correção é fazer a LEITURA concordar com a ESCRITA — as duas
+        // metades do mesmo ciclo estavam olhando para cópias diferentes.
+        //
+        // A memória vem antes de jr_sac_db de propósito: se um save()
+        // estourou a cota, window.db.data tem o registro e jr_sac_db não, e
+        // na dúvida se preserva o trabalho do operador.
+        //
+        // O espelho continua sendo escrito no fim deste bloco. Ele deixa de
+        // ser autoridade, não deixa de existir: syncLocalToCloud ainda o usa
+        // como último recurso, e o detector (conferirCamadas) precisa dele
+        // para conseguir enxergar divergência.
+        const espelhoRaw = localStorage.getItem(m.localKey);
+        let localRaw = espelhoRaw;
+        if (window.db && window.db.data && Array.isArray(window.db.data[m.dbKey])) {
+          localRaw = JSON.stringify(window.db.data[m.dbKey]);
+        } else {
+          const daFatia = lerFatiaOperacional(m.dbKey);
+          if (daFatia !== null) localRaw = daFatia;
+        }
 
         // (achado de 21/08/2026, diagnóstico da causa raiz) getAll() devolve
         // [] — não null — quando a tabela existe mas está VAZIA na nuvem. E
@@ -1277,8 +1624,15 @@ class CloudStore {
         const mesclado = this._mesclarPorRegistro(m.tableName, localRaw, cloudData);
         const mescladoStr = JSON.stringify(mesclado);
 
-        if (localRaw !== mescladoStr) {
+        // Duas decisões separadas, porque as duas cópias entram diferentes:
+        // o espelho é atualizado sempre que estiver atrás (é o que o mantém
+        // útil para o diagnóstico), e a fatia operacional só é marcada como
+        // mudada se a mesclagem realmente mudar algo em relação ao que este
+        // aparelho tem — que é o que dispara o redesenho da tela.
+        if (espelhoRaw !== mescladoStr) {
           localStorage.setItem(m.localKey, mescladoStr);
+        }
+        if (localRaw !== mescladoStr) {
           pulledUpdates[m.dbKey] = mesclado;
           anyChange = true;
         }
@@ -1450,7 +1804,39 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.8.2";
+CloudStore.BUILD = "sync-4.8.3";
+
+// As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
+//   tableName -> a tabela no Supabase
+//   localKey  -> a chave ESPELHO no localStorage ('jr_ocorrencias' etc.)
+//   dbKey     -> a colecao dentro de jr_sac_db e de window.db.data
+CloudStore.MAPA_TABELAS = [
+  { tableName: 'ocorrencias_devolucao', localKey: 'jr_ocorrencias',       dbKey: 'ocorrencias_devolucao' },
+  { tableName: 'ocorrencias_rota',      localKey: 'jr_ocorrencias_rota',  dbKey: 'ocorrencias_rota' },
+  { tableName: 'retencoes_frota',       localKey: 'jr_retencoes_frota',   dbKey: 'retencoes_frota' },
+  { tableName: 'reentregas_rota',       localKey: 'jr_reentregas',        dbKey: 'reentregas' },
+  { tableName: 'trocas_veiculos',       localKey: 'jr_trocas_veiculos',   dbKey: 'trocas_veiculos' },
+  { tableName: 'motoristas',            localKey: 'jr_motoristas',        dbKey: 'motoristas' },
+  { tableName: 'ajudantes',             localKey: 'jr_ajudantes',         dbKey: 'ajudantes' },
+  { tableName: 'veiculos',              localKey: 'jr_veiculos',          dbKey: 'veiculos' },
+  { tableName: 'cargas',                localKey: 'jr_cargas',            dbKey: 'cargas' },
+  { tableName: 'usuarios',              localKey: 'jr_usuarios',          dbKey: 'usuarios' },
+  { tableName: 'audit_logs',            localKey: 'jr_audit_logs',        dbKey: 'audit_logs' },
+  { tableName: 'registro_versoes',      localKey: 'jr_registro_versoes',  dbKey: 'registro_versoes' },
+  { tableName: 'controle_viagens',      localKey: 'jr_controle_viagens',  dbKey: 'controle_viagens' },
+  { tableName: 'ocorrencias_viagens',   localKey: 'jr_ocorrencias_viagens', dbKey: 'ocorrencias_viagens' },
+  { tableName: 'resumo_diario_cd',      localKey: 'jr_resumo_diario_cd',  dbKey: 'resumo_diario_cd' },
+  { tableName: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', dbKey: 'medidas_disciplinares' },
+  { tableName: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', dbKey: 'orientacoes_feedback' },
+  { tableName: 'atestados_medicos',     localKey: 'jr_atestados_medicos', dbKey: 'atestados_medicos' },
+  { tableName: 'ausencias_registros',   localKey: 'jr_ausencias_registros', dbKey: 'ausencias_registros' },
+  { tableName: 'itens_devolucao',       localKey: 'jr_itens_devolucao',   dbKey: 'itens_devolucao' },
+  { tableName: 'colaboradores_cd',      localKey: 'jr_colaboradores_cd',  dbKey: 'colaboradores_cd' },
+  { tableName: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', dbKey: 'relatorios_divergencia' },
+  { tableName: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', dbKey: 'auditoria_produtividade' },
+  { tableName: 'sinistros',             localKey: 'jr_sinistros',         dbKey: 'sinistros' },
+  { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' }
+];
 
 // Tamanho do bloco de leitura paginada (item 4). Deliberadamente ABAIXO do
 // corte padrão de 1.000 linhas do PostgREST: assim um bloco cheio sempre
@@ -1531,6 +1917,73 @@ window.jrDiagnosticoSync = function() {
   }
   if (!d.tabelasComPendencia.length) console.info('✅ Nenhuma tabela pendente — tudo que foi salvo aqui chegou ao banco.');
   return d;
+};
+
+
+// Detector de resquício, pelo console (PC). No celular, o mesmo resultado
+// sai pelo botão em Governança & Lixeira -> Aparelhos, que é onde ele
+// realmente precisa estar: celular não tem F12.
+//
+// Não confundir com jrDiagnosticoSync(), que responde "a nuvem recusou
+// alguma tabela?". Este aqui responde outra pergunta, que era cega até
+// hoje: "as cópias que este aparelho guarda do mesmo registro concordam
+// entre si?". Um aparelho pode passar no primeiro e falhar no segundo — foi
+// exatamente o caso do lançamento de 23/08/2026.
+window.jrConferirCamadas = function() {
+  const r = window.cloudStore.conferirCamadas();
+  window.jrUltimaConferenciaCamadas = r;
+  if (r.totalDivergentes === 0) {
+    console.info('✅ Nenhuma divergência entre as cópias locais deste aparelho.');
+    return r;
+  }
+  console.warn(
+    `⚠️ ${r.totalDivergentes} registro(s) com cópias que não batem entre si neste aparelho` +
+    (r.totalEmRisco > 0
+      ? ` — e ${r.totalEmRisco} deles some(m) no próximo pull se não subirem antes.`
+      : '.')
+  );
+  console.table(r.tabelas.map(t => ({
+    tabela: t.tabela,
+    divergentes: t.total,
+    'em risco': t.emRisco,
+    'na memória': t.contagens.memoria,
+    'em jr_sac_db': t.contagens.sacDb,
+    'no espelho': t.contagens.espelho
+  })));
+  r.tabelas.forEach(t => {
+    console.groupCollapsed(`${t.tabela} (espelho: ${t.espelho})`);
+    console.table(t.divergentes.map(d => ({
+      id: d.id, registro: d.rotulo, 'em risco': d.emRisco ? 'SIM' : '',
+      memoria: d.onde.memoria, jr_sac_db: d.onde.sacDb, espelho: d.onde.espelho
+    })));
+    console.groupEnd();
+  });
+  return r;
+};
+
+// Rastreia UM registro pelas cinco camadas. Aceita placa, carga, NF,
+// protocolo ou id: jrRastrear('OLI2E18')
+window.jrRastrear = async function(termo) {
+  const r = await window.cloudStore.rastrearRegistro(termo);
+  window.jrUltimoRastreio = r;
+  if (r.erro) { console.warn(r.erro); return r; }
+  if (!r.achados.length) {
+    console.warn(`Nada encontrado para "${r.termo}" em nenhuma das cópias locais deste aparelho.`);
+    return r;
+  }
+  r.achados.forEach(a => {
+    const emoji = a.veredito.nivel === 'CRITICO' ? '⛔' : a.veredito.nivel === 'ATENCAO' ? '⚠️' : '✅';
+    console.group(`${emoji} ${a.tabela} #${a.id} — ${a.veredito.texto}`);
+    console.table({
+      'memória (tela)':      { estado: a.camadas.memoria.estado,  assinatura: a.camadas.memoria.hash  || '' },
+      'jr_sac_db (salvo)':   { estado: a.camadas.sacDb.estado,    assinatura: a.camadas.sacDb.hash    || '' },
+      'espelho (pull)':      { estado: a.camadas.espelho.estado,  assinatura: a.camadas.espelho.hash  || '' },
+      'mapa de envio':       { estado: a.camadas.hashMap.estado,  assinatura: a.camadas.hashMap.hash  || '' },
+      'nuvem (agora)':       { estado: a.camadas.nuvem.estado,    assinatura: a.camadas.nuvem.hash    || '' }
+    });
+    console.groupEnd();
+  });
+  return r;
 };
 
 // Captura de TODOS os erros de envio, e não só do último (22/08/2026).

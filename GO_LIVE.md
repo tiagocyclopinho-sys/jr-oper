@@ -6,27 +6,35 @@ sincronização do módulo de **Transporte**.
 Substitui o procedimento de go-live de 21/08 (migrações 22–24), que já foi
 executado — está resumido no fim deste arquivo, em *Histórico*.
 
-> **Leia isto antes de qualquer coisa.**
-> A **ETAPA 0 pode e deve ser feita hoje**: são consultas de leitura, não
-> alteram nada e não dependem de código novo.
-> As **ETAPAS 1 a 6 dependem da entrega das Ondas 1+2**, que ainda **não
-> foram implementadas**. Elas estão escritas aqui para que o roteiro já
-> exista quando o código chegar — e para que a ETAPA 0 seja feita sabendo
-> o que virá depois.
+> **ESTADO EM 22/08/2026, 21h — ETAPAS 0 a 5 EXECUTADAS.**
+> Falta **só a ETAPA 6** (teste de aceite). O Reset Global de Treinamento
+> rodou às 20:41 e a base está zerada para o início de produção em 26/08.
+>
+> O texto abaixo preserva o roteiro e as decisões como foram escritos, com
+> os resultados reais registrados em cada etapa. É documento de histórico
+> tanto quanto de procedimento: **o valor dele é registrar o que foi tentado
+> e por quê**, inclusive as premissas que se provaram erradas no caminho.
 
 ---
 
-## Onde estamos hoje
+## Onde estamos hoje — 22/08/2026, 21h
 
 | Assunto | Situação |
 |---|---|
 | Sincronização de SAC, CD e Financeiro | Funcionando desde 21/08 |
-| Sincronização de **Transporte** | **Com defeito** — 7 mecanismos identificados em 22/08 |
-| Migrações 22, 23 e 24 | Aplicadas |
-| Cadastros mestre (39 motoristas, 38 ajudantes, 89 veículos) | Na nuvem, mas **reinjetados a cada 30s** pelo `mockData.js` embarcado |
-| Exclusão de registros | Propaga sim, desde as correções de 20/08 — mas **não é durável**: um aparelho com cache velho a desfaz no sync seguinte (ver nota abaixo) |
-| Volume de viagens | ~400/mês → **dois tetos técnicos já no horizonte** (ver abaixo) |
-| RLS do banco | Aberto para `anon` — dívida conhecida, fora desta rodada |
+| Sincronização de **Transporte** | ✅ **Corrigida.** Os 7 mecanismos de 22/08 foram fechados nas Ondas 1+2 |
+| Quatro tabelas que nunca sincronizaram | ✅ **Corrigidas na `migration_26` + 4.8.1** — ver *Rodada da noite de 22/08* |
+| Migrações 22, 23, 24, 25, 25a, 25b, 26 | Aplicadas |
+| Build em produção | `sync-4.8.2` |
+| Frota | **Fechada em 3 aparelhos** (decisão 11). Notebook e Celular em `4.8.2`; PC Analista Logística em `4.8.0`, sem acesso no momento — não bloqueia (ver decisão 13) |
+| Os 247 fantasmas | ✅ Expurgados na `migration_25`, e depois **apagados fisicamente** no Reset Global |
+| Duplicatas de importação | ✅ Zeradas, e barradas no banco pelo índice único sobre `carga` |
+| Cadastros mestre | ✅ 41 motoristas, 38 ajudantes, 89 veículos — preservados no Reset, conferidos no banco |
+| Reset Global de Treinamento | ✅ **Executado 22/08 às 20:41**, carimbo em `sync_control` confirmado |
+| Base operacional | **Zerada.** `controle_viagens`, `ocorrencias_devolucao` e `ocorrencias_rota` em 0 |
+| Volume de viagens | ~400/mês → Teto 1 fechado pela paginação; Teto 2 continua aberto (ver abaixo) |
+| RLS do banco | Aberto para `anon` — dívida conhecida, continua fora de escopo |
+| **O que falta** | **ETAPA 6 — teste de aceite.** Prazo folgado: produção começa 26/08 |
 
 > **Correção de 22/08 — a exclusão já propaga.** Este documento afirmava que
 > exclusão nunca chegava à nuvem. Está desatualizado: `deleteViagem()`
@@ -80,6 +88,31 @@ executado — está resumido no fim deste arquivo, em *Histórico*.
     encosta em `controle_viagens` e não faz faxina nenhuma — nada do motivo
     que empurrou a migração para o fim se aplica a ela.
 
+### Decisões acrescentadas na noite de 22/08
+
+11. **A frota é fechada em 3 aparelhos.** Notebook Tiago, Celular Tiago e PC
+    Analista Logística. Isso encerrou a ETAPA 3 na hora — o PASSO E deixou de
+    ser um inventário a descobrir e passou a ser uma lista conhecida. O preço
+    é que o risco vira **regra + detector** em vez de tarefa: nenhum aparelho
+    fora dos 3 abre o app, e a coluna RECUSADOS denuncia se algum abrir.
+    Reversível: um aparelho novo entra com um `Ctrl + Shift + R`.
+12. **Nenhuma FK nova.** A `migration_25` deveria criar
+    `ocorrencias_viagens.viagem_id REFERENCES controle_viagens(id)`
+    (decisão 9). **A coluna entrou, a FK não.** Motivo medido no mesmo dia:
+    `sinistros` era a única tabela do schema com integridade referencial
+    ainda de pé e era a única cuspindo `23503`. A `migration_22` já havia
+    derrubado quase todas as FKs porque a sincronização não tem como
+    honrá-las — envio por tabela, cache parcial por aparelho, POST
+    transacional. Um índice dá o ganho de consulta sem o risco.
+13. **A precondição do Reset mudou.** O roteiro exigia "ETAPA 3 100%
+    concluída em todos os aparelhos" antes do Reset Global. Essa regra foi
+    escrita **antes** da TRAVA DE RESET ([cloudStore.js](js/cloudStore.js),
+    em `syncLocalToCloud`), criada em 22/08 às 01:05 depois de a DEV-2026-001
+    voltar do túmulo. Com a trava, um aparelho que não aplicou o reset mais
+    recente **não tem autoridade para enviar nada** — puxa primeiro, envia
+    depois. A precondição real passou a ser "todos numa build ≥ 4.8.0", e não
+    "todos na build mais nova". Foi o que permitiu resetar sem o PC Analista.
+
 ---
 
 ## Ordem de execução — revisada em 22/08/2026
@@ -90,16 +123,144 @@ têm `id` estável, gerado no aparelho, e o envio usa
 banco enquanto algum aparelho ainda tiver esses registros no cache, o primeiro
 sync devolve tudo** — inclusive desfazendo o `is_deleted`.
 
-| Ordem | Etapa | Por quê nesta posição |
-|---|---|---|
-| 1º | **ETAPA 2** — deploy (Ondas 1+2, com a guarda na escrita) | A guarda precisa estar de pé antes de qualquer limpeza |
-| 2º | **ETAPA 2b** — SQL avulso da tabela `dispositivos` | Decisão 10: sem ela a tela de Aparelhos fica vazia justamente na ETAPA 3 |
-| 3º | **ETAPA 3** — limpeza de cache dos aparelhos | Esvazia a fonte do fantasma antes de limpar o destino |
-| 4º | **ETAPA 1** — `migration_25` | Só agora a limpeza do banco é definitiva |
-| 5º | **ETAPA 4 a 6** | Sem mudança |
+| Ordem | Etapa | Por quê nesta posição | Situação |
+|---|---|---|---|
+| 1º | **ETAPA 2** — deploy (Ondas 1+2, com a guarda na escrita) | A guarda precisa estar de pé antes de qualquer limpeza | ✅ 22/08 |
+| 2º | **ETAPA 2b** — SQL avulso da tabela `dispositivos` | Decisão 10: sem ela a tela de Aparelhos fica vazia justamente na ETAPA 3 | ✅ 22/08 (+ `25b`) |
+| 3º | **ETAPA 3** — limpeza de cache dos aparelhos | Esvazia a fonte do fantasma antes de limpar o destino | ✅ 22/08 (decisão 11) |
+| — | **`migration_26`** — colunas faltantes | Não estava no plano. Quatro tabelas nunca sincronizaram; descobertas só quando o erro deixou de ser silencioso | ✅ 22/08 |
+| 4º | **ETAPA 1** — `migration_25` | Só agora a limpeza do banco é definitiva | ✅ 22/08 |
+| 5º | **ETAPA 4** — cadastros mestre | Vira conferência: a 4.8.0 semeia uma vez só | ✅ 22/08 |
+| 6º | **ETAPA 5** — Reset Global | Deixou de ser opcional: a operação **não** tinha começado, e não se implanta com base suja | ✅ 22/08, 20:41 |
+| 7º | **ETAPA 6** — teste de aceite | — | ⬜ **pendente** |
 
 A numeração das etapas foi mantida para não invalidar as referências já
 combinadas. **O que mudou é a ordem de execução, não o nome delas.**
+
+> **A ETAPA 5 quase foi pulada por engano.** O roteiro dizia "se a operação
+> já está valendo, pule esta etapa", e o plano de execução chegou a
+> recomendar isso. Estava errado: a operação **não** havia começado
+> (`dataInicioProducao: "2026-08-26"` em [js/config.js](js/config.js)), e a
+> base era inteiramente de treinamento. Resetar era o certo — e resolveu de
+> quebra o que a `migration_25` só conseguia marcar como `is_deleted`.
+
+---
+
+## Rodada da noite de 22/08 — as quatro tabelas que nunca sincronizaram
+
+Não estava no plano. Apareceu porque a correção de 21/08 tornou a falha de
+escrita **visível**: o `jrDiagnosticoSync()` do primeiro PC na 4.8.0 devolveu
+quatro tabelas em `tabelasComPendencia`, com dado gravado só no aparelho.
+
+| Tabela | Código | Causa real |
+|---|---|---|
+| `ocorrencias_rota` | `23514` | O app gravava em `tipo_ocorrencia` o vocabulário do dropdown **Motivo Resumido** |
+| `ocorrencias_viagens` | `PGRST204` | Coluna `status` não existia no banco |
+| `itens_devolucao` | `PGRST204` | Coluna `data_validade` não existia (e mais quatro atrás dela) |
+| `sinistros` | `23503` | **Consequência da primeira** — apontava para uma ocorrência que a nuvem não tinha |
+
+### O achado que mais dói
+
+O `CHECK` de `ocorrencias_rota` aceita `''`, `MECANICA`, `OPERACIONAL`,
+`CONDUTA_INADEQUADA`, `ACIDENTE`. A tela gravava ali `AVARIA MECÂNICA`,
+`ATRASO DE LARGADA`, `CHECKLIST`, `FALTA`, `SUBSTITUIÇÃO DE EQUIPE`,
+`CONDUTA OPERACIONAL` ou `OUTRO`. **Interseção: zero.**
+
+Ou seja: **nenhuma ocorrência de rota criada pela tela jamais chegou ao
+banco**, desde sempre. Bate com o cabeçalho da `migration_22`, que já
+registrava `ocorrencias_rota=0` em 21/08 e atribuiu o zero a FK e NOT NULL.
+Aquelas duas causas eram reais, mas havia uma terceira embaixo.
+
+É a **mesma doença dos 247 fantasmas**: dois vocabulários na mesma coluna, um
+deles gravado por engano. Por isso o conserto não foi alargar o `CHECK` — foi
+normalizar na escrita, em `_tipoOcorrenciaDoMotivo()`
+([store.js](js/store.js)), na store e não na tela, para cobrir também
+qualquer tela futura. `motivo_resumido` guarda o texto original, que é o que
+a interface toda já lia.
+
+### O método importou mais que os consertos
+
+Consertar coluna a coluna era um ciclo infinito: `PGRST204` só reporta **uma
+por vez**, e um registro ruim derruba o lote inteiro (o POST do PostgREST é
+transacional). Duas tentativas de levantamento falharam antes de acertar, e as
+duas falharam do mesmo jeito — **transformando falha de leitura em afirmação
+confiante**, que é o defeito-assinatura deste projeto:
+
+- A primeira leu o OpenAPI do PostgREST e fazia `spec.definitions || {}`.
+  Formato inesperado → concluiu que **as 25 tabelas não existiam**.
+- A segunda leu as chaves `jr_*` do localStorage. Mas o envio lê `jr_sac_db`
+  **primeiro**, e só cai nessas chaves como último recurso — leu a cópia
+  desatualizada e reportou tabelas vazias que estavam falhando ao enviar.
+
+O que funcionou: `information_schema` no SQL Editor (que não tem como mentir
+assim — ou devolve linhas, ou dá erro na tela) cruzado com as chaves de
+`jr_sac_db`, na mesma ordem de precedência do envio. **Resultado: só 4 colunas
+faltavam no sistema inteiro**, não uma cauda infinita.
+
+### A armadilha que teria sido a próxima
+
+`itens_devolucao.valor_total` é `GENERATED ALWAYS AS (quantidade *
+valor_unitario) STORED`, e o app manda esse campo no POST. Postgres recusa
+escrita em coluna gerada (`428C9`). Isso **ainda não tinha aparecido** porque
+o `PGRST204` de `data_validade` barra antes, no cache de schema do PostgREST —
+o erro nem chegava ao banco. Sem o item 26.3, a tabela destravaria e voltaria
+a travar no ciclo seguinte, com um erro novo.
+
+### Duas cópias locais que divergem
+
+Achado colateral, e vale registrar porque explica horas de confusão: cada
+coleção existe **duas vezes** no navegador — dentro de `jr_sac_db` e numa
+chave `jr_*` própria. O envio prefere `jr_sac_db`
+([cloudStore.js](js/cloudStore.js), em `syncLocalToCloud`); o pull escreve nas
+duas; mas nem todo caminho de gravação do app faz o mesmo. Enquanto isso for
+verdade, **qualquer diagnóstico precisa ler as duas na ordem certa**.
+
+### Outros consertos que entraram junto
+
+- **Dois `Date.now()` crus.** `addDevolucao()` e `addOcorrenciaRota()`
+  geravam `id` sem passar pelo `gerarIdUnico()` — a centralização de 20/08
+  cobriu 15 pontos e deixou estes dois. Com `merge-duplicates`, dois
+  aparelhos criando um registro no mesmo milissegundo faziam um sobrescrever
+  o outro **sem erro nenhum**. É o item 9 da Onda 2, que passou perto sem
+  cobrir.
+- **`data_validade` grava `null` em vez de `''`.** É por isso que a coluna
+  nasceu `VARCHAR` e não `DATE`: para `AVARIA_DESCARTE` e `RENEGOCIADO_ROTA`
+  a tela dispensa a data. Dívida registrada: quando não houver mais `''` em
+  cache de nenhum aparelho, dá para apertar para `DATE`.
+- **Dois furos no Reset Global.** `jr_ocorrencias_viagens` e
+  `jr_itens_devolucao` não estavam em `chavesLimpeza`.
+
+---
+
+## O detector de recontaminação — e por que ele estava cego
+
+A coluna RECUSADOS da tela de Aparelhos passou por duas correções no mesmo
+dia, e as duas valem registro porque o padrão se repete.
+
+**Primeira leitura, errada:** "o aparelho que marca 247 é a origem dos
+fantasmas". Não é. A contagem varre o cache local, e o pull grava as linhas da
+**nuvem** nesse mesmo cache — então todo aparelho sincronizado mostra o mesmo
+número. O número bater com a ETAPA 0 não era impressão digital; era a mesma
+linha contada de dois lugares.
+
+**Segunda, também errada:** o roteiro afirmava que, depois da `migration_25`,
+o contador zeraria sozinho. Não zerou. `getAll()` faz `select=*` sem filtrar
+`is_deleted`, então as 247 linhas expurgadas continuavam descendo no pull, e
+`_auditarCacheLocal()` as contava porque olhava só `data_saida`. Corrigido na
+4.8.2: a auditoria ignora `is_deleted`.
+
+**O que a coluna significa agora, e é o que sempre se quis:** fantasma
+**vivo** chegou ao cache deste aparelho. Zero é o esperado. Qualquer número
+acima de zero é recontaminação, e só um aparelho fora da 4.8.0 consegue
+causar isso.
+
+A tarja da tela também mentia, e foi reescrita para distinguir dois casos que
+pedem ações **opostas**:
+
+- **Todos os aparelhos com o mesmo número** → os registros estão no **banco**.
+  Limpar cache não resolve (o pull baixa de volta em 30s). É a ETAPA 1.
+- **Números que não batem entre si** → o que destoa está reenviando cache
+  antigo. É a ETAPA 3, naquele aparelho.
 
 ---
 
@@ -463,7 +624,26 @@ a `migration_25` com a limpeza das duplicatas dimensionada pelo número real.
 
 ---
 
-## ETAPA 1 — `migration_25` (banco)
+## ETAPA 1 — `migration_25` (banco) — **EXECUTADA EM 22/08/2026**
+
+> **Resultado.** O SQL está em
+> [database/migration_25_faxina_e_chave_natural.sql](database/migration_25_faxina_e_chave_natural.sql).
+> Conferência depois de rodar: `chave_natural 1`, `coluna_viagem_id 1`,
+> `coluna_atualizado_em 1`, `criado_em_nulos 0`, `fantasmas_restantes 0`,
+> `cargas_duplicadas 0`, **`viagens_vivas 38`**.
+>
+> As 343 vivas caíram para 38. A ETAPA 0 estimara "~39" por subtração, não
+> por contagem — um registro de diferença é a margem daquela estimativa.
+>
+> **Duas diferenças em relação ao que está escrito abaixo:**
+> 1. O banco tinha crescido de 331 para ~346 linhas desde a ETAPA 0: uma
+>    **quinta** rodada de importação duplicada. O item 2 agrupa por `carga` e
+>    mantém a de menor `id`, então lida com 4 ou 40 rodadas igual — mas as
+>    "44 duplicatas" do texto abaixo eram o número de 22/08 de manhã.
+> 2. O item 7 (`viagem_id`) entrou **sem a FK** — ver decisão 12.
+>
+> Os registros marcados aqui foram **apagados fisicamente** algumas horas
+> depois, no Reset Global da ETAPA 5.
 
 > **Executar por último**, depois das ETAPAS 2 e 3 — ver *Ordem de execução*.
 > A ETAPA 0 já dimensionou a limpeza: 247 fantasmas e 44 duplicatas. Criar a
@@ -579,7 +759,24 @@ liberar a operação.
 
 ---
 
-## ETAPA 2 — Deploy único (Ondas 1 + 2)
+## ETAPA 2 — Deploy único (Ondas 1 + 2) — **EXECUTADA EM 22/08/2026**
+
+> **Foram três deploys, não um.** A decisão 3 (um deploy só) valeu para as
+> Ondas 1+2. Os dois seguintes saíram de defeitos que só apareceram **porque**
+> o primeiro tornou a falha visível:
+>
+> | Build | O que entrou |
+> |---|---|
+> | `sync-4.8.0` | Ondas 1+2, os 12 itens |
+> | `sync-4.8.1` | Normalização de `tipo_ocorrencia`, `data_validade` como `null`, os dois `Date.now()` crus |
+> | `sync-4.8.2` | Auditoria ignorando `is_deleted`, tarja de RECUSADOS reescrita, `jrErrosSync()` + painel "Diagnóstico deste aparelho", dois furos no Reset Global |
+>
+> A auto-atualização (item 11) levou os três aparelhos de uma build à outra
+> **sem ninguém limpar cache**, incluindo o Android. Na prática, o **T6 da
+> ETAPA 6 passou três vezes** antes de ser formalmente executado.
+>
+> As três versões precisam bater em [version.json](version.json),
+> `CloudStore.BUILD` e [sw.js](sw.js) a cada deploy — hoje em `4.8.2`.
 
 > **Executar primeiro** — ver *Ordem de execução*. Deixou de depender da
 > ETAPA 1: a guarda na escrita (item 7) precisa estar de pé **antes** de
@@ -742,7 +939,27 @@ ETAPA 4 que se resolve, excluindo de novo — e agora a exclusão gruda.
 
 ---
 
-## ETAPA 2b — Tabela `dispositivos` (decisão 10)
+## ETAPA 2b — Tabela `dispositivos` (decisão 10) — **EXECUTADA EM 22/08/2026**
+
+> **O problema do RLS voltou, e agora está resolvido de forma durável.**
+> A tela ficou vazia uma segunda vez à noite. Conferido no banco:
+> `rls_ligado = true`, `linhas_reais = 3` — os aparelhos estavam lá, o app é
+> que estava cego.
+>
+> A causa raiz não era a execução: era a **abordagem**. A `migration_25a`
+> resolvia com `DISABLE ROW LEVEL SECURITY`, o que conserta o dia e quebra de
+> novo, porque o Supabase reativa RLS em tabelas do schema `public` — e
+> tabela com RLS ligado **e sem política** fica invisível. Todas as outras
+> ~30 tabelas do [schema.sql](database/schema.sql) nunca tiveram esse
+> problema porque usam o par `ENABLE` + `POLICY`. A `dispositivos` era a
+> única fora do padrão.
+>
+> Corrigido em
+> [database/migration_25b_dispositivos_rls.sql](database/migration_25b_dispositivos_rls.sql):
+> RLS **ligado**, com política aberta para `anon` e `authenticated`, igual às
+> demais. **Na conferência dessa tabela, `rls_ligado = true` passou a ser o
+> resultado certo** — o que faz a tela funcionar é a política, não o RLS
+> desligado.
 
 > Uma consulta só, logo depois do deploy e **antes** da ETAPA 3. Sem ela, a
 > tela de Aparelhos abre vazia exatamente no dia em que ela é necessária.
@@ -785,7 +1002,23 @@ a ETAPA 3 vira conferência de tela em vez de caminhada.
 
 ---
 
-## ETAPA 3 — A última limpeza manual de cache
+## ETAPA 3 — A última limpeza manual de cache — **ENCERRADA EM 22/08/2026**
+
+> **Encerrada pela decisão 11, não pela caminhada.** Fechar a frota em 3
+> aparelhos transformou o PASSO E de "inventário a descobrir" em "lista
+> conhecida", e a etapa terminou na hora. Nenhuma limpeza manual de cache
+> chegou a ser necessária: a auto-atualização levou os aparelhos sozinha.
+>
+> | Aparelho | Situação em 22/08, 21h |
+> |---|---|
+> | Notebook Tiago | `sync-4.8.2` · RECUSADOS 0 |
+> | Celular Tiago (Android) | subiu sozinho de build antiga até `4.8.1`+ |
+> | PC Analista Logística | `sync-4.8.0`, sem acesso — não bloqueia (decisão 13) |
+>
+> **O que continua valendo daqui para frente:** um aparelho que **não
+> aparece** na tela de Aparelhos não abriu o app desde a última atualização e
+> **não deve operar** antes de aparecer. A regra da frota fechada só funciona
+> junto com o detector — ver *O detector de recontaminação*, acima.
 
 > **Ordem revisada em 22/08: esta etapa roda ANTES da ETAPA 1.** Os fantasmas
 > têm `id` estável e o envio sobrescreve por `merge-duplicates` — limpar o
@@ -874,9 +1107,20 @@ o app desde o deploy, e não deve operar até abrir.
 
 ---
 
-## ETAPA 4 — Semeadura dos cadastros mestre
+## ETAPA 4 — Semeadura dos cadastros mestre — **EXECUTADA EM 22/08/2026**
 
 > Decisão 5: a planilha é a base inicial; a partir daqui o app manda.
+
+> **Virou conferência, e passou.** O `seed_cadastros_mestre.sql` previsto
+> abaixo **nunca precisou existir**: o item 8 da Onda 2 já semeia os
+> cadastros uma vez por aparelho, na primeira abertura da 4.8.0 (chave
+> `jr_seed_cadastros_v1`), com mescla por `id`.
+>
+> Conferido no banco depois do Reset Global, que é o momento em que os
+> cadastros correriam risco: **41 motoristas, 38 ajudantes, 89 veículos** —
+> os mesmos números da ETAPA 0, intactos. Os 2 motoristas a mais que os 39 da
+> planilha continuam lá, como esperado: foram cadastrados pelo app, e a
+> decisão 5 diz que o app manda.
 
 Com a correção 7 no ar, nada mais repõe os cadastros automaticamente. Então é
 preciso garantir, **de uma vez**, que a nuvem tem a lista completa:
@@ -884,7 +1128,7 @@ preciso garantir, **de uma vez**, que a nuvem tem a lista completa:
 1. Rodar `database/seed_cadastros_mestre.sql` (a ser gerado a partir do
    `mockData.js`), com `ON CONFLICT (id) DO NOTHING` — **`DO NOTHING`, não
    `DO UPDATE`**: quem já foi editado ou excluído pelo app não pode ser
-   sobrescrito pela planilha.
+   sobrescrito pela planilha. *(Não foi necessário — ver nota acima.)*
 2. Conferir de novo as contagens do PASSO B. O número precisa ser **igual ou maior**
    que o de antes, nunca menor.
 3. A partir daqui, incluir e excluir motorista, ajudante e veículo é feito pela
@@ -895,20 +1139,61 @@ primeira abertura sem internet. Ele nunca mais envia nada para a nuvem.
 
 ---
 
-## ETAPA 5 — Reset Global de Treinamento (só se você decidir)
+## ETAPA 5 — Reset Global de Treinamento — **EXECUTADO EM 22/08/2026, 20:41**
 
-Só faz sentido se a ETAPA 0 mostrar que ainda há muito dado de treinamento
-misturado com dado real. Se a operação já está valendo, **pule esta etapa** —
-a limpeza cirúrgica da ETAPA 1.1 já terá removido as duplicatas.
+> **Executado em 22/08/2026 às 20:41, pelo Notebook Tiago.**
+>
+> | Conferência | Resultado |
+> |---|---|
+> | `sync_control` | 1 linha · `reset_epoch 1787431314866` · `20:41:54` · TIAGO FERREIRA ALVES |
+> | `jrDiagnosticoSync().resetAplicado` | `1787431314866` — **bate com a nuvem** |
+> | `controle_viagens` / `ocorrencias_devolucao` / `ocorrencias_rota` | 0, 0, 0 |
+> | `motoristas` / `ajudantes` / `veiculos` | 41, 38, 89 — preservados |
+> | `tabelasComPendencia` | vazio |
+>
+> O carimbo bater dos dois lados é o que importa: sem ele a TRAVA DE RESET
+> não engata, e um aparelho parado traria tudo de volta ao abrir.
+>
+> **Rodou sem o PC Analista Logística**, que estava inacessível em `4.8.0`.
+> Ver decisão 13: a trava tornou a precondição "todos na build mais nova"
+> desnecessária — basta `≥ 4.8.0`. Aquele aparelho, parado com cache
+> pré-reset, virou de quebra o **teste real** de que o reset se sustenta:
+> quando abrir, é obrigado a puxar e adotar o vazio antes de poder enviar
+> qualquer coisa.
 
-Se for fazer: em **um único aparelho**, e só depois que a ETAPA 3 estiver 100%
-concluída em todos. O reset preserva os cadastros mestre e grava um carimbo na
-nuvem (`sync_control`, migração 23) para que os outros aparelhos reconheçam que
-o vazio é proposital, em vez de reenviarem o que tinham em cache.
+**O texto original desta etapa dizia para pulá-la** — e quase foi pulada por
+isso. A condição estava mal escrita: falava em "se a operação já está
+valendo", mas a operação **não** havia começado
+(`dataInicioProducao: "2026-08-26"`), e toda a base era de treinamento. Não se
+implanta com base suja. O critério certo é **este**, e fica registrado para a
+próxima:
+
+> Se a operação **ainda não começou**, resete. Se **já começou**, não resete —
+> aí a limpeza cirúrgica da ETAPA 1 é o caminho, porque há dado real em jogo.
+
+Se for fazer: em **um único aparelho**. O reset preserva os cadastros mestre e
+grava um carimbo na nuvem (`sync_control`, migração 23) para que os outros
+aparelhos reconheçam que o vazio é proposital, em vez de reenviarem o que
+tinham em cache. O botão fica em **Governança & Lixeira**, no painel vermelho
+ao fim da tela, e exige senha de Admin mais a confirmação `RESETAR`.
 
 ---
 
-## ETAPA 6 — Teste de aceite (obrigatório)
+## ETAPA 6 — Teste de aceite (obrigatório) — ⬜ **É O QUE FALTA**
+
+> **Única etapa pendente em 22/08/2026, 21h.** Produção começa em 26/08
+> (`dataInicioProducao` em [js/config.js](js/config.js)), então há folga.
+>
+> **Condições melhores do que o roteiro previa:** a base está **zerada** pelo
+> Reset Global, então qualquer duplicata que aparecer no T4 é da importação de
+> agora, não resíduo antigo. E há **três** aparelhos disponíveis, não dois.
+>
+> **O T6 já passou três vezes** — 4.8.0 → 4.8.1 → 4.8.2, incluindo no Android,
+> sem ninguém limpar cache. Falta executá-lo formalmente uma vez, para o
+> registro.
+>
+> Só o **T4** e o **T5** precisam de dado criado na hora. T1, T2 e T3 se fazem
+> com os registros que sobrarem do próprio T4.
 
 Com **dois aparelhos**, A e B, os dois já na build nova. Cada teste mira um
 defeito específico.
@@ -956,13 +1241,34 @@ O sistema **não perde dado por falta de sincronização**: tudo é gravado no
 aparelho primeiro. Se a nuvem recusar, o dado continua lá e o indicador fica
 vermelho.
 
-1. Indicador vermelho → F12 → `jrDiagnosticoSync()` → mostra a tabela e o erro
-2. `PGRST204` → falta uma coluna no banco; a mensagem diz qual
-3. `23503` → chave estrangeira
-4. `23505` → violação de unicidade. Depois da ETAPA 1, pode ser a chave natural
+1. **Comece pela tela, não pelo console.** Governança → Aparelhos, painel
+   **🩺 Diagnóstico deste aparelho**, botão **🔎 Ver o motivo**. Funciona em
+   celular, que é onde o console não existe.
+2. Num PC, o equivalente no console é **`jrErrosSync()`** — e não
+   `jrDiagnosticoSync()`. A diferença importa: o `getDiagnostico()` guarda
+   **um** erro, o último, e foi assim que a investigação de 22/08 passou horas
+   perseguindo um `23503` de `sinistros` que era mera consequência de um
+   `23514` em `ocorrencias_rota`. O `jrErrosSync()` roda um ciclo de envio e
+   devolve **todos**.
+3. `PGRST204` → falta uma coluna no banco. **Cuidado: ele reporta uma por
+   vez.** Consertar coluna a coluna é ciclo infinito — levante todas de uma
+   vez cruzando `information_schema.columns` com as chaves de `jr_sac_db`
+   (ver *Rodada da noite de 22/08*, "O método importou mais que os consertos")
+4. `23514` → `CHECK` violado. Quase sempre significa que o app está gravando
+   naquela coluna o vocabulário de **outro** campo — foi o caso de
+   `tipo_ocorrencia` e o dos 247 fantasmas em `data_saida`. **Alargar o
+   `CHECK` é o conserto errado**; normalize na escrita
+5. `23503` → chave estrangeira. Sobraram poucas no schema (a `migration_22`
+   derrubou quase todas): as três de `sinistros` e duas de
+   `itens_relatorio_divergencia`. Se o erro for de `sinistros`, verifique
+   antes se `ocorrencias_rota` está sincronizando — geralmente é consequência
+6. `428C9` → escrita em coluna gerada (`GENERATED ALWAYS`). Confira com
+   `SELECT ... FROM information_schema.columns WHERE is_generated <> 'NEVER'`
+7. `23505` → violação de unicidade. Depois da ETAPA 1, pode ser a chave natural
    barrando uma duplicidade — que é o comportamento desejado. Confira em
    **Governança → Conflitos** antes de tratar como defeito
-5. `401` / `403` → chave ou policy do Supabase
+8. `401` / `403` → chave ou policy do Supabase. Se for a tela de Aparelhos
+   vazia **sem** tarja âmbar, é RLS sem política — ver ETAPA 2b
 
 Enquanto isso, a operação continua normalmente em cada aparelho — só não
 compartilha até resolver.
@@ -998,7 +1304,42 @@ parte da cota do navegador. É a onda seguinte a esta; não entra aqui.
 cabeçalho exibe "🧪 Modo Treinamento". É só informativo, mas confunde — ajuste
 para o dia real de início.
 
-### 4. Redesenho de tela a cada sincronização
+**Passou a ter peso além do cosmético:** foi essa data que mostrou que a
+operação ainda não valia e, portanto, que a ETAPA 5 devia ser executada em vez
+de pulada. Se a data real de início mudar, mude aqui.
+
+### 4. `data_validade` de `itens_devolucao` é `VARCHAR`, não `DATE`
+
+A coluna nasceu na `migration_26` como `VARCHAR(20)` porque o app gravava
+string vazia para `AVARIA_DESCARTE` e `RENEGOCIADO_ROTA`, destinos em que a
+tela dispensa a data — e `DATE` recusa `''`. A 4.8.1 passou a gravar `null`.
+
+Quando não houver mais `''` em cache de nenhum aparelho, dá para apertar para
+`DATE`. Enquanto não apertar, é uma coluna de data que aceita qualquer texto —
+exatamente a condição que deixou os 247 fantasmas entrarem em
+`controle_viagens.data_saida`.
+
+### 5. `controle_viagens.data_saida` continua `VARCHAR(20)`
+
+O campo que originou os 247 fantasmas **não foi normalizado**. A guarda de
+escrita (item 7) impede que valor inválido suba, e a base está zerada — mas o
+tipo da coluna continua aceitando qualquer coisa, e o caminho de edição grava
+em ISO enquanto o de importação grava em `dd/mm/aaaa`.
+
+Enquanto isso for verdade, `data_saida` não serve para janela de tempo nem
+para índice. Normalizar os dois caminhos de gravação e apertar a coluna é uma
+rodada própria — e agora é o momento mais barato da história do projeto para
+fazê-la, com a tabela vazia.
+
+### 6. O app não abre sem internet
+
+Anotado na ETAPA 2 e ainda de pé: o `sw.js` existe mas **não é registrado em
+lugar nenhum**, e o `setupPwa()` ([app.js](js/app.js)) desregistra qualquer
+service worker que encontre. Isso já era verdade antes desta rodada, mas
+contraria o que se espera de um app instalado no celular do motorista. Vale
+uma rodada própria, com teste de verdade em modo avião.
+
+### 7. Redesenho de tela a cada sincronização
 
 Toda vez que chega dado novo da nuvem, o app redesenha a tela inteira. Já
 existe uma proteção que adia o redesenho enquanto alguém está digitando num

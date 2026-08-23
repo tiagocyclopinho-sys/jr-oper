@@ -2229,6 +2229,7 @@ function renderAparelhosContent() {
       ${cabecalho}
       ${corpo}
       ${renderDiagnosticoDesteAparelho()}
+      ${renderResquiciosDesteAparelho()}
     </div>`;
 }
 window.renderAparelhosContent = renderAparelhosContent;
@@ -2301,6 +2302,169 @@ function verErrosDesteAparelho(botao) {
     .then(() => { if (typeof renderApp === 'function') renderApp(); });
 }
 window.verErrosDesteAparelho = verErrosDesteAparelho;
+
+// =================================================================
+// RESQUÍCIO DE CACHE — build 4.8.3 (23/08/2026)
+//
+// O bloco acima ("Diagnóstico deste aparelho") responde se a NUVEM recusou
+// alguma tabela. Este responde outra coisa, que era cega até hoje: se as
+// cópias que ESTE aparelho guarda do mesmo registro concordam entre si.
+//
+// São perguntas independentes, e é por isso que precisam de dois blocos: o
+// lançamento perdido de 23/08/2026 passava no primeiro ("✅ tudo chegou ao
+// banco") e falhava no segundo. Ver o comentário de conferirCamadas() em
+// cloudStore.js para o porquê das cópias divergirem.
+//
+// Fica na tela, e não só no console, pela mesma razão do bloco de cima:
+// celular não tem F12, e é no celular que a devolução é lançada.
+// =================================================================
+window._resquiciosCache = window._resquiciosCache || null;
+window._rastreioCache = window._rastreioCache || null;
+
+function conferirResquicios(botao) {
+  if (botao) { botao.disabled = true; botao.textContent = '⏳ Conferindo...'; }
+  try {
+    window._resquiciosCache = window.cloudStore.conferirCamadas();
+  } catch(e) {
+    window._resquiciosCache = { erro: String(e && e.message || e), tabelas: [], totalDivergentes: 0, totalEmRisco: 0 };
+  }
+  if (typeof renderApp === 'function') renderApp();
+}
+window.conferirResquicios = conferirResquicios;
+
+function rastrearRegistroNaTela(botao) {
+  const campo = document.getElementById('jr-rastreio-termo');
+  const termo = campo ? campo.value : '';
+  if (!String(termo || '').trim()) { alert('Digite a placa, a carga, a NF ou o número do protocolo.'); return; }
+  if (botao) { botao.disabled = true; botao.textContent = '⏳ Rastreando...'; }
+  Promise.resolve(window.cloudStore.rastrearRegistro(termo))
+    .catch(e => ({ termo, achados: [], erro: String(e && e.message || e) }))
+    .then(r => {
+      window._rastreioCache = r;
+      if (typeof renderApp === 'function') renderApp();
+    });
+}
+window.rastrearRegistroNaTela = rastrearRegistroNaTela;
+
+function _seloDeCamada(estado) {
+  const mapa = {
+    'presente':         'text-emerald-400',
+    'ausente':          'text-red-400 font-black',
+    'confirmado':       'text-emerald-400',
+    'nunca confirmado': 'text-amber-400',
+    'n/a':              'text-slate-600',
+    'nao consultada':   'text-slate-600',
+    'falha ao consultar': 'text-red-400'
+  };
+  return `<span class="${mapa[estado] || 'text-slate-300'}">${estado}</span>`;
+}
+
+function renderResquiciosDesteAparelho() {
+  if (!window.cloudStore || !window.cloudStore.conferirCamadas) return '';
+  const r = window._resquiciosCache;
+  const rast = window._rastreioCache;
+
+  let corpoConferencia = `
+    <div class="text-[11px] text-slate-400">
+      Compara as três cópias que este aparelho guarda de cada registro: a que está na
+      <b class="text-slate-200">tela</b>, a que está <b class="text-slate-200">salva</b> e o
+      <b class="text-slate-200">espelho</b> que a sincronização usa. Quando elas discordam, é resquício.
+      Não altera nada e não usa internet.
+    </div>`;
+
+  if (r && r.erro) {
+    corpoConferencia += `<div class="text-[11px] text-red-400">Falha ao conferir: ${String(r.erro).replace(/</g, '&lt;')}</div>`;
+  } else if (r && r.totalDivergentes === 0) {
+    corpoConferencia += `<div class="text-[11px] text-emerald-400">✅ Nenhuma divergência: as cópias deste aparelho batem entre si.</div>`;
+  } else if (r) {
+    corpoConferencia += `
+      <div class="text-[11px] ${r.totalEmRisco > 0 ? 'text-red-300' : 'text-amber-300'}">
+        ⚠️ <b>${r.totalDivergentes}</b> registro(s) com cópias que não batem entre si.
+        ${r.totalEmRisco > 0
+          ? `<b class="text-red-400">${r.totalEmRisco} some(m) no próximo ciclo de 30s se não subirem antes</b> — não feche o app e toque em "Ver o motivo" acima para forçar o envio.`
+          : 'Nenhum em risco de sumir: é atraso de espelho, e o próximo ciclo resolve.'}
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] border-collapse">
+          <thead class="bg-slate-950 text-slate-300 text-[10px] uppercase">
+            <tr>
+              <th class="p-2">Tabela</th><th class="p-2">Registro</th>
+              <th class="p-2 text-center">Tela</th><th class="p-2 text-center">Salvo</th>
+              <th class="p-2 text-center">Espelho</th><th class="p-2 text-center">Risco</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${r.tabelas.map(t => t.divergentes.map(d => `
+              <tr class="border-t border-slate-800 ${d.emRisco ? 'bg-red-950/30' : ''}">
+                <td class="p-2 text-slate-400">${t.tabela}</td>
+                <td class="p-2 font-bold text-white">${(d.rotulo || ('#' + d.id)).replace(/</g, '&lt;')}</td>
+                <td class="p-2 text-center ${d.onde.memoria === 'FALTA' ? 'text-red-400 font-black' : 'text-slate-500'}">${d.onde.memoria === 'FALTA' ? 'falta' : d.onde.memoria === 'n/a' ? '—' : 'ok'}</td>
+                <td class="p-2 text-center ${d.onde.sacDb === 'FALTA' ? 'text-red-400 font-black' : 'text-slate-500'}">${d.onde.sacDb === 'FALTA' ? 'falta' : d.onde.sacDb === 'n/a' ? '—' : 'ok'}</td>
+                <td class="p-2 text-center ${d.onde.espelho === 'FALTA' ? 'text-amber-400 font-black' : 'text-slate-500'}">${d.onde.espelho === 'FALTA' ? 'falta' : d.onde.espelho === 'n/a' ? '—' : 'ok'}</td>
+                <td class="p-2 text-center ${d.emRisco ? 'text-red-400 font-black' : 'text-slate-600'}">${d.emRisco ? 'SOME' : '—'}</td>
+              </tr>`).join('')).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="text-[10px] text-slate-500">
+        "ok" e "falta" comparam presença; linhas que aparecem sem nenhum "falta" estão nas três cópias
+        com <b>conteúdo diferente</b>. Para ver qual está velha, rastreie o registro abaixo.
+      </div>`;
+  }
+
+  let corpoRastreio = '';
+  if (rast) {
+    if (rast.erro) {
+      corpoRastreio = `<div class="text-[11px] text-red-400">${String(rast.erro).replace(/</g, '&lt;')}</div>`;
+    } else if (!rast.achados.length) {
+      corpoRastreio = `<div class="text-[11px] text-slate-400">Nada encontrado para <b class="text-slate-200">${String(rast.termo).replace(/</g, '&lt;')}</b> nas cópias deste aparelho.</div>`;
+    } else {
+      corpoRastreio = rast.achados.map(a => {
+        const cor = a.veredito.nivel === 'CRITICO' ? 'border-red-800 bg-red-950/30'
+                  : a.veredito.nivel === 'ATENCAO' ? 'border-amber-800 bg-amber-950/20'
+                  : 'border-emerald-900 bg-emerald-950/20';
+        const emoji = a.veredito.nivel === 'CRITICO' ? '⛔' : a.veredito.nivel === 'ATENCAO' ? '⚠️' : '✅';
+        return `
+          <div class="border ${cor} rounded-xl p-3 space-y-2">
+            <div class="text-[11px] font-bold text-white">${emoji} ${a.tabela} #${a.id}</div>
+            <div class="text-[11px] text-slate-300">${a.veredito.texto}</div>
+            <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px]">
+              <div><div class="text-slate-500 uppercase">Tela</div>${_seloDeCamada(a.camadas.memoria.estado)}</div>
+              <div><div class="text-slate-500 uppercase">Salvo</div>${_seloDeCamada(a.camadas.sacDb.estado)}</div>
+              <div><div class="text-slate-500 uppercase">Espelho</div>${_seloDeCamada(a.camadas.espelho.estado)}</div>
+              <div><div class="text-slate-500 uppercase">Mapa de envio</div>${_seloDeCamada(a.camadas.hashMap.estado)}</div>
+              <div><div class="text-slate-500 uppercase">Nuvem</div>${_seloDeCamada(a.camadas.nuvem.estado)}</div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+  }
+
+  return `
+    <div class="border-t border-slate-800 pt-4 space-y-2">
+      <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 text-xs">
+        <span class="font-bold text-slate-200 uppercase flex items-center gap-2"><span>🧬</span> Resquício de cache neste aparelho</span>
+        <button onclick="conferirResquicios(this)" class="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold">🔬 Conferir as cópias</button>
+      </div>
+      ${corpoConferencia}
+
+      <div class="border-t border-slate-800/60 pt-3 space-y-2">
+        <div class="text-[11px] font-bold text-slate-300 uppercase">Rastrear um lançamento</div>
+        <div class="text-[10px] text-slate-500">
+          Placa, carga, nota fiscal, protocolo ou id. Mostra esse registro nas cinco camadas —
+          inclusive o que a nuvem tem <b>agora</b>, lido direto, sem cache.
+        </div>
+        <div class="flex flex-col sm:flex-row gap-2">
+          <input id="jr-rastreio-termo" value="${rast ? String(rast.termo || '').replace(/"/g, '&quot;') : ''}"
+                 placeholder="ex: OLI2E18"
+                 class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white uppercase">
+          <button onclick="rastrearRegistroNaTela(this)" class="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold">🔎 Rastrear</button>
+        </div>
+        ${corpoRastreio}
+      </div>
+    </div>`;
+}
+window.renderResquiciosDesteAparelho = renderResquiciosDesteAparelho;
 
 function renderConflitosContent(conflitos) {
   const rotuloCampo = { cnh: 'CNH', email: 'E-mail' };

@@ -31,7 +31,9 @@ O esperado, em cada um, é a última linha dizer **TODOS OS TESTES PASSARAM**.
 | `01_paginacao_e_guarda.js` | 4, 7 | Lê 1.200 linhas inteiras em blocos de 500; falha no meio devolve nada em vez de lista truncada; tabela sem `id` recua para a leitura antiga; a guarda aceita data ISO/`dd/mm/aaaa`/vazio e recusa `INICIADO`/`NÃO INICIADO` |
 | `02_envio_mesclagem_exclusao.js` | 1, 2, 3 | Sobe só o registro alterado; edição local não enviada sobrevive ao pull; exclusão feita em outro aparelho entra e não volta; registro apagado na nuvem não ressuscita; registro que nunca subiu não some; envio recusado continua pendente |
 | `03_janela_e_alarme.js` | 5, 6 | Poda o que passou de 90 dias e **só** o que a nuvem já confirmou; entende os dois formatos de `id`; gravação que falha vira tarja na tela e alerta, e limpa quando volta a funcionar |
-| `04_aparelhos_e_atualizacao.js` | 9, 11, 12 | 500 ids seguidos sem repetir e sem bater com os de outro aparelho no mesmo milissegundo; a tela de Aparelhos em cada estado; a auto-atualização recarrega uma vez e não entra em laço |
+| `04_aparelhos_e_atualizacao.js` | 9, 11, 12 | 500 ids seguidos sem repetir e sem bater com os de outro aparelho no mesmo milissegundo; a tela de Aparelhos em cada estado; a auto-atualização recarrega uma vez e não entra em laço; o painel de resquício desenha em cada estado e escapa o conteúdo do registro |
+| `05_resquicio_de_cache.js` | detector (23/08) | Acusa o lançamento salvo que ficou fora do espelho e prevê que o pull o apaga; não acusa aparelho em dia nem espelho inexistente; rastreia um registro pelas cinco camadas por placa ou id, e o veredito bate com o estado |
+| `06_pull_nao_apaga_lancamento.js` | correção (23/08) | O pull deixa de apagar lançamento recém-salvo quando outro aparelho manda algo na mesma tabela; funciona com e sem `window.db`; e NÃO desfaz nada do que veio antes — exclusão de outro aparelho entra, Reset Global remoto é aceito, nuvem vazia sem reset não apaga, edição local não enviada vence; o contador de fantasmas conta a fatia operacional |
 
 ## Duas armadilhas do ambiente, para quem for mexer aqui
 
