@@ -3881,6 +3881,43 @@ function getSlaBreakdown(list, dateField) {
 // se identificaram, em 23/08/2026, dois registros semeados cujo id apontava
 // para 2024 enquanto a linha se dizia de 2026. Se o id decodifica para uma
 // data plausível, ele serve perfeitamente como referência de idade.
+// "Visto pela primeira vez": o último recurso, para o card NUNCA ficar sem
+// SLA (pedido de 23/08/2026 — saber que não há data ajuda, mas não resolve o
+// problema de saber quando cobrar).
+//
+// Quando um registro pendente não tem nenhuma data legível em lugar nenhum,
+// carimbamos AQUI, neste aparelho, o instante em que ele apareceu pela
+// primeira vez, e passamos a contar dali. O número vira "pendente há PELO
+// MENOS X" — é menor que a idade real, e por isso é seguro: nunca acusa
+// alguém de um atraso que não existe.
+//
+// POR QUE O CARIMBO FICA SÓ NO APARELHO, e não no registro: gravar um campo
+// novo dentro de ocorrencias_devolucao mandaria esse campo para o Supabase, e
+// coluna que não existe no banco derruba o envio da TABELA INTEIRA com
+// PGRST204 — foi exatamente o que travou tudo em 23/08 (ver migration_27). O
+// SLA não vale esse risco. A consequência aceita: dois aparelhos que viram o
+// registro em horas diferentes mostram números um pouco diferentes, e ambos
+// dizem "pelo menos".
+function _vistoPrimeiroEm(id) {
+  if (id === undefined || id === null) return null;
+  const chave = 'jr_visto_em';
+  let mapa = {};
+  try { mapa = JSON.parse(localStorage.getItem(chave) || '{}') || {}; } catch(e) {}
+  const k = String(id);
+  if (!mapa[k]) {
+    mapa[k] = Date.now();
+    // Não deixa o mapa crescer para sempre: 400 chaves cobrem folgado o que
+    // fica pendente ao mesmo tempo, e o que sai da lista some naturalmente.
+    const chaves = Object.keys(mapa);
+    if (chaves.length > 400) {
+      chaves.sort((a, b) => mapa[a] - mapa[b]).slice(0, chaves.length - 400)
+            .forEach(velha => { delete mapa[velha]; });
+    }
+    try { localStorage.setItem(chave, JSON.stringify(mapa)); } catch(e) {}
+  }
+  return mapa[k];
+}
+
 function _momentoDoRegistroParaSla(r, campos) {
   for (const campo of campos) {
     const bruto = r ? r[campo] : null;
@@ -3888,6 +3925,28 @@ function _momentoDoRegistroParaSla(r, campos) {
     const t = new Date(bruto).getTime();
     if (!isNaN(t)) return t;
   }
+
+  // Nenhum dos campos esperados serviu. Antes de desistir, varre QUALQUER
+  // campo do registro que tenha cara de data e fica com o mais antigo — que
+  // é o que melhor representa "desde quando isso existe". Restrito a nomes
+  // de campo que falam de data/hora, para não confundir um número solto com
+  // um carimbo de tempo.
+  if (r && typeof r === 'object') {
+    let maisAntigo = null;
+    for (const k of Object.keys(r)) {
+      if (!/(data|criado|atualizado|_em$|hora|abertura|entrada|saida)/i.test(k)) continue;
+      const v = r[k];
+      if (!v || typeof v === 'object') continue;
+      const t = new Date(v).getTime();
+      if (isNaN(t)) continue;
+      // Datas futuras aqui são validade de produto, previsão de entrega e
+      // afins — não servem para medir há quanto tempo algo está parado.
+      if (t > Date.now()) continue;
+      if (maisAntigo === null || t < maisAntigo) maisAntigo = t;
+    }
+    if (maisAntigo !== null) return maisAntigo;
+  }
+
   // O id como relógio, na mesma regra do cloudStore.
   const id = Number(r && r.id);
   if (!isFinite(id) || id <= 0) return null;
@@ -3918,25 +3977,42 @@ function getMaisAntigaPendente(list, campos, limites) {
   let maxHoras = -1;
   let maisAntiga = null;
   let semData = 0;
+  let estimado = false;   // true quando a idade veio do "visto pela primeira vez"
 
   (list || []).forEach(item => {
-    const ms = _momentoDoRegistroParaSla(item, nomes);
-    if (ms === null) { semData++; return; }
+    let ms = _momentoDoRegistroParaSla(item, nomes);
+    let veioDoCarimbo = false;
+    if (ms === null) {
+      // ÚLTIMO RECURSO: o registro não tem data em canto nenhum. Em vez de
+      // desistir do SLA — que era o comportamento anterior, e que não
+      // resolvia o problema de saber quando cobrar — conta a partir da
+      // primeira vez que este aparelho viu o registro.
+      semData++;
+      ms = _vistoPrimeiroEm(item && item.id);
+      if (ms === null) return;
+      veioDoCarimbo = true;
+    }
     const horas = (agora - ms) / 36e5;
-    if (horas > maxHoras) { maxHoras = horas; maisAntiga = item; }
+    if (horas > maxHoras) { maxHoras = horas; maisAntiga = item; estimado = veioDoCarimbo; }
   });
 
   if (!maisAntiga || maxHoras < 0) {
-    // Nada datável na lista. Diz isso em vez de sumir da tela.
+    // Só chega aqui com lista vazia ou registro sem id nenhum.
     return {
-      horas: 0, texto: 'sem data de referência', item: null,
-      nivel: 'indefinido', semData, cor: 'text-slate-400', icone: '❔'
+      horas: 0, texto: 'sem registro datável', item: null,
+      nivel: 'indefinido', semData, estimado: false,
+      cor: 'text-slate-400', icone: '❔'
     };
   }
 
   const dias = Math.floor(maxHoras / 24);
   const horasResto = Math.floor(maxHoras % 24);
-  const texto = dias > 0 ? `${dias}d ${horasResto}h` : `${horasResto}h`;
+  const minutos = Math.floor((maxHoras * 60) % 60);
+  // Abaixo de 1h, mostrar "0h" fazia o card parecer quebrado logo depois de
+  // um lançamento. Minutos resolvem, e a conta é a mesma.
+  const texto = dias > 0 ? `${dias}d ${horasResto}h`
+              : horasResto > 0 ? `${horasResto}h ${minutos}min`
+              : `${minutos}min`;
 
   const nivel = maxHoras >= lim.estourado ? 'estourado'
               : maxHoras >= lim.atencao   ? 'atencao' : 'ok';
@@ -3944,7 +4020,7 @@ function getMaisAntigaPendente(list, campos, limites) {
             : nivel === 'atencao'   ? 'text-amber-300' : 'text-emerald-400';
   const icone = nivel === 'estourado' ? '🔴' : nivel === 'atencao' ? '🟡' : '🟢';
 
-  return { horas: maxHoras, texto, item: maisAntiga, nivel, semData, cor, icone, limites: lim };
+  return { horas: maxHoras, texto, item: maisAntiga, nivel, semData, estimado, cor, icone, limites: lim };
 }
 
 // Monta a linha de SLA do card. Uma função só, para os oito cards ficarem
@@ -3953,12 +4029,18 @@ function getMaisAntigaPendente(list, campos, limites) {
 function _linhaSla(sla, rotulo) {
   if (!sla) return '';
   if (sla.nivel === 'indefinido') {
-    return `<div class="text-[10px] font-bold text-slate-500 truncate" title="Nenhum registro desta lista tem data de referência gravada">❔ SLA: sem data</div>`;
+    return `<div class="text-[10px] font-bold text-slate-500 truncate" title="Registro sem data e sem identificador — não há de onde contar">❔ SLA: sem referência</div>`;
   }
   const estourou = sla.nivel === 'estourado'
     ? ` <span class="font-black">· prazo estourado</span>` : '';
-  return `<div class="text-[10px] font-bold ${sla.cor} truncate" title="Meta: atenção em ${sla.limites.atencao}h, estourado em ${sla.limites.estourado}h">`
-       + `${sla.icone} ${rotulo}: ${sla.texto}${estourou}</div>`;
+  // "pelo menos" quando a contagem começou na primeira vez que este aparelho
+  // viu o registro: a idade real é maior ou igual à mostrada, nunca menor.
+  const prefixo = sla.estimado ? 'pelo menos ' : '';
+  const explica = sla.estimado
+    ? `O registro não tem data gravada. Contando desde a primeira vez que este aparelho o viu, a idade real é IGUAL OU MAIOR que esta. Meta: atenção em ${sla.limites.atencao}h, estourado em ${sla.limites.estourado}h.`
+    : `Meta: atenção em ${sla.limites.atencao}h, estourado em ${sla.limites.estourado}h.`;
+  return `<div class="text-[10px] font-bold ${sla.cor} truncate" title="${explica}">`
+       + `${sla.icone} ${rotulo}: ${prefixo}${sla.texto}${estourou}</div>`;
 }
 
 function renderDashboardView() {
@@ -3973,11 +4055,31 @@ function renderDashboardView() {
   const rawResumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
 
   // Filtragem periódica por intervalo de datas
-  const devs = allDevs.filter(d => dataNoPeriodo(d.data_abertura || d.data, fDe, fAte));
-  const rotas = allRotas.filter(r => dataNoPeriodo(r.data_chamado || r.data, fDe, fAte));
-  const viagens = allViagens.filter(v => dataNoPeriodo(v.data_viagem || v.data, fDe, fAte));
-  const ocViagens = allOcViagens.filter(o => dataNoPeriodo(o.data_chamado || o.data, fDe, fAte));
-  const trocas = allTrocas.filter(t => dataNoPeriodo(t.data_troca || t.data, fDe, fAte));
+  // O FILTRO POR PERÍODO NÃO FILTRAVA NADA — correção de 23/08/2026.
+  //
+  // Cada linha destas procurava um campo que NENHUMA tela grava:
+  // data_abertura, data_chamado, data_viagem e data_troca não existem em
+  // lugar nenhum do store.js (conferido, zero ocorrências), e nem como
+  // coluna no banco. Sobrava o `|| d.data`, que também não existe em
+  // devolução nem em ocorrência de rota.
+  //
+  // E dataNoPeriodo() devolve TRUE quando não recebe data — de propósito,
+  // para nunca esconder um registro por falta de carimbo. As duas decisões
+  // juntas davam nisto: com "Hoje", "Esta Semana" ou "Este Mês" marcado,
+  // TODOS os registros passavam pelo filtro e os números do Dashboard não
+  // mudavam. O painel parecia funcionar e mostrava sempre o histórico
+  // inteiro. (Achado ao investigar por que uma devolução aparecia sem SLA:
+  // o registro tinha criado_em e data_abertura undefined — e foi esse
+  // undefined que denunciou o filtro.)
+  //
+  // criado_em é o carimbo que TODAS estas coleções têm de verdade, gravado
+  // na criação e com DEFAULT no banco. Os nomes antigos ficam na frente por
+  // segurança: se algum registro importado tiver um deles, ele ganha.
+  const devs = allDevs.filter(d => dataNoPeriodo(d.data_abertura || d.data || d.criado_em, fDe, fAte));
+  const rotas = allRotas.filter(r => dataNoPeriodo(r.data_chamado || r.data || r.criado_em, fDe, fAte));
+  const viagens = allViagens.filter(v => dataNoPeriodo(v.data_viagem || v.data || v.data_saida || v.criado_em, fDe, fAte));
+  const ocViagens = allOcViagens.filter(o => dataNoPeriodo(o.data_chamado || o.data || o.criado_em, fDe, fAte));
+  const trocas = allTrocas.filter(t => dataNoPeriodo(t.data_troca || t.data || t.criado_em, fDe, fAte));
   const resumosCdArr = rawResumosCd.filter(r => r && dataNoPeriodo(r.data, fDe, fAte));
 
   // Cálculos CD

@@ -7,11 +7,17 @@
 const fs = require('fs');
 global.window = global;
 global.document = { addEventListener(){}, getElementById(){ return null; } };
+const armazem = {};
+global.localStorage = {
+  getItem: k => (k in armazem ? armazem[k] : null),
+  setItem: (k, v) => { armazem[k] = String(v); },
+  removeItem: k => { delete armazem[k]; }
+};
 
 // Extrai da app.js só o bloco das funções de SLA — o arquivo inteiro depende
 // de dezenas de globais que não existem aqui.
 const app = fs.readFileSync(__dirname + '/../js/app.js', 'utf8');
-const ini = app.indexOf('function getSlaBreakdown');
+const ini = app.indexOf('function dataNoPeriodo');   // dataNoPeriodo vem logo antes do bloco de SLA
 const fim = app.indexOf('function renderDashboardView()');
 if (ini < 0 || fim < 0) { console.error('bloco de SLA nao encontrado'); process.exit(1); }
 eval(app.slice(ini, fim));
@@ -22,7 +28,20 @@ function conferir(nome, ok, detalhe) {
   if (!ok) falhas++;
 }
 const HORA = 36e5;
-const atras = h => new Date(Date.now() - h * HORA).toISOString();
+
+// RELÓGIO CONGELADO. Sem isto, cada asserção compara uma data montada numa
+// linha com um Date.now() lido microssegundos depois, dentro da função — e
+// as conferências de texto exato ("3h 0min", "30min") passam a depender de
+// a máquina não engasgar entre as duas leituras. Numa das execuções de
+// 23/08/2026 o arquivo falhou uma única vez e não repetiu em 21 tentativas
+// seguidas; em vez de deixar um teste que às vezes acusa e às vezes não —
+// que é pior do que não ter teste, porque ninguém confia nele —, o tempo
+// aqui simplesmente não anda. `new Date(iso)` continua funcionando; só o
+// "agora" é fixo.
+const T0 = Date.now();
+Date.now = () => T0;
+
+const atras = h => new Date(T0 - h * HORA).toISOString();
 
 const ADM   = { atencao: 24, estourado: 48 };
 const FROTA = { atencao: 4,  estourado: 8  };
@@ -30,7 +49,7 @@ const FROTA = { atencao: 4,  estourado: 8  };
 console.log('\n== A idade e o nível ==');
 let r = getMaisAntigaPendente([{ id: 1, criado_em: atras(3) }], ['criado_em'], ADM);
 conferir('3h com meta de 24h: dentro do prazo', r.nivel === 'ok', r);
-conferir('e mostra as horas', r.texto === '3h', r.texto);
+conferir('e mostra as horas', r.texto === '3h 0min', r.texto);
 
 r = getMaisAntigaPendente([{ id: 1, criado_em: atras(30) }], ['criado_em'], ADM);
 conferir('30h: atencao', r.nivel === 'atencao', r.nivel);
@@ -72,23 +91,61 @@ conferir('sem data nenhuma: usa o relógio do id', r.item !== null && r.nivel ==
 r = getMaisAntigaPendente([{ id: Date.now() - 50 * HORA }], ['criado_em'], ADM);
 conferir('entende o formato antigo de id', r.item !== null && r.nivel === 'estourado', r);
 
-// Id semeado (aquele que decodifica para 2024): NÃO serve de relógio.
-r = getMaisAntigaPendente([{ id: 1718000000001 }], ['criado_em'], ADM);
-conferir('id semeado de 2024 nao vira SLA inventado', r.nivel === 'indefinido', r);
+// Data com OUTRO nome de campo, fora da lista pedida: a varredura ampla
+// acha. Cobre o registro que entrou pela planilha ou veio da nuvem com o
+// nome de coluna do banco.
+r = getMaisAntigaPendente([{ id: 1, data_entrada_cd: atras(50) }], ['criado_em'], ADM);
+conferir('varre qualquer campo com cara de data', r.nivel === 'estourado' && !r.estimado, r);
 
-// Id pequeno (SERIAL do banco) tambem nao e relogio.
+// Entre varias datas, fica com a MAIS ANTIGA — e ignora data futura, que e
+// validade de produto ou previsao de entrega, nao idade de pendencia.
+r = getMaisAntigaPendente([{
+  id: 1,
+  data_acao_gestor: atras(10),
+  data_entrada_cd: atras(60),
+  data_validade: new Date(Date.now() + 90 * 24 * HORA).toISOString()
+}], ['criado_em'], ADM);
+conferir('escolhe a data mais antiga do registro', r.texto === '2d 12h', r.texto);
+conferir('e ignora data no futuro', r.nivel === 'estourado', r.nivel);
+
+console.log('\n== O último recurso: "visto pela primeira vez" ==');
+// O pedido de 23/08: saber que nao ha data nao resolve saber quando cobrar.
+// Sem nenhuma data e sem id-relogio, conta da primeira vez que o aparelho viu.
 r = getMaisAntigaPendente([{ id: 42 }], ['criado_em'], ADM);
-conferir('id pequeno nao vira SLA inventado', r.nivel === 'indefinido', r);
+conferir('registro sem data nenhuma AINDA recebe SLA', r.item !== null, r);
+conferir('e fica marcado como estimado', r.estimado === true, r.estimado);
+conferir('contando de agora, comeca perto de zero', r.horas < 0.1, r.horas);
 
-console.log('\n== Quando não dá para saber, ele DIZ, em vez de sumir ==');
-r = getMaisAntigaPendente([{ id: 42 }, { id: 43 }], ['criado_em'], ADM);
-conferir('nivel indefinido', r.nivel === 'indefinido', r.nivel);
-conferir('conta quantos ficaram sem data', r.semData === 2, r.semData);
 let html = _linhaSla(r, 'Mais antiga');
-conferir('a linha AINDA e desenhada', html.length > 0 && html.indexOf('sem data') >= 0, html);
+conferir('a linha diz "pelo menos"', html.indexOf('pelo menos') >= 0, html);
+conferir('e explica no title que a idade real e maior', html.indexOf('IGUAL OU MAIOR') >= 0, html);
 
+// O carimbo PERSISTE: na proxima vez, conta desde a primeira.
+const armazenado = JSON.parse(armazem['jr_visto_em']);
+conferir('o carimbo fica guardado no aparelho', armazenado['42'] !== undefined, armazem['jr_visto_em']);
+armazenado['42'] = Date.now() - 60 * HORA;          // simula 60h depois
+armazem['jr_visto_em'] = JSON.stringify(armazenado);
+r = getMaisAntigaPendente([{ id: 42 }], ['criado_em'], ADM);
+conferir('60h depois, o SLA acompanha', r.nivel === 'estourado' && r.estimado, r);
+conferir('e nao recarimba (o relogio nao reinicia)', r.texto === '2d 12h', r.texto);
+
+// Id semeado de 2024 nao vira SLA de 804 dias: cai no carimbo, nao no id.
+r = getMaisAntigaPendente([{ id: 1718000000001 }], ['criado_em'], ADM);
+conferir('id semeado de 2024 nao vira SLA de 804 dias', r.horas < 0.1 && r.estimado, r);
+
+console.log('\n== Os casos em que nao ha nada de onde contar ==');
 conferir('lista vazia nao quebra', getMaisAntigaPendente([], ['criado_em'], ADM).nivel === 'indefinido');
 conferir('lista nula nao quebra', getMaisAntigaPendente(null, ['criado_em'], ADM).nivel === 'indefinido');
+r = getMaisAntigaPendente([{ semId: true }], ['criado_em'], ADM);
+conferir('registro sem id nenhum: assume que nao sabe', r.nivel === 'indefinido', r);
+conferir('e a linha diz isso, em vez de sumir',
+  _linhaSla(r, 'Mais antiga').indexOf('sem referência') >= 0, _linhaSla(r, 'Mais antiga'));
+
+console.log('\n== Minutos, para o card nao parecer quebrado logo apos o lancamento ==');
+r = getMaisAntigaPendente([{ id: 1, criado_em: atras(0.5) }], ['criado_em'], ADM);
+conferir('30 minutos aparece como minutos', r.texto === '30min', r.texto);
+r = getMaisAntigaPendente([{ id: 1, criado_em: atras(2.5) }], ['criado_em'], ADM);
+conferir('2h30 aparece com hora e minuto', r.texto === '2h 30min', r.texto);
 
 console.log('\n== A linha que vai para a tela ==');
 r = getMaisAntigaPendente([{ id: 1, criado_em: atras(60) }], ['criado_em'], ADM);
@@ -109,6 +166,28 @@ conferir('aceita um campo em string, como antes',
   getMaisAntigaPendente([{ id: 1, criado_em: atras(60) }], 'criado_em', ADM).nivel === 'estourado');
 conferir('sem metas informadas, usa 24h/48h',
   getMaisAntigaPendente([{ id: 1, criado_em: atras(30) }], ['criado_em']).nivel === 'atencao');
+
+
+
+console.log('\n== O filtro por período do Dashboard (23/08/2026) ==');
+// Provava-se sozinho: os campos que o filtro procurava não existem em
+// registro nenhum, e dataNoPeriodo devolve true sem data. Resultado: "Este
+// Mês" mostrava o histórico inteiro.
+const devolucaoReal = { id: 1787492322138994, numero_protocolo: 'DEV-2026-001',
+                        criado_em: '2026-08-23T13:38:42.142', data_abertura: undefined };
+
+conferir('o registro real nao tem os campos que o filtro procurava',
+  devolucaoReal.data_abertura === undefined && devolucaoReal.data === undefined);
+conferir('sem data, dataNoPeriodo deixa passar (e por isso o filtro era inerte)',
+  dataNoPeriodo(devolucaoReal.data_abertura || devolucaoReal.data, '2026-01-01', '2026-01-31') === true);
+conferir('com criado_em na cadeia, um mes que NAO contem o registro exclui',
+  dataNoPeriodo(devolucaoReal.data_abertura || devolucaoReal.data || devolucaoReal.criado_em,
+                '2026-01-01', '2026-01-31') === false);
+conferir('e o mes que CONTEM o registro inclui',
+  dataNoPeriodo(devolucaoReal.data_abertura || devolucaoReal.data || devolucaoReal.criado_em,
+                '2026-08-01', '2026-08-31') === true);
+conferir('sem filtro nenhum, continua passando',
+  dataNoPeriodo(devolucaoReal.criado_em, '', '') === true);
 
 console.log(falhas === 0 ? '\nTODOS OS TESTES PASSARAM' : `\n${falhas} TESTE(S) FALHARAM`);
 process.exit(falhas === 0 ? 0 : 1);
