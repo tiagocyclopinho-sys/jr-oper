@@ -390,225 +390,23 @@ function calcularSlaManutencao(retencao) {
   return { diffMs, diffHoras, hhmmss, nivel, badgeHtml };
 }
 
-// ===== SISTEMA GLOBAL DE NOTIFICAÇÕES VISUAIS (SINO DE NOTIFICAÇÕES) =====
-function atualizarSinoNotificacoes() {
-  const badgeEl = document.getElementById('notif-badge-count');
-  const dropEl = document.getElementById('dropdown-notificacoes');
-  if (!badgeEl || typeof db === 'undefined' || !db.data) return;
-
-  const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
-  const reentregasPendentes = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
-  const maisAntigaReentrega = getMaisAntigaPendente(reentregasPendentes, 'criado_em');
-
-  const retencoes = typeof db.getRetencoesFrota === 'function' ? db.getRetencoesFrota() : [];
-  const retidos = retencoes.filter(r => r.status === 'RETIDO');
-
-  const retidosSlaCritico = retidos.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO_8H');
-  const retidosSlaAlerta = retidos.filter(r => calcularSlaManutencao(r).nivel === 'ALERTA_4H');
-  const maisAntigaSlaCritico = getMaisAntigaPendente(retidosSlaCritico, 'data_parada');
-  const maisAntigaSlaAlerta = getMaisAntigaPendente(retidosSlaAlerta, 'data_parada');
-
-  const ocorrenciasRota = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
-  const veicParadosRota = ocorrenciasRota.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO');
-  const maisAntigaVeicParado = getMaisAntigaPendente(veicParadosRota, 'criado_em');
-
-  const devolucoes = typeof db.getDevolucoes === 'function' ? db.getDevolucoes() : [];
-  const pendCd = devolucoes.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
-  const maisAntigaPendCd = getMaisAntigaPendente(pendCd, 'criado_em');
-  // Quantas dessas pendências já têm a viagem finalizada (veículo já
-  // voltou, só falta a conferência física) vs ainda em rota — pedido do
-  // Encarregado do CD para priorizar o que já está pronto para conferir.
-  const todasViagensParaAlerta = typeof db.getControleViagens === 'function' ? db.getControleViagens() : [];
-  const pendCdViagemFinalizada = pendCd.filter(d => {
-    const cargaDev = String(d.carga_numero || '').trim().toUpperCase();
-    if (!cargaDev) return false;
-    const v = todasViagensParaAlerta.find(vg => String(vg.carga || vg.carga_numero || '').trim().toUpperCase() === cargaDev);
-    return v && v.status_viagem === 'FINALIZADO';
-  }).length;
-
-  // Sinistros pendentes (item 18/08/2026: "manter no painel de alerta").
-  const sinistrosPendentes = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
-  const maisAntigoSinistro = getMaisAntigaPendente(sinistrosPendentes, 'data_acidente');
-
-  const totalAlertas = reentregasPendentes.length + retidosSlaCritico.length + retidosSlaAlerta.length + veicParadosRota.length + pendCd.length + sinistrosPendentes.length;
-
-  if (totalAlertas > 0) {
-    badgeEl.textContent = totalAlertas > 99 ? '99+' : totalAlertas;
-    badgeEl.classList.remove('hidden');
-    if (retidosSlaCritico.length > 0 || veicParadosRota.length > 0 || reentregasPendentes.length > 0) {
-      badgeEl.classList.add('animate-pulse');
-    } else {
-      badgeEl.classList.remove('animate-pulse');
-    }
-  } else {
-    badgeEl.classList.add('hidden');
-    badgeEl.classList.remove('animate-pulse');
-  }
-
-  if (dropEl) {
-    dropEl.innerHTML = `
-      <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
-        <div class="flex items-center gap-2">
-          <span class="text-amber-400 font-black text-xs uppercase tracking-wider flex items-center gap-1.5">
-            <span>🔔</span> Central de Notificações
-          </span>
-          <span class="bg-slate-800 text-slate-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full border border-slate-700">${totalAlertas} alerta(s)</span>
-        </div>
-        <button onclick="fecharDropdownNotificacoes()" class="text-slate-400 hover:text-white text-xs font-bold px-1.5 py-0.5 rounded transition">✕</button>
-      </div>
-
-      <div class="max-h-80 overflow-y-auto space-y-2.5 pr-1">
-        ${totalAlertas === 0 ? `
-          <div class="text-center py-6 text-slate-500 space-y-1">
-            <div class="text-2xl">✅</div>
-            <div class="text-xs font-bold text-slate-400">Nenhum alerta crítico ativo</div>
-            <div class="text-[10px] text-slate-500">Toda a operação está em conformidade.</div>
-          </div>
-        ` : `
-          <!-- ALERTA DE REENTREGAS PENDENTES -->
-          ${reentregasPendentes.length > 0 ? `
-            <div class="bg-slate-950 border border-purple-900/70 p-2.5 rounded-xl shadow space-y-1.5 hover:border-purple-600 transition">
-              <div class="flex items-center justify-between">
-                <div class="text-xs font-black text-purple-300 flex items-center gap-1.5">
-                  <span>🚨</span> Reentregas Pendentes (${reentregasPendentes.length})
-                </div>
-                <span class="bg-purple-950 text-purple-300 border border-purple-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Atraso em Rota</span>
-              </div>
-              <p class="text-[10px] text-slate-400 leading-snug">Existem devoluções de rota aguardando nova tentativa ou reencaminhamento imediato.</p>
-              ${maisAntigaReentrega.item ? `<div class="text-[10px] font-bold ${maisAntigaReentrega.horas > 48 ? 'text-red-400' : maisAntigaReentrega.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}">⏳ Mais antiga: ${maisAntigaReentrega.texto}</div>` : ''}
-              <button onclick="fecharDropdownNotificacoes(); switchTab('controle_viagens'); switchViagensSubTab('reentregas');" class="w-full bg-purple-900/50 hover:bg-purple-800 text-purple-200 border border-purple-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
-                Ver Painel de Reentregas →
-              </button>
-            </div>
-          ` : ''}
-
-          <!-- ALERTA DE SLA CRÍTICO >8H -->
-          ${retidosSlaCritico.length > 0 ? `
-            <div class="bg-slate-950 border border-red-800 p-2.5 rounded-xl shadow space-y-1.5 animate-pulse">
-              <div class="flex items-center justify-between">
-                <div class="text-xs font-black text-red-400 flex items-center gap-1.5">
-                  <span>🔴</span> SLA Crítico de Manutenção &gt;8h (${retidosSlaCritico.length})
-                </div>
-                <span class="bg-red-950 text-red-300 border border-red-700 text-[10px] px-1.5 py-0.5 rounded font-black">URGENTE</span>
-              </div>
-              <p class="text-[10px] text-slate-400 leading-snug">Veículo(s) parados na oficina há mais de 8 horas sem liberação registrada.</p>
-              ${maisAntigaSlaCritico.item ? `<div class="text-[10px] font-bold text-red-400">⏳ Parado há mais tempo: ${maisAntigaSlaCritico.texto}</div>` : ''}
-              <button onclick="fecharDropdownNotificacoes(); activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="w-full bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-600 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
-                Ver Veículos Retidos →
-              </button>
-            </div>
-          ` : ''}
-
-          <!-- ALERTA DE SLA ATENÇÃO >4H -->
-          ${retidosSlaAlerta.length > 0 ? `
-            <div class="bg-slate-950 border border-amber-800/70 p-2.5 rounded-xl shadow space-y-1.5">
-              <div class="flex items-center justify-between">
-                <div class="text-xs font-black text-amber-400 flex items-center gap-1.5">
-                  <span>🟡</span> SLA em Atenção &gt;4h (${retidosSlaAlerta.length})
-                </div>
-                <span class="bg-amber-950 text-amber-300 border border-amber-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Oficina</span>
-              </div>
-              <p class="text-[10px] text-slate-400 leading-snug">Veículo(s) imobilizados entre 4h e 8h requerem acompanhamento da oficina.</p>
-              ${maisAntigaSlaAlerta.item ? `<div class="text-[10px] font-bold text-amber-400">⏳ Parado há mais tempo: ${maisAntigaSlaAlerta.texto}</div>` : ''}
-              <button onclick="fecharDropdownNotificacoes(); activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="w-full bg-amber-900/50 hover:bg-amber-800 text-amber-200 border border-amber-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
-                Acompanhar Manutenção →
-              </button>
-            </div>
-          ` : ''}
-
-          <!-- ALERTA DE VEÍCULOS PARADOS EM ROTA -->
-          ${veicParadosRota.length > 0 ? `
-            <div class="bg-slate-950 border border-red-900/70 p-2.5 rounded-xl shadow space-y-1.5">
-              <div class="flex items-center justify-between">
-                <div class="text-xs font-black text-red-300 flex items-center gap-1.5">
-                  <span>🚨</span> Veículos Parados em Rota (${veicParadosRota.length})
-                </div>
-                <span class="bg-red-950 text-red-300 border border-red-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Socorro</span>
-              </div>
-              <p class="text-[10px] text-slate-400 leading-snug">Chamados operacionais de socorro mecânico ou quebra pendentes de solução.</p>
-              ${maisAntigaVeicParado.item ? `<div class="text-[10px] font-bold text-red-400">⏳ Parado há mais tempo: ${maisAntigaVeicParado.texto}</div>` : ''}
-              <button onclick="fecharDropdownNotificacoes(); switchTab('rota_ocorrencias');" class="w-full bg-red-900/50 hover:bg-red-800 text-red-200 border border-red-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
-                Ver Ocorrências em Rota →
-              </button>
-            </div>
-          ` : ''}
-
-          <!-- ALERTA DE SINISTROS PENDENTES -->
-          ${sinistrosPendentes.length > 0 ? `
-            <div class="bg-slate-950 border border-red-800 p-2.5 rounded-xl shadow space-y-1.5">
-              <div class="flex items-center justify-between">
-                <div class="text-xs font-black text-red-400 flex items-center gap-1.5">
-                  <span>🚨</span> Sinistros Pendentes (${sinistrosPendentes.length})
-                </div>
-                <span class="bg-red-950 text-red-300 border border-red-700 text-[10px] px-1.5 py-0.5 rounded font-black">Investigação</span>
-              </div>
-              <p class="text-[10px] text-slate-400 leading-snug">Investigação de acidente aguardando conclusão de uma ou mais etapas (Motorista, Manutenção, Operações, Jurídico ou Diretoria).</p>
-              ${maisAntigoSinistro.item ? `<div class="text-[10px] font-bold ${maisAntigoSinistro.horas > 48 ? 'text-red-400' : 'text-amber-400'}">⏳ Mais antigo: ${maisAntigoSinistro.texto} (${maisAntigoSinistro.item.numero_sinistro})</div>` : ''}
-              <button onclick="fecharDropdownNotificacoes(); switchTab('sinistros');" class="w-full bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-600 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
-                Ver Investigação de Sinistros →
-              </button>
-            </div>
-          ` : ''}
-
-          <!-- ALERTA DE RETORNOS PENDENTES CD -->
-          ${pendCd.length > 0 ? `
-            <div class="bg-slate-950 border border-amber-900/70 p-2.5 rounded-xl shadow space-y-1.5">
-              <div class="flex items-center justify-between">
-                <div class="text-xs font-black text-amber-300 flex items-center gap-1.5">
-                  <span>📦</span> Retornos Físicos Pendentes CD (${pendCd.length})
-                </div>
-                <span class="bg-amber-950 text-amber-300 border border-amber-700 text-[10px] px-1.5 py-0.5 rounded font-bold">Armazém</span>
-              </div>
-              <p class="text-[10px] text-slate-400 leading-snug">Mercadorias devolvidas aguardando conferência e entrada física no estoque.</p>
-              ${pendCdViagemFinalizada > 0 ? `
-              <div class="flex items-center gap-1.5 text-[10px] font-bold">
-                <span class="bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded">✅ ${pendCdViagemFinalizada} com viagem já finalizada</span>
-                ${(pendCd.length - pendCdViagemFinalizada) > 0 ? `<span class="bg-blue-950 text-blue-300 border border-blue-700 px-1.5 py-0.5 rounded">🚚 ${pendCd.length - pendCdViagemFinalizada} ainda em rota</span>` : ''}
-              </div>` : ''}
-              ${maisAntigaPendCd.item ? `<div class="text-[10px] font-bold ${maisAntigaPendCd.horas > 48 ? 'text-red-400' : maisAntigaPendCd.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}">⏳ Mais antiga: ${maisAntigaPendCd.texto}</div>` : ''}
-              <button onclick="fecharDropdownNotificacoes(); switchTab('cd_recepcao');" class="w-full bg-amber-900/50 hover:bg-amber-800 text-amber-200 border border-amber-700 text-[11px] font-extrabold py-1.5 rounded-lg transition text-center block">
-                Conferir Devoluções CD →
-              </button>
-            </div>
-          ` : ''}
-        `}
-      </div>
-
-      <div class="pt-2 border-t border-slate-800 flex justify-between items-center text-[10px] text-slate-500 font-bold">
-        <span>JR Oper • Monitoramento em Tempo Real</span>
-        <button onclick="renderApp();" class="text-emerald-400 hover:underline">Atualizar 🔄</button>
-      </div>
-    `;
-  }
-}
-
-function toggleDropdownNotificacoes() {
-  const dropEl = document.getElementById('dropdown-notificacoes');
-  if (!dropEl) return;
-  const isHidden = dropEl.classList.contains('hidden');
-  if (isHidden) {
-    atualizarSinoNotificacoes();
-    dropEl.classList.remove('hidden');
-  } else {
-    dropEl.classList.add('hidden');
-  }
-}
-
-function fecharDropdownNotificacoes() {
-  const dropEl = document.getElementById('dropdown-notificacoes');
-  if (dropEl) dropEl.classList.add('hidden');
-}
-
-// Fechar dropdown de notificações ao clicar fora
-if (typeof document !== 'undefined') {
-  document.addEventListener('click', function(event) {
-    const container = document.getElementById('sino-notificacoes-container');
-    const dropEl = document.getElementById('dropdown-notificacoes');
-    if (container && dropEl && !container.contains(event.target)) {
-      dropEl.classList.add('hidden');
-    }
-  });
-}
+// ===== O SINO DE NOTIFICAÇÕES FICAVA AQUI — removido em 23/08/2026 =====
+//
+// Eram ~220 linhas montando um painel suspenso que repetia, atrás de um
+// clique, os mesmos avisos que o Dashboard Executivo já mostra abertos:
+// reentregas pendentes, veículos retidos, retorno físico do CD, análise de
+// causa raiz. Duas cópias do mesmo alerta, calculadas por caminhos
+// diferentes e atualizadas em momentos diferentes.
+//
+// Foi exatamente essa duplicidade que atrapalhou o diagnóstico de 23/08: o
+// painel do sino e o bloco do Dashboard discordavam, e ficou parecendo
+// problema de sincronização quando o problema estava no banco (a trava de
+// destino_cd, migration_27).
+//
+// Os alertas continuam existindo, num lugar só: o bloco "ALERTAS &
+// PENDÊNCIAS CRÍTICAS EM TEMPO REAL" do Dashboard Executivo, calculado na
+// hora em que a tela é desenhada (ver pendCd e abertasCausaRaiz em
+// renderDashboard). Não recolocar o sino.
 
 // ===== TOAST NOTIFICATION HELPER =====
 function showToast(message, type = 'success') {
@@ -2654,9 +2452,6 @@ function executarResetGlobalTreinamento() {
         if (typeof pararAlarmeReentregas === 'function') {
           pararAlarmeReentregas();
         }
-        if (typeof atualizarSinoNotificacoes === 'function') {
-          atualizarSinoNotificacoes();
-        }
 
         showToast('🧹 Reset Global executado com sucesso! Dados operacionais zerados.');
         renderApp();
@@ -2835,7 +2630,6 @@ function renderApp() {
   container.innerHTML = html;
   updateUserHeader();
   renderNavMenu();
-  atualizarSinoNotificacoes();
   decorarTabelasOrdenaveis();
 
   if (window._isSwitchingMainTab) {
@@ -3492,8 +3286,23 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
     icone = '⚠️';
     tabDestino = 'controle_viagens';
     subTabDestino = 'operacional';
-    const lista = (db && db.data && Array.isArray(db.data.transporte_oc_operacionais)) ? db.data.transporte_oc_operacionais : [];
-    registro = lista.find(o => String(o.id) === String(id));
+    // Procurava SÓ em 'transporte_oc_operacionais' — e a matriz de
+    // recorrências monta as linhas "OC #" a partir de db.getOcorrenciasViagens(),
+    // que lê OUTRA coleção: 'ocorrencias_viagens'. Coleções diferentes, então
+    // o botão "Ver Ocorrência Completa" nunca achava a linha que a própria
+    // tela tinha acabado de desenhar, e caía no alerta de "não encontrado"
+    // (achado de 23/08/2026, placa RSE9G23).
+    //
+    // As duas existem de verdade e são coisas distintas: 'ocorrencias_viagens'
+    // é a tabela que sincroniza (está no mapa das 25); 'transporte_oc_operacionais'
+    // é o módulo de importação por CSV. Procuramos nas duas, a que a matriz
+    // usa primeiro.
+    const daViagem = (typeof db !== 'undefined' && db.getOcorrenciasViagens) ? db.getOcorrenciasViagens() : [];
+    registro = daViagem.find(o => String(o.id) === String(id));
+    if (!registro) {
+      const importadas = (db && db.data && Array.isArray(db.data.transporte_oc_operacionais)) ? db.data.transporte_oc_operacionais : [];
+      registro = importadas.find(o => String(o.id) === String(id));
+    }
   } else {
     const devs = (typeof db !== 'undefined' && db.getDevolucoes) ? db.getDevolucoes() : [];
     registro = devs.find(d => String(d.id) === String(id));
@@ -3504,7 +3313,12 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
   }
 
   if (!registro) {
-    alert('Detalhes da ocorrência não encontrados no banco de dados.');
+    // A mensagem dizia "não encontrados no banco de dados", e isso é falso:
+    // esta busca é toda em memória, nunca consulta a nuvem. Quem lia o aviso
+    // ia investigar o Supabase por um problema que está no aparelho — foi o
+    // que aconteceu em 23/08/2026. O texto agora diz o que de fato ocorreu.
+    alert('Não foi possível abrir os detalhes: este registro não está carregado neste aparelho.\n\n'
+        + 'Atualize a página (no PC, Ctrl + Shift + R) e tente de novo. Se continuar, envie o número do protocolo.');
     return;
   }
 
@@ -4041,25 +3855,110 @@ function getSlaBreakdown(list, dateField) {
   return { critico, alerta, ok };
 }
 
-// Encontra a ocorrência pendente mais antiga de uma lista (maior tempo
-// decorrido desde dateField) e formata sua idade de forma legível — usado
-// nos painéis de alerta do Dashboard Executivo para mostrar não só a
-// contagem de pendências, mas a idade da mais crítica delas.
-function getMaisAntigaPendente(list, dateField) {
+// Encontra a ocorrência pendente mais antiga de uma lista e devolve a idade
+// dela já formatada, com o nível de SLA — é o que os cards de "Alertas &
+// Pendências Críticas" do Dashboard mostram, para que a cobrança de cada
+// área tenha um número e não uma impressão.
+//
+// REESCRITA EM 23/08/2026, por dois motivos:
+//
+// 1. A linha de SLA só era desenhada quando `item` vinha preenchido, e ele
+//    vinha nulo sempre que NENHUM registro da lista tivesse o campo de data
+//    esperado. Resultado: o card aparecia sem SLA nenhum, calado, e ninguém
+//    sabia se era "está no prazo" ou "não consegui calcular". Registro sem
+//    `criado_em` existe de verdade — a ETAPA 0 achou 24 linhas assim.
+//    Agora a função sempre devolve algo dizível, e o card sempre desenha.
+//
+// 2. `campos` virou lista. Cada tela grava a data num nome diferente
+//    (criado_em, data_abertura, data_chamado, data_parada...) e o mesmo
+//    registro pode ter um ou outro dependendo de por onde entrou — pela
+//    tela, pela importação da planilha ou vindo da nuvem, que devolve as
+//    colunas do banco. Tentar um nome só era apostar em qual caminho o
+//    registro tinha feito.
+//
+// ÚLTIMO RECURSO: o próprio `id`, que neste sistema é relógio (ver
+// _momentoDoRegistro em cloudStore.js — são dois formatos). Foi com ele que
+// se identificaram, em 23/08/2026, dois registros semeados cujo id apontava
+// para 2024 enquanto a linha se dizia de 2026. Se o id decodifica para uma
+// data plausível, ele serve perfeitamente como referência de idade.
+function _momentoDoRegistroParaSla(r, campos) {
+  for (const campo of campos) {
+    const bruto = r ? r[campo] : null;
+    if (!bruto) continue;
+    const t = new Date(bruto).getTime();
+    if (!isNaN(t)) return t;
+  }
+  // O id como relógio, na mesma regra do cloudStore.
+  const id = Number(r && r.id);
+  if (!isFinite(id) || id <= 0) return null;
+  const ms = id > 1e14 ? Math.floor(id / 1000) : (id > 1e11 ? id : null);
+  if (ms === null) return null;
+  // O id só vale como relógio se cair numa janela operacional plausível:
+  // nada no futuro, nada com mais de um ano. Fora disso o número não é
+  // relógio de verdade e um SLA inventado é pior do que assumir que não se
+  // sabe — os ids semeados 1718000000001/2, achados em 23/08/2026,
+  // decodificam para junho/2024 e produziriam "804d 7h" no card, deixando o
+  // alerta permanentemente vermelho. Alerta que fica sempre vermelho é
+  // alerta que ninguém olha mais.
+  //
+  // A trava vale SÓ para este último recurso. Data de verdade gravada no
+  // registro é respeitada por mais antiga que seja: ali o número é real.
+  const agora = Date.now();
+  if (ms > agora + 86400000 || ms < agora - 365 * 24 * 36e5) return null;
+  return ms;
+}
+
+function getMaisAntigaPendente(list, campos, limites) {
+  const nomes = Array.isArray(campos) ? campos : [campos];
+  // Sem limites informados, usa o mesmo corte de getSlaBreakdown (24h/48h),
+  // que é o padrão das pendências administrativas. Frota passa 4/8.
+  const lim = limites || { atencao: 24, estourado: 48 };
+
   const agora = Date.now();
   let maxHoras = -1;
   let maisAntiga = null;
+  let semData = 0;
+
   (list || []).forEach(item => {
-    const dataRef = item ? item[dateField] : null;
-    if (!dataRef) return;
-    const horas = (agora - new Date(dataRef).getTime()) / 36e5;
+    const ms = _momentoDoRegistroParaSla(item, nomes);
+    if (ms === null) { semData++; return; }
+    const horas = (agora - ms) / 36e5;
     if (horas > maxHoras) { maxHoras = horas; maisAntiga = item; }
   });
-  if (!maisAntiga || maxHoras < 0) return { horas: 0, texto: '—', item: null };
+
+  if (!maisAntiga || maxHoras < 0) {
+    // Nada datável na lista. Diz isso em vez de sumir da tela.
+    return {
+      horas: 0, texto: 'sem data de referência', item: null,
+      nivel: 'indefinido', semData, cor: 'text-slate-400', icone: '❔'
+    };
+  }
+
   const dias = Math.floor(maxHoras / 24);
   const horasResto = Math.floor(maxHoras % 24);
   const texto = dias > 0 ? `${dias}d ${horasResto}h` : `${horasResto}h`;
-  return { horas: maxHoras, texto, item: maisAntiga };
+
+  const nivel = maxHoras >= lim.estourado ? 'estourado'
+              : maxHoras >= lim.atencao   ? 'atencao' : 'ok';
+  const cor = nivel === 'estourado' ? 'text-red-400'
+            : nivel === 'atencao'   ? 'text-amber-300' : 'text-emerald-400';
+  const icone = nivel === 'estourado' ? '🔴' : nivel === 'atencao' ? '🟡' : '🟢';
+
+  return { horas: maxHoras, texto, item: maisAntiga, nivel, semData, cor, icone, limites: lim };
+}
+
+// Monta a linha de SLA do card. Uma função só, para os oito cards ficarem
+// iguais — antes cada um repetia o mesmo HTML com um rótulo diferente, e foi
+// por isso que a linha pôde sumir de um sem ninguém notar nos outros.
+function _linhaSla(sla, rotulo) {
+  if (!sla) return '';
+  if (sla.nivel === 'indefinido') {
+    return `<div class="text-[10px] font-bold text-slate-500 truncate" title="Nenhum registro desta lista tem data de referência gravada">❔ SLA: sem data</div>`;
+  }
+  const estourou = sla.nivel === 'estourado'
+    ? ` <span class="font-black">· prazo estourado</span>` : '';
+  return `<div class="text-[10px] font-bold ${sla.cor} truncate" title="Meta: atenção em ${sla.limites.atencao}h, estourado em ${sla.limites.estourado}h">`
+       + `${sla.icone} ${rotulo}: ${sla.texto}${estourou}</div>`;
 }
 
 function renderDashboardView() {
@@ -4113,12 +4012,12 @@ function renderDashboardView() {
   // Idade da ocorrência pendente mais antiga em cada painel de alerta —
   // complementa a contagem por faixa (🔴🟡🟢) com "há quanto tempo está
   // parado o pior caso", que é o que mais importa para priorização.
-  const maisAntigaPendCd = getMaisAntigaPendente(devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO'), 'criado_em');
-  const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaiz, 'criado_em');
-  const maisAntigaVeicParadoRota = getMaisAntigaPendente(rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO'), 'criado_em');
-  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, 'data_parada');
+  const maisAntigaPendCd = getMaisAntigaPendente(devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO'), ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
+  const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaiz, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
+  const maisAntigaVeicParadoRota = getMaisAntigaPendente(rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO'), ['criado_em', 'data_chamado', 'data'], { atencao: 4, estourado: 8 });
+  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
   const sinistrosPendentesDash = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
-  const maisAntigoSinistroDash = getMaisAntigaPendente(sinistrosPendentesDash, 'data_acidente');
+  const maisAntigoSinistroDash = getMaisAntigaPendente(sinistrosPendentesDash, ['data_acidente', 'criado_em', 'data'], { atencao: 24, estourado: 48 });
   const totDescontosGestor = devs.filter(d => d.desconto_produtividade_gestor).length;
   const totalCortesValor = cortesList.reduce((a, c) => a + (parseFloat(c.valor)||0), 0);
   const totalCustoSocorro = rotas.reduce((a, r) => a + (parseFloat(r.custo_socorro)||0), 0);
@@ -4129,7 +4028,7 @@ function renderDashboardView() {
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
   const reentregasPeriodo = todasReentregas.filter(r => dataNoPeriodo(r.data || r.criado_em, fDe, fAte));
   const reentregasPendentes = reentregasPeriodo.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
-  const maisAntigaReentregaDash = getMaisAntigaPendente(reentregasPendentes, 'criado_em');
+  const maisAntigaReentregaDash = getMaisAntigaPendente(reentregasPendentes, ['criado_em', 'data'], { atencao: 24, estourado: 48 });
   const totalQtdReentregas = reentregasPeriodo.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
   const indiceReentregaViagemPct = viagensIniciadas > 0 ? ((reentregasPeriodo.length / viagensIniciadas) * 100).toFixed(1) : '0.0';
 
@@ -4146,8 +4045,8 @@ function renderDashboardView() {
   // ===== SLA CRÍTICO DE MANUTENÇÃO (4H / 8H) =====
   const retidosCriticos8h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO_8H');
   const retidosAlerta4h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'ALERTA_4H');
-  const maisAntigaCritico8h = getMaisAntigaPendente(retidosCriticos8h, 'data_parada');
-  const maisAntigaAlerta4h = getMaisAntigaPendente(retidosAlerta4h, 'data_parada');
+  const maisAntigaCritico8h = getMaisAntigaPendente(retidosCriticos8h, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
+  const maisAntigaAlerta4h = getMaisAntigaPendente(retidosAlerta4h, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
 
   // ===== CÁLCULOS DOS NOVOS KPIS =====
   // 1. Lead Time de Abertura (Formato hh:mm:ss — Tempo médio entre criação da ocorrência e parecer/ação do gestor)
@@ -4407,7 +4306,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-purple-300 truncate">${reentregasPendentes.length} Reentrega(s) Pendente(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Atrasos & devoluções de rota</div>
-                    ${maisAntigaReentregaDash.item ? `<div class="text-[10px] font-bold text-purple-300 truncate">⏳ Mais antiga: ${maisAntigaReentregaDash.texto}</div>` : ''}
+                    ${_linhaSla(maisAntigaReentregaDash, 'Mais antiga')}
                   </div>
                 </div>
                 <button onclick="switchTab('controle_viagens'); switchViagensSubTab('reentregas');" class="bg-purple-900/50 hover:bg-purple-800 border border-purple-600 text-purple-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver</button>
@@ -4421,7 +4320,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-red-300 truncate">${retidosCriticos8h.length} Veículo(s) SLA &gt;8h</div>
                     <div class="text-[10px] text-red-400 font-bold truncate">Imobilização crítica estourada</div>
-                    ${maisAntigaCritico8h.item ? `<div class="text-[10px] font-bold text-red-300 truncate">⏳ Parado há: ${maisAntigaCritico8h.texto}</div>` : ''}
+                    ${_linhaSla(maisAntigaCritico8h, 'Parado há')}
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-red-900/60 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
@@ -4435,7 +4334,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-amber-300 truncate">${retidosAlerta4h.length} Veículo(s) SLA &gt;4h</div>
                     <div class="text-[10px] text-slate-400 truncate">Atenção tempo na oficina</div>
-                    ${maisAntigaAlerta4h.item ? `<div class="text-[10px] font-bold text-amber-300 truncate">⏳ Parado há: ${maisAntigaAlerta4h.texto}</div>` : ''}
+                    ${_linhaSla(maisAntigaAlerta4h, 'Parado há')}
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
@@ -4449,7 +4348,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-red-300 truncate">${veicParados} Veículo(s) Parado(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Socorro / Chamado em rota</div>
-                    ${maisAntigaVeicParadoRota.item ? `<div class="text-[10px] font-bold text-red-300 truncate">⏳ Parado há: ${maisAntigaVeicParadoRota.texto}</div>` : ''}
+                    ${_linhaSla(maisAntigaVeicParadoRota, 'Parado há')}
                   </div>
                 </div>
                 <button onclick="switchTab('rota_ocorrencias')" class="bg-red-900/40 hover:bg-red-900/80 border border-red-700 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver Rota</button>
@@ -4463,7 +4362,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-amber-300 truncate">${veicRetidos} Veículo(s) Retido(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Oficina / Manutenção</div>
-                    ${maisAntigaVeicRetido.item ? `<div class="text-[10px] font-bold text-amber-300 truncate">⏳ Retido há: ${maisAntigaVeicRetido.texto}</div>` : ''}
+                    ${_linhaSla(maisAntigaVeicRetido, 'Retido há')}
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota')" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver Frota</button>
@@ -4477,7 +4376,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-amber-300 truncate">${pendCd} Retorno(s) Pendente(s) CD</div>
                     <div class="text-[10px] text-slate-400 truncate">Aguardando entrada física</div>
-                    ${maisAntigaPendCd.item ? `<div class="text-[10px] font-bold text-amber-300 truncate">⏳ Mais antiga: ${maisAntigaPendCd.texto}</div>` : ''}
+                    ${_linhaSla(maisAntigaPendCd, 'Mais antiga')}
                   </div>
                 </div>
                 <button onclick="switchTab('cd_recepcao')" class="bg-amber-900/40 hover:bg-amber-900/80 border border-amber-700 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver CD</button>
@@ -4491,7 +4390,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-orange-300 truncate">${abertasCausaRaiz.length} Análise(s) Pendente(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Causa raiz não apurada</div>
-                    ${maisAntigaAnalise.item ? `<div class="text-[10px] font-bold text-orange-300 truncate">⏳ Mais antiga: ${maisAntigaAnalise.texto}</div>` : ''}
+                    ${_linhaSla(maisAntigaAnalise, 'Mais antiga')}
                   </div>
                 </div>
                 <button onclick="switchTab('sac_investigacao')" class="bg-orange-900/40 hover:bg-orange-900/80 border border-orange-700 text-orange-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Analisar</button>
@@ -4505,7 +4404,7 @@ function renderDashboardView() {
                   <div class="truncate">
                     <div class="text-xs font-black text-red-300 truncate">${sinistrosPendentesDash.length} Sinistro(s) Pendente(s)</div>
                     <div class="text-[10px] text-slate-400 truncate">Investigação em andamento</div>
-                    ${maisAntigoSinistroDash.item ? `<div class="text-[10px] font-bold text-red-300 truncate">⏳ Mais antigo: ${maisAntigoSinistroDash.texto}</div>` : ''}
+                    ${_linhaSla(maisAntigoSinistroDash, 'Mais antigo')}
                   </div>
                 </div>
                 <button onclick="switchTab('sinistros')" class="bg-red-900/50 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver</button>

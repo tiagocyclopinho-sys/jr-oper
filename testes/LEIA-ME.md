@@ -34,6 +34,7 @@ O esperado, em cada um, é a última linha dizer **TODOS OS TESTES PASSARAM**.
 | `04_aparelhos_e_atualizacao.js` | 9, 11, 12 | 500 ids seguidos sem repetir e sem bater com os de outro aparelho no mesmo milissegundo; a tela de Aparelhos em cada estado; a auto-atualização recarrega uma vez e não entra em laço; o painel de resquício desenha em cada estado e escapa o conteúdo do registro |
 | `05_resquicio_de_cache.js` | detector (23/08) | Acusa o lançamento salvo que ficou fora do espelho e prevê que o pull o apaga; não acusa aparelho em dia nem espelho inexistente; rastreia um registro pelas cinco camadas por placa ou id, e o veredito bate com o estado |
 | `06_pull_nao_apaga_lancamento.js` | correção (23/08) | O pull deixa de apagar lançamento recém-salvo quando outro aparelho manda algo na mesma tabela; funciona com e sem `window.db`; e NÃO desfaz nada do que veio antes — exclusão de outro aparelho entra, Reset Global remoto é aceito, nuvem vazia sem reset não apaga, edição local não enviada vence; o contador de fantasmas conta a fatia operacional |
+| `07_sla_dos_alertas.js` | SLA (23/08) | A idade da mais antiga e o semaforo em cada faixa; frota (4h/8h) e administrativo (24h/48h) nao se confundem; acha a data em campo alternativo e, em ultimo caso, no relogio do `id`; id semeado ou pequeno NAO vira SLA inventado; sem data, a linha diz "sem data" em vez de sumir |
 
 ## Duas armadilhas do ambiente, para quem for mexer aqui
 

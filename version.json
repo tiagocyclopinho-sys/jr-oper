@@ -1,5 +1,5 @@
 {
-  "build": "sync-4.8.3",
+  "build": "sync-4.8.5",
   "publicado_em": "2026-08-23",
-  "resumo": "Correcao: o pull passou a mesclar contra a fatia operacional (memoria/jr_sac_db) em vez do espelho por tabela, que so ele proprio escrevia — era o que apagava um lancamento recem-salvo quando outro aparelho mandava algo na mesma tabela. Junto: contador de fantasmas e zeramento de treinamento passam a olhar as tres copias. E o detector de resquicio (conferir as copias e rastrear um lancamento pelas cinco camadas), no console e na tela de Aparelhos."
+  "resumo": "SLA da ocorrencia mais antiga em todos os 8 cards de Alertas & Pendencias Criticas, com semaforo e meta por area (frota 4h/8h, administrativo 24h/48h). A linha agora sempre aparece: antes sumia calada quando o campo de data esperado nao existia no registro. Sino de notificacoes removido do cabecalho."
 }
