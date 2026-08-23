@@ -17,7 +17,9 @@ global.localStorage = {
 // Extrai da app.js só o bloco das funções de SLA — o arquivo inteiro depende
 // de dezenas de globais que não existem aqui.
 const app = fs.readFileSync(__dirname + '/../js/app.js', 'utf8');
-const ini = app.indexOf('function _paraIsoDeComparacao');  // vem logo antes de dataNoPeriodo e do bloco de SLA
+const ini = app.indexOf('function _parseDataFlex');  // vem logo antes de dataNoPeriodo e do bloco de SLA
+const blocoSla = app.indexOf('function calcularSlaManutencao');
+const fimSla = app.indexOf('function _paraIsoDeComparacao') > blocoSla ? app.indexOf('// ===== SISTEMA GLOBAL') : -1;
 const fim = app.indexOf('function renderDashboardView()');
 if (ini < 0 || fim < 0) { console.error('bloco de SLA nao encontrado'); process.exit(1); }
 eval(app.slice(ini, fim));
@@ -219,6 +221,55 @@ conferir('e a linha nao diz "sem referencia"',
   _linhaSla(r, 'Mais antiga').indexOf('sem referência') < 0, _linhaSla(r, 'Mais antiga'));
 r = getMaisAntigaPendente([{ nada: true }], ['criado_em'], ADM);
 conferir('sem id E sem protocolo: ai sim assume que nao sabe', r.nivel === 'indefinido', r);
+
+console.log('\n== A hora que volta da nuvem nao tem fuso (23/08/2026) ==');
+// O sintoma: "Mais antiga: 0min" e, no primeiro ciclo de sincronizacao,
+// "SLA: sem referencia". A copia da nuvem chegava 3h adiantada, a idade dava
+// negativa e a funcao desistia.
+const semZ = '2026-08-23T13:38:42.142';      // como a nuvem devolve
+const comZ = '2026-08-23T13:38:42.142Z';     // como o app grava
+conferir('sem Z e lido como UTC, igual ao com Z',
+  _parseDataFlex(semZ) === _parseDataFlex(comZ), [_parseDataFlex(semZ), _parseDataFlex(comZ)]);
+conferir('com offset explicito e respeitado',
+  _parseDataFlex('2026-08-23T10:38:42.142-03:00') === _parseDataFlex(comZ),
+  _parseDataFlex('2026-08-23T10:38:42.142-03:00'));
+conferir('formato do Postgres com espaco tambem',
+  _parseDataFlex('2026-08-23 13:38:42.142') === _parseDataFlex(comZ));
+
+// A regressao completa: registro recem-criado, versao da nuvem, SLA continua valendo.
+const criado = new Date(T0 - 5 * HORA);
+const daNuvem = criado.toISOString().replace('Z', '');   // tira o marcador, como o banco faz
+r = getMaisAntigaPendente([{ id: 1, criado_em: daNuvem }], ['criado_em'], ADM);
+conferir('registro de 5h vindo da nuvem: SLA correto, nao "sem referencia"',
+  r.nivel === 'ok' && r.texto === '5h 0min', r);
+conferir('e nao fica marcado como estimado', r.estimado === false, r.estimado);
+
+// Rede de seguranca: relogio de aparelho adiantado nao pode apagar o SLA.
+r = getMaisAntigaPendente([{ id: 1, criado_em: new Date(T0 + 3 * HORA).toISOString() }], ['criado_em'], ADM);
+conferir('data no futuro vira "agora", em vez de sumir',
+  r.nivel === 'ok' && r.horas === 0, r);
+
+// E o filtro de periodo tambem nao pode escorregar de dia por causa do fuso.
+conferir('carimbo da nuvem cai no dia certo no filtro',
+  _paraIsoDeComparacao('2026-08-23T02:30:00') === '2026-08-23',
+  _paraIsoDeComparacao('2026-08-23T02:30:00'));
+conferir('data pura nao escorrega de dia',
+  _paraIsoDeComparacao('2026-08-23') === '2026-08-23');
+conferir('dd/mm/aaaa nao escorrega de dia',
+  _paraIsoDeComparacao('23/08/2026') === '2026-08-23');
+
+console.log('== O SLA da frota (4h/8h) sofria o mesmo desvio ==');
+// calcularSlaManutencao lia criado_em com new Date(). Vindo da nuvem sem
+// fuso, a imobilizacao ficava 3h MENOR — ou negativa —, escondendo veiculo
+// parado justamente no alerta que existe para nao deixar isso acontecer.
+eval(app.slice(app.indexOf('function formatarDuracaoHHMMSS'), app.indexOf('function _parseDataFlex')));
+const paradoHa5h = new Date(T0 - 5 * HORA).toISOString().replace('Z', '');   // como a nuvem devolve
+let sla = calcularSlaManutencao({ status: 'RETIDO', criado_em: paradoHa5h });
+conferir('veiculo parado ha 5h e contado como 5h',
+  Math.round(sla.diffHoras) === 5, sla.diffHoras);
+conferir('e cai na faixa de atencao (>4h)', sla.nivel === 'ALERTA_4H', sla.nivel);
+sla = calcularSlaManutencao({ status: 'RETIDO', criado_em: new Date(T0 - 9 * HORA).toISOString().replace('Z', '') });
+conferir('parado ha 9h cai na faixa critica (>8h)', sla.nivel === 'CRITICO_8H', sla.nivel);
 
 console.log(falhas === 0 ? '\nTODOS OS TESTES PASSARAM' : `\n${falhas} TESTE(S) FALHARAM`);
 process.exit(falhas === 0 ? 0 : 1);

@@ -22,7 +22,7 @@ compare com o que os aparelhos mostrarem:
 
 | Campo | Valor |
 |---|---|
-| Versão esperada (`buildSync`) | `sync-4.8.8` |
+| Versão esperada (`buildSync`) | `sync-4.8.9` |
 | Data do deploy | ____/____/______ |
 
 Qualquer aparelho com versão **diferente** dessa está rodando código antigo.

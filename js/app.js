@@ -356,11 +356,17 @@ function formatarDuracaoHHMMSS(valor, unidade = 'ms') {
 function calcularSlaManutencao(retencao) {
   if (!retencao) return { diffMs: 0, diffHoras: 0, hhmmss: '00:00:00', nivel: 'NORMAL', badgeHtml: '' };
 
+  // _parseDataFlex em vez de new Date(): o criado_em que volta da nuvem nao
+  // tem fuso e seria lido 3h adiantado, fazendo a imobilizacao parecer MENOR
+  // do que e — ou negativa. Como e daqui que saem os alertas de 4h e 8h da
+  // frota, o desvio escondia veiculo parado. Achado em 23/08/2026.
   let dtInicio = null;
   if (retencao.criado_em) {
-    dtInicio = new Date(retencao.criado_em);
+    const msR = _parseDataFlex(retencao.criado_em);
+    dtInicio = msR === null ? new Date() : new Date(msR);
   } else if (retencao.data_parada) {
-    dtInicio = new Date(retencao.data_parada + 'T08:00:00');
+    const msR = _parseDataFlex(retencao.data_parada + 'T08:00:00');
+    dtInicio = msR === null ? new Date() : new Date(msR);
   } else {
     dtInicio = new Date();
   }
@@ -3846,26 +3852,66 @@ function setDashboardPeriodo(tipo) {
 // objetos Date em ~8 lugares no meio de uma implantação é risco maior que o
 // problema. Normalizar na entrada resolve os dois formatos que o sistema
 // realmente grava, e deixa a porta aberta para o resto.
-function _paraIsoDeComparacao(val) {
-  if (val === null || val === undefined || val === '') return '';
-  if (val instanceof Date) {
-    return isNaN(val.getTime()) ? '' : val.toISOString().split('T')[0];
-  }
+// =================================================================
+// A HORA QUE VOLTA DA NUVEM NÃO TEM FUSO — achado de 23/08/2026
+//
+// As colunas de data do banco são TIMESTAMP (sem time zone), então o
+// PostgREST devolve "2026-08-23T13:38:42.142", sem o "Z" do fim. O app
+// grava com Z (new Date().toISOString()), mas o que VOLTA da nuvem perde
+// esse marcador — e o JavaScript, sem marcador, entende a hora como sendo
+// do fuso do aparelho.
+//
+// Como o Brasil é UTC-3, isso joga todo carimbo que veio da nuvem 3 HORAS
+// PARA O FUTURO. O sintoma que denunciou: um retorno pendente aparecia com
+// "Mais antiga: 0min" e, uns 15 segundos depois — no primeiro ciclo de
+// sincronização —, virava "SLA: sem referência". Não era o SLA quebrando:
+// era o registro local, correto, sendo substituído pela cópia da nuvem, com
+// a hora adiantada. A idade dava negativa e a função desistia.
+//
+// Vale para TODA conta de tempo do sistema, não só o SLA: filtro de
+// período, faixas de 24h/48h, MTTR, lead time e ordenação.
+//
+// A regra: carimbo sem fuso nenhum é UTC, porque foi assim que o banco o
+// guardou. Carimbo COM Z ou com offset (+00:00, -03:00) é respeitado como
+// veio.
+// =================================================================
+function _parseDataFlex(val) {
+  if (val === null || val === undefined || val === '') return null;
+  if (val instanceof Date) return isNaN(val.getTime()) ? null : val.getTime();
+
   const s = String(val).trim();
-  if (!s) return '';
-  // Já é ISO (com ou sem hora): fica como está.
-  const iso = s.split('T')[0].trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-  // dd/mm/aaaa — o formato da importação da escala e das telas em pt-BR.
+  if (!s) return null;
+
+  // dd/mm/aaaa — importação da escala e telas em pt-BR. Meio-dia UTC de
+  // propósito: data sem hora não pode virar "ontem" nem "amanhã" por causa
+  // de fuso.
   const br = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
-  // Serial do Excel (ex: 45518), que aparece em planilha importada.
-  if (/^\d{5}(\.\d+)?$/.test(s)) {
-    const t = new Date(Date.UTC(1899, 11, 30) + Number(s) * 86400000);
-    return isNaN(t.getTime()) ? '' : t.toISOString().split('T')[0];
+  if (br) return Date.UTC(Number(br[3]), Number(br[2]) - 1, Number(br[1]), 12);
+
+  // Serial do Excel (ex: 45518), de planilha importada.
+  if (/^\d{5}(\.\d+)?$/.test(s)) return Date.UTC(1899, 11, 30) + Number(s) * 86400000;
+
+  // Só a data, sem hora.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const p = s.split('-');
+    return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]), 12);
   }
-  const t = new Date(s);
-  return isNaN(t.getTime()) ? '' : t.toISOString().split('T')[0];
+
+  // Data e hora SEM marcador de fuso: é o formato que a nuvem devolve.
+  // Tratar como UTC — é o que o banco guardou.
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) {
+    const t = new Date(s.replace(' ', 'T') + 'Z').getTime();
+    return isNaN(t) ? null : t;
+  }
+
+  const t = new Date(s).getTime();
+  return isNaN(t) ? null : t;
+}
+
+function _paraIsoDeComparacao(val) {
+  const ms = _parseDataFlex(val);
+  if (ms === null) return '';
+  return new Date(ms).toISOString().split('T')[0];
 }
 
 function dataNoPeriodo(dStr, de, ate) {
@@ -3886,7 +3932,12 @@ function getSlaBreakdown(list, dateField) {
   (list || []).forEach(item => {
     const dataRef = item ? item[dateField] : null;
     if (!dataRef) { ok++; return; }
-    const horas = (agora - new Date(dataRef).getTime()) / 36e5;
+    // _parseDataFlex, e não new Date(): a hora que volta da nuvem não tem
+    // fuso e seria lida como local, adiantando tudo em 3h (ver o comentário
+    // longo em _parseDataFlex).
+    const ms = _parseDataFlex(dataRef);
+    if (ms === null) { ok++; return; }
+    const horas = (agora - ms) / 36e5;
     if (horas > 48) critico++;
     else if (horas >= 24) alerta++;
     else ok++;
@@ -3961,8 +4012,8 @@ function _momentoDoRegistroParaSla(r, campos) {
   for (const campo of campos) {
     const bruto = r ? r[campo] : null;
     if (!bruto) continue;
-    const t = new Date(bruto).getTime();
-    if (!isNaN(t)) return t;
+    const t = _parseDataFlex(bruto);
+    if (t !== null) return t;
   }
 
   // Nenhum dos campos esperados serviu. Antes de desistir, varre QUALQUER
@@ -3976,8 +4027,8 @@ function _momentoDoRegistroParaSla(r, campos) {
       if (!/(data|criado|atualizado|_em$|hora|abertura|entrada|saida)/i.test(k)) continue;
       const v = r[k];
       if (!v || typeof v === 'object') continue;
-      const t = new Date(v).getTime();
-      if (isNaN(t)) continue;
+      const t = _parseDataFlex(v);
+      if (t === null) continue;
       // Datas futuras aqui são validade de produto, previsão de entrega e
       // afins — não servem para medir há quanto tempo algo está parado.
       if (t > Date.now()) continue;
@@ -4036,7 +4087,12 @@ function getMaisAntigaPendente(list, campos, limites) {
       if (ms === null) return;
       veioDoCarimbo = true;
     }
-    const horas = (agora - ms) / 36e5;
+    // Idade negativa = carimbo no futuro. Acontecia o tempo todo antes de
+    // _parseDataFlex (a hora da nuvem vinha 3h adiantada), e derrubava a
+    // linha inteira para "sem referência" — o registro tinha data, só que
+    // adiante. Pode voltar a acontecer por relógio de aparelho errado, que
+    // é comum em celular. Tratar como "agora" é honesto e não some da tela.
+    const horas = Math.max(0, (agora - ms) / 36e5);
     if (horas > maxHoras) { maxHoras = horas; maisAntiga = item; estimado = veioDoCarimbo; }
   });
 
@@ -4237,8 +4293,10 @@ function renderDashboardView() {
   devs.forEach(d => {
     const dtCriado = d.criado_em || d.data_abertura;
     if (dtCriado) {
-      const inicio = new Date(dtCriado.includes('T') ? dtCriado : dtCriado + 'T08:00:00');
-      const fim = d.data_acao_gestor ? new Date(d.data_acao_gestor.includes('T') ? d.data_acao_gestor : d.data_acao_gestor + 'T18:00:00') : new Date();
+      const msIni = _parseDataFlex(dtCriado.includes('T') ? dtCriado : dtCriado + 'T08:00:00');
+      const inicio = new Date(msIni === null ? NaN : msIni);
+      const msFim = d.data_acao_gestor ? _parseDataFlex(d.data_acao_gestor.includes('T') ? d.data_acao_gestor : d.data_acao_gestor + 'T18:00:00') : Date.now();
+      const fim = new Date(msFim === null ? NaN : msFim);
       if (!isNaN(inicio.getTime()) && !isNaN(fim.getTime())) {
         const diffMs = Math.max(0, fim.getTime() - inicio.getTime());
         totalLeadTimeMs += diffMs;
@@ -4254,7 +4312,8 @@ function renderDashboardView() {
   let countMttr = 0;
   const retencoesPeriodo = allRetencoes.filter(r => dataNoPeriodo(r.data_parada || r.criado_em, fDe, fAte));
   retencoesPeriodo.forEach(r => {
-    const dtInicio = r.criado_em ? new Date(r.criado_em) : (r.data_parada ? new Date(r.data_parada + 'T08:00:00') : null);
+    const msIniR = r.criado_em ? _parseDataFlex(r.criado_em) : (r.data_parada ? _parseDataFlex(r.data_parada + 'T08:00:00') : null);
+    const dtInicio = msIniR === null ? null : new Date(msIniR);
     if (dtInicio && !isNaN(dtInicio.getTime())) {
       let dtFim = null;
       if (r.status === 'LIBERADO' && r.data_liberacao) {
@@ -4270,7 +4329,8 @@ function renderDashboardView() {
   });
   rotas.forEach(r => {
     if (r.veiculo_parado || r.status_chamado === 'finalizado' || r.status === 'RESOLVIDO') {
-      const dtInicio = r.criado_em ? new Date(r.criado_em) : (r.data_chamado ? new Date(r.data_chamado + 'T08:00:00') : null);
+      const msIniC = r.criado_em ? _parseDataFlex(r.criado_em) : (r.data_chamado ? _parseDataFlex(r.data_chamado + 'T08:00:00') : null);
+      const dtInicio = msIniC === null ? null : new Date(msIniC);
       if (dtInicio && !isNaN(dtInicio.getTime())) {
         const dtFim = (r.status === 'RESOLVIDO' || r.status_chamado === 'finalizado') && r.resolvido_em ? new Date(r.resolvido_em) : new Date();
         if (!isNaN(dtFim.getTime())) {
@@ -15222,7 +15282,8 @@ function renderDisponibilidadeFrotaView() {
   let totalMttrMs = 0;
   let countMttr = 0;
   retencoes.forEach(r => {
-    const dtInicio = r.criado_em ? new Date(r.criado_em) : (r.data_parada ? new Date(r.data_parada + 'T08:00:00') : null);
+    const msIniR = r.criado_em ? _parseDataFlex(r.criado_em) : (r.data_parada ? _parseDataFlex(r.data_parada + 'T08:00:00') : null);
+    const dtInicio = msIniR === null ? null : new Date(msIniR);
     if (dtInicio && !isNaN(dtInicio.getTime())) {
       let dtFim = null;
       if (r.status === 'LIBERADO' && r.data_liberacao) {
