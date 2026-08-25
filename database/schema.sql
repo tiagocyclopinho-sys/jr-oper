@@ -658,7 +658,49 @@ CREATE TABLE IF NOT EXISTS reentregas_rota (
     motivo TEXT NOT NULL,
     placa VARCHAR(20) NOT NULL,
     novo_motorista VARCHAR(120),
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDENTE' CHECK (status IN ('PENDENTE', 'REALIZADA')),
+    -- Custodia da reentrega (v5.0.0 / migrations 28 e 31):
+    --     PENDENTE -> RECEBIDO_CD -> DESPACHADO -> REALIZADA
+    --                                           -> CANCELADA
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDENTE'
+      CHECK (status IN ('PENDENTE', 'RECEBIDO_CD', 'DESPACHADO', 'REALIZADA', 'CANCELADA')),
+
+    -- Recepcao fisica no CD. qtd_recebida_cd e separada de entregas_reentrega
+    -- de proposito: a segunda e o que o motorista DECLAROU na rota, a primeira
+    -- e o que o CD CONTOU na doca. E onde as duas divergem que a etapa se paga.
+    recebido_cd_em         TIMESTAMP,
+    recebido_cd_por        VARCHAR(120),
+    qtd_recebida_cd        INT,
+    condicao_recebimento   VARCHAR(20) CHECK (condicao_recebimento IS NULL OR condicao_recebimento IN ('OK','AVARIA','FALTA_PARCIAL')),
+    observacao_recebimento TEXT,
+    local_armazenagem      VARCHAR(60),
+    fotos_recebimento      JSONB DEFAULT '[]'::jsonb,
+
+    -- Despacho para o veiculo (o mesmo ou outro). Quem leva continua sendo
+    -- novo_motorista, que ja existia -- dois campos com o mesmo significado
+    -- sempre acabam divergindo.
+    despachado_em          TIMESTAMP,
+    despachado_por         VARCHAR(120),
+    despacho_placa         VARCHAR(20),
+    despacho_carga_numero  VARCHAR(50),
+    qtd_despachada         INT,
+    fotos_despacho         JSONB DEFAULT '[]'::jsonb,
+
+    -- Fecho e cancelamento
+    realizada_em           TIMESTAMP,
+    cancelada_em           TIMESTAMP,
+    cancelada_por          VARCHAR(120),
+    motivo_cancelamento    TEXT,
+    devolucao_gerada_id    BIGINT,
+
+    -- Foto obrigatoria nas duas etapas do CD. A trava fica aqui E na tela: so
+    -- na tela, a garantia dependeria de a tela se comportar.
+    CONSTRAINT reentregas_foto_recebimento_check CHECK (
+      status NOT IN ('RECEBIDO_CD','DESPACHADO')
+      OR (fotos_recebimento IS NOT NULL AND jsonb_array_length(fotos_recebimento) > 0)),
+    CONSTRAINT reentregas_foto_despacho_check CHECK (
+      status <> 'DESPACHADO'
+      OR (fotos_despacho IS NOT NULL AND jsonb_array_length(fotos_despacho) > 0)),
+
     criado_por VARCHAR(120),
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_deleted BOOLEAN DEFAULT FALSE,

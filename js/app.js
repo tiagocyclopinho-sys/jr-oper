@@ -917,7 +917,7 @@ function renderBlocoOrientacaoFeedback(nome, tipo, varDe, varAte, formVisivelVar
       </div>
       ${formAberto ? `
       <form onsubmit="handleAddOrientacaoFeedback(event, '${nome.replace(/'/g,"\\'")}', '${tipo}')" class="grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
-        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data *</label><input type="date" id="of-data" required value="${new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data *</label><input type="date" id="of-data" required value="${agoraIsoBrasilia().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
         <div class="sm:col-span-1"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Ocorrência *</label><input type="text" id="of-ocorrencia" required placeholder="O que aconteceu" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
         <div class="sm:col-span-1"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Ação *</label><input type="text" id="of-acao" required placeholder="O que foi feito" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
         <div class="flex items-end"><button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 rounded text-xs">Salvar</button></div>
@@ -962,7 +962,7 @@ function renderBlocoAtestadosMedicos(nome, tipo, varDe, varAte, formVisivelVar) 
       </div>
       ${formAberto ? `
       <form onsubmit="handleAddAtestadoMedico(event, '${nome.replace(/'/g,"\\'")}', '${tipo}')" class="grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
-        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data *</label><input type="date" id="am-data" required value="${new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+        <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data *</label><input type="date" id="am-data" required value="${agoraIsoBrasilia().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
         <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Parcial/Integral</label><select id="am-tipo" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"><option value="PARCIAL">Parcial</option><option value="INTEGRAL">Integral</option></select></div>
         <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Motivo</label><input type="text" id="am-motivo" placeholder="Motivo do atestado" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
         <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">CID</label><input type="text" id="am-cid" placeholder="Ex: M54" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
@@ -1263,7 +1263,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `JR_SAC_${tipo === 'MOTORISTA' ? 'Dossie_Motorista' : 'Acompanhamento_Funcionario'}_${nome.replace(/\s+/g,'_')}_${new Date().toISOString().slice(0,10)}.csv`);
+  link.setAttribute('download', `JR_SAC_${tipo === 'MOTORISTA' ? 'Dossie_Motorista' : 'Acompanhamento_Funcionario'}_${nome.replace(/\s+/g,'_')}_${agoraIsoBrasilia().slice(0,10)}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -1319,7 +1319,7 @@ function abrirModalNovoSinistro(prefill) {
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="block font-bold text-slate-300 mb-1">Data do Acidente *</label>
-              <input type="date" id="sin-data" required value="${prefill.data_acidente || new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+              <input type="date" id="sin-data" required value="${prefill.data_acidente || agoraIsoBrasilia().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
             </div>
             <div>
               <label class="block font-bold text-slate-300 mb-1">Local / Cidade</label>
@@ -2727,7 +2727,7 @@ function renderNavMenu() {
           ${window._navVerTudo ? '🎯 Mostrar só as telas do meu setor' : '👁️ Ver todas as telas'}
         </button>` : ''}
       <div class="pt-2.5 border-t border-slate-800 text-[10px] text-slate-500 font-medium px-2 flex justify-between items-center">
-        <span>JR Oper v2.0</span>
+        <span>JR Oper v${(window.JR_CONFIG && JR_CONFIG.appVersion) || '—'}</span>
         <button onclick="handleLogout()" class="text-red-400 hover:underline font-bold">Sair</button>
       </div>
     </div>`;
@@ -2846,6 +2846,15 @@ function renderApp() {
   updateUserHeader();
   renderNavMenu();
   decorarTabelasOrdenaveis();
+  if (window._prefillDevolucaoReentrega) {
+    if (activeTab === 'sac_abertura') {
+      aplicarPrefillDevolucaoDeReentrega();
+    } else {
+      // Saiu da tela sem salvar: o vinculo com a reentrega morre aqui, senao
+      // ele reapareceria numa devolucao futura sem nada a ver com ela.
+      window._prefillDevolucaoReentrega = null;
+    }
+  }
 
   if (window._isSwitchingMainTab) {
     window._isSwitchingMainTab = false;
@@ -4032,24 +4041,34 @@ function handleLoginSubmit(e) {
 }
 
 // ===== HELPERS E FILTRO DE DATAS DO DASHBOARD =====
+
 function setDashboardPeriodo(tipo) {
-  const today = new Date();
-  const isoToday = today.toISOString().split('T')[0];
-  if (tipo === 'hoje') {
+  const isoToday = hojeIsoBrasilia();
+  if (tipo === 'hoje' || tipo === 'limpar') {
+    // "✕ Limpar" VOLTA PARA HOJE - mudanca de 25/08/2026.
+    //
+    // Antes ele gravava string vazia, que significa "historico completo".
+    // Mas o padrao da tela e hoje, e quem clica em "limpar" espera voltar ao
+    // padrao, nao pular para o extremo oposto (e ver os numeros do painel
+    // explodirem sem entender por que). O historico completo continua
+    // disponivel, agora num botao proprio ('tudo'), que diz o que faz.
     window._dashFiltroDe = isoToday;
     window._dashFiltroAte = isoToday;
   } else if (tipo === 'semana') {
-    const day = today.getDay();
-    const diffToMonday = today.getDate() - day + (day === 0 ? -6 : 1);
-    const monday = new Date(today.setDate(diffToMonday));
-    window._dashFiltroDe = monday.toISOString().split('T')[0];
+    // Segunda-feira da semana corrente. A conta sai da propria string de
+    // hoje (ja em Brasilia), sem passar pelo relogio do aparelho - senao um
+    // aparelho com fuso errado mudaria o inicio da semana.
+    const p = isoToday.split('-').map(Number);
+    const diaDaSemana = new Date(Date.UTC(p[0], p[1] - 1, p[2], 12)).getUTCDay();
+    const recuo = diaDaSemana === 0 ? 6 : diaDaSemana - 1;
+    window._dashFiltroDe = somaDiasIso(isoToday, -recuo);
     window._dashFiltroAte = isoToday;
   } else if (tipo === 'mes') {
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    window._dashFiltroDe = `${yyyy}-${mm}-01`;
+    window._dashFiltroDe = isoToday.slice(0, 8) + '01';
     window._dashFiltroAte = isoToday;
-  } else if (tipo === 'limpar') {
+  } else if (tipo === 'tudo') {
+    // Vazio nos dois campos = sem recorte de periodo. dataNoPeriodo() deixa
+    // tudo passar quando `de` e `ate` sao vazios.
     window._dashFiltroDe = '';
     window._dashFiltroAte = '';
   }
@@ -4075,7 +4094,7 @@ function setDashboardPeriodo(tipo) {
 //
 // As colunas de data do banco são TIMESTAMP (sem time zone), então o
 // PostgREST devolve "2026-08-23T13:38:42.142", sem o "Z" do fim. O app
-// grava com Z (new Date().toISOString()), mas o que VOLTA da nuvem perde
+// grava com Z (agoraIsoBrasilia()), mas o que VOLTA da nuvem perde
 // esse marcador — e o JavaScript, sem marcador, entende a hora como sendo
 // do fuso do aparelho.
 //
@@ -4115,10 +4134,21 @@ function _parseDataFlex(val) {
     return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]), 12);
   }
 
-  // Data e hora SEM marcador de fuso: é o formato que a nuvem devolve.
-  // Tratar como UTC — é o que o banco guardou.
+  // Data e hora SEM marcador de fuso: é o formato que a nuvem devolve, e
+  // desde a v5.0.0 é também o que o app grava.
+  //
+  // MUDOU EM 25/08/2026: antes isto era lido como UTC. Agora é lido como
+  // BRASÍLIA, porque é assim que passou a ser gravado — pelo app
+  // (agoraIsoBrasilia) e pelo banco (migration 29 trocou os DEFAULT para
+  // NOW() AT TIME ZONE 'America/Sao_Paulo').
+  //
+  // Efeito colateral aceito: os registros criados ANTES da v5.0.0 têm UTC
+  // gravado e passam a ser lidos 3h adiantados. Eram ~20 linhas de
+  // treinamento, todas de horário comercial, cujas DATAS continuam certas —
+  // só o horário aparece deslocado. Decisão tomada na virada para produção,
+  // que era a janela para fazer isso sem misturar dado real.
   if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) {
-    const t = new Date(s.replace(' ', 'T') + 'Z').getTime();
+    const t = new Date(s.replace(' ', 'T') + '-03:00').getTime();
     return isNaN(t) ? null : t;
   }
 
@@ -4126,10 +4156,15 @@ function _parseDataFlex(val) {
   return isNaN(t) ? null : t;
 }
 
+// A data de calendario do registro sai no fuso de Brasilia, nao em UTC.
+// Um retorno lancado as 22h30 de 25/08 tem criado_em "2026-08-26T01:30:00Z";
+// lido em UTC ele virava dia 26 e sumia do filtro "Hoje" de quem estava
+// trabalhando nele. Como a conversao acontece na LEITURA, isto corrige
+// tambem todo o historico ja gravado.
 function _paraIsoDeComparacao(val) {
   const ms = _parseDataFlex(val);
   if (ms === null) return '';
-  return new Date(ms).toISOString().split('T')[0];
+  return dataIsoBrasilia(ms);
 }
 
 function dataNoPeriodo(dStr, de, ate) {
@@ -4366,17 +4401,29 @@ function renderDashboardView() {
   // justamente porque virou o padrao — ter um botao para o estado inicial so
   // ocupava espaco.
   //
-  // A checagem e por `undefined`, e nao por vazio, de proposito: "✕ Limpar"
-  // grava string vazia, que significa "quero o historico completo". Se
-  // testassemos por vazio, o filtro de hoje voltaria sozinho a cada
-  // redesenho e seria impossivel ver o historico.
+  // A checagem e por `undefined`, e nao por vazio, de proposito: string vazia
+  // nos dois campos significa "quero o historico completo", estado que agora
+  // se alcanca pelo botao "🗄️ Histórico Completo". Se testassemos por vazio,
+  // o filtro de hoje voltaria sozinho a cada redesenho e seria impossivel ver
+  // o historico.
+  //
+  // "✕ Limpar" NAO cai mais aqui: desde 25/08/2026 ele volta explicitamente
+  // para hoje (ver setDashboardPeriodo), que e o padrao que o usuario espera
+  // reencontrar ao limpar.
   if (window._dashFiltroDe === undefined && window._dashFiltroAte === undefined) {
-    const hoje = new Date().toISOString().split('T')[0];
+    const hoje = hojeIsoBrasilia();
     window._dashFiltroDe = hoje;
     window._dashFiltroAte = hoje;
   }
   const fDe = window._dashFiltroDe || '';
   const fAte = window._dashFiltroAte || '';
+
+  // Os tres estados que a barra de filtro sabe mostrar. Servem tanto para o
+  // selo ao lado do titulo quanto para decidir se o botao "voltar para hoje"
+  // aparece - ele so faz sentido quando ja se saiu do padrao.
+  const isoHojeDash = hojeIsoBrasilia();
+  const filtroEhHoje = fDe === isoHojeDash && fAte === isoHojeDash;
+  const filtroEhTudo = !fDe && !fAte;
 
   const allDevs = db.getDevolucoes();
   const allRotas = db.getOcorrenciasRota();
@@ -4483,7 +4530,7 @@ function renderDashboardView() {
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
   const reentregasPeriodo = todasReentregas.filter(r => dataNoPeriodo(r.data || r.criado_em, fDe, fAte));
   // Alerta: pendencia atual, sem filtro de periodo (ver bloco acima).
-  const reentregasPendentes = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
+  const reentregasPendentes = todasReentregas.filter(reentregaEmAberto);
   const maisAntigaReentregaDash = getMaisAntigaPendente(reentregasPendentes, ['criado_em', 'data'], { atencao: 24, estourado: 48 });
   const totalQtdReentregas = reentregasPeriodo.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
   const indiceReentregaViagemPct = viagensIniciadas > 0 ? ((reentregasPeriodo.length / viagensIniciadas) * 100).toFixed(1) : '0.0';
@@ -4859,7 +4906,11 @@ function renderDashboardView() {
           <div>
             <div class="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
               FILTRO POR PERÍODO (DATA A DATA)
-              ${(fDe || fAte) ? `<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">FILTRO ATIVO</span>` : `<span class="bg-slate-800 text-slate-400 text-[10px] px-2 py-0.5 rounded font-medium">HISTÓRICO COMPLETO</span>`}
+              ${filtroEhHoje
+                ? `<span class="bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">HOJE (PADRÃO)</span>`
+                : filtroEhTudo
+                  ? `<span class="bg-slate-800 text-slate-300 border border-slate-700 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">HISTÓRICO COMPLETO</span>`
+                  : `<span class="bg-amber-950 text-amber-300 border border-amber-700 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">PERÍODO PERSONALIZADO</span>`}
             </div>
             <p class="text-[11px] text-slate-400 font-medium">Selecione o período inicial e final para visualizar os dados consolidados do painel</p>
           </div>
@@ -4876,7 +4927,8 @@ function renderDashboardView() {
           <div class="flex items-center gap-1 shrink-0">
             <button onclick="setDashboardPeriodo('semana')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-amber-800/60 shadow">Esta Semana</button>
             <button onclick="setDashboardPeriodo('mes')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-blue-800/60 shadow">Este Mês</button>
-            ${(fDe || fAte) ? `<button onclick="setDashboardPeriodo('limpar')" class="bg-red-950 hover:bg-red-900 text-red-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-red-800 shadow" title="Limpar Filtro">✕ Limpar</button>` : ''}
+            <button onclick="setDashboardPeriodo('tudo')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-slate-600 shadow" title="Mostrar todo o histórico, sem recorte de período">🗄️ Histórico Completo</button>
+            ${!filtroEhHoje ? `<button onclick="setDashboardPeriodo('limpar')" class="bg-red-950 hover:bg-red-900 text-red-300 font-bold text-[11px] px-2.5 py-1.5 rounded border border-red-800 shadow" title="Voltar ao padrão do painel: hoje">✕ Limpar (voltar para hoje)</button>` : ''}
           </div>
         </div>
       </div>
@@ -7991,7 +8043,7 @@ function atualizarStatusNegociacaoItem(itemId, devId, novoStatus) {
   if (!ref) { alert('Item não encontrado.'); return; }
 
   ref.item.status_negociacao = novoStatus;
-  ref.item.data_negociacao = new Date().toISOString();
+  ref.item.data_negociacao = agoraIsoBrasilia();
 
   // Mesma "graduação" de destino aplicada na tela de Editar: Vendido gera
   // seu próprio destino "Vendido"; Descartado entra na lista de Avaria/
@@ -8281,7 +8333,7 @@ function handleAdicionarDivisaoDestino(e, itemId, devId) {
     destino: destino,
     status_negociacao: destino === 'PRODUTOS_NEGOCIACAO' ? statusNegociacao : null,
     observacao: observacao,
-    criado_em: new Date().toISOString(),
+    criado_em: agoraIsoBrasilia(),
     criado_por: db.currentUser ? db.currentUser.nome : 'SISTEMA'
   });
 
@@ -8545,7 +8597,7 @@ function exportarDestinacaoCsv() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `JR_SAC_Destinacao_Itens_${new Date().toISOString().slice(0,10)}.csv`);
+  link.setAttribute('download', `JR_SAC_Destinacao_Itens_${agoraIsoBrasilia().slice(0,10)}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -8772,7 +8824,7 @@ function exportarMedidasDisciplinaresCsv() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `JR_SAC_Medidas_Disciplinares_${new Date().toISOString().slice(0,10)}.csv`);
+  link.setAttribute('download', `JR_SAC_Medidas_Disciplinares_${agoraIsoBrasilia().slice(0,10)}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -9051,7 +9103,7 @@ function gerarRelatorioDivergencia(devId, itensDivergentes, dev, valorTotalDiver
     tipo_erro: dev?.tipo_erro || '',
     itens_divergentes: itensDivergentes,
     valor_total_divergencia: valorTotalDivergencia,
-    gerado_em: new Date().toISOString(),
+    gerado_em: agoraIsoBrasilia(),
     tipo: 'DESCONTO_MOTORISTA'
   };
 }
@@ -10028,7 +10080,7 @@ function renderViagensLargadaSubTab() {
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Data Saída</label>
-              <input type="date" id="vg-data-saida" value="${new Date().toISOString().split('T')[0]}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <input type="date" id="vg-data-saida" value="${hojeIsoBrasilia()}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
             </div>
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Hora Saída</label>
@@ -10583,7 +10635,7 @@ function abrirModalNovaReentrega(dados = {}) {
     "OUTROS"
   ];
 
-  const defaultData = dados.data || dados.data_saida || new Date().toISOString().split('T')[0];
+  const defaultData = dados.data || dados.data_saida || hojeIsoBrasilia();
   const defaultCarga = dados.carga || dados.carga_numero || '';
   const defaultRota = dados.rota || dados.rota_nome || '';
   const defaultMotorista = dados.motorista || dados.motorista_nome || '';
@@ -10920,6 +10972,475 @@ function handleSalvarEdicaoReentrega(e, id) {
   renderApp();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CUSTÓDIA DA REENTREGA (v5.0.0)
+//
+// Antes existiam dois estados: PENDENTE e REALIZADA. O registro dizia que
+// HAVIA reentrega e quem IA levar — mas entre o motorista voltar com a
+// mercadoria e ela ser entregue, ninguém assinava por ela.
+//
+// Agora o caminho é:
+//     PENDENTE → RECEBIDO_CD → DESPACHADO → REALIZADA
+//                                        ↘ CANCELADA → abre Devolução SAC
+//
+// Reentrega só existe em carga local de Araguaína, e toda reentrega passa
+// pelo CD — por isso não há caminho que pule a recepção.
+//
+// A foto é obrigatória nas duas etapas do CD. A trava está aqui E no banco
+// (CHECK da migration 31): validar só na tela deixaria a garantia dependendo
+// de a tela se comportar.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const REENTREGA_ETAPAS = {
+  PENDENTE:    { rotulo: 'PENDENTE',    icone: '⏳', cor: 'amber',   ordem: 1 },
+  RECEBIDO_CD: { rotulo: 'NO CD',       icone: '📦', cor: 'blue',    ordem: 2 },
+  DESPACHADO:  { rotulo: 'DESPACHADO',  icone: '🚚', cor: 'purple',  ordem: 3 },
+  REALIZADA:   { rotulo: 'REALIZADA',   icone: '✅', cor: 'emerald', ordem: 4 },
+  CANCELADA:   { rotulo: 'CANCELADA',   icone: '🚫', cor: 'red',     ordem: 5 }
+};
+
+// 'EM ANDAMENTO' e 'CONCLUÍDO'/'FINALIZADO' são vocabulário de registros
+// antigos, anteriores a esta versão. Traduzimos na leitura para não precisar
+// reescrever o histórico.
+function normalizarStatusReentrega(status) {
+  const s = String(status || 'PENDENTE').toUpperCase();
+  if (s === 'EM ANDAMENTO') return 'PENDENTE';
+  if (s === 'CONCLUÍDO' || s === 'CONCLUIDO' || s === 'FINALIZADO') return 'REALIZADA';
+  return REENTREGA_ETAPAS[s] ? s : 'PENDENTE';
+}
+
+// "Em aberto" = ainda nao chegou ao cliente. Inclui RECEBIDO_CD e DESPACHADO.
+//
+// Isto e o que impede a reentrega de SUMIR do alerta ao ser recebida no CD:
+// antes da custodia so existiam PENDENTE e REALIZADA, entao "pendente" e "em
+// aberto" eram a mesma coisa. Agora nao sao - e um filtro que so olhasse
+// PENDENTE esconderia justamente a mercadoria parada no CD, que e a que mais
+// precisa de cobranca.
+function reentregaEmAberto(r) {
+  const st = normalizarStatusReentrega(r && r.status);
+  return st !== 'REALIZADA' && st !== 'CANCELADA';
+}
+
+function reentregaConcluida(r) {
+  return normalizarStatusReentrega(r && r.status) === 'REALIZADA';
+}
+
+function badgeStatusReentrega(status) {
+  const st = normalizarStatusReentrega(status);
+  const e = REENTREGA_ETAPAS[st];
+  const pulso = st === 'PENDENTE'
+    ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>'
+    : `<span>${e.icone}</span>`;
+  return `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-${e.cor}-950/90 text-${e.cor}-300 border border-${e.cor}-500/80 shadow">${pulso} ${e.rotulo}</span>`;
+}
+
+// Cada etapa mostra só a ação que faz sentido a seguir. Botão que não se
+// aplica não aparece — em vez de aparecer e recusar depois.
+function botoesEtapaReentrega(r) {
+  const st = normalizarStatusReentrega(r.status);
+  const btn = (fn, cor, icone, texto, titulo) =>
+    `<button onclick="${fn}(${r.id})" class="bg-${cor}-700 hover:bg-${cor}-600 text-white px-2 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 shadow" title="${titulo}"><span>${icone}</span> ${texto}</button>`;
+
+  if (st === 'PENDENTE') {
+    return btn('abrirModalReceberReentrega', 'blue', '📦', 'Receber no CD', 'Registrar a chegada física da mercadoria ao CD (exige foto)')
+         + btn('abrirModalCancelarReentrega', 'red', '🚫', '', 'Cancelar a reentrega e abrir Devolução SAC');
+  }
+  if (st === 'RECEBIDO_CD') {
+    return btn('abrirModalDespacharReentrega', 'purple', '🚚', 'Despachar', 'Encaminhar a mercadoria para um veículo (exige foto)')
+         + btn('abrirModalCancelarReentrega', 'red', '🚫', '', 'Cancelar a reentrega e abrir Devolução SAC');
+  }
+  if (st === 'DESPACHADO') {
+    return btn('baixarReentregaRapida', 'emerald', '✅', 'Baixar', 'Confirmar a entrega ao cliente')
+         + btn('abrirModalCancelarReentrega', 'red', '🚫', '', 'Cancelar a reentrega e abrir Devolução SAC');
+  }
+  return `<button onclick="abrirDetalheCustodiaReentrega(${r.id})" class="text-slate-400 hover:text-white p-1 font-bold text-sm hover:bg-slate-800 rounded transition" title="Ver a linha do tempo da custódia">🕓</button>`;
+}
+
+// --- Fotos ------------------------------------------------------------------
+// Reaproveita comprimirImagem() (canvas 1280px / JPEG 75%), a mesma que a
+// Devolução SAC usa desde 20/08/2026, quando uma auditoria achou foto crua de
+// celular estourando a cota do localStorage.
+//
+// Base64 e não Supabase Storage de propósito: a recepção acontece na doca, e
+// upload exigiria rede NO INSTANTE da captura. O app é PWA offline-first — a
+// foto vai para o localStorage e sincroniza quando houver sinal.
+window._fotosReentrega = [];
+
+function handleFotoReentregaUpload(inputEl, previewId) {
+  const files = Array.from(inputEl.files || []);
+  if (!files.length) return;
+  window._fotosReentrega = [];
+  const preview = document.getElementById(previewId);
+  if (preview) preview.innerHTML = '<div class="text-[10px] text-slate-400 font-bold w-full">Processando ' + files.length + ' foto(s)...</div>';
+
+  Promise.all(files.map(f => comprimirImagem(f).catch(() => null)))
+    .then(resultados => {
+      window._fotosReentrega = resultados.filter(Boolean);
+      if (!preview) return;
+      if (window._fotosReentrega.length === 0) {
+        preview.innerHTML = '<div class="text-[10px] text-red-400 font-bold">Nenhuma foto pôde ser lida. Tente novamente.</div>';
+        return;
+      }
+      preview.innerHTML = '<div class="text-[10px] text-emerald-400 font-bold w-full mb-1">' + window._fotosReentrega.length + ' foto(s) anexada(s)</div>'
+        + '<div class="flex gap-2 flex-wrap">'
+        + window._fotosReentrega.map(src => '<img src="' + src + '" class="w-16 h-16 object-cover rounded-lg border border-slate-700 shadow">').join('')
+        + '</div>';
+    });
+}
+
+function _blocoFotoReentrega(inputId, previewId, cor, obrigatoriaTexto) {
+  return `
+    <div class="bg-${cor}-950/30 border border-${cor}-800/60 rounded-lg p-2.5">
+      <label class="block text-[10px] text-${cor}-300 font-black uppercase mb-1.5">
+        📷 Foto — obrigatória <span class="font-medium normal-case text-slate-400">(${obrigatoriaTexto})</span>
+      </label>
+      <input type="file" id="${inputId}" accept="image/*" capture="environment" multiple
+             onchange="handleFotoReentregaUpload(this, '${previewId}')"
+             class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-${cor}-700 file:text-white cursor-pointer">
+      <div id="${previewId}" class="mt-2 flex flex-wrap gap-1.5"></div>
+    </div>`;
+}
+
+function _cabecalhoModalReentrega(item, titulo, icone, cor) {
+  return `
+    <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+      <h3 class="text-sm font-bold text-${cor}-400 uppercase flex items-center gap-2"><span>${icone}</span> ${titulo}</h3>
+      <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-base p-1">✕</button>
+    </div>
+    <div class="bg-slate-950/80 p-3 rounded-lg border border-slate-800 text-xs space-y-1">
+      <div><span class="text-slate-400">Carga:</span> <strong class="text-white">${item.carga_numero}</strong> | <span class="text-slate-400">Rota:</span> <strong class="text-white">${item.rota_nome}</strong></div>
+      <div><span class="text-slate-400">Motorista original:</span> <strong class="text-white">${item.motorista_nome}</strong> | <span class="text-slate-400">Placa:</span> <strong class="text-amber-300">${item.placa}</strong></div>
+      <div><span class="text-slate-400">Volumes declarados para reentrega:</span> <strong class="text-purple-300">${item.entregas_reentrega}</strong></div>
+    </div>`;
+}
+
+// --- ETAPA 2: recepção no CD ------------------------------------------------
+function abrirModalReceberReentrega(id) {
+  const item = db.getReentregas().find(x => x.id == id);
+  if (!item) return;
+  window._fotosReentrega = [];
+  const c = document.getElementById('modal-container');
+  if (!c) return;
+
+  c.innerHTML = `
+    <div class="bg-slate-900 border border-blue-600/70 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4 max-h-[90vh] overflow-y-auto">
+      ${_cabecalhoModalReentrega(item, 'Receber no CD', '📦', 'blue')}
+      <form onsubmit="handleSalvarRecebimentoReentrega(event, ${item.id})" class="space-y-3 text-xs">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] text-blue-300 font-black uppercase mb-1">Volumes recebidos *</label>
+            <input type="number" id="rc-qtd" min="0" required value="${item.entregas_reentrega || 0}"
+                   oninput="_avisarDivergenciaReentrega(${item.entregas_reentrega || 0})"
+                   class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          </div>
+          <div>
+            <label class="block text-[10px] text-blue-300 font-black uppercase mb-1">Condição *</label>
+            <select id="rc-condicao" onchange="_avisarDivergenciaReentrega(${item.entregas_reentrega || 0})"
+                    class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+              <option value="OK">✅ OK — íntegro</option>
+              <option value="AVARIA">⚠️ AVARIA</option>
+              <option value="FALTA_PARCIAL">📉 FALTA PARCIAL</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="rc-aviso-divergencia" class="hidden bg-amber-950/60 border border-amber-600 rounded-lg p-2.5 text-[11px] text-amber-200 font-semibold"></div>
+
+        <div>
+          <label class="block text-[10px] text-blue-300 font-black uppercase mb-1">Local de armazenagem</label>
+          <input type="text" id="rc-local" placeholder="Ex: RUA 4, BOX 12" oninput="forcarMaiuscula(this)"
+                 class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+        </div>
+
+        <div>
+          <label class="block text-[10px] text-blue-300 font-black uppercase mb-1">Observação do recebimento</label>
+          <textarea id="rc-obs" rows="2" placeholder="Obrigatória se a quantidade divergir ou houver avaria"
+                    class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs"></textarea>
+        </div>
+
+        ${_blocoFotoReentrega('rc-fotos', 'rc-foto-preview', 'blue', 'comprova que a mercadoria chegou ao CD')}
+
+        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+          <button type="button" onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded text-xs">Cancelar</button>
+          <button type="submit" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-5 py-2 rounded text-xs shadow-lg flex items-center gap-1.5"><span>📦</span> Confirmar Recebimento</button>
+        </div>
+      </form>
+    </div>`;
+  c.classList.remove('hidden');
+}
+
+// O aviso aparece ENQUANTO se digita, e não só ao salvar: divergência de
+// contagem é o achado mais importante desta etapa, e o conferente precisa
+// vê-la enquanto ainda está com a mercadoria na frente.
+function _avisarDivergenciaReentrega(declarado) {
+  const el = document.getElementById('rc-aviso-divergencia');
+  const qtdEl = document.getElementById('rc-qtd');
+  const cond = (document.getElementById('rc-condicao') || {}).value;
+  if (!el || !qtdEl) return;
+  const qtd = parseInt(qtdEl.value);
+  const partes = [];
+  if (!isNaN(qtd) && qtd !== declarado) {
+    const dif = declarado - qtd;
+    partes.push(dif > 0
+      ? `Faltam <strong>${dif}</strong> volume(s): declarados ${declarado}, recebidos ${qtd}.`
+      : `Chegaram <strong>${-dif}</strong> volume(s) a mais: declarados ${declarado}, recebidos ${qtd}.`);
+  }
+  if (cond && cond !== 'OK') partes.push('Recebimento marcado como <strong>' + cond.replace('_', ' ') + '</strong>.');
+  if (partes.length === 0) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.innerHTML = '⚠️ ' + partes.join(' ') + ' <span class="block mt-1 font-normal">A observação passa a ser obrigatória.</span>';
+  el.classList.remove('hidden');
+}
+
+function handleSalvarRecebimentoReentrega(e, id) {
+  e.preventDefault();
+  const res = db.receberReentregaCd(id, {
+    qtd_recebida: document.getElementById('rc-qtd').value,
+    condicao: document.getElementById('rc-condicao').value,
+    observacao: document.getElementById('rc-obs').value,
+    local_armazenagem: document.getElementById('rc-local').value,
+    fotos: window._fotosReentrega || []
+  });
+  if (!res.success) { alert('⚠️ ' + res.message); return; }
+  window._fotosReentrega = [];
+  closeModal();
+  showToast('📦 Recebimento registrado no CD.', 'success');
+  renderApp();
+}
+
+// --- ETAPA 3: despacho ------------------------------------------------------
+function abrirModalDespacharReentrega(id) {
+  const item = db.getReentregas().find(x => x.id == id);
+  if (!item) return;
+  window._fotosReentrega = [];
+  const motoristas = db.data.motoristas || [];
+  const veiculos = (db.data.veiculos || []).filter(v => v.situacao !== 'Inativo');
+  const c = document.getElementById('modal-container');
+  if (!c) return;
+
+  c.innerHTML = `
+    <div class="bg-slate-900 border border-purple-600/70 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4 max-h-[90vh] overflow-y-auto">
+      ${_cabecalhoModalReentrega(item, 'Despachar do CD', '🚚', 'purple')}
+
+      <div class="bg-blue-950/40 border border-blue-800/60 rounded-lg p-2.5 text-[11px] space-y-0.5">
+        <div class="text-blue-300 font-black uppercase text-[10px]">Recebido no CD</div>
+        <div class="text-slate-300"><strong class="text-white">${item.qtd_recebida_cd}</strong> volume(s) · ${String(item.condicao_recebimento || 'OK').replace('_', ' ')}${item.local_armazenagem ? ' · ' + item.local_armazenagem : ''}</div>
+        <div class="text-slate-400">Por ${item.recebido_cd_por || '—'} em ${formatarDataHora(item.recebido_cd_em)}</div>
+      </div>
+
+      <form onsubmit="handleSalvarDespachoReentrega(event, ${item.id})" class="space-y-3 text-xs">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] text-purple-300 font-black uppercase mb-1">Veículo que leva *</label>
+            <input type="text" id="dp-placa" list="dp-veiculos-list" required value="${item.placa || ''}" oninput="forcarMaiuscula(this)"
+                   class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <datalist id="dp-veiculos-list">${veiculos.map(v => `<option value="${v.placa || v}">`).join('')}</datalist>
+            <div class="text-[9px] text-slate-500 mt-0.5">Pode ser o mesmo veículo ou outro</div>
+          </div>
+          <div>
+            <label class="block text-[10px] text-purple-300 font-black uppercase mb-1">Motorista *</label>
+            <input type="text" id="dp-motorista" list="dp-motoristas-list" required value="${item.novo_motorista || item.motorista_nome || ''}" oninput="forcarMaiuscula(this)"
+                   class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <datalist id="dp-motoristas-list">${motoristas.map(m => `<option value="${m.nome || m}">`).join('')}</datalist>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] text-purple-300 font-black uppercase mb-1">Volumes despachados *</label>
+            <input type="number" id="dp-qtd" min="1" max="${item.qtd_recebida_cd || 1}" required value="${item.qtd_recebida_cd || 1}"
+                   class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          </div>
+          <div>
+            <label class="block text-[10px] text-purple-300 font-black uppercase mb-1">Nova carga</label>
+            <input type="text" id="dp-carga" placeholder="Opcional" oninput="forcarMaiuscula(this)"
+                   class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+          </div>
+        </div>
+
+        ${_blocoFotoReentrega('dp-fotos', 'dp-foto-preview', 'purple', 'comprova que a mercadoria saiu do CD')}
+
+        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+          <button type="button" onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded text-xs">Cancelar</button>
+          <button type="submit" class="bg-purple-700 hover:bg-purple-600 text-white font-bold px-5 py-2 rounded text-xs shadow-lg flex items-center gap-1.5"><span>🚚</span> Confirmar Despacho</button>
+        </div>
+      </form>
+    </div>`;
+  c.classList.remove('hidden');
+}
+
+function handleSalvarDespachoReentrega(e, id) {
+  e.preventDefault();
+  const res = db.despacharReentrega(id, {
+    placa: document.getElementById('dp-placa').value,
+    motorista: document.getElementById('dp-motorista').value,
+    carga_numero: document.getElementById('dp-carga').value,
+    qtd_despachada: document.getElementById('dp-qtd').value,
+    fotos: window._fotosReentrega || []
+  });
+  if (!res.success) { alert('⚠️ ' + res.message); return; }
+  window._fotosReentrega = [];
+  closeModal();
+  showToast('🚚 Despacho registrado.', 'success');
+  renderApp();
+}
+
+// --- CANCELAMENTO → chama a tela de Devolução SAC ---------------------------
+function abrirModalCancelarReentrega(id) {
+  const item = db.getReentregas().find(x => x.id == id);
+  if (!item) return;
+  const c = document.getElementById('modal-container');
+  if (!c) return;
+
+  c.innerHTML = `
+    <div class="bg-slate-900 border border-red-600/70 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
+      ${_cabecalhoModalReentrega(item, 'Cancelar Reentrega', '🚫', 'red')}
+      <div class="bg-amber-950/60 border border-amber-600 rounded-lg p-2.5 text-[11px] text-amber-200 font-semibold">
+        A mercadoria não vai mais ao cliente, então precisa virar <strong>Devolução SAC</strong>.
+        Ao confirmar, a tela de abertura de devolução abre já preenchida com os dados desta carga —
+        você completa cliente, nota e itens.
+      </div>
+      <form onsubmit="handleCancelarReentrega(event, ${item.id})" class="space-y-3 text-xs">
+        <div>
+          <label class="block text-[10px] text-red-300 font-black uppercase mb-1">Motivo do cancelamento *</label>
+          <textarea id="cn-motivo" rows="3" required placeholder="Por que a reentrega não vai acontecer?"
+                    class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs"></textarea>
+        </div>
+        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+          <button type="button" onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded text-xs">Voltar</button>
+          <button type="submit" class="bg-red-700 hover:bg-red-600 text-white font-bold px-5 py-2 rounded text-xs shadow-lg flex items-center gap-1.5"><span>🚫</span> Cancelar e abrir Devolução</button>
+        </div>
+      </form>
+    </div>`;
+  c.classList.remove('hidden');
+}
+
+function handleCancelarReentrega(e, id) {
+  e.preventDefault();
+  const item = db.getReentregas().find(x => x.id == id);
+  const res = db.cancelarReentrega(id, { motivo: document.getElementById('cn-motivo').value });
+  if (!res.success) { alert('⚠️ ' + res.message); return; }
+  closeModal();
+
+  // A devolução NÃO é criada aqui. Ela pede cliente, nota fiscal e itens, que
+  // o CD não tem na mão no momento do cancelamento — uma devolução gerada pela
+  // metade entraria no fluxo do SAC como pendência incompleta. Em vez disso a
+  // tela abre preenchida no que dá para preencher, e o agente completa.
+  window._prefillDevolucaoReentrega = {
+    reentrega_id: id,
+    carga_numero: item.carga_numero,
+    rota_nome: item.rota_nome,
+    placa: item.despacho_placa || item.placa,
+    volumes: (item.qtd_recebida_cd !== null && item.qtd_recebida_cd !== undefined) ? item.qtd_recebida_cd : item.entregas_reentrega,
+    motivo: document.getElementById('cn-motivo') ? '' : '',
+    motivo_cancelamento: res.reentrega.motivo_cancelamento,
+    fotos: Array.isArray(item.fotos_recebimento) ? item.fotos_recebimento : []
+  };
+  switchTab('sac_abertura');
+  showToast('🚫 Reentrega cancelada. Complete a devolução.', 'success');
+}
+
+// Preenche a tela de abertura de devolução com o que veio da reentrega.
+// Roda depois do render, por isso o setTimeout: switchTab desenha a tela de
+// forma síncrona, mas os <select> de rota/motorista são populados no mesmo
+// ciclo e precisam existir antes de receberem valor.
+function aplicarPrefillDevolucaoDeReentrega() {
+  const pre = window._prefillDevolucaoReentrega;
+  if (!pre) return;
+
+  // O prefill NAO e consumido aqui, de proposito. Ele fica guardado ate o
+  // usuario sair da tela (ver renderApp), e e reaplicado a cada render.
+  //
+  // Motivo: os valores vivem so no DOM, e o app redesenha a tela inteira em
+  // varias situacoes - sendo a mais traicoeira a sincronizacao automatica de
+  // 30 em 30 segundos. Na primeira versao disto, consumir o prefill de cara
+  // fazia os campos aparecerem preenchidos e, ate meio minuto depois,
+  // esvaziarem sozinhos enquanto o agente ainda estava digitando o resto.
+  // Reaplicar e inofensivo: escrever o mesmo valor no mesmo campo.
+  setTimeout(() => {
+    const set = (elId, valor) => { const el = document.getElementById(elId); if (el && valor) el.value = valor; };
+    set('sac-carga-numero', pre.carga_numero);
+    const det = document.getElementById('sac-detalhamento');
+    if (det) {
+      det.value = `ORIGEM: REENTREGA #${pre.reentrega_id} CANCELADA (CARGA ${pre.carga_numero}, ROTA ${pre.rota_nome}, ${pre.volumes} VOLUME(S)). `
+                + `MOTIVO DO CANCELAMENTO: ${String(pre.motivo_cancelamento || '').toUpperCase()}`;
+    }
+    // As fotos do recebimento no CD acompanham: são a prova do estado em que a
+    // mercadoria voltou, e refotografar no SAC seria refazer trabalho.
+    if (Array.isArray(pre.fotos) && pre.fotos.length && typeof uploadedFotosBase64 !== 'undefined') {
+      uploadedFotosBase64 = pre.fotos.slice();
+      const galeria = document.getElementById('foto-preview-container');
+      if (galeria) {
+        galeria.innerHTML = '<div class="font-bold text-slate-400 text-[10px] w-full mb-1">Fotos herdadas do recebimento no CD (' + pre.fotos.length + '):</div>'
+          + '<div class="flex gap-2 flex-wrap">' + pre.fotos.map(f => '<img src="' + f + '" class="w-20 h-20 object-cover rounded-lg border border-slate-700 shadow">').join('') + '</div>';
+        galeria.classList.remove('hidden');
+      }
+    }
+    // O banner leva id para nao entrar duas vezes quando o render se repete.
+    const aviso = document.getElementById('main-content');
+    if (aviso && !document.getElementById('banner-origem-reentrega')) {
+      const banner = document.createElement('div');
+      banner.id = 'banner-origem-reentrega';
+      banner.className = 'bg-amber-950/60 border border-amber-600 rounded-xl p-3 text-xs text-amber-200 font-semibold mb-4';
+      banner.innerHTML = `🚫 Esta devolução veio do cancelamento da <strong>reentrega #${pre.reentrega_id}</strong>. Complete cliente, nota fiscal e itens.`;
+      aviso.insertBefore(banner, aviso.firstChild);
+    }
+  }, 60);
+}
+
+// --- Linha do tempo da custódia ---------------------------------------------
+function abrirDetalheCustodiaReentrega(id) {
+  const r = db.getReentregas().find(x => x.id == id);
+  if (!r) return;
+  const c = document.getElementById('modal-container');
+  if (!c) return;
+  const fmt = v => formatarDataHora(v);
+  const fotos = arr => (Array.isArray(arr) && arr.length)
+    ? '<div class="flex gap-1.5 flex-wrap mt-1.5">' + arr.map(f => `<img src="${f}" onclick="window.open('${f}')" class="w-14 h-14 object-cover rounded border border-slate-700 cursor-pointer">`).join('') + '</div>'
+    : '<div class="text-[10px] text-slate-500 mt-1">sem foto</div>';
+
+  const etapa = (icone, titulo, cor, ativo, corpo) => `
+    <div class="flex gap-2.5">
+      <div class="flex flex-col items-center">
+        <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs ${ativo ? 'bg-' + cor + '-800 text-white' : 'bg-slate-800 text-slate-600'}">${icone}</div>
+        <div class="w-px flex-1 bg-slate-800"></div>
+      </div>
+      <div class="pb-4 flex-1">
+        <div class="text-[11px] font-black uppercase ${ativo ? 'text-' + cor + '-300' : 'text-slate-600'}">${titulo}</div>
+        ${ativo ? corpo : '<div class="text-[10px] text-slate-600">não ocorreu</div>'}
+      </div>
+    </div>`;
+
+  c.innerHTML = `
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4 max-h-[90vh] overflow-y-auto">
+      ${_cabecalhoModalReentrega(r, 'Custódia da Reentrega', '🕓', 'slate')}
+      <div class="pt-1">
+        ${etapa('⏳', 'Registrada na rota', 'amber', true,
+          `<div class="text-[11px] text-slate-300">Por ${r.criado_por || '—'} em ${fmt(r.criado_em)}</div>
+           <div class="text-[11px] text-slate-400">Motivo: ${r.motivo || '—'}</div>`)}
+        ${etapa('📦', 'Recebida no CD', 'blue', !!r.recebido_cd_em,
+          `<div class="text-[11px] text-slate-300">Por ${r.recebido_cd_por || '—'} em ${fmt(r.recebido_cd_em)}</div>
+           <div class="text-[11px] text-slate-400">${r.qtd_recebida_cd} volume(s) · ${String(r.condicao_recebimento || '').replace('_', ' ')}${r.local_armazenagem ? ' · ' + r.local_armazenagem : ''}</div>
+           ${r.observacao_recebimento ? `<div class="text-[11px] text-amber-300 mt-0.5">⚠️ ${r.observacao_recebimento}</div>` : ''}
+           ${fotos(r.fotos_recebimento)}`)}
+        ${etapa('🚚', 'Despachada', 'purple', !!r.despachado_em,
+          `<div class="text-[11px] text-slate-300">Por ${r.despachado_por || '—'} em ${fmt(r.despachado_em)}</div>
+           <div class="text-[11px] text-slate-400">${r.qtd_despachada} volume(s) · ${r.despacho_placa || '—'} · ${r.novo_motorista || '—'}</div>
+           ${fotos(r.fotos_despacho)}`)}
+        ${r.cancelada_em
+          ? etapa('🚫', 'Cancelada', 'red', true,
+              `<div class="text-[11px] text-slate-300">Por ${r.cancelada_por || '—'} em ${fmt(r.cancelada_em)}</div>
+               <div class="text-[11px] text-red-300">${r.motivo_cancelamento || '—'}</div>
+               ${r.devolucao_gerada_id ? `<div class="text-[11px] text-slate-400">Devolução gerada: #${r.devolucao_gerada_id}</div>` : ''}`)
+          : etapa('✅', 'Entregue ao cliente', 'emerald', !!r.realizada_em,
+              `<div class="text-[11px] text-slate-300">Em ${fmt(r.realizada_em)}</div>`)}
+      </div>
+      <div class="flex justify-end pt-2 border-t border-slate-800">
+        <button onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded text-xs">Fechar</button>
+      </div>
+    </div>`;
+  c.classList.remove('hidden');
+}
+
 // BAIXA RÁPIDA DE REENTREGA
 function baixarReentregaRapida(id) {
   const item = db.getReentregas().find(x => x.id == id);
@@ -10929,7 +11450,7 @@ function baixarReentregaRapida(id) {
   const container = document.getElementById('modal-container');
   if (!container) {
     if (confirm(`Confirmar baixa da Reentrega da Carga ${item.carga_numero} (${item.rota_nome}) como REALIZADA?`)) {
-      db.updateReentrega(id, { status: 'REALIZADA' });
+      db.concluirReentrega(id);
       alert('✅ Reentrega baixada com sucesso!');
       renderApp();
     }
@@ -10975,13 +11496,12 @@ function baixarReentregaRapida(id) {
 function handleSalvarBaixaReentrega(e, id) {
   e.preventDefault();
   const novoMot = document.getElementById('bx-re-novo-motorista')?.value;
-  const updates = {
-    status: 'REALIZADA'
-  };
   if (novoMot && novoMot.trim() !== '') {
-    updates.novo_motorista = novoMot.trim().toUpperCase();
+    db.updateReentrega(id, { novo_motorista: novoMot.trim().toUpperCase() });
   }
-  db.updateReentrega(id, updates);
+  // concluirReentrega em vez de updateReentrega direto: é ele que carimba
+  // realizada_em, sem o qual não dá para medir o ciclo da reentrega.
+  db.concluirReentrega(id);
   closeModal();
   alert('✅ Reentrega baixada e marcada como REALIZADA!');
   renderApp();
@@ -11087,7 +11607,7 @@ function renderViagensOcorrenciasSubTab() {
           <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Data *</label>
-              <input type="date" id="ocv-data" required value="${new Date().toISOString().split('T')[0]}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+              <input type="date" id="ocv-data" required value="${hojeIsoBrasilia()}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
             </div>
             <div>
               <div class="flex items-center justify-between mb-1">
@@ -12221,7 +12741,7 @@ function renderViagensTrocaVeiculosSubTab() {
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Data da Troca *</label>
-              <input type="date" id="tr-data" required value="${new Date().toISOString().split('T')[0]}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
+              <input type="date" id="tr-data" required value="${hojeIsoBrasilia()}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
             </div>
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Veículo Escalado (Placa) *</label>
@@ -12481,15 +13001,15 @@ function renderViagensReentregasSubTab() {
 
   // Contagens Globais
   const totalReentregasGeral = todasReentregas.length;
-  const pendentesGeralCount = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO').length;
-  const realizadasGeralCount = todasReentregas.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO').length;
+  const pendentesGeralCount = todasReentregas.filter(reentregaEmAberto).length;
+  const realizadasGeralCount = todasReentregas.filter(reentregaConcluida).length;
 
   // 1. Filtragem por Aba
   let listaPorAba = todasReentregas;
   if (window._reActiveAba === 'pendentes') {
-    listaPorAba = todasReentregas.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
+    listaPorAba = todasReentregas.filter(reentregaEmAberto);
   } else if (window._reActiveAba === 'realizadas') {
-    listaPorAba = todasReentregas.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO');
+    listaPorAba = todasReentregas.filter(reentregaConcluida);
   }
 
   // 2. Filtros Combináveis
@@ -12551,7 +13071,7 @@ function renderViagensReentregasSubTab() {
 
     // Filtro Status (se selecionado na barra de filtros)
     if (fStatus && fStatus !== 'TODOS') {
-      const isPend = r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO';
+      const isPend = reentregaEmAberto(r);
       if (fStatus === 'PENDENTE' && !isPend) return false;
       if (fStatus === 'REALIZADA' && isPend) return false;
     }
@@ -12574,8 +13094,8 @@ function renderViagensReentregasSubTab() {
 
   // Cálculos de Indicadores (KPIs) Reativos - recalculam dinamicamente com base nos filtros e datas
   const totalReentregas = listaFiltrada.length;
-  const totalPendentes = listaFiltrada.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO').length;
-  const totalRealizadas = listaFiltrada.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO').length;
+  const totalPendentes = listaFiltrada.filter(reentregaEmAberto).length;
+  const totalRealizadas = listaFiltrada.filter(reentregaConcluida).length;
   const totalQtdReentregas = listaFiltrada.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
   const totalSaiu = listaFiltrada.reduce((acc, r) => acc + (parseInt(r.entregas_saiu) || 0), 0);
   const totalFeitas = listaFiltrada.reduce((acc, r) => acc + (parseInt(r.entregas_feitas) || 0), 0);
@@ -12870,10 +13390,7 @@ function renderViagensReentregasSubTab() {
                   </td>
                 </tr>
               ` : listaFiltrada.map(r => {
-                const isPendente = r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO';
-                const statusBadge = isPendente
-                  ? `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-950/90 text-amber-300 border border-amber-500/80 shadow"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> PENDENTE</span>`
-                  : `<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 shadow"><span>✅</span> REALIZADA</span>`;
+                const statusBadge = badgeStatusReentrega(r.status);
 
                 return `
                   <tr class="hover:bg-slate-800/60 transition">
@@ -12902,11 +13419,7 @@ function renderViagensReentregasSubTab() {
                     <td class="p-2.5 border-r border-slate-800 text-center whitespace-nowrap">${statusBadge}</td>
                     <td class="p-2.5 text-center whitespace-nowrap">
                       <div class="flex items-center justify-center gap-1.5">
-                        ${isPendente ? `
-                          <button onclick="baixarReentregaRapida(${r.id})" class="bg-emerald-700 hover:bg-emerald-600 text-white px-2 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 shadow" title="Baixar e Concluir Reentrega">
-                            <span>✅</span> Baixar
-                          </button>
-                        ` : ''}
+                        ${botoesEtapaReentrega(r)}
                         <button onclick="abrirModalEditarReentrega(${r.id})" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-sm hover:bg-slate-800 rounded transition" title="Editar Reentrega">✏️</button>
                         <button onclick="excluirReentregaComConfirmacao(${r.id})" class="text-red-400 hover:text-red-300 p-1 font-bold text-sm hover:bg-slate-800 rounded transition" title="Excluir Reentrega (Requer Senha Admin)">🗑️</button>
                       </div>
@@ -12937,7 +13450,7 @@ function emitirRelatorioReentregasA4(filtro = null) {
     if (fStatus === 'PENDENTE') {
       lista = lista.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO');
     } else if (fStatus === 'REALIZADA') {
-      lista = lista.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO');
+      lista = lista.filter(reentregaConcluida);
     }
   }
 
@@ -12972,14 +13485,14 @@ function emitirRelatorioReentregasA4(filtro = null) {
   const totFeitas = lista.reduce((acc, r) => acc + (parseInt(r.entregas_feitas) || 0), 0);
   const totReentreg = lista.reduce((acc, r) => acc + (parseInt(r.entregas_reentrega) || 0), 0);
   const totPendentes = lista.filter(r => r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO').length;
-  const totRealizadas = lista.filter(r => r.status === 'REALIZADA' || r.status === 'CONCLUÍDO' || r.status === 'FINALIZADO').length;
+  const totRealizadas = lista.filter(reentregaConcluida).length;
 
   const linhasHtml = lista.length === 0
     ? `<tr><td colspan="10" style="text-align:center;padding:24px;color:#64748b;font-size:11px;font-style:italic;">Nenhum registro de reentrega encontrado para este período.</td></tr>`
     : lista.map((r, i) => {
         const rowBg = (i % 2 === 0) ? '#ffffff' : '#fcfbf7';
-        const isPendente = r.status === 'PENDENTE' || r.status === 'EM ANDAMENTO';
-        const statusText = isPendente ? 'PENDENTE' : 'REALIZADA';
+        const isPendente = reentregaEmAberto(r);
+        const statusText = (REENTREGA_ETAPAS[normalizarStatusReentrega(r.status)] || {}).rotulo || 'PENDENTE';
         const statusColor = isPendente ? '#9a3412' : '#166534';
         const statusBg = isPendente ? '#ffedd5' : '#dcfce7';
 
@@ -13911,7 +14424,7 @@ function handleManutencaoSubmit(e, id) {
     acao_mecanico: acao,
     retorno_manutencao_descricao: acao,
     retorno_manutencao_responsavel: db.currentUser ? db.currentUser.nome : 'MANUTENÇÃO',
-    retorno_manutencao_data: statusVeic === 'Em Rota' ? new Date().toISOString() : null,
+    retorno_manutencao_data: statusVeic === 'Em Rota' ? agoraIsoBrasilia() : null,
     pecas_trocadas: document.getElementById(`man-pecas-${id}`)?.value || '',
     custo_socorro: document.getElementById(`man-custo-${id}`)?.value || 0,
     guincho_acionado: document.getElementById(`man-guincho-${id}`)?.value || 'nao',
@@ -14062,7 +14575,7 @@ function confirmarLiberacaoVeiculo(id) {
   const pecas = pecasEl ? pecasEl.value.trim() : '';
   const custo = custoEl ? (parseFloat(custoEl.value) || 0) : 0;
   const guincho = guinchoEl ? guinchoEl.value : 'nao';
-  const nowIso = new Date().toISOString();
+  const nowIso = agoraIsoBrasilia();
 
   db.updateOcorrenciaRota(id, {
     status_chamado: 'finalizado',
@@ -14378,7 +14891,7 @@ function handleEditarRotaSubmit(e, id) {
     retorno_manutencao_descricao: retornoDesc,
     acao_mecanico: retornoDesc,
     retorno_manutencao_responsavel: retornoResp,
-    retorno_manutencao_data: isFinalizado ? new Date().toISOString() : null,
+    retorno_manutencao_data: isFinalizado ? agoraIsoBrasilia() : null,
     pecas_trocadas: pecas,
     custo_socorro: custo,
     guincho_acionado: guincho,
@@ -15235,7 +15748,7 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
         <div class="grid grid-cols-3 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
-            <input type="date" id="md-oc2-data" value="${defaultData || new Date().toISOString().split('T')[0]}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <input type="date" id="md-oc2-data" value="${defaultData || hojeIsoBrasilia()}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor *</label>
@@ -15373,7 +15886,7 @@ function exportarOcorrenciasExcel() {
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Ocorrências Fechadas");
-    XLSX.writeFile(wb, `ocorrencias_fechadas_cd_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.writeFile(wb, `ocorrencias_fechadas_cd_${hojeIsoBrasilia()}.xlsx`);
   } else {
     let csv = 'Data;Turno;Titulo;Colaborador;Causa;Acao;Status\n';
     exportData.forEach(row => {
@@ -15382,7 +15895,7 @@ function exportarOcorrenciasExcel() {
     const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `ocorrencias_fechadas_cd_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `ocorrencias_fechadas_cd_${hojeIsoBrasilia()}.csv`;
     link.click();
   }
 }
@@ -15598,7 +16111,7 @@ function renderDisponibilidadeFrotaView() {
 // ─────────────────────────────────────────────────────────────────────────────
 function renderPainelReterVeiculo() {
   const veiculos = (db.data.veiculos || []).filter(v => v.situacao !== 'Inativo');
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeIsoBrasilia();
 
   return `
     <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 max-w-2xl">
@@ -15799,7 +16312,7 @@ function renderPainelRetidos(retencoes) {
         <h3 class="text-sm font-black text-emerald-400 mb-4 flex items-center gap-2">✅ Liberar Veículo</h3>
         <p class="text-xs text-slate-400 mb-3">Informe a data de liberação do veículo:</p>
         <input type="date" id="modal-data-liberacao"
-          value="${new Date().toISOString().split('T')[0]}"
+          value="${hojeIsoBrasilia()}"
           class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 transition mb-4" />
         <label class="block text-xs font-bold text-slate-300 mb-1">Ação de Manutenção Realizada <span class="text-amber-400">*</span></label>
         <textarea id="modal-acao-liberacao-frota" required rows="3"
@@ -16091,7 +16604,7 @@ function abrirModalEdicaoFrota(id) {
   if (old) old.remove();
 
   const ehLiberado = r.status === 'LIBERADO';
-  const dataHoje   = new Date().toISOString().split('T')[0];
+  const dataHoje   = hojeIsoBrasilia();
 
   const modalHtml = `
     <div id="modal-edicao-frota"
@@ -16382,7 +16895,7 @@ function emitirRelatorioFrota(tipo) {
     : lista.map((r, i) => {
         const rowBg = (i % 2 === 0) ? '#ffffff' : '#f8f9fa';
         const dLiberado = calcDias(r.data_parada, r.data_liberacao);
-        const dHoje = r.data_parada ? calcDias(r.data_parada, agora.toISOString().split('T')[0]) : null;
+        const dHoje = r.data_parada ? calcDias(r.data_parada, hojeIsoBrasilia()) : null;
 
         const badgeTipoOs = r.tipo_os ? `<span style="display:inline-block;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:bold;text-transform:uppercase;margin-left:4px;border:1px solid #cbd5e1;background:#f1f5f9;color:#334155;">${r.tipo_os}</span>` : '';
 
@@ -17467,7 +17980,7 @@ function emitirRelatorioChamadosRotaA4(filtro = null) {
 
 function renderResumoDiarioCdView() {
 
-  const fData = window._resumoFiltroData || new Date().toISOString().split('T')[0];
+  const fData = window._resumoFiltroData || hojeIsoBrasilia();
   const fTurno = window._resumoFiltroTurno || '2º TURNO - FRIO';
 
   const resumo = db.getResumoDiarioCD(fData, fTurno);
@@ -17995,7 +18508,7 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
 }
 
 function salvarResumoDiarioCdCurrent(showAlert = true) {
-  const fData = window._resumoFiltroData || new Date().toISOString().split('T')[0];
+  const fData = window._resumoFiltroData || hojeIsoBrasilia();
   const fTurno = window._resumoFiltroTurno || '2º TURNO - FRIO';
 
   const resumo = db.getResumoDiarioCD(fData, fTurno);
@@ -18831,9 +19344,7 @@ function gerarResumoDiarioPdf(data, turno) {
 
 // ===== IMPRESSOR EXECUTIVO DO BOLETIM GERENCIAL MASTER (D-1 FECHADO) =====
 function imprimirBoletimGerencialExecutivo() {
-  const ontemDate = new Date();
-  ontemDate.setDate(ontemDate.getDate() - 1);
-  const dMenosUmStr = ontemDate.toISOString().split('T')[0];
+  const dMenosUmStr = somaDiasIso(hojeIsoBrasilia(), -1);
 
   const fDe = window._boletimFiltroDe !== undefined && window._boletimFiltroDe !== '' ? window._boletimFiltroDe : dMenosUmStr;
   const fAte = window._boletimFiltroAte !== undefined && window._boletimFiltroAte !== '' ? window._boletimFiltroAte : dMenosUmStr;
@@ -19887,9 +20398,7 @@ function toggleSelectAllCsvCols(selectAll) {
 
 // ===== MÓDULO: BOLETIM GERENCIAL MASTER LOGÍSTICO & CENTRAL DE RELATÓRIOS =====
 function renderBoletimGerencialView() {
-  const ontemDate = new Date();
-  ontemDate.setDate(ontemDate.getDate() - 1);
-  const dMenosUmStr = ontemDate.toISOString().split('T')[0];
+  const dMenosUmStr = somaDiasIso(hojeIsoBrasilia(), -1);
 
   const fDe = window._boletimFiltroDe !== undefined && window._boletimFiltroDe !== '' ? window._boletimFiltroDe : dMenosUmStr;
   const fAte = window._boletimFiltroAte !== undefined && window._boletimFiltroAte !== '' ? window._boletimFiltroAte : dMenosUmStr;
@@ -20898,7 +21407,7 @@ function handleExportCsvSubmit(e) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `JR_SAC_Banco_Dados_${modulo}_${new Date().toISOString().slice(0,10)}.csv`);
+  link.setAttribute('download', `JR_SAC_Banco_Dados_${modulo}_${agoraIsoBrasilia().slice(0,10)}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -21079,7 +21588,7 @@ function openPdfFilterModal(pdfType) {
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="block text-xs font-bold text-slate-300 mb-1">Data da Operação:</label>
-          <input type="date" id="pdf-filter-de" value="${defDe || new Date().toISOString().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          <input type="date" id="pdf-filter-de" value="${defDe || agoraIsoBrasilia().slice(0,10)}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
         </div>
         <div>
           <label class="block text-xs font-bold text-slate-300 mb-1">Turno da Operação:</label>
@@ -21286,7 +21795,7 @@ function confirmarEGerarPdf(pdfType) {
   } else if (pdfType === 'chamados_rota_lote') {
     emitirRelatorioChamadosRotaA4({ data_de: fDe, data_ate: fAte, status: status || 'TODOS', veiculo, busca });
   } else if (pdfType === 'resumo_cd') {
-    gerarResumoDiarioPdf(fDe || new Date().toISOString().slice(0,10), turno);
+    gerarResumoDiarioPdf(fDe || agoraIsoBrasilia().slice(0,10), turno);
   } else if (pdfType === 'adiantamento_motorista') {
     if (devId) gerarAdiantamentoPdf(devId);
     else alert('Selecione uma ocorrência válida.');
@@ -22271,7 +22780,7 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Data da Ocorrência *</label>
-              <input type="date" id="disc-data" value="${options.parentData || new Date().toISOString().slice(0,10)}" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+              <input type="date" id="disc-data" value="${options.parentData || agoraIsoBrasilia().slice(0,10)}" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-xs font-bold">
             </div>
             <div class="sm:col-span-2">
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Gestor Emissor / Responsável *</label>
@@ -22330,7 +22839,7 @@ async function handleConfirmarEmissaoDisciplinar(e) {
   const secao = colabMatched ? colabMatched.secao : (document.getElementById('disc-secao')?.value || 'CARREGAMENTO CD');
 
   const diasSuspensao = parseInt(document.getElementById('disc-dias')?.value || '1', 10);
-  const dataOc = document.getElementById('disc-data')?.value || new Date().toISOString().slice(0,10);
+  const dataOc = document.getElementById('disc-data')?.value || agoraIsoBrasilia().slice(0,10);
   const gestor = (document.getElementById('disc-gestor')?.value || '').trim().toUpperCase();
   const motivo = (document.getElementById('disc-motivo')?.value || '').trim();
 
@@ -22367,7 +22876,7 @@ async function handleConfirmarEmissaoDisciplinar(e) {
       item.medida_disciplinar = tipo;
       item.alinea_clt = alineasSelecionadasKeys.join(', ');
       if (tipo === 'SUSPENSAO') item.dias_suspensao = diasSuspensao;
-      item.disciplinar_gerada_em = new Date().toISOString();
+      item.disciplinar_gerada_em = agoraIsoBrasilia();
       db.saveResumoDiarioCD(resumo);
     }
   }

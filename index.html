@@ -354,6 +354,25 @@
     }
 
     /* Header & Navbar (Preserve rich corporate dark green header with crisp high contrast) */
+
+    /* O MENU LATERAL MORA DENTRO DO <header>, e foi isso que apagou o menu no
+       modo claro (achado em 25/08/2026).
+
+       A regra de contraste do topo era `html.light header *`, com !important.
+       Ela pinta de BRANCO tudo que estiver dentro do <header> - e o
+       <div id="nav-menu">, que carrega o drawer #mobile-menu-dropdown, e
+       filho do <header>. O drawer tem fundo BRANCO no modo claro, entao os
+       rotulos dos itens ("Dashboard Executivo", "Devolucao SAC", ...)
+       ficavam branco no branco: sumiam da tela e sobravam so os emojis.
+
+       Os titulos de grupo continuavam aparecendo porque eles trazem a classe
+       .text-slate-500, cuja regra tem especificidade maior e ganhava do
+       `header *`. Foi essa diferenca - grupo visivel, item invisivel - que
+       apontou para o seletor universal.
+
+       Correcao: o branco forcado passa a valer so para a BARRA do topo
+       (#header-bar), que e o irmao do #nav-menu. Nao voltar a usar
+       `header *` aqui. */
     html.light header,
     html.light header.bg-emerald-950,
     html.light header.bg-slate-900 {
@@ -361,17 +380,18 @@
       border-color: #047857 !important;
       color: #ffffff !important;
     }
-    html.light header *,
-    html.light header .text-white,
-    html.light header .text-emerald-100 {
+    html.light #header-bar,
+    html.light #header-bar *,
+    html.light #header-bar .text-white,
+    html.light #header-bar .text-emerald-100 {
       color: #ffffff !important;
     }
-    html.light header .text-emerald-400,
-    html.light header .text-emerald-300,
-    html.light header .text-emerald-300\/70 {
+    html.light #header-bar .text-emerald-400,
+    html.light #header-bar .text-emerald-300,
+    html.light #header-bar .text-emerald-300\/70 {
       color: #6ee7b7 !important;
     }
-    html.light header #hamburger-btn {
+    html.light #header-bar #hamburger-btn {
       background-color: #047857 !important;
       border-color: #065f46 !important;
       color: #ffffff !important;
@@ -382,29 +402,69 @@
       color: #ffffff !important;
     }
 
-    /* Header Dropdown Menu & Notifications */
+    /* Menu lateral (drawer) - painel CLARO dentro do header escuro.
+       A cor de texto base fica declarada aqui de proposito: o <header> pai
+       forca color:#ffffff, e sem esta linha todo elemento do drawer que nao
+       traga uma classe .text-* herdaria branco. */
     html.light #mobile-menu-dropdown {
       background-color: #ffffff !important;
       border-color: #cbd5e1 !important;
+      color: #1e293b !important;
       box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15) !important;
     }
-    html.light #mobile-menu-dropdown .bg-slate-950 {
-      background-color: #f8fafc !important;
+    html.light #mobile-menu-dropdown .bg-slate-950,
+    html.light #mobile-menu-dropdown .bg-slate-800\/60 {
+      background-color: #f1f5f9 !important;
       border-color: #e2e8f0 !important;
     }
-    html.light #mobile-menu-dropdown .text-white {
-      color: #0f172a !important;
+    html.light #mobile-menu-dropdown .border-slate-800,
+    html.light #mobile-menu-dropdown .border-slate-700 {
+      border-color: #cbd5e1 !important;
     }
+    html.light #mobile-menu-dropdown .text-white,
+    html.light #mobile-menu-dropdown .text-slate-100,
+    html.light #mobile-menu-dropdown .text-slate-200,
     html.light #mobile-menu-dropdown .text-slate-300 {
-      color: #334155 !important;
+      color: #1e293b !important;
     }
-    html.light #mobile-menu-dropdown .hover\:bg-slate-800:hover {
+    /* Titulos de grupo, setinhas e legendas: cinza-ardosia escuro o bastante
+       para passar em AA sobre o branco (#475569 = 7.4:1, #64748b = 4.8:1). */
+    html.light #mobile-menu-dropdown .text-slate-400,
+    html.light #mobile-menu-dropdown .text-slate-500 {
+      color: #475569 !important;
+    }
+    /* A setinha ▶ dos grupos: #64748b sobre o cinza do grupo aberto (#f1f5f9)
+       dava 4.34:1, logo abaixo do minimo. #475569 leva a 6.4:1. */
+    html.light #mobile-menu-dropdown .text-slate-600 {
+      color: #475569 !important;
+    }
+    html.light #mobile-menu-dropdown .text-emerald-400,
+    html.light #mobile-menu-dropdown .text-emerald-300 {
+      color: #047857 !important;
+    }
+    html.light #mobile-menu-dropdown .text-red-400 {
+      color: #b91c1c !important;
+    }
+    html.light #mobile-menu-dropdown .hover\:bg-slate-800:hover,
+    html.light #mobile-menu-dropdown .hover\:bg-slate-800\/60:hover {
       background-color: #f1f5f9 !important;
       color: #0f172a !important;
     }
-    html.light #mobile-menu-dropdown .bg-emerald-800 {
-      background-color: #dcfce7 !important;
+    html.light #mobile-menu-dropdown .hover\:text-white:hover {
+      color: #0f172a !important;
+    }
+    /* Item ATIVO: verde escuro sobre verde bem claro (11.5:1). A regra vem
+       depois das de texto de proposito - o botao ativo traz .text-white e
+       .bg-emerald-800 juntos, e quem tem de mandar na cor da letra e o
+       fundo verde. */
+    html.light #mobile-menu-dropdown .bg-emerald-800,
+    html.light #mobile-menu-dropdown .bg-emerald-800 * {
+      background-color: transparent;
       color: #14532d !important;
+    }
+    html.light #mobile-menu-dropdown .bg-emerald-800 {
+      background-color: #bbf7d0 !important;
+      border: 1px solid #4ade80 !important;
     }
 
     /* Footers & Modals */
@@ -423,6 +483,240 @@
     html.light #modal-container .bg-slate-950 {
       background-color: #f8fafc !important;
       border-color: #e2e8f0 !important;
+    }
+
+    /* ==========================================
+       MODO CLARO - CORREÇÕES DE CONTRASTE (25/08/2026)
+
+       Tudo abaixo veio de uma varredura feita com a tela ja renderizada:
+       para cada elemento de texto, cor final x cor de fundo final,
+       comparadas com o minimo da WCAG AA (4.5:1, ou 3:1 para texto grande).
+       O que esta aqui sao os casos que REPROVARAM.
+       ========================================== */
+
+    /* 1. FUNDOS TRANSLUCIDOS ESCUROS (bg-*-900/60, bg-*-950/30, ...)
+
+       O bloco "Callout & Banner" mais acima lista as opacidades uma a uma -
+       e por isso deixava passar tudo que nao estivesse na lista
+       (bg-red-900/80, bg-emerald-900/80, bg-orange-900/40 e mais uma duzia).
+       O sintoma era sempre o mesmo: o fundo continuava escuro, a letra
+       virava escura pela regra de texto, e o selo sumia.
+
+       Aqui o casamento e por PREFIXO ("bg-red-950/"), o que pega qualquer
+       opacidade, inclusive as que ainda nao existem. Isso tambem casa com as
+       variantes hover: (hover:bg-red-900/80), mas neste codigo elas sempre
+       acompanham uma classe-base da mesma familia - mesmo resultado. */
+    html.light [class*="bg-emerald-950/"],
+    html.light [class*="bg-emerald-900/"] {
+      background-color: #dcfce7 !important;
+      border-color: #86efac !important;
+      color: #14532d !important;
+    }
+    html.light [class*="bg-amber-950/"],
+    html.light [class*="bg-amber-900/"] {
+      background-color: #fef3c7 !important;
+      border-color: #fde047 !important;
+      color: #78350f !important;
+    }
+    html.light [class*="bg-red-950/"],
+    html.light [class*="bg-red-900/"] {
+      background-color: #fee2e2 !important;
+      border-color: #fca5a5 !important;
+      color: #7f1d1d !important;
+    }
+    html.light [class*="bg-purple-950/"],
+    html.light [class*="bg-purple-900/"],
+    html.light [class*="bg-violet-950/"],
+    html.light [class*="bg-violet-900/"] {
+      background-color: #f3e8ff !important;
+      border-color: #d8b4fe !important;
+      color: #581c87 !important;
+    }
+    html.light [class*="bg-blue-950/"],
+    html.light [class*="bg-blue-900/"],
+    html.light [class*="bg-sky-950/"],
+    html.light [class*="bg-sky-900/"],
+    html.light [class*="bg-cyan-950/"],
+    html.light [class*="bg-cyan-900/"] {
+      background-color: #dbeafe !important;
+      border-color: #93c5fd !important;
+      color: #1e3a8a !important;
+    }
+    /* Laranja nao aparecia em nenhuma lista - o cartao do relogio "⏳"
+       ficava laranja escuro sobre laranja escuro. */
+    html.light .bg-orange-950,
+    html.light .bg-orange-900,
+    html.light [class*="bg-orange-950/"],
+    html.light [class*="bg-orange-900/"] {
+      background-color: #ffedd5 !important;
+      border-color: #fdba74 !important;
+      color: #7c2d12 !important;
+    }
+    html.light [class*="bg-slate-950/"],
+    html.light [class*="bg-slate-900/"] {
+      background-color: #f8fafc !important;
+      border-color: #e2e8f0 !important;
+    }
+    /* bg-slate-800/80 ficava de fora: a lista antiga so tinha /40, /50 e /60.
+       Na tela de Ocorrencias em Rota isso deixava cartoes cinza-chumbo com
+       icone escuro por cima. */
+    html.light [class*="bg-slate-800/"] {
+      background-color: #f1f5f9 !important;
+      border-color: #e2e8f0 !important;
+      color: #1e293b !important;
+    }
+
+    /* 1b. FAMÍLIAS DE COR DE TEXTO QUE FALTAVAM
+
+       O bloco de cores mais acima cobre emerald/amber/red/purple/blue/orange
+       nos tons 200-400. Faltavam o tom 100 e as familias cyan, sky, violet,
+       indigo, teal e yellow - poucas ocorrencias cada uma, mas o efeito era
+       o pior possivel: "📦 Nº DA CARGA" em text-cyan-400 sobre branco da
+       1.8:1, e o subtitulo em text-emerald-100 sobre cinza claro da 1.04:1.
+
+       Levantado com `grep -o 'text-[a-z]*-[1-4]00'` sobre js/app.js, para a
+       lista sair do que o codigo usa de verdade e nao de suposicao. */
+    html.light .text-emerald-100 { color: #047857 !important; }
+    html.light .text-amber-100,
+    html.light .text-yellow-400,
+    html.light .text-yellow-300,
+    html.light .text-yellow-200 { color: #b45309 !important; }
+    html.light .text-red-100,
+    html.light .text-rose-400,
+    html.light .text-rose-300 { color: #b91c1c !important; }
+    html.light .text-purple-200,
+    html.light .text-purple-100,
+    html.light .text-violet-400,
+    html.light .text-violet-300,
+    html.light .text-violet-200,
+    html.light .text-fuchsia-400,
+    html.light .text-fuchsia-300 { color: #6b21a8 !important; }
+    html.light .text-blue-200,
+    html.light .text-blue-100,
+    html.light .text-indigo-400,
+    html.light .text-indigo-300,
+    html.light .text-indigo-200 { color: #1d4ed8 !important; }
+    html.light .text-sky-400,
+    html.light .text-sky-300,
+    html.light .text-sky-200 { color: #0369a1 !important; }
+    html.light .text-cyan-400,
+    html.light .text-cyan-300,
+    html.light .text-cyan-200,
+    html.light .text-teal-400,
+    html.light .text-teal-300 { color: #0e7490 !important; }
+    html.light .text-orange-200,
+    html.light .text-orange-100 { color: #c2410c !important; }
+
+    /* 2. CORES DE TEXTO COM OPACIDADE (text-red-300/90 e afins)
+
+       As regras de texto mais acima so citam a cor "cheia". As sete
+       variantes com barra que existem no app caiam fora e ficavam com a cor
+       clara do modo escuro. */
+    html.light .text-emerald-400\/80,
+    html.light .text-emerald-300\/90,
+    html.light .text-emerald-300\/80 { color: #047857 !important; }
+    html.light .text-amber-400\/80,
+    html.light .text-amber-300\/80 { color: #b45309 !important; }
+    html.light .text-red-400\/80,
+    html.light .text-red-300\/90 { color: #b91c1c !important; }
+
+    /* 3. BOTÕES E SELOS DE FUNDO SÓLIDO SATURADO
+
+       O modo claro NAO altera esses fundos (bg-emerald-600, bg-red-600,
+       bg-blue-700, ...), mas a regra `html.light .text-white` escurecia a
+       letra. Resultado: cinza-chumbo sobre vermelho vivo - 3.7:1, reprovado.
+
+       Como o fundo continua igual ao do modo escuro, a letra tambem tem de
+       continuar: branca. */
+    html.light .bg-emerald-500, html.light .bg-emerald-500 .text-white,
+    html.light .bg-emerald-600, html.light .bg-emerald-600 .text-white,
+    html.light .bg-emerald-700, html.light .bg-emerald-700 .text-white,
+    html.light .bg-emerald-800, html.light .bg-emerald-800 .text-white,
+    html.light .bg-red-500, html.light .bg-red-500 .text-white,
+    html.light .bg-red-600, html.light .bg-red-600 .text-white,
+    html.light .bg-red-700, html.light .bg-red-700 .text-white,
+    html.light .bg-red-800, html.light .bg-red-800 .text-white,
+    html.light .bg-blue-500, html.light .bg-blue-500 .text-white,
+    html.light .bg-blue-600, html.light .bg-blue-600 .text-white,
+    html.light .bg-blue-700, html.light .bg-blue-700 .text-white,
+    html.light .bg-blue-800, html.light .bg-blue-800 .text-white,
+    html.light .bg-purple-500, html.light .bg-purple-500 .text-white,
+    html.light .bg-purple-600, html.light .bg-purple-600 .text-white,
+    html.light .bg-purple-700, html.light .bg-purple-700 .text-white,
+    html.light .bg-purple-800, html.light .bg-purple-800 .text-white,
+    html.light .bg-violet-500, html.light .bg-violet-500 .text-white,
+    html.light .bg-violet-600, html.light .bg-violet-600 .text-white,
+    html.light .bg-violet-700, html.light .bg-violet-700 .text-white,
+    html.light .bg-violet-800, html.light .bg-violet-800 .text-white,
+    html.light .bg-sky-500, html.light .bg-sky-500 .text-white,
+    html.light .bg-sky-600, html.light .bg-sky-600 .text-white,
+    html.light .bg-sky-700, html.light .bg-sky-700 .text-white,
+    html.light .bg-cyan-600, html.light .bg-cyan-600 .text-white,
+    html.light .bg-cyan-700, html.light .bg-cyan-700 .text-white,
+    html.light .bg-amber-700, html.light .bg-amber-700 .text-white,
+    html.light .bg-amber-800, html.light .bg-amber-800 .text-white {
+      color: #ffffff !important;
+    }
+
+    /* 4. HOVER QUE APAGAVA O BOTÃO NO MODO CLARO
+
+       `hover:bg-slate-700` e `hover:bg-slate-800` (68 usos, quase todos em
+       botao de barra de acao) pintavam o fundo de cinza-chumbo enquanto a
+       letra ja estava escura - o botao sumia justamente ao passar o mouse. */
+    html.light .hover\:bg-slate-700:hover,
+    html.light .hover\:bg-slate-800:hover {
+      background-color: #e2e8f0 !important;
+      color: #0f172a !important;
+    }
+
+    /* 5. EXCEÇÕES DA BARRA DO TOPO
+
+       A barra fica verde-escura tambem no claro, e por isso `#header-bar *`
+       pinta tudo de branco. Estes dois botoes tem fundo proprio e precisam
+       escapar da regra - por isso vem depois e com especificidade maior
+       (dois ids). */
+    html.light #header-bar #btn-pwa-install,
+    html.light #header-bar #btn-pwa-install * {
+      color: #451a03 !important;
+    }
+    html.light #header-bar #user-info-area .bg-red-950 {
+      background-color: rgba(127, 29, 29, 0.55) !important;
+      border-color: #f87171 !important;
+      color: #fecaca !important;
+    }
+    /* A pastilha do usuario (bg-emerald-950/60) tem de continuar ESCURA: ela
+       fica sobre a barra verde-escura, onde a letra e branca. A regra de
+       fundos translucidos do item 1 acima a clareava, e o nome do usuario
+       virava branco no verde claro - 1.1:1. Dois ids garantem a precedencia. */
+    html.light #header-bar #user-info-area [class*="bg-emerald-950/"],
+    html.light #header-bar #user-info-area [class*="bg-emerald-900/"] {
+      background-color: rgba(6, 78, 59, 0.65) !important;
+      border-color: rgba(6, 95, 70, 0.8) !important;
+      color: #ffffff !important;
+    }
+
+    /* 6. BOTÃO VERDE DE AÇÃO PRIMÁRIA
+
+       emerald-600 com letra branca da 3.77:1 - abaixo do minimo AA, e isso
+       vale para os dois temas. No claro da para corrigir de graca: o fundo
+       da pagina e claro, entao o botao pode escurecer um tom sem perder
+       destaque, e sobe para 5.0:1. O hover escurece mais - no modo claro,
+       escurecer e a leitura natural de "estou sobre o botao". */
+    html.light .bg-emerald-600,
+    html.light .bg-emerald-500 {
+      background-color: #047857 !important;
+    }
+    html.light .hover\:bg-emerald-500:hover,
+    html.light .hover\:bg-emerald-600:hover {
+      background-color: #065f46 !important;
+    }
+    /* Mesma historia no vermelho: bg-red-500 + branco da 3.76:1 (selo de
+       contagem na Disponibilidade de Frota). red-700 leva para 6.4:1. */
+    html.light .bg-red-500 {
+      background-color: #b91c1c !important;
+    }
+    html.light .hover\:bg-red-500:hover {
+      background-color: #991b1b !important;
     }
 
     /* ==========================================
@@ -496,7 +790,7 @@
 <body class="min-h-screen flex flex-col bg-slate-950 text-slate-100 antialiased selection:bg-emerald-500 selection:text-white">
 
   <header class="bg-emerald-950 border-b border-emerald-800/80 sticky top-0 z-50 shadow-xl w-full">
-    <div class="max-w-7xl mx-auto px-2.5 sm:px-4 py-2 sm:py-2.5 flex items-center justify-between gap-2 relative w-full">
+    <div id="header-bar" class="max-w-7xl mx-auto px-2.5 sm:px-4 py-2 sm:py-2.5 flex items-center justify-between gap-2 relative w-full">
       <div class="flex items-center gap-2 min-w-0 shrink">
         <button onclick="toggleMobileMenu()" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white p-1.5 sm:p-2 rounded-lg transition shrink-0" id="hamburger-btn" title="Menu de Navegação" aria-label="Abrir Menu">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>

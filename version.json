@@ -1,5 +1,13 @@
 {
-  "build": "sync-4.9.1",
+  "build": "sync-5.0.0",
   "publicado_em": "2026-08-25",
-  "resumo": "Correcao do menu agrupado: clicar na setinha de um departamento fechava o menu inteiro. O proprio re-render do menu destacava do DOM o botao clicado, e o listener global de 'clicar fora' passava a ver o clique como externo. Agora um alvo ja desconectado e ignorado por esse listener. Alcanca a setinha de grupo e o botao 'Ver todas as telas'."
+  "resumo": "CUSTODIA DA REENTREGA. Antes existiam dois estados (PENDENTE -> REALIZADA): o registro dizia que havia reentrega e quem ia levar, mas entre o motorista voltar com a mercadoria e ela ser entregue ninguem assinava por ela. Agora o caminho e PENDENTE -> RECEBIDO_CD -> DESPACHADO -> REALIZADA, com CANCELADA como saida. As duas etapas do CD exigem FOTO, e a exigencia esta no banco (CHECK), nao so na tela. A recepcao registra quantos volumes o CD contou contra quantos o motorista declarou, e cobra observacao quando os numeros divergem - e ai que a etapa se paga. Cancelamento abre a tela de Devolucao SAC ja preenchida. FUSO: toda data de calendario e todo carimbo de instante passam a sair de America/Sao_Paulo, e os DEFAULT de 25 colunas do banco tambem. Antes era UTC e, como o Brasil e UTC-3, depois das 21h o sistema trabalhava no dia seguinte - formularios abriam com amanha, o lancado as 22h era gravado com data errada e o Dashboard em 'Hoje' nao mostrava. Atingia so o 3o turno do CD. MODO CLARO: o menu lateral ficava branco no branco, porque a regra html.light header * pintava tudo dentro do <header> e o menu mora la dentro; escopado para a barra do topo. Fechadas tambem as demais lacunas de contraste do tema claro. DASHBOARD: 'Limpar' no filtro de periodo volta para hoje, que e o padrao da tela, e o historico completo ganhou botao proprio. CORRECAO DE SINCRONIA: a coluna atualizado_por faltava em reentregas_rota e ocorrencias_rota, e como o envio manda o objeto inteiro sem filtrar colunas, QUALQUER edicao desses dois modulos derrubava a sincronia da tabela inteira, calada, desde antes desta versao.",
+  "migrations_necessarias": [
+    "database/migration_28_reentrega_custodia.sql",
+    "database/migration_29_default_fuso_brasilia.sql",
+    "database/migration_31_reentrega_fotos_jsonb.sql",
+    "database/migration_33_atualizado_por_faltante.sql",
+    "database/schema_views.sql (view vw_bi_reentregas_custodia)"
+  ],
+  "observacao_deploy": "As migrations acima JA FORAM APLICADAS no projeto qxipgnkdbzxtfvuyupow em 25/08/2026. Os arquivos existem para o repositorio espelhar o banco e para instalacao nova. Como o envio para a nuvem manda o objeto local inteiro sem filtro de colunas, campo novo no app SEM a coluna no banco derruba a sincronia da tabela toda - por isso a ordem e sempre migration primeiro, deploy depois."
 }

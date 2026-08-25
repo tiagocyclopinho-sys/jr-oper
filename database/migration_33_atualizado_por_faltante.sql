@@ -1,0 +1,36 @@
+-- =============================================================================
+-- MIGRATION 33 - COLUNA atualizado_por QUE FALTAVA EM DUAS TABELAS
+--
+-- JA APLICADA no projeto qxipgnkdbzxtfvuyupow em 25/08/2026.
+--
+-- ACHADO testando o fluxo novo de reentrega. O console acusou:
+--
+--   FALHA AO SALVAR NA NUVEM - reentregas_rota (HTTP 400):
+--   Could not find the 'atualizado_por' column of 'reentregas_rota'
+--
+-- js/store.js grava `atualizado_por` em TRES lugares - updateDevolucao (1182),
+-- updateOcorrenciaRota (1432) e updateReentrega (3039) - mas a coluna so existia
+-- em ocorrencias_devolucao.
+--
+-- O EFEITO, que e o que importa: cloudStore.upsert() envia o objeto local
+-- INTEIRO, sem filtro de colunas (js/cloudStore.js:336). Uma coluna inexistente
+-- faz o PostgREST recusar o LOTE TODO com 400. Ou seja: qualquer edicao de uma
+-- ocorrencia em rota ou de uma reentrega derrubava a sincronia da tabela
+-- inteira - a gravacao local funcionava, a tela mostrava tudo certo, e o
+-- registro simplesmente nunca chegava na nuvem.
+--
+-- Isso e ANTERIOR a v5.0.0: vale para qualquer edicao desde que
+-- updateOcorrenciaRota passou a carimbar autor. So apareceu agora porque o
+-- fluxo de custodia da reentrega usa updateReentrega a cada etapa, e ai o erro
+-- ficou constante em vez de esporadico.
+--
+-- Preferimos criar a coluna a tirar o campo do store: saber QUEM alterou por
+-- ultimo e informacao que a operacao quer ter, e ocorrencias_devolucao ja a
+-- tinha - a inconsistencia estava na falta, nao na presenca.
+--
+-- LICAO: como o envio nao filtra colunas, TODO campo novo no objeto local
+-- precisa existir no banco ANTES de a versao do app subir. Senao a tabela
+-- inteira para de sincronizar, sem aviso na tela.
+-- =============================================================================
+ALTER TABLE reentregas_rota  ADD COLUMN IF NOT EXISTS atualizado_por VARCHAR(120);
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS atualizado_por VARCHAR(120);

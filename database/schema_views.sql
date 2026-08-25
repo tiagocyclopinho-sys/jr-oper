@@ -151,3 +151,71 @@ LEFT JOIN retencoes_frota r
     AND r.is_deleted = FALSE
     AND r.status = 'RETIDO'   -- apenas retenção aberta por veículo
 WHERE v.is_deleted = FALSE;
+
+-- =============================================================================
+-- REENTREGAS: CUSTÓDIA DA MERCADORIA (migration 32, 25/08/2026)
+--
+-- Não existia view nenhuma de reentrega — o módulo era invisível para o BI.
+-- Com a custódia registrada (PENDENTE → RECEBIDO_CD → DESPACHADO → REALIZADA),
+-- dá para medir o que antes não existia: quanto tempo a mercadoria fica parada
+-- no CD, e quanto do que o motorista declara realmente chega na doca.
+--
+-- As colunas de FOTO ficam de fora de propósito: são base64 de centenas de KB
+-- cada, e o Power BI não consome imagem — só inflariam o import.
+--
+-- Os carimbos já estão em horário de Brasília (migration 29 + app v5.0.0),
+-- então ::date aqui é a data certa, sem conversão.
+-- =============================================================================
+CREATE OR REPLACE VIEW vw_bi_reentregas_custodia AS
+SELECT
+    r.id,
+    r.data                         AS data_reentrega,
+    r.carga_numero,
+    r.rota_nome,
+    r.motorista_nome               AS motorista_original,
+    r.novo_motorista               AS motorista_reentrega,
+    r.placa                        AS placa_original,
+    r.despacho_placa               AS placa_reentrega,
+    r.motivo,
+    r.status,
+
+    r.entregas_saiu,
+    r.entregas_feitas,
+    r.entregas_reentrega           AS volumes_declarados,
+    r.qtd_recebida_cd              AS volumes_recebidos_cd,
+    r.qtd_despachada               AS volumes_despachados,
+
+    -- Divergência entre o que o motorista declarou e o que o CD contou.
+    -- Positivo = faltou mercadoria na chegada.
+    CASE WHEN r.qtd_recebida_cd IS NULL THEN NULL
+         ELSE r.entregas_reentrega - r.qtd_recebida_cd END AS divergencia_volumes,
+    r.condicao_recebimento,
+    r.local_armazenagem,
+    r.observacao_recebimento,
+
+    r.criado_em                    AS registrada_em,
+    r.recebido_cd_em,
+    r.despachado_em,
+    r.realizada_em,
+    r.cancelada_em,
+    r.motivo_cancelamento,
+    r.devolucao_gerada_id,
+
+    -- Horas paradas no CD: da chegada até a saída. Enquanto não despachou,
+    -- conta contra o relógio atual — é assim que o BI mostra o que está parado
+    -- AGORA, e não só o que já fechou.
+    CASE WHEN r.recebido_cd_em IS NULL THEN NULL
+         ELSE ROUND(EXTRACT(EPOCH FROM (
+              COALESCE(r.despachado_em, r.cancelada_em, NOW() AT TIME ZONE 'America/Sao_Paulo')
+              - r.recebido_cd_em))/3600, 2) END AS horas_no_cd,
+
+    -- Ciclo total: do registro na rota até a entrega ao cliente.
+    CASE WHEN r.realizada_em IS NULL THEN NULL
+         ELSE ROUND(EXTRACT(EPOCH FROM (r.realizada_em - r.criado_em))/3600, 2) END AS horas_ciclo_total,
+
+    r.criado_por,
+    r.recebido_cd_por,
+    r.despachado_por,
+    r.cancelada_por
+FROM reentregas_rota r
+WHERE COALESCE(r.is_deleted, FALSE) = FALSE;

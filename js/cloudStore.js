@@ -44,7 +44,7 @@ class CloudStore {
       tabela: tableName,
       status,
       detalhe: String(detalhe || '').slice(0, 300),
-      quando: new Date().toISOString()
+      quando: agoraIsoBrasilia()
     };
     console.error(`[CloudStore] FALHA AO SALVAR NA NUVEM — ${tableName} (HTTP ${status}): ${this._ultimoErroSync.detalhe}`);
     this._setStatus(this._connectionStatus); // repinta o indicador com o alerta
@@ -438,7 +438,7 @@ class CloudStore {
           tabela: tableName,
           total: recusados.length,
           exemplos: amostra,
-          quando: new Date().toISOString()
+          quando: agoraIsoBrasilia()
         };
       }
       console.warn(
@@ -780,7 +780,7 @@ class CloudStore {
       tabela: 'controle_viagens',
       total: contaminados.length,
       exemplos: contaminados.slice(0, 5).map(r => `${r.carga || r.id}: data_saida="${r.data_saida}"`),
-      quando: new Date().toISOString()
+      quando: agoraIsoBrasilia()
     };
   }
 
@@ -925,7 +925,7 @@ class CloudStore {
     }
 
     return {
-      quando: new Date().toISOString(),
+      quando: agoraIsoBrasilia(),
       build: CloudStore.BUILD,
       totalDivergentes,
       totalEmRisco,
@@ -1029,7 +1029,7 @@ class CloudStore {
       }
     }
 
-    return { termo: alvo, quando: new Date().toISOString(), achados };
+    return { termo: alvo, quando: agoraIsoBrasilia(), achados };
   }
 
   // Traduz a combinação das cinco camadas numa frase acionável. A ordem dos
@@ -1117,7 +1117,7 @@ class CloudStore {
       plataforma: this._plataformaDoAparelho(),
       build: CloudStore.BUILD,
       ultimo_usuario: (window.db && window.db.currentUser && window.db.currentUser.nome) || null,
-      ultimo_acesso: new Date().toISOString(),
+      ultimo_acesso: agoraIsoBrasilia(),
       // O número que identifica o aparelho da ETAPA 3. Zero é o esperado.
       registros_recusados: this._bloqueadosNaEscrita ? this._bloqueadosNaEscrita.total : 0
     };
@@ -2014,7 +2014,7 @@ window.jrErrosSync = async function() {
   } finally {
     cs._registrarFalhaSync = original;
   }
-  window.jrUltimosErrosSync = { erros: capturados, quando: new Date().toISOString() };
+  window.jrUltimosErrosSync = { erros: capturados, quando: agoraIsoBrasilia() };
   if (capturados.length === 0) console.info('✅ Nenhuma tabela recusada — o envio passou inteiro.');
   else console.table(capturados);
   return capturados;

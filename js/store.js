@@ -261,7 +261,7 @@ class Store {
         if (this.restaurarCadastrosDaPlanilha() > 0) {
           legacyMonolithic = legacyMonolithic || {};
         }
-        try { localStorage.setItem('jr_seed_cadastros_v1', new Date().toISOString()); } catch(e) {}
+        try { localStorage.setItem('jr_seed_cadastros_v1', agoraIsoBrasilia()); } catch(e) {}
       }
     }
 
@@ -416,11 +416,11 @@ class Store {
           ocorrencia: m.motivo || '',
           acao: `ORIENTAÇÃO VERBAL APLICADA${m.gestor ? ` — GESTOR: ${m.gestor}` : ''}`,
           criado_por: m.criado_por || 'SISTEMA',
-          criado_em: m.criado_em || new Date().toISOString(),
+          criado_em: m.criado_em || agoraIsoBrasilia(),
           is_deleted: false
         });
         m.is_deleted = true;
-        m.deleted_at = new Date().toISOString();
+        m.deleted_at = agoraIsoBrasilia();
         precisaSalvarMigracaoOV = true;
       }
     });
@@ -631,7 +631,7 @@ class Store {
   _alertarFalhaDeGravacao(erro) {
     const uso = (() => { try { return this.getStorageUsageInfo(); } catch(e) { return null; } })();
     this.ultimaFalhaDeGravacao = {
-      quando: new Date().toISOString(),
+      quando: agoraIsoBrasilia(),
       detalhe: String((erro && erro.message) || erro || 'desconhecido').slice(0, 200),
       usoKB: uso ? uso.totalKB : null,
       percentual: uso ? uso.percentual : null
@@ -912,7 +912,7 @@ class Store {
       departamento: departamento || 'SAC',
       cargo: cargo || '',
       ativo: true,
-      criado_em: new Date().toISOString()
+      criado_em: agoraIsoBrasilia()
     };
     this.data.usuarios.push(newUser);
     const salvou = this.save();
@@ -939,7 +939,7 @@ class Store {
     dev.separador_apurado = dados.separador_apurado;
     dev.conferente_apurado = dados.conferente_apurado;
     dev.status_gestao = dados.status_gestao;
-    dev.data_acao_gestor = new Date().toISOString();
+    dev.data_acao_gestor = agoraIsoBrasilia();
     dev.gestor_id = this.currentUser ? this.currentUser.id : null;
 
     if (dados.desconto_produtividade_gestor) {
@@ -960,7 +960,7 @@ class Store {
         acao_gestor: dados.acao_gestor,
         valor_prejuizo: dev.valor_reclamado,
         gestor_id: this.currentUser ? this.currentUser.id : null,
-        registrado_em: new Date().toISOString()
+        registrado_em: agoraIsoBrasilia()
       });
     }
     this.save();
@@ -1063,7 +1063,7 @@ class Store {
         motorista_id: parseInt(devolucaoData.motorista_id) || null,
         ajudante_id: parseInt(devolucaoData.ajudante_id) || null,
         veiculo_id: parseInt(devolucaoData.veiculo_id) || null,
-        data_saida: new Date().toISOString().split('T')[0]
+        data_saida: hojeIsoBrasilia()
       };
       this.data.cargas.push(cargaObj);
     } else if (cargaObj) {
@@ -1115,7 +1115,7 @@ class Store {
       sem_itens: devolucaoData.sem_itens || false,
       observacao_sem_itens: String(devolucaoData.observacao_sem_itens || '').toUpperCase().trim(),
       criado_por_usuario_id: this.currentUser ? this.currentUser.id : 1,
-      criado_em: new Date().toISOString()
+      criado_em: agoraIsoBrasilia()
     };
 
     this.data.ocorrencias_devolucao.unshift(newDev);
@@ -1178,7 +1178,7 @@ class Store {
       // quando o status ainda era PENDENTE/vazio, o que fazia a Gestão de
       // Tratativas "não perceber" edições feitas depois da 1ª apuração.
       dev.status_gestao = 'PENDENTE_GESTOR';
-      dev.atualizado_em = new Date().toISOString();
+      dev.atualizado_em = agoraIsoBrasilia();
       dev.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
 
       this.logAudit({
@@ -1199,7 +1199,7 @@ class Store {
           valor_prejuizo: dev.valor_reclamado,
           pontos_desconto: 10,
           observacoes: updateData.acao_tomada,
-          registrado_em: new Date().toISOString()
+          registrado_em: agoraIsoBrasilia()
         });
       }
 
@@ -1212,7 +1212,7 @@ class Store {
     if (dev) {
       dev.destino_cd = destino_cd;
       dev.status_fechamento = status_fechamento;
-      dev.data_entrada_cd = new Date().toISOString();
+      dev.data_entrada_cd = agoraIsoBrasilia();
 
       if (Array.isArray(itensDestinos) && itensDestinos.length > 0) {
         itensDestinos.forEach(idst => {
@@ -1240,7 +1240,7 @@ class Store {
     const item = (this.data.itens_devolucao || []).find(i => i.id == itemId);
     if (item) {
       item.status_negociacao = statusNegociacao;
-      item.data_negociacao = new Date().toISOString();
+      item.data_negociacao = agoraIsoBrasilia();
       this.save();
       return true;
     }
@@ -1346,8 +1346,8 @@ class Store {
       retorno_manutencao_data: null,
       retorno_manutencao_responsavel: null,
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString(),
-      resolvido_em: isEmRota ? new Date().toISOString() : null,
+      criado_em: agoraIsoBrasilia(),
+      resolvido_em: isEmRota ? agoraIsoBrasilia() : null,
       is_deleted: false
     };
 
@@ -1399,8 +1399,8 @@ class Store {
         r.status_chamado = 'finalizado';
         r.status_veiculo = 'Em Rota';
         r.veiculo_parado = false;
-        if (!r.resolvido_em) r.resolvido_em = new Date().toISOString();
-        r.retorno_manutencao_data = updateData.retorno_manutencao_data || r.retorno_manutencao_data || new Date().toISOString();
+        if (!r.resolvido_em) r.resolvido_em = agoraIsoBrasilia();
+        r.retorno_manutencao_data = updateData.retorno_manutencao_data || r.retorno_manutencao_data || agoraIsoBrasilia();
         r.retorno_manutencao_responsavel = updateData.retorno_manutencao_responsavel || (this.currentUser ? this.currentUser.nome : 'MANUTENÇÃO');
       } else {
         r.status = updateData.status || r.status || 'EM_ATENDIMENTO';
@@ -1428,7 +1428,7 @@ class Store {
       if (updateData.pecas_trocadas !== undefined) r.pecas_trocadas = updateData.pecas_trocadas;
       if (updateData.guincho_acionado !== undefined) r.guincho_acionado = updateData.guincho_acionado === 'sim' || updateData.guincho_acionado === true;
       if (updateData.custo_socorro !== undefined) r.custo_socorro = parseFloat(updateData.custo_socorro) || 0;
-      r.atualizado_em = new Date().toISOString();
+      r.atualizado_em = agoraIsoBrasilia();
       r.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
 
       this.logAudit({
@@ -1517,7 +1517,7 @@ class Store {
       motorista_id: parseInt(motorista_id),
       ajudante_id: parseInt(ajudante_id),
       veiculo_id: parseInt(veiculo_id),
-      data_saida: new Date().toISOString().split('T')[0]
+      data_saida: hojeIsoBrasilia()
     };
     this.data.cargas.push(item);
     this.save();
@@ -1600,7 +1600,7 @@ class Store {
       const item = this.data.controle_viagens.find(x => x.id == id);
       if (item) {
         item.is_deleted = true;
-        item.deleted_at = new Date().toISOString();
+        item.deleted_at = agoraIsoBrasilia();
         item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
         this.save();
       }
@@ -1618,7 +1618,7 @@ class Store {
     if (!this.data.ocorrencias_viagens) this.data.ocorrencias_viagens = [];
     const item = {
       id: this.gerarIdUnico(),
-      data: ocData.data || new Date().toISOString().split('T')[0],
+      data: ocData.data || hojeIsoBrasilia(),
       carga: String(ocData.carga || '').toUpperCase().trim(),
       rota: String(ocData.rota || '').toUpperCase().trim(),
       placa: String(ocData.placa || '').toUpperCase().trim(),
@@ -1650,7 +1650,7 @@ class Store {
       const item = this.data.ocorrencias_viagens.find(x => x.id == id);
       if (item) {
         item.is_deleted = true;
-        item.deleted_at = new Date().toISOString();
+        item.deleted_at = agoraIsoBrasilia();
         item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
         this.save();
       }
@@ -1723,7 +1723,7 @@ class Store {
 
     return {
       id: this.gerarIdUnico(),
-      data: data || new Date().toISOString().split('T')[0],
+      data: data || hojeIsoBrasilia(),
       turno: turno || '2º TURNO - FRIO',
       gestor: gestorPadrao,
       movimentacao: {
@@ -1740,7 +1740,7 @@ class Store {
   saveResumoDiarioCD(resumoData) {
     if (!this.data.resumo_diario_cd) this.data.resumo_diario_cd = [];
     const idx = this.data.resumo_diario_cd.findIndex(x => x.data === resumoData.data && x.turno === resumoData.turno);
-    resumoData.atualizado_em = new Date().toISOString();
+    resumoData.atualizado_em = agoraIsoBrasilia();
     if (idx >= 0) {
       this.data.resumo_diario_cd[idx] = resumoData;
     } else {
@@ -1768,14 +1768,14 @@ class Store {
     if (!this.data.trocas_veiculos) this.data.trocas_veiculos = [];
     const item = {
       id: this.gerarIdUnico(),
-      data: trocaData.data || new Date().toISOString().split('T')[0],
+      data: trocaData.data || hojeIsoBrasilia(),
       veiculo_escalado: String(trocaData.veiculo_escalado || '').toUpperCase().trim(),
       veiculo_trocado: String(trocaData.veiculo_trocado || '').toUpperCase().trim(),
       motivo_resumido: String(trocaData.motivo_resumido || 'PESO EXCEDIDO').toUpperCase().trim(),
       motivo_outro: String(trocaData.motivo_outro || '').toUpperCase().trim(),
       detalhamento: String(trocaData.detalhamento || '').toUpperCase().trim(),
       autorizado_por: String(trocaData.autorizado_por || '').toUpperCase().trim(),
-      criado_em: new Date().toISOString()
+      criado_em: agoraIsoBrasilia()
     };
     this.data.trocas_veiculos.unshift(item);
     this.save();
@@ -1798,7 +1798,7 @@ class Store {
       const item = this.data.trocas_veiculos.find(x => x.id == id);
       if (item) {
         item.is_deleted = true;
-        item.deleted_at = new Date().toISOString();
+        item.deleted_at = agoraIsoBrasilia();
         item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
         this.save();
       }
@@ -1933,7 +1933,7 @@ class Store {
     const item = this.data[collection].find(x => x.id == id);
     if (!item) return false;
     item.is_deleted = true;
-    item.deleted_at = new Date().toISOString();
+    item.deleted_at = agoraIsoBrasilia();
     // achado em 20/08/2026: gravava um objeto aninhado deleted_by:{id,nome},
     // mas nenhuma tabela do schema.sql tem essa coluna — só as flat
     // deleted_by_usuario_id/deleted_by_nome (seção 10.1). cloudStore.upsert()
@@ -2045,7 +2045,7 @@ class Store {
       c.tabela === tabela && c.campo === campo && String(c.valor).toLowerCase() === String(valor).toLowerCase() && !c.resolvido
     );
     if (existente) {
-      existente.detectado_em = new Date().toISOString();
+      existente.detectado_em = agoraIsoBrasilia();
       existente.ocorrencias = (existente.ocorrencias || 1) + 1;
     } else {
       const registrosLocais = (this.data[tabela] || [])
@@ -2057,7 +2057,7 @@ class Store {
         campo,
         valor,
         registros_locais: registrosLocais,
-        detectado_em: new Date().toISOString(),
+        detectado_em: agoraIsoBrasilia(),
         ocorrencias: 1,
         resolvido: false
       });
@@ -2077,7 +2077,7 @@ class Store {
     const c = this.data.conflitos_pendentes.find(x => x.id == id);
     if (!c) return false;
     c.resolvido = true;
-    c.resolvido_em = new Date().toISOString();
+    c.resolvido_em = agoraIsoBrasilia();
     c.resolvido_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
     this.save();
     return true;
@@ -2093,7 +2093,7 @@ class Store {
       id: this.gerarIdUnico(),
       usuario_id: this.currentUser ? this.currentUser.id : 0,
       usuario_nome: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      data_hora: new Date().toISOString(),
+      data_hora: agoraIsoBrasilia(),
       acao,
       modulo,
       registro_id,
@@ -2118,7 +2118,7 @@ class Store {
       versao: versaoNum,
       dados_json: JSON.parse(JSON.stringify(record)),
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString()
+      criado_em: agoraIsoBrasilia()
     });
     // Limita o histórico de versões a 1500 registros no total (este array
     // não tinha nenhum limite antes — achado da auditoria de 17/08/2026,
@@ -2292,7 +2292,7 @@ class Store {
         sql += `  motivo_reclamado, valor_reclamado, detalhamento_texto, forma_acerto, status_fechamento, criado_em\n`;
         sql += `) VALUES (\n`;
         sql += `  ${esc(dev.numero_protocolo)}, ${esc(dev.numero_devolucao)}, ${esc(dev.carga_numero)}, ${esc(dev.cliente_nome)}, ${esc(dev.veiculo_placa)}, ${esc(dev.rota_nome)},\n`;
-        sql += `  ${esc(dev.motivo_reclamado)}, ${esc(dev.valor_reclamado || 0)}, ${esc(dev.detalhamento_texto)}, ${esc(dev.forma_acerto || 'ABATIMENTO')}, ${esc(dev.status_fechamento || 'PENDENTE_FISICO')}, ${esc(dev.criado_em || new Date().toISOString())}\n`;
+        sql += `  ${esc(dev.motivo_reclamado)}, ${esc(dev.valor_reclamado || 0)}, ${esc(dev.detalhamento_texto)}, ${esc(dev.forma_acerto || 'ABATIMENTO')}, ${esc(dev.status_fechamento || 'PENDENTE_FISICO')}, ${esc(dev.criado_em || agoraIsoBrasilia())}\n`;
         sql += `) ON CONFLICT (numero_protocolo) DO UPDATE SET valor_reclamado = EXCLUDED.valor_reclamado, status_fechamento = EXCLUDED.status_fechamento;\n\n`;
       });
     }
@@ -2342,10 +2342,22 @@ class Store {
       sql += `-- 5. REENTREGAS DE ROTA\n`;
       reentregasList.forEach(re => {
         sql += `INSERT INTO reentregas_rota (\n`;
-        sql += `  id, data, carga_numero, rota_nome, motorista_nome, entregas_saiu, entregas_feitas, entregas_reentrega, motivo, placa, novo_motorista, status, criado_por, criado_em\n`;
+        sql += `  id, data, carga_numero, rota_nome, motorista_nome, entregas_saiu, entregas_feitas, entregas_reentrega, motivo, placa, novo_motorista, status, criado_por, criado_em,\n`;
+        sql += `  recebido_cd_em, recebido_cd_por, qtd_recebida_cd, condicao_recebimento, observacao_recebimento, local_armazenagem,\n`;
+        sql += `  despachado_em, despachado_por, despacho_placa, despacho_carga_numero, qtd_despachada, realizada_em,\n`;
+        sql += `  cancelada_em, cancelada_por, motivo_cancelamento, devolucao_gerada_id\n`;
         sql += `) VALUES (\n`;
-        sql += `  ${re.id}, ${esc(re.data)}, ${esc(re.carga_numero)}, ${esc(re.rota_nome)}, ${esc(re.motorista_nome)}, ${re.entregas_saiu || 0}, ${re.entregas_feitas || 0}, ${re.entregas_reentrega || 0}, ${esc(re.motivo)}, ${esc(re.placa)}, ${esc(re.novo_motorista)}, ${esc(re.status || 'PENDENTE')}, ${esc(re.criado_por || 'SISTEMA')}, ${esc(re.criado_em)}\n`;
-        sql += `) ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, entregas_feitas = EXCLUDED.entregas_feitas, entregas_reentrega = EXCLUDED.entregas_reentrega;\n\n`;
+        // As fotos (base64, centenas de KB cada) ficam DE FORA de proposito:
+        // este .sql alimenta o Power BI, que nao consome imagem, e inclui-las
+        // tornaria o arquivo grande demais para abrir.
+        sql += `  ${re.id}, ${esc(re.data)}, ${esc(re.carga_numero)}, ${esc(re.rota_nome)}, ${esc(re.motorista_nome)}, ${re.entregas_saiu || 0}, ${re.entregas_feitas || 0}, ${re.entregas_reentrega || 0}, ${esc(re.motivo)}, ${esc(re.placa)}, ${esc(re.novo_motorista)}, ${esc(re.status || 'PENDENTE')}, ${esc(re.criado_por || 'SISTEMA')}, ${esc(re.criado_em)},\n`;
+        sql += `  ${esc(re.recebido_cd_em)}, ${esc(re.recebido_cd_por)}, ${re.qtd_recebida_cd === null || re.qtd_recebida_cd === undefined ? 'NULL' : re.qtd_recebida_cd}, ${esc(re.condicao_recebimento)}, ${esc(re.observacao_recebimento)}, ${esc(re.local_armazenagem)},\n`;
+        sql += `  ${esc(re.despachado_em)}, ${esc(re.despachado_por)}, ${esc(re.despacho_placa)}, ${esc(re.despacho_carga_numero)}, ${re.qtd_despachada === null || re.qtd_despachada === undefined ? 'NULL' : re.qtd_despachada}, ${esc(re.realizada_em)},\n`;
+        sql += `  ${esc(re.cancelada_em)}, ${esc(re.cancelada_por)}, ${esc(re.motivo_cancelamento)}, ${re.devolucao_gerada_id || 'NULL'}\n`;
+        sql += `) ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, entregas_feitas = EXCLUDED.entregas_feitas, entregas_reentrega = EXCLUDED.entregas_reentrega,\n`;
+        sql += `  recebido_cd_em = EXCLUDED.recebido_cd_em, qtd_recebida_cd = EXCLUDED.qtd_recebida_cd, condicao_recebimento = EXCLUDED.condicao_recebimento,\n`;
+        sql += `  despachado_em = EXCLUDED.despachado_em, despacho_placa = EXCLUDED.despacho_placa, qtd_despachada = EXCLUDED.qtd_despachada,\n`;
+        sql += `  realizada_em = EXCLUDED.realizada_em, cancelada_em = EXCLUDED.cancelada_em;\n\n`;
       });
     }
 
@@ -2475,7 +2487,7 @@ class Store {
       veiculo_id: parseInt(veiculo_id) || null,
       placa: String(placa || '').toUpperCase().trim(),
       tipo_veiculo: String(tipo_veiculo || '').toUpperCase().trim(),
-      data_parada: data_parada || new Date().toISOString().split('T')[0],
+      data_parada: data_parada || hojeIsoBrasilia(),
       motivo: String(motivo || '').toUpperCase().trim(),
       tipo_os: String(tipo_os || 'CORRETIVA').toUpperCase().trim(),
       local: String(local || '').toUpperCase().trim(),
@@ -2485,7 +2497,7 @@ class Store {
       data_liberacao: null,
       status: 'RETIDO',
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString(),
+      criado_em: agoraIsoBrasilia(),
       is_deleted: false
     };
     this.data.retencoes_frota.push(retencao);
@@ -2514,7 +2526,7 @@ class Store {
       return { success: false, message: `Retenção ID ${id} não encontrada.` };
     }
     retencao.status = 'LIBERADO';
-    retencao.data_liberacao = dataLiberacao || new Date().toISOString().split('T')[0];
+    retencao.data_liberacao = dataLiberacao || hojeIsoBrasilia();
     if (descricaoAcao !== undefined) {
       retencao.descricao_acao_liberacao = descricaoAcao;
     }
@@ -2547,7 +2559,7 @@ class Store {
       divisoes_destino: [],
       is_deleted: false,
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString()
+      criado_em: agoraIsoBrasilia()
     };
     this.data.itens_avulsos_destinacao.push(item);
     const salvou = this.save();
@@ -2564,7 +2576,7 @@ class Store {
     const item = (this.data.itens_avulsos_destinacao || []).find(i => String(i.id) === String(id));
     if (!item) return { success: false, message: 'Item avulso não encontrado.' };
     item.is_deleted = true;
-    item.deleted_at = new Date().toISOString();
+    item.deleted_at = agoraIsoBrasilia();
     const salvou = this.save();
     return { success: salvou };
   }
@@ -2593,9 +2605,9 @@ class Store {
       dias_suspensao: tipo === 'SUSPENSAO' ? (parseInt(dias_suspensao, 10) || 1) : null,
       motivo: String(motivo || '').trim(),
       gestor: String(gestor || '').toUpperCase().trim(),
-      data_ocorrencia: data_ocorrencia || new Date().toISOString().split('T')[0],
+      data_ocorrencia: data_ocorrencia || hojeIsoBrasilia(),
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString(),
+      criado_em: agoraIsoBrasilia(),
       is_deleted: false
     };
     this.data.medidas_disciplinares.push(medida);
@@ -2640,11 +2652,11 @@ class Store {
       colaborador_tipo: colaborador_tipo || 'CD',
       colaborador_id: colaborador_id || null,
       colaborador_nome: String(colaborador_nome || '').toUpperCase().trim(),
-      data: data || new Date().toISOString().split('T')[0],
+      data: data || hojeIsoBrasilia(),
       ocorrencia: String(ocorrencia || '').trim(),
       acao: String(acao || '').trim(),
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString(),
+      criado_em: agoraIsoBrasilia(),
       is_deleted: false
     };
     this.data.orientacoes_feedback.push(registro);
@@ -2656,7 +2668,7 @@ class Store {
     const r = (this.data.orientacoes_feedback || []).find(x => String(x.id) === String(id));
     if (!r) return { success: false, message: 'Registro não encontrado.' };
     r.is_deleted = true;
-    r.deleted_at = new Date().toISOString();
+    r.deleted_at = agoraIsoBrasilia();
     return { success: this.save() };
   }
 
@@ -2676,14 +2688,14 @@ class Store {
       colaborador_tipo: colaborador_tipo || 'CD',
       colaborador_id: colaborador_id || null,
       colaborador_nome: String(colaborador_nome || '').toUpperCase().trim(),
-      data: data || new Date().toISOString().split('T')[0],
+      data: data || hojeIsoBrasilia(),
       tipo_afastamento: tipo_afastamento === 'INTEGRAL' ? 'INTEGRAL' : 'PARCIAL',
       motivo: String(motivo || '').trim(),
       cid: String(cid || '').toUpperCase().trim(),
       medico: String(medico || '').toUpperCase().trim(),
       crm_cro: String(crm_cro || '').toUpperCase().trim(),
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString(),
+      criado_em: agoraIsoBrasilia(),
       is_deleted: false
     };
     this.data.atestados_medicos.push(registro);
@@ -2695,7 +2707,7 @@ class Store {
     const r = (this.data.atestados_medicos || []).find(x => String(x.id) === String(id));
     if (!r) return { success: false, message: 'Registro não encontrado.' };
     r.is_deleted = true;
-    r.deleted_at = new Date().toISOString();
+    r.deleted_at = agoraIsoBrasilia();
     return { success: this.save() };
   }
 
@@ -2715,10 +2727,10 @@ class Store {
       colaborador_tipo: colaborador_tipo || 'CD',
       colaborador_id: colaborador_id || null,
       colaborador_nome: String(colaborador_nome || '').toUpperCase().trim(),
-      data: data || new Date().toISOString().split('T')[0],
+      data: data || hojeIsoBrasilia(),
       motivo: String(motivo || '').trim(),
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString(),
+      criado_em: agoraIsoBrasilia(),
       is_deleted: false
     };
     this.data.ausencias_registros.push(registro);
@@ -2730,7 +2742,7 @@ class Store {
     const r = (this.data.ausencias_registros || []).find(x => String(x.id) === String(id));
     if (!r) return { success: false, message: 'Registro não encontrado.' };
     r.is_deleted = true;
-    r.deleted_at = new Date().toISOString();
+    r.deleted_at = agoraIsoBrasilia();
     return { success: this.save() };
   }
 
@@ -2801,7 +2813,7 @@ class Store {
       veiculo_id: veiculo_id || null,
       motorista_nome: String(motorista_nome || '').toUpperCase().trim(),
       motorista_id: motorista_id || null,
-      data_acidente: data_acidente || new Date().toISOString().split('T')[0],
+      data_acidente: data_acidente || hojeIsoBrasilia(),
       local_acidente: String(local_acidente || '').toUpperCase().trim(),
 
       etapa_motorista_completa: false,
@@ -2813,7 +2825,7 @@ class Store {
       status_geral: 'PENDENTE',
 
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString(),
+      criado_em: agoraIsoBrasilia(),
       is_deleted: false
     };
     this.data.sinistros.push(sinistro);
@@ -2833,7 +2845,7 @@ class Store {
     else if (etapa === 'operacoes') s.etapa_operacoes_completa = completa !== false;
     else if (etapa === 'juridico') s.etapa_juridico_completa = completa !== false;
     else if (etapa === 'diretoria') s.etapa_diretoria_completa = completa !== false;
-    s.atualizado_em = new Date().toISOString();
+    s.atualizado_em = agoraIsoBrasilia();
     this._recalcularStatusSinistro(s);
     const salvou = this.save();
     return salvou ? { success: true, sinistro: s } : { success: false, sinistro: s, message: 'Não foi possível salvar neste dispositivo. Tente novamente.' };
@@ -2843,7 +2855,7 @@ class Store {
     const s = (this.data.sinistros || []).find(x => String(x.id) === String(id));
     if (!s) return { success: false, message: 'Sinistro não encontrado.' };
     s.is_deleted = true;
-    s.deleted_at = new Date().toISOString();
+    s.deleted_at = agoraIsoBrasilia();
     return { success: this.save() };
   }
 
@@ -2870,7 +2882,7 @@ class Store {
       return { success: false, message: `Retenção ID ${id} não encontrada.` };
     }
     retencao.is_deleted = true;
-    retencao.deleted_at = new Date().toISOString();
+    retencao.deleted_at = agoraIsoBrasilia();
     retencao.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
     this.save();
     return { success: true };
@@ -2893,7 +2905,7 @@ class Store {
         retencao[c] = dados[c];
       }
     });
-    retencao.atualizado_em = new Date().toISOString();
+    retencao.atualizado_em = agoraIsoBrasilia();
     this.save();
     return { success: true, retencao };
   }
@@ -2923,7 +2935,7 @@ class Store {
     }
     const novaReentrega = {
       id: this.gerarIdUnico(),
-      data: item.data || new Date().toISOString().split('T')[0],
+      data: item.data || hojeIsoBrasilia(),
       carga_numero: String(item.carga_numero || '').trim().toUpperCase(),
       rota_nome: String(item.rota_nome || '').trim().toUpperCase(),
       motorista_nome: String(item.motorista_nome || '').trim().toUpperCase(),
@@ -2934,8 +2946,40 @@ class Store {
       placa: String(item.placa || '').trim().toUpperCase(),
       novo_motorista: item.novo_motorista ? String(item.novo_motorista).trim().toUpperCase() : null,
       status: item.status || 'PENDENTE',
+
+      // --- CUSTODIA DA REENTREGA (v5.0.0) ---
+      // Entre o motorista voltar com o produto e o produto ser entregue, a
+      // mercadoria fica em algum lugar e alguem tem de assinar por ela. Estes
+      // campos sao o rastro dessa custodia: quem recebeu no CD, quanto
+      // recebeu, em que estado, e para qual veiculo despachou.
+      //
+      // Nascem null (e nao ''), porque o banco espera TIMESTAMP/INT nessas
+      // colunas e string vazia viraria erro de tipo no PostgREST.
+      recebido_cd_em: null,
+      recebido_cd_por: null,
+      qtd_recebida_cd: null,
+      condicao_recebimento: null,
+      observacao_recebimento: null,
+      local_armazenagem: null,
+      fotos_recebimento: [],
+
+      despachado_em: null,
+      despachado_por: null,
+      despacho_placa: null,
+      despacho_carga_numero: null,
+      qtd_despachada: null,
+      fotos_despacho: [],
+
+      // realizada_em nao existia: so havia atualizado_em, que muda a cada
+      // edicao e por isso nao serve para medir o ciclo da reentrega.
+      realizada_em: null,
+      cancelada_em: null,
+      cancelada_por: null,
+      motivo_cancelamento: null,
+      devolucao_gerada_id: null,
+
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
-      criado_em: new Date().toISOString(),
+      criado_em: agoraIsoBrasilia(),
       is_deleted: false,
       deleted_at: null,
       deleted_by_nome: null
@@ -2964,10 +3008,21 @@ class Store {
       return { success: false, message: `Reentrega ID ${id} não encontrada.` };
     }
     const antes = JSON.parse(JSON.stringify(item));
+    // ATENCAO: isto e uma WHITELIST. Campo que nao estiver aqui e descartado
+    // em silencio pelo update - nao da erro, so nao grava. Foi por isso que os
+    // campos de custodia precisaram entrar um a um.
     const camposPermitidos = [
       'data', 'carga_numero', 'rota_nome', 'motorista_nome',
       'entregas_saiu', 'entregas_feitas', 'entregas_reentrega',
-      'motivo', 'placa', 'novo_motorista', 'status'
+      'motivo', 'placa', 'novo_motorista', 'status',
+      // Custodia (v5.0.0)
+      'recebido_cd_em', 'recebido_cd_por', 'qtd_recebida_cd',
+      'condicao_recebimento', 'observacao_recebimento', 'local_armazenagem',
+      'fotos_recebimento',
+      'despachado_em', 'despachado_por', 'despacho_placa',
+      'despacho_carga_numero', 'qtd_despachada', 'fotos_despacho',
+      'realizada_em', 'cancelada_em', 'cancelada_por',
+      'motivo_cancelamento', 'devolucao_gerada_id'
     ];
     camposPermitidos.forEach(campo => {
       if (Object.prototype.hasOwnProperty.call(updates, campo)) {
@@ -2980,7 +3035,7 @@ class Store {
         }
       }
     });
-    item.atualizado_em = new Date().toISOString();
+    item.atualizado_em = agoraIsoBrasilia();
     item.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
 
     this.logAudit({
@@ -2991,6 +3046,171 @@ class Store {
     });
     this.save();
     return { success: true, reentrega: item };
+  }
+
+  /**
+   * ETAPA 2 - O CD RECEBE FISICAMENTE o produto que voltou.
+   *
+   * A foto e obrigatoria aqui e no despacho (pedido de 25/08/2026), e a regra
+   * esta tambem como CHECK no banco (migration 31): validar so na tela deixaria
+   * a garantia depender de a tela se comportar.
+   *
+   * qtd_recebida vem separada de entregas_reentrega de proposito: a segunda e
+   * o que o motorista DECLAROU na rota, a primeira e o que o CD CONTOU na doca.
+   * E justamente onde as duas divergem que a etapa se paga.
+   *
+   * @param {number|string} id
+   * @param {Object} d - { qtd_recebida, condicao, observacao, local_armazenagem, fotos }
+   */
+  receberReentregaCd(id, d) {
+    const item = (this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
+    if (!item) return { success: false, message: `Reentrega ID ${id} nao encontrada.` };
+    if (item.status !== 'PENDENTE') {
+      return { success: false, message: `Esta reentrega esta como ${item.status}. So da para receber o que esta PENDENTE.` };
+    }
+    const fotos = Array.isArray(d && d.fotos) ? d.fotos.filter(Boolean) : [];
+    if (fotos.length === 0) {
+      return { success: false, message: 'Anexe ao menos uma foto do recebimento. E o comprovante de que o produto chegou ao CD.' };
+    }
+    const condicoes = ['OK', 'AVARIA', 'FALTA_PARCIAL'];
+    const condicao = String((d && d.condicao) || 'OK').toUpperCase();
+    if (!condicoes.includes(condicao)) {
+      return { success: false, message: `Condicao invalida: ${condicao}.` };
+    }
+    const qtd = parseInt(d && d.qtd_recebida);
+    if (isNaN(qtd) || qtd < 0) {
+      return { success: false, message: 'Informe quantos volumes o CD recebeu.' };
+    }
+    const divergiu = qtd !== (parseInt(item.entregas_reentrega) || 0);
+    const obs = String((d && d.observacao) || '').trim();
+    if ((divergiu || condicao !== 'OK') && !obs) {
+      return {
+        success: false,
+        message: divergiu
+          ? `Foram declarados ${item.entregas_reentrega} volume(s) e voce esta recebendo ${qtd}. Descreva o que houve no campo de observacao.`
+          : 'Recebimento com avaria ou falta exige observacao.'
+      };
+    }
+    return this.updateReentrega(id, {
+      status: 'RECEBIDO_CD',
+      recebido_cd_em: agoraIsoBrasilia(),
+      recebido_cd_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      qtd_recebida_cd: qtd,
+      condicao_recebimento: condicao,
+      observacao_recebimento: obs || null,
+      local_armazenagem: String((d && d.local_armazenagem) || '').trim().toUpperCase() || null,
+      fotos_recebimento: fotos
+    });
+  }
+
+  /**
+   * ETAPA 3 - O CD DESPACHA para um veiculo (o mesmo ou outro).
+   *
+   * Despacho e UNICO por reentrega: o negocio confirmou que pode acontecer em
+   * duas remessas, mas nao deve, e pediu para tratar como nao. E por isso que
+   * estes campos sao colunas e nao uma tabela filha - se um dia partir em duas
+   * remessas passar a ser permitido, o modelo aqui precisa mudar de forma.
+   *
+   * @param {number|string} id
+   * @param {Object} d - { placa, motorista, carga_numero, qtd_despachada, fotos }
+   */
+  despacharReentrega(id, d) {
+    const item = (this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
+    if (!item) return { success: false, message: `Reentrega ID ${id} nao encontrada.` };
+    if (item.status !== 'RECEBIDO_CD') {
+      return { success: false, message: `Esta reentrega esta como ${item.status}. So da para despachar o que ja foi RECEBIDO_CD.` };
+    }
+    const fotos = Array.isArray(d && d.fotos) ? d.fotos.filter(Boolean) : [];
+    if (fotos.length === 0) {
+      return { success: false, message: 'Anexe ao menos uma foto do despacho. E o comprovante de que o produto saiu do CD.' };
+    }
+    const placa = String((d && d.placa) || '').trim().toUpperCase();
+    if (!placa) return { success: false, message: 'Informe a placa do veiculo que vai levar.' };
+    const motorista = String((d && d.motorista) || '').trim().toUpperCase();
+    if (!motorista) return { success: false, message: 'Informe o motorista que vai levar.' };
+
+    const qtd = parseInt(d && d.qtd_despachada);
+    const recebido = parseInt(item.qtd_recebida_cd) || 0;
+    if (isNaN(qtd) || qtd <= 0) return { success: false, message: 'Informe quantos volumes estao saindo.' };
+    if (qtd > recebido) {
+      return { success: false, message: `O CD recebeu ${recebido} volume(s); nao da para despachar ${qtd}.` };
+    }
+    return this.updateReentrega(id, {
+      status: 'DESPACHADO',
+      despachado_em: agoraIsoBrasilia(),
+      despachado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      despacho_placa: placa,
+      // novo_motorista ja existia como "quem vai levar" e continua sendo a
+      // fonte unica disso - nao criamos um segundo campo com o mesmo sentido.
+      novo_motorista: motorista,
+      despacho_carga_numero: String((d && d.carga_numero) || '').trim().toUpperCase() || null,
+      qtd_despachada: qtd,
+      fotos_despacho: fotos
+    });
+  }
+
+  /**
+   * Marca a reentrega como entregue ao cliente.
+   */
+  concluirReentrega(id) {
+    const item = (this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
+    if (!item) return { success: false, message: `Reentrega ID ${id} nao encontrada.` };
+    return this.updateReentrega(id, {
+      status: 'REALIZADA',
+      realizada_em: agoraIsoBrasilia()
+    });
+  }
+
+  /**
+   * CANCELAMENTO da reentrega.
+   *
+   * Regra do negocio (25/08/2026): reentrega cancelada significa que a
+   * mercadoria nao vai mais ao cliente, entao ela precisa virar Devolucao SAC.
+   *
+   * Mas a devolucao NAO e criada aqui. Quem abre e o proprio agente do SAC,
+   * na tela de abertura - e a tela e chamada logo em seguida, ja preenchida
+   * com os dados desta reentrega (ver cancelarReentregaFluxo em app.js).
+   *
+   * O motivo de nao criar automatico: a devolucao pede cliente, nota fiscal,
+   * motivo e itens, que o CD nao tem na mao no momento do cancelamento. Uma
+   * devolucao gerada pela metade entraria no fluxo do SAC como pendencia
+   * incompleta, e alguem teria de caçar a informacao depois. Melhor a tela
+   * abrir preenchida no que da para preencher e o SAC completar na hora.
+   *
+   * devolucao_gerada_id fica disponivel para amarrar as duas pontas quando a
+   * devolucao for salva.
+   *
+   * @param {number|string} id
+   * @param {Object} d - { motivo }
+   */
+  cancelarReentrega(id, d) {
+    const item = (this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
+    if (!item) return { success: false, message: `Reentrega ID ${id} nao encontrada.` };
+    if (item.status === 'REALIZADA') {
+      return { success: false, message: 'Reentrega ja realizada nao pode ser cancelada.' };
+    }
+    if (item.status === 'CANCELADA') {
+      return { success: false, message: 'Esta reentrega ja esta cancelada.' };
+    }
+    const motivo = String((d && d.motivo) || '').trim();
+    if (!motivo) return { success: false, message: 'Descreva o motivo do cancelamento.' };
+
+    const upd = this.updateReentrega(id, {
+      status: 'CANCELADA',
+      cancelada_em: agoraIsoBrasilia(),
+      cancelada_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      motivo_cancelamento: motivo
+    });
+    if (!upd.success) return upd;
+    return { success: true, reentrega: upd.reentrega };
+  }
+
+  /**
+   * Amarra a devolucao aberta pelo SAC de volta na reentrega que a originou.
+   * Chamada depois que o agente salva a devolucao vinda do cancelamento.
+   */
+  vincularDevolucaoAReentrega(reentregaId, devolucaoId) {
+    return this.updateReentrega(reentregaId, { devolucao_gerada_id: devolucaoId });
   }
 
   /**
@@ -3008,7 +3228,7 @@ class Store {
       return { success: false, message: `Reentrega ID ${id} não encontrada.` };
     }
     item.is_deleted = true;
-    item.deleted_at = new Date().toISOString();
+    item.deleted_at = agoraIsoBrasilia();
     item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
     // (achado em 20/08/2026) não existe coluna deleted_by em reentregas_rota
     // — só deleted_by_nome, já preenchida acima. Ver mesmo achado em softDelete().

@@ -1,10 +1,10 @@
 // =================================================================
-// SERVICE WORKER - JR OPER v4.7
+// SERVICE WORKER - JR OPER v5.0
 // Habilita instalação em qualquer aparelho (Android, iPhone, PC, Mac)
 // Cache offline para funcionar sem internet
 // =================================================================
 
-const CACHE_NAME = 'jr-oper-v4.9.1';
+const CACHE_NAME = 'jr-oper-v5.0.0';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
