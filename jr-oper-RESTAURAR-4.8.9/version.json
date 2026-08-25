@@ -1,5 +1,0 @@
-{
-  "build": "sync-4.8.9",
-  "publicado_em": "2026-08-23",
-  "resumo": "A hora que volta da nuvem vinha sem marcador de fuso e era lida como horario local, adiantando todo carimbo em 3 horas. Sintoma: SLA aparecia certo e virava 'sem referencia' no primeiro ciclo de sincronizacao. Corrigido na raiz: carimbo sem fuso passa a ser lido como UTC, que e como o banco guarda. Alcanca SLA dos alertas, faixas 24h/48h, SLA de frota 4h/8h, MTTR, lead time e filtro por periodo."
-}
