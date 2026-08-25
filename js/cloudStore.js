@@ -1804,7 +1804,7 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.9.0";
+CloudStore.BUILD = "sync-4.9.1";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase

@@ -3189,6 +3189,15 @@ function toggleMobileMenu(forceState) {
 
 // Fechar menu ao clicar fora ou no overlay
 document.addEventListener('click', (e) => {
+  // (25/08/2026) Um clique em algo que o PRÓPRIO menu acabou de re-renderizar
+  // — a setinha de grupo (toggleNavGrupo) e o "Ver todas as telas"
+  // (toggleNavVerTudo) reescrevem menuEl.innerHTML — chega aqui com o
+  // e.target já destacado do DOM. Nesse caso menu.contains(e.target) dá
+  // false e o menu se fechava sozinho, como se o clique tivesse sido fora:
+  // clicar para abrir um grupo fechava o menu inteiro. Alvo desconectado só
+  // acontece quando o clique nasceu DENTRO do que foi re-renderizado, então
+  // não é clique fora — ignora.
+  if (e.target && e.target.isConnected === false) return;
   const menu = document.getElementById('mobile-menu-dropdown');
   const btn = document.getElementById('hamburger-btn');
   const overlay = document.getElementById('nav-menu-overlay');

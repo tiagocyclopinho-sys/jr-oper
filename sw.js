@@ -4,7 +4,7 @@
 // Cache offline para funcionar sem internet
 // =================================================================
 
-const CACHE_NAME = 'jr-oper-v4.9.0';
+const CACHE_NAME = 'jr-oper-v4.9.1';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [

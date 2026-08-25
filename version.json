@@ -1,5 +1,5 @@
 {
-  "build": "sync-4.9.0",
+  "build": "sync-4.9.1",
   "publicado_em": "2026-08-25",
-  "resumo": "Uniao das duas linhas que haviam divergido: o motor de sincronizacao da 4.8.9 (Ondas 1+2 - guarda na escrita, registro de aparelhos, paginacao por cursor, exclusao duravel, carimbo de reset) somado ao menu agrupado por departamento da linha de UI (NAV_GRUPOS - 6 grupos, filtro por papel com falha aberta, sub-abas de Controle de Viagens e as entradas de Dossie do Motorista e Acompanhamento do Funcionario)."
+  "resumo": "Correcao do menu agrupado: clicar na setinha de um departamento fechava o menu inteiro. O proprio re-render do menu destacava do DOM o botao clicado, e o listener global de 'clicar fora' passava a ver o clique como externo. Agora um alvo ja desconectado e ignorado por esse listener. Alcanca a setinha de grupo e o botao 'Ver todas as telas'."
 }
