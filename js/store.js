@@ -736,22 +736,83 @@ class Store {
   // Tamanho aproximado (KB) do que está salvo hoje, para o painel de
   // Configurações/Governança acompanhar o crescimento dos dados ao longo
   // do tempo (item 0.1 da auditoria de 17/08/2026).
+  // =================================================================
+  // MEDIDOR DE ARMAZENAMENTO — reescrito em 25/08/2026
+  //
+  // O medidor anterior SUBESTIMAVA por três motivos somados, e por isso um
+  // aparelho perdeu lançamento com a tarja marcando apenas 72%. Não era
+  // alarme prematuro: era alarme ATRASADO.
+  //
+  //   1. Contava 2 chaves de 33. O cloudStore grava ~25 chaves-espelho
+  //      (jr_ocorrencias, jr_reentregas, ...) que ficavam invisíveis —
+  //      medido em produção, 28% do uso real não aparecia.
+  //
+  //   2. Contava CARACTERE, não byte. localStorage guarda UTF-16: cada
+  //      caractere ocupa 2 bytes, então o consumo real era o dobro.
+  //
+  //   3. Dividia por um palpite. O limite varia MUITO por aparelho: medido
+  //      neste projeto, um Chromium de desktop aceitou 30 MB sem reclamar,
+  //      enquanto o Safari do iPhone costuma parar perto de 5 MB.
+  //
+  // O que mudou: conta TODAS as chaves, e o sinal de perigo não depende
+  // mais só do percentual — há uma SONDA que tenta escrever de verdade. É
+  // ela que responde à única pergunta que importa na doca: "ainda dá para
+  // salvar?". O percentual continua servindo para acompanhar crescimento,
+  // agora contra um limite declarado como o que é: referência do pior caso.
+  // =================================================================
   getStorageUsageInfo() {
-    const LIMITE_ESTIMADO_MB = 5; // cota conservadora comum em navegadores mobile
-    let operacionalKB = 0;
-    let estaticoKB = 0;
-    try { operacionalKB = (localStorage.getItem('jr_sac_db') || '').length / 1024; } catch(e) {}
-    try { estaticoKB = (localStorage.getItem('jr_sac_static') || '').length / 1024; } catch(e) {}
-    const totalKB = operacionalKB + estaticoKB;
-    const percentual = (totalKB / 1024 / LIMITE_ESTIMADO_MB) * 100;
+    // Pior caso conhecido (iPhone/Safari). NÃO é o limite do aparelho atual
+    // — serve como régua de acompanhamento, não como verdade.
+    const LIMITE_REFERENCIA_MB = 5;
+    const PROVA_KB = 512;
+
+    let operacionalKB = 0, estaticoKB = 0, totalKB = 0, chaves = 0;
+    const maiores = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        const tam = ((localStorage.getItem(k) || '').length + k.length) / 1024;
+        totalKB += tam;
+        chaves++;
+        if (k === 'jr_sac_db') operacionalKB = tam;
+        else if (k === 'jr_sac_static') estaticoKB = tam;
+        maiores.push({ chave: k, KB: Math.round(tam) });
+      }
+    } catch (e) {
+      // Navegador com storage bloqueado (modo restrito): sem medição.
+      return { operacionalKB: 0, estaticoKB: 0, totalKB: 0, percentual: 0,
+               nivel: 'green', chaves: 0, maiores: [], cabeMais: null, bytesKB: 0 };
+    }
+    maiores.sort((a, b) => b.KB - a.KB);
+
+    // SONDA: escreve e apaga meio mega. Se não couber, o aparelho está na
+    // borda AGORA, independente do que o percentual diga.
+    let cabeMais = null;
+    try {
+      const alvo = '__jr_prova_espaco__';
+      localStorage.setItem(alvo, 'x'.repeat(PROVA_KB * 1024));
+      localStorage.removeItem(alvo);
+      cabeMais = true;
+    } catch (e) {
+      cabeMais = false;
+      try { localStorage.removeItem('__jr_prova_espaco__'); } catch (e2) {}
+    }
+
+    const percentual = (totalKB / 1024 / LIMITE_REFERENCIA_MB) * 100;
     let nivel = 'green';
-    if (percentual >= 90) nivel = 'red';
+    if (cabeMais === false || percentual >= 90) nivel = 'red';
     else if (percentual >= 70) nivel = 'amber';
+
     return {
       operacionalKB: Math.round(operacionalKB),
       estaticoKB: Math.round(estaticoKB),
       totalKB: Math.round(totalKB),
+      bytesKB: Math.round(totalKB * 2),   // UTF-16: o consumo real em bytes
       percentual: Math.round(percentual),
+      chaves,
+      maiores: maiores.slice(0, 5),
+      cabeMais,                            // true = ainda dá para gravar
       nivel
     };
   }
