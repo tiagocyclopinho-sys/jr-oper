@@ -2308,6 +2308,13 @@ class Store {
       try { localStorage.removeItem(k); } catch(e) {}
     });
 
+    // A FILA DE FOTOS TAMBEM (v5.1.0). Ela NAO mora no localStorage, entao
+    // passaria intacta por toda a limpeza acima e sobreviveria ao reset
+    // apontando para reentregas que acabaram de deixar de existir - subindo
+    // um arquivo orfao para o bucket a cada ciclo de 30s, para sempre.
+    // Ver limparTudo() em js/fotoStore.js.
+    if (window.fotoStore) window.fotoStore.limparTudo().catch(() => {});
+
     this.save();
 
     // O reset sempre só limpou o navegador local, nunca a nuvem — rodar
@@ -3022,7 +3029,22 @@ class Store {
       condicao_recebimento: null,
       observacao_recebimento: null,
       local_armazenagem: null,
+
+      // FOTOS (v5.1.0): a imagem NAO mora mais aqui.
+      //
+      // fotos_recebimento / fotos_despacho continuam existindo por causa dos
+      // registros criados ate a v5.0.0, que guardam base64 dentro deles. Para
+      // registro NOVO nascem vazios e nunca recebem nada - se voltassem a
+      // receber base64, voltariam junto o estouro de localStorage de
+      // 25/08/2026 e o trafego de ~400 KB a cada pull de 30s.
+      //
+      // O que a v5.1.0 grava:
+      //   *_paths      caminho do arquivo no bucket reentregas-fotos
+      //   *_pendentes  quantas fotos ainda estao so no IndexedDB deste
+      //                aparelho, esperando rede (ver js/fotoStore.js)
       fotos_recebimento: [],
+      fotos_recebimento_paths: [],
+      fotos_recebimento_pendentes: 0,
 
       despachado_em: null,
       despachado_por: null,
@@ -3030,6 +3052,8 @@ class Store {
       despacho_carga_numero: null,
       qtd_despachada: null,
       fotos_despacho: [],
+      fotos_despacho_paths: [],
+      fotos_despacho_pendentes: 0,
 
       // realizada_em nao existia: so havia atualizado_em, que muda a cada
       // edicao e por isso nao serve para medir o ciclo da reentrega.
@@ -3082,6 +3106,11 @@ class Store {
       'fotos_recebimento',
       'despachado_em', 'despachado_por', 'despacho_placa',
       'despacho_carga_numero', 'qtd_despachada', 'fotos_despacho',
+      // Fotos em Storage (v5.1.0). Sem estes quatro nomes AQUI, o caminho da
+      // foto que acabou de subir seria descartado em silencio por esta mesma
+      // whitelist - a foto estaria no bucket e o registro nunca saberia.
+      'fotos_recebimento_paths', 'fotos_recebimento_pendentes',
+      'fotos_despacho_paths', 'fotos_despacho_pendentes',
       'realizada_em', 'cancelada_em', 'cancelada_por',
       'motivo_cancelamento', 'devolucao_gerada_id'
     ];
@@ -3129,8 +3158,12 @@ class Store {
     if (item.status !== 'PENDENTE') {
       return { success: false, message: `Esta reentrega esta como ${item.status}. So da para receber o que esta PENDENTE.` };
     }
-    const fotos = Array.isArray(d && d.fotos) ? d.fotos.filter(Boolean) : [];
-    if (fotos.length === 0) {
+    // A FOTO CONTINUA OBRIGATORIA - o que mudou e ONDE ela esta neste
+    // instante. Ate a v5.0.0 chegava aqui o base64 inteiro; agora a tela ja
+    // guardou a imagem no IndexedDB (js/fotoStore.js) e passa so QUANTAS
+    // guardou. O que este metodo exige e que esse numero seja pelo menos 1.
+    const qtdFotos = parseInt(d && d.fotos_pendentes);
+    if (isNaN(qtdFotos) || qtdFotos < 1) {
       return { success: false, message: 'Anexe ao menos uma foto do recebimento. E o comprovante de que o produto chegou ao CD.' };
     }
     const condicoes = ['OK', 'AVARIA', 'FALTA_PARCIAL'];
@@ -3160,7 +3193,12 @@ class Store {
       condicao_recebimento: condicao,
       observacao_recebimento: obs || null,
       local_armazenagem: String((d && d.local_armazenagem) || '').trim().toUpperCase() || null,
-      fotos_recebimento: fotos
+      // Nasce inteiramente pendente: os caminhos aparecem um a um, conforme a
+      // fila sobe. Enquanto este numero for > 0, a tela mostra "foto pendente"
+      // em TODO aparelho, nao so neste - e por isso que ele e um campo do
+      // registro e nao um estado local.
+      fotos_recebimento_paths: [],
+      fotos_recebimento_pendentes: qtdFotos
     });
   }
 
@@ -3181,8 +3219,10 @@ class Store {
     if (item.status !== 'RECEBIDO_CD') {
       return { success: false, message: `Esta reentrega esta como ${item.status}. So da para despachar o que ja foi RECEBIDO_CD.` };
     }
-    const fotos = Array.isArray(d && d.fotos) ? d.fotos.filter(Boolean) : [];
-    if (fotos.length === 0) {
+    // Mesma troca do recebimento: chega a CONTAGEM, nao a imagem. Ver o
+    // comentario em receberReentregaCd().
+    const qtdFotos = parseInt(d && d.fotos_pendentes);
+    if (isNaN(qtdFotos) || qtdFotos < 1) {
       return { success: false, message: 'Anexe ao menos uma foto do despacho. E o comprovante de que o produto saiu do CD.' };
     }
     const placa = String((d && d.placa) || '').trim().toUpperCase();
@@ -3206,8 +3246,105 @@ class Store {
       novo_motorista: motorista,
       despacho_carga_numero: String((d && d.carga_numero) || '').trim().toUpperCase() || null,
       qtd_despachada: qtd,
-      fotos_despacho: fotos
+      fotos_despacho_paths: [],
+      fotos_despacho_pendentes: qtdFotos
     });
+  }
+
+  // ---------------------------------------------------------------
+  // FOTOS EM STORAGE (v5.1.0) - ponte entre js/fotoStore.js e o registro
+  // ---------------------------------------------------------------
+
+  /** Traduz 'recebimento'/'despacho' nos dois nomes de campo da etapa. */
+  static _camposFoto(etapa) {
+    return String(etapa) === 'despacho'
+      ? { paths: 'fotos_despacho_paths',    pendentes: 'fotos_despacho_pendentes',    legado: 'fotos_despacho' }
+      : { paths: 'fotos_recebimento_paths', pendentes: 'fotos_recebimento_pendentes', legado: 'fotos_recebimento' };
+  }
+
+  /**
+   * Uma foto acabou de subir para o Storage: guarda o caminho no registro e
+   * baixa em um o contador de pendentes.
+   *
+   * Chamado por fotoStore.processarFila() DEPOIS do upload e ANTES de a copia
+   * local ser apagada - se isto falhar, a foto continua no aparelho e a fila
+   * tenta de novo.
+   *
+   * @param {number|string} id
+   * @param {'recebimento'|'despacho'} etapa
+   * @param {string} caminho - ex: reentregas/123/recebimento/1756...-a1b2.jpg
+   */
+  registrarFotoEnviada(id, etapa, caminho) {
+    const item = (this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
+    if (!item) return { success: false, message: `Reentrega ID ${id} nao encontrada.` };
+    if (!caminho) return { success: false, message: 'Caminho vazio.' };
+
+    const c = Store._camposFoto(etapa);
+    const paths = Array.isArray(item[c.paths]) ? item[c.paths].slice() : [];
+    // Idempotente: subir a mesma foto duas vezes (app fechado no meio do
+    // caminho) nao pode gerar dois caminhos iguais no registro.
+    if (!paths.includes(caminho)) paths.push(caminho);
+
+    const restantes = Math.max(0, (parseInt(item[c.pendentes]) || 0) - 1);
+    const updates = {};
+    updates[c.paths] = paths;
+    updates[c.pendentes] = restantes;
+    return this.updateReentrega(id, updates);
+  }
+
+  /**
+   * A reentrega ainda existe (e nao esta na lixeira)?
+   *
+   * Serve a fila de fotos: ela precisa saber, ANTES de subir um arquivo, se
+   * ainda ha registro a que o caminho possa ser gravado. Sem isso, uma foto
+   * orfa - de um Reset Global ou de uma exclusao - subiria de novo a cada
+   * ciclo de 30s, deixando um arquivo no bucket por tentativa.
+   */
+  existeReentrega(id) {
+    return !!(this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
+  }
+
+  /**
+   * Reescreve o contador de pendentes com o numero REAL de fotos que este
+   * aparelho ainda tem na fila. E o antidoto para o pull de 30s ressuscitar
+   * uma pendencia ja resolvida - ver o bloco POSSE em js/fotoStore.js.
+   *
+   * NAO passa por updateReentrega de proposito: isto roda a cada ciclo de
+   * sincronizacao e encheria a trilha de auditoria de edicoes que nao sao
+   * edicoes de ninguem. Grava direto e so quando o valor muda de fato.
+   */
+  ajustarFotosPendentes(id, etapa, quantidade) {
+    const item = (this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
+    if (!item) return { success: false, message: `Reentrega ID ${id} nao encontrada.` };
+
+    const c = Store._camposFoto(etapa);
+    const alvo = Math.max(0, parseInt(quantidade) || 0);
+    const atual = parseInt(item[c.pendentes]) || 0;
+    if (atual === alvo) return { success: true, pendentes: alvo, mudou: false };
+
+    item[c.pendentes] = alvo;
+    item.atualizado_em = agoraIsoBrasilia();
+    item.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    this.save();
+    return { success: true, pendentes: alvo, mudou: true };
+  }
+
+  /**
+   * Estado das fotos de uma etapa, do jeito que a tela precisa perguntar.
+   * Reune as tres formas que uma prova pode ter neste momento da migracao:
+   * caminho no Storage, base64 legado (registros ate a v5.0.0) e pendente.
+   */
+  estadoFotosReentrega(item, etapa) {
+    const c = Store._camposFoto(etapa);
+    const paths = Array.isArray(item && item[c.paths]) ? item[c.paths].filter(Boolean) : [];
+    const legado = Array.isArray(item && item[c.legado]) ? item[c.legado].filter(Boolean) : [];
+    const pendentes = Math.max(0, parseInt(item && item[c.pendentes]) || 0);
+    return {
+      paths, legado, pendentes,
+      enviadas: paths.length + legado.length,
+      total: paths.length + legado.length + pendentes,
+      temAlguma: (paths.length + legado.length + pendentes) > 0
+    };
   }
 
   /**

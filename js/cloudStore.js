@@ -1706,6 +1706,13 @@ class CloudStore {
     // vez de ficar num estado meio-aplicado.
     if (resetRemotoPendente) {
       try { localStorage.setItem('jr_reset_epoch', String(epochNuvem)); } catch(e) {}
+      // O reset foi feito em OUTRO aparelho e acabou de chegar neste. As
+      // reentregas locais já foram substituídas pelo que veio da nuvem — que
+      // é vazio — mas a fila de fotos vive no IndexedDB e não é tocada por
+      // nada disso. Sem esta linha, este aparelho ficaria com a tarja âmbar
+      // acesa para sempre e subindo um arquivo órfão por ciclo, comprovando
+      // reentregas que já não existem em lugar nenhum.
+      if (window.fotoStore) window.fotoStore.limparTudo().catch(() => {});
     }
 
     if (anyChange) {
@@ -1748,6 +1755,14 @@ class CloudStore {
 
     this._syncTimer = setInterval(() => {
       this.syncCloudToLocal();
+      // FILA DE FOTOS (v5.1.0). Anda de carona no mesmo ciclo de 30s em vez
+      // de ter timer próprio: se a rede está boa o bastante para o pull, está
+      // boa para a foto — e um segundo timer só teria como novidade a chance
+      // de disparar quando o primeiro falhou.
+      //
+      // Sem await de propósito: um upload lento não pode atrasar a
+      // sincronização dos dados, que é o que mantém a tela honesta.
+      if (window.fotoStore) window.fotoStore.processarFila().catch(() => {});
     }, interval);
   }
 
@@ -1820,7 +1835,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "sync-5.0.0";
+CloudStore.BUILD = "sync-5.1.0";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
@@ -2130,6 +2145,7 @@ CloudStore.ARQUIVOS_DO_APP = [
   './js/app.js',
   './js/store.js',
   './js/cloudStore.js',
+  './js/fotoStore.js',
   './js/config.js',
   './js/mockData.js',
   './manifest.json'

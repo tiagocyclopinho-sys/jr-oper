@@ -831,6 +831,14 @@
     <div id="nav-menu"></div>
   </header>
 
+  <!-- FOTO AINDA SO NESTE APARELHO (v5.1.0).
+       Mora FORA do #main-content de proposito: renderApp() reescreve o miolo
+       inteiro a cada ciclo de sincronizacao, e um aviso que some sozinho de 30
+       em 30 segundos nao avisa ninguem. Preenchida por
+       atualizarTarjaFotosPendentes(), em js/fotoStore.js. -->
+  <div id="tarja-fotos-pendentes"
+       class="hidden bg-amber-950/80 border-b border-amber-600 text-amber-200 text-[11px] font-semibold px-4 py-2 text-center w-full"></div>
+
   <main class="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6 w-full flex-grow" id="main-content">
     <div class="text-center py-20 text-slate-500">
       <div class="text-2xl mb-2">⚙️</div>
@@ -879,6 +887,8 @@
   <script src="./js/xlsx.full.min.js"></script>
   <script src="./js/mockData.js"></script>
   <script src="./js/config.js"></script>
+  <!-- Antes de store.js e cloudStore.js: os dois chamam window.fotoStore. -->
+  <script src="./js/fotoStore.js"></script>
   <script src="./js/cloudStore.js"></script>
   <script src="./js/store.js"></script>
   <script src="./js/app.js"></script>

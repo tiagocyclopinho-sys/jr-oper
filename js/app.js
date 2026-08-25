@@ -465,6 +465,31 @@ function renderStorageUsagePanel() {
         <div class="${cor.bar} h-2 rounded-full transition-all" style="width:${Math.min(info.percentual, 100)}%"></div>
       </div>
       <p class="text-slate-400 leading-relaxed">${mensagem} O catálogo de clientes e produtos (~${info.estaticoKB} KB) fica em um armazenamento separado e não conta para este limite.</p>
+      ${renderFilaFotosPanel()}
+    </div>`;
+}
+
+// Fila de fotos (v5.1.0). Fica dentro do painel de armazenamento porque é
+// exatamente a pergunta que o painel responde — "o que este aparelho está
+// segurando?" — só que para o que NÃO está no localStorage.
+//
+// Lê window._fotosNaFila, alimentado por atualizarTarjaFotosPendentes(): o
+// IndexedDB só responde por Promise e este render é síncrono. O valor pode
+// ficar um ciclo atrasado; a tarja do topo é a fonte imediata.
+function renderFilaFotosPanel() {
+  if (!window.fotoStore || !window.fotoStore.disponivel()) return '';
+  if (typeof window.atualizarTarjaFotosPendentes === 'function') window.atualizarTarjaFotosPendentes();
+  const n = window._fotosNaFila || 0;
+  if (!n) {
+    return `<p class="text-slate-500 mt-2 pt-2 border-t border-slate-800/80 leading-relaxed">
+      📷 Nenhuma foto pendente. As fotos da custódia de reentrega ficam no servidor, não neste aparelho.
+    </p>`;
+  }
+  return `<div class="mt-2 pt-2 border-t border-amber-800/60 text-amber-300 leading-relaxed">
+      <strong>📷 ${n} foto(s) aguardando envio.</strong>
+      Estão guardadas neste aparelho (IndexedDB, fora do limite acima) e sobem sozinhas quando houver rede.
+      <strong>Não limpe os dados do navegador enquanto este número não for zero</strong> — a foto se perde.
+      <button onclick="jrSubirFotosAgora()" class="ml-1 bg-amber-700 hover:bg-amber-600 text-white font-bold px-2 py-0.5 rounded text-[10px]">Tentar enviar agora</button>
     </div>`;
 }
 
@@ -2738,6 +2763,11 @@ function renderApp() {
   if (!container) return;
 
   atualizarModoBadge();
+
+  // Tarja de foto pendente (v5.1.0). Fica fora do #main-content, então não é
+  // redesenhada por este render — mas o NÚMERO nela pode ter mudado (uma foto
+  // subiu no ciclo anterior), e é aqui que dá para reconferir de graça.
+  if (typeof window.atualizarTarjaFotosPendentes === 'function') window.atualizarTarjaFotosPendentes();
 
   if (typeof db === 'undefined' || !db || !db.data) {
     if (typeof Store !== 'undefined') {
@@ -11061,9 +11091,23 @@ function botoesEtapaReentrega(r) {
 // Devolução SAC usa desde 20/08/2026, quando uma auditoria achou foto crua de
 // celular estourando a cota do localStorage.
 //
-// Base64 e não Supabase Storage de propósito: a recepção acontece na doca, e
-// upload exigiria rede NO INSTANTE da captura. O app é PWA offline-first — a
-// foto vai para o localStorage e sincroniza quando houver sinal.
+// MUDOU NA v5.1.0 — ONDE A FOTO FICA.
+// Até a v5.0.0 ela ia para o localStorage como base64, dentro do registro.
+// Isso estourou a cota num aparelho do CD em 25/08/2026 e custou um
+// lançamento. Agora a foto vai para o IndexedDB (fila própria, em js/
+// fotoStore.js) e de lá para o Supabase Storage; o registro guarda só o
+// caminho.
+//
+// O que NÃO mudou é o motivo original de não subir na hora: a recepção
+// acontece na doca, onde pode não haver sinal no instante da captura. Por
+// isso a gravação local continua sendo o primeiro passo, e o upload é
+// diferido. A diferença é que agora existe fila de verdade — ela sobrevive a
+// reload, esvazia sozinha quando a rede volta, e aparece na tela enquanto
+// não esvaziar.
+//
+// window._fotosReentrega segue guardando dataURLs, mas só entre a captura e o
+// "Confirmar": é o que alimenta o preview do modal. No submit as imagens
+// passam para o IndexedDB e esta variável é zerada.
 window._fotosReentrega = [];
 
 function handleFotoReentregaUpload(inputEl, previewId) {
@@ -11088,12 +11132,113 @@ function handleFotoReentregaUpload(inputEl, previewId) {
     });
 }
 
+// -----------------------------------------------------------------------------
+// EXIBIÇÃO DAS FOTOS DE UMA ETAPA
+//
+// Uma foto pode estar em três lugares neste momento, e a tela mostra os três
+// sem que o conferente precise saber a diferença:
+//
+//   1. STORAGE   — já subiu. <img> aponta para a URL pública do bucket.
+//   2. INDEXEDDB — tirada agora ou tirada offline. Vem do aparelho, com borda
+//                  âmbar e a seta de "ainda vai subir".
+//   3. BASE64    — registros criados até a v5.0.0, que guardam a imagem dentro
+//                  do próprio banco. Continuam funcionando; nada novo entra aqui.
+//
+// O caso 2 é a razão de existir da leitura assíncrona abaixo: quem acabou de
+// fotografar precisa VER a foto na hora, mesmo sem rede, ou vai fotografar de
+// novo achando que não pegou.
+// -----------------------------------------------------------------------------
+function _galeriaFotosReentrega(r, etapa) {
+  // GUARDA DE ORDEM DE DEPLOY. Os arquivos sobem por pasta, em rodadas
+  // separadas (a raiz não aceita mais de 100 por vez), então existe uma
+  // janela real em que index.html já está no ar pedindo ./js/fotoStore.js e o
+  // arquivo ainda não chegou. Sem esta guarda, a tela inteira de reentregas
+  // quebraria nessa janela — e quebrar a tela é bem pior do que não mostrar a
+  // miniatura por alguns minutos.
+  if (!window.fotoStore) {
+    return '<div class="text-[10px] text-amber-400 mt-1">⚠️ Recarregue a página (Ctrl+Shift+R): falta um arquivo desta versão.</div>';
+  }
+  const est = (db && typeof db.estadoFotosReentrega === 'function')
+    ? db.estadoFotosReentrega(r, etapa) : null;
+  if (!est || !est.temAlguma) return '<div class="text-[10px] text-slate-500 mt-1">sem foto</div>';
+
+  const idLocais = `fotos-locais-${etapa}-${r.id}`;
+  const thumb = (src, titulo, classe) =>
+    `<img src="${src}" title="${titulo}" onclick="window.open('${src}')" class="w-14 h-14 object-cover rounded cursor-pointer ${classe}">`;
+
+  const nuvem =
+      est.paths.map(p => thumb(window.fotoStore.urlPublica(p), 'Arquivada no servidor', 'border border-slate-700')).join('')
+    + est.legado.map(b => thumb(b, 'Formato antigo (imagem dentro do banco)', 'border border-slate-600 opacity-90')).join('');
+
+  // Só vai ao IndexedDB se houver pendência declarada — não custa nada quando
+  // está tudo no ar, que é o caso normal.
+  if (est.pendentes > 0) setTimeout(() => _preencherFotosLocaisReentrega(r.id, etapa, idLocais), 0);
+
+  return `
+    <div class="flex gap-1.5 flex-wrap mt-1.5 items-center">
+      ${nuvem}
+      <span id="${idLocais}" class="flex gap-1.5 flex-wrap items-center">
+        ${est.pendentes > 0
+          ? `<span class="text-[10px] font-bold text-amber-300 bg-amber-950/70 border border-amber-700 rounded px-1.5 py-1"
+                   title="A foto existe, mas ainda está no aparelho de quem fotografou. Sobe sozinha quando aquele aparelho tiver rede.">📷 ${est.pendentes} aguardando envio</span>`
+          : ''}
+      </span>
+    </div>`;
+}
+
+// Troca o aviso "aguardando envio" pelas miniaturas de verdade, quando as
+// fotos pendentes estão NESTE aparelho. Se a fila local estiver vazia, o aviso
+// fica: a foto é de outro aparelho, e dizer isso é mais honesto do que fingir
+// que não há nada.
+async function _preencherFotosLocaisReentrega(registroId, etapa, containerId) {
+  if (!window.fotoStore || !window.fotoStore.disponivel()) return;
+  let regs = [];
+  try { regs = await window.fotoStore.listarDoAlvo(registroId, etapa); } catch (e) { return; }
+  if (!regs.length) return;
+  const box = document.getElementById(containerId);
+  if (!box) return;   // o modal pode ter sido fechado enquanto o IndexedDB respondia
+  box.innerHTML = regs.map(reg => {
+    const u = window.fotoStore.urlLocal(reg);
+    return `<span class="relative inline-block">
+        <img src="${u}" onclick="window.open('${u}')"
+             title="Ainda só neste aparelho — aguardando rede para subir"
+             class="w-14 h-14 object-cover rounded border-2 border-amber-500 cursor-pointer">
+        <span class="absolute -top-1 -right-1 bg-amber-500 text-slate-950 text-[9px] font-black rounded-full w-4 h-4 flex items-center justify-center">↑</span>
+      </span>`;
+  }).join('');
+}
+
+// Lista de src prontos para <img>, misturando o que está no Storage com o
+// base64 legado. Não inclui pendentes: quem consome isto (a herança de fotos
+// para a Devolução SAC) precisa de endereços que qualquer aparelho consiga
+// abrir, e uma foto que ainda não subiu não tem endereço.
+function _fotosExibiveisReentrega(item, etapa) {
+  if (!window.fotoStore) return [];
+  if (!db || typeof db.estadoFotosReentrega !== 'function') return [];
+  const est = db.estadoFotosReentrega(item, etapa);
+  return est.paths.map(p => window.fotoStore.urlPublica(p)).concat(est.legado);
+}
+
+// Selo para a listagem de reentregas. Só aparece quando há pendência — a tela
+// não pode ficar poluída no caso normal, senão o aviso perde o valor.
+function _seloFotoPendenteReentrega(r) {
+  if (!db || typeof db.estadoFotosReentrega !== 'function') return '';
+  const pend = db.estadoFotosReentrega(r, 'recebimento').pendentes
+             + db.estadoFotosReentrega(r, 'despacho').pendentes;
+  if (!pend) return '';
+  return `<span class="ml-1 inline-flex items-center gap-1 bg-amber-950/80 border border-amber-600 text-amber-300 font-black px-1.5 py-0.5 rounded text-[9px] uppercase whitespace-nowrap"
+                title="${pend} foto(s) desta reentrega ainda não chegaram ao servidor. Estão guardadas no aparelho de quem fotografou e sobem quando ele tiver rede.">📷 ${pend} pendente</span>`;
+}
+
 function _blocoFotoReentrega(inputId, previewId, cor, obrigatoriaTexto) {
   return `
     <div class="bg-${cor}-950/30 border border-${cor}-800/60 rounded-lg p-2.5">
       <label class="block text-[10px] text-${cor}-300 font-black uppercase mb-1.5">
         📷 Foto — obrigatória <span class="font-medium normal-case text-slate-400">(${obrigatoriaTexto})</span>
       </label>
+      <div class="text-[9px] text-slate-500 mb-1.5 leading-snug">
+        Pode fotografar sem sinal: a foto fica guardada no aparelho e sobe sozinha quando a rede voltar.
+      </div>
       <input type="file" id="${inputId}" accept="image/*" capture="environment" multiple
              onchange="handleFotoReentregaUpload(this, '${previewId}')"
              class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-${cor}-700 file:text-white cursor-pointer">
@@ -11191,20 +11336,20 @@ function _avisarDivergenciaReentrega(declarado) {
   el.classList.remove('hidden');
 }
 
-function handleSalvarRecebimentoReentrega(e, id) {
+async function handleSalvarRecebimentoReentrega(e, id) {
   e.preventDefault();
-  const res = db.receberReentregaCd(id, {
-    qtd_recebida: document.getElementById('rc-qtd').value,
-    condicao: document.getElementById('rc-condicao').value,
-    observacao: document.getElementById('rc-obs').value,
-    local_armazenagem: document.getElementById('rc-local').value,
-    fotos: window._fotosReentrega || []
+  await _salvarEtapaComFotos({
+    id,
+    etapa: 'recebimento',
+    dados: {
+      qtd_recebida: document.getElementById('rc-qtd').value,
+      condicao: document.getElementById('rc-condicao').value,
+      observacao: document.getElementById('rc-obs').value,
+      local_armazenagem: document.getElementById('rc-local').value
+    },
+    gravar: (d) => db.receberReentregaCd(id, d),
+    sucesso: '📦 Recebimento registrado no CD.'
   });
-  if (!res.success) { alert('⚠️ ' + res.message); return; }
-  window._fotosReentrega = [];
-  closeModal();
-  showToast('📦 Recebimento registrado no CD.', 'success');
-  renderApp();
 }
 
 // --- ETAPA 3: despacho ------------------------------------------------------
@@ -11268,20 +11413,82 @@ function abrirModalDespacharReentrega(id) {
   c.classList.remove('hidden');
 }
 
-function handleSalvarDespachoReentrega(e, id) {
+async function handleSalvarDespachoReentrega(e, id) {
   e.preventDefault();
-  const res = db.despacharReentrega(id, {
-    placa: document.getElementById('dp-placa').value,
-    motorista: document.getElementById('dp-motorista').value,
-    carga_numero: document.getElementById('dp-carga').value,
-    qtd_despachada: document.getElementById('dp-qtd').value,
-    fotos: window._fotosReentrega || []
+  await _salvarEtapaComFotos({
+    id,
+    etapa: 'despacho',
+    dados: {
+      placa: document.getElementById('dp-placa').value,
+      motorista: document.getElementById('dp-motorista').value,
+      carga_numero: document.getElementById('dp-carga').value,
+      qtd_despachada: document.getElementById('dp-qtd').value
+    },
+    gravar: (d) => db.despacharReentrega(id, d),
+    sucesso: '🚚 Despacho registrado.'
   });
-  if (!res.success) { alert('⚠️ ' + res.message); return; }
+}
+
+// -----------------------------------------------------------------------------
+// GRAVAÇÃO DE UMA ETAPA DE CUSTÓDIA COM FOTO (v5.1.0)
+//
+// A ORDEM AQUI É O CORAÇÃO DA MUDANÇA, e ela é: foto no aparelho PRIMEIRO,
+// registro depois, upload por último e sem pressa.
+//
+//   1. as imagens comprimidas entram no IndexedDB;
+//   2. o registro é gravado com a CONTAGEM de fotos pendentes — sem bytes;
+//   3. se o passo 2 falhar (validação do store), o passo 1 é DESFEITO, senão
+//      ficariam fotos órfãs na fila apontando para uma etapa que não existe;
+//   4. só então tenta subir. Falhar aqui é normal e não é erro: significa
+//      apenas que não havia rede, e a fila tenta de novo sozinha.
+//
+// O conferente pode fechar o app, ficar sem sinal a tarde inteira e ainda
+// assim ter a prova — ela está no aparelho, visível na tela, e sobe quando der.
+// -----------------------------------------------------------------------------
+async function _salvarEtapaComFotos({ id, etapa, dados, gravar, sucesso }) {
+  const fotos = (window._fotosReentrega || []).filter(Boolean);
+  if (fotos.length === 0) {
+    alert('⚠️ Anexe ao menos uma foto. É o comprovante desta etapa.');
+    return;
+  }
+  if (!window.fotoStore || !window.fotoStore.disponivel()) {
+    // Sem IndexedDB não há para onde mandar a foto. Recusar é melhor do que
+    // voltar a gravar base64 no localStorage às escondidas — foi isso que
+    // estourou a cota em 25/08/2026.
+    alert('⚠️ Este navegador não permite guardar a foto (IndexedDB indisponível). '
+        + 'Se estiver em aba anônima, saia dela e tente de novo.');
+    return;
+  }
+
+  let enfileiradas = [];
+  try {
+    for (const dataUrl of fotos) {
+      const idLocal = await window.fotoStore.enfileirar({ registro_id: id, etapa, dataUrl });
+      enfileiradas.push(idLocal);
+    }
+  } catch (err) {
+    for (const x of enfileiradas) { try { await window.fotoStore.remover(x); } catch (e) {} }
+    alert('⚠️ Não consegui guardar a foto neste aparelho: ' + err.message);
+    return;
+  }
+
+  const res = gravar(Object.assign({}, dados, { fotos_pendentes: enfileiradas.length }));
+  if (!res || !res.success) {
+    // Desfaz o passo 1.
+    for (const x of enfileiradas) { try { await window.fotoStore.remover(x); } catch (e) {} }
+    alert('⚠️ ' + ((res && res.message) || 'Não foi possível gravar.'));
+    return;
+  }
+
   window._fotosReentrega = [];
   closeModal();
-  showToast('🚚 Despacho registrado.', 'success');
+  showToast(sucesso, 'success');
   renderApp();
+  if (typeof window.atualizarTarjaFotosPendentes === 'function') window.atualizarTarjaFotosPendentes();
+
+  // Sem await: a tela não espera a rede. Se houver sinal, a foto sobe em
+  // segundos e a marca de pendente some sozinha; se não houver, fica na fila.
+  window.fotoStore.processarFila().catch(() => {});
 }
 
 // --- CANCELAMENTO → chama a tela de Devolução SAC ---------------------------
@@ -11333,7 +11540,12 @@ function handleCancelarReentrega(e, id) {
     volumes: (item.qtd_recebida_cd !== null && item.qtd_recebida_cd !== undefined) ? item.qtd_recebida_cd : item.entregas_reentrega,
     motivo: document.getElementById('cn-motivo') ? '' : '',
     motivo_cancelamento: res.reentrega.motivo_cancelamento,
-    fotos: Array.isArray(item.fotos_recebimento) ? item.fotos_recebimento : []
+    // As fotos do recebimento no CD acompanham a devolução (são a prova do
+    // estado em que a mercadoria voltou). O que viaja agora é a URL no
+    // Storage, não os bytes — a devolução herda uma referência de ~100 bytes
+    // em vez de ~400 KB de base64. Registro antigo, que ainda guarda base64,
+    // continua sendo herdado como base64.
+    fotos: _fotosExibiveisReentrega(item, 'recebimento')
   };
   switchTab('sac_abertura');
   showToast('🚫 Reentrega cancelada. Complete a devolução.', 'success');
@@ -11394,9 +11606,6 @@ function abrirDetalheCustodiaReentrega(id) {
   const c = document.getElementById('modal-container');
   if (!c) return;
   const fmt = v => formatarDataHora(v);
-  const fotos = arr => (Array.isArray(arr) && arr.length)
-    ? '<div class="flex gap-1.5 flex-wrap mt-1.5">' + arr.map(f => `<img src="${f}" onclick="window.open('${f}')" class="w-14 h-14 object-cover rounded border border-slate-700 cursor-pointer">`).join('') + '</div>'
-    : '<div class="text-[10px] text-slate-500 mt-1">sem foto</div>';
 
   const etapa = (icone, titulo, cor, ativo, corpo) => `
     <div class="flex gap-2.5">
@@ -11421,11 +11630,11 @@ function abrirDetalheCustodiaReentrega(id) {
           `<div class="text-[11px] text-slate-300">Por ${r.recebido_cd_por || '—'} em ${fmt(r.recebido_cd_em)}</div>
            <div class="text-[11px] text-slate-400">${r.qtd_recebida_cd} volume(s) · ${String(r.condicao_recebimento || '').replace('_', ' ')}${r.local_armazenagem ? ' · ' + r.local_armazenagem : ''}</div>
            ${r.observacao_recebimento ? `<div class="text-[11px] text-amber-300 mt-0.5">⚠️ ${r.observacao_recebimento}</div>` : ''}
-           ${fotos(r.fotos_recebimento)}`)}
+           ${_galeriaFotosReentrega(r, 'recebimento')}`)}
         ${etapa('🚚', 'Despachada', 'purple', !!r.despachado_em,
           `<div class="text-[11px] text-slate-300">Por ${r.despachado_por || '—'} em ${fmt(r.despachado_em)}</div>
            <div class="text-[11px] text-slate-400">${r.qtd_despachada} volume(s) · ${r.despacho_placa || '—'} · ${r.novo_motorista || '—'}</div>
-           ${fotos(r.fotos_despacho)}`)}
+           ${_galeriaFotosReentrega(r, 'despacho')}`)}
         ${r.cancelada_em
           ? etapa('🚫', 'Cancelada', 'red', true,
               `<div class="text-[11px] text-slate-300">Por ${r.cancelada_por || '—'} em ${fmt(r.cancelada_em)}</div>
@@ -13416,7 +13625,7 @@ function renderViagensReentregasSubTab() {
                     <td class="p-2.5 border-r border-slate-800 font-medium ${r.novo_motorista ? 'text-purple-300 font-bold' : 'text-slate-500'}">
                       ${r.novo_motorista ? `🔄 ${r.novo_motorista}` : '—'}
                     </td>
-                    <td class="p-2.5 border-r border-slate-800 text-center whitespace-nowrap">${statusBadge}</td>
+                    <td class="p-2.5 border-r border-slate-800 text-center whitespace-nowrap">${statusBadge}${_seloFotoPendenteReentrega(r)}</td>
                     <td class="p-2.5 text-center whitespace-nowrap">
                       <div class="flex items-center justify-center gap-1.5">
                         ${botoesEtapaReentrega(r)}
