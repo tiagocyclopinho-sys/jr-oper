@@ -1804,7 +1804,23 @@ class CloudStore {
   }
 }
 
-CloudStore.BUILD = "sync-4.9.1";
+// A build QUE ESTE ARQUIVO E. O app compara este valor com o "build" do
+// version.json publicado para descobrir se o aparelho ficou com uma versao
+// velha em cache.
+//
+// TEM DE SUBIR JUNTO com version.json, sempre. Em 25/08/2026 o version.json
+// foi para sync-5.0.0 e esta linha ficou em sync-4.9.1 - resultado: o codigo
+// novo rodando e, ainda assim, todo aparelho acusando no console
+// "A atualizacao automatica nao pegou. Rodando sync-4.9.1, publicada
+// sync-5.0.0", para sempre. O aviso que existe para detectar cache velho
+// vira ruido permanente, e ai ninguem olha mais para ele.
+//
+// Sao QUATRO marcadores de versao, e os quatro andam juntos:
+//   js/cloudStore.js  CloudStore.BUILD   <- este
+//   version.json      build
+//   js/config.js      appVersion
+//   sw.js             CACHE_NAME
+CloudStore.BUILD = "sync-5.0.0";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
