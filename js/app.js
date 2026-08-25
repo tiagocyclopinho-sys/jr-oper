@@ -2469,6 +2469,160 @@ function executarResetGlobalTreinamento() {
 }
 window.executarResetGlobalTreinamento = executarResetGlobalTreinamento;
 
+// =============================================================================
+// MENU DE NAVEGAÇÃO — AGRUPADO POR DEPARTAMENTO E FILTRADO POR PAPEL
+// (23/08/2026)
+//
+// Antes: lista plana de 14 itens, sem grupos e sem filtro. Ações do mesmo
+// departamento ficavam distantes umas das outras — o CD tinha "Retorno
+// Físico" na 5ª posição e "Resumo Diário" na 8ª, separados por Viagens e
+// Frota; a Frota tinha "Disponibilidade" na 7ª e "Sinistro" na 13ª. E duas
+// telas prontas (Dossiê do Motorista e Acompanhamento do Funcionário) não
+// tinham entrada nenhuma no menu: só eram alcançáveis por um link interno.
+//
+// A CREDENCIAL DO FILTRO É `user.role`, NÃO `user.departamento`. São coisas
+// diferentes e é fácil confundir, porque o cabeçalho do drawer exibe
+// `departamento || role` — mas isso é só rótulo. O `role` é um dos 6 valores
+// de `roles_disponiveis` (SAC, CD, FINANCEIRO, MANUTENCAO, GESTOR, ADMIN),
+// gravado em cada usuário por addUsuario() (store.js) e definido em dois
+// lugares: no autocadastro, derivado do departamento por
+// mapDeptToRoleAndCargo(); e na tela "Logins e Senhas", escolhido à mão pelo
+// admin num select próprio, independente do departamento.
+//
+// O filtro FALHA ABERTO de propósito: papel ausente, vazio ou desconhecido
+// mostra o menu inteiro. Ninguém pode perder acesso a uma tela por causa de
+// um cadastro incompleto — e há casos reais disso (ver o comentário em
+// navPapelDoUsuario). O botão "Ver todas as telas" no rodapé desliga o
+// filtro a qualquer momento, para qualquer usuário.
+// =============================================================================
+const NAV_GRUPOS = [
+  {
+    id: 'visao_geral', icon: '📊', titulo: 'Visão Geral',
+    itens: [
+      { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo', papeis: null },
+      { tab: 'boletim_gerencial', icon: '📄', label: 'Boletim Gerencial', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] }
+    ]
+  },
+  {
+    id: 'sac', icon: '📝', titulo: 'Devoluções (SAC)',
+    itens: [
+      { tab: 'sac_abertura', icon: '📝', label: 'Devolução SAC', papeis: ['SAC', 'GESTOR', 'ADMIN'] },
+      { tab: 'sac_investigacao', icon: '🔍', label: 'Análise & Causa Raiz', papeis: ['SAC', 'GESTOR', 'ADMIN'] },
+      { tab: 'gestao_gestor', icon: '👔', label: 'Tratativas do Gestor', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] }
+    ]
+  },
+  {
+    id: 'cd', icon: '📦', titulo: 'Centro de Distribuição',
+    itens: [
+      { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico CD', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário CD', papeis: ['CD', 'GESTOR', 'ADMIN'] }
+    ]
+  },
+  {
+    id: 'frota', icon: '🚚', titulo: 'Operação & Frota',
+    itens: [
+      { tab: 'controle_viagens', icon: '🚍', label: 'Controle de Viagens', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'],
+        sub: [
+          { valor: 'largada', icon: '🚩', label: 'Largada' },
+          { valor: 'operacional', icon: '⚠️', label: 'Oc. Operacional' },
+          { valor: 'frota_rota', icon: '🚚', label: 'Oc. em Rota' },
+          { valor: 'troca_veiculos', icon: '🔄', label: 'Trocas de Veículos' },
+          { valor: 'reentregas', icon: '🔁', label: 'Reentregas' }
+        ] },
+      { tab: 'disponibilidade_frota', icon: '🚛', label: 'Disponibilidade da Frota', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] }
+    ]
+  },
+  {
+    id: 'pessoas', icon: '👤', titulo: 'Pessoas',
+    itens: [
+      { tab: 'dossie_motorista', icon: '🪪', label: 'Dossiê do Motorista', papeis: ['GESTOR', 'ADMIN'] },
+      { tab: 'acompanhamento_funcionario', icon: '📁', label: 'Acompanhamento do Funcionário', papeis: ['GESTOR', 'ADMIN'] }
+    ]
+  },
+  {
+    // Administração aparece para TODOS: quem protege estas quatro telas é a
+    // senha de admin (ver renderPortaoAdmin), não o papel do usuário. Filtrar
+    // aqui daria a impressão de uma trava que o botão "Ver todas as telas"
+    // desfaz num clique — e ainda esconderia a porta de quem legitimamente
+    // precisa dela, já que qualquer pessoa com a senha é admin.
+    id: 'admin', icon: '⚙️', titulo: 'Administração',
+    itens: [
+      { tab: 'cadastros_dados', icon: '⚙️', label: 'Cadastros Mestres', papeis: null, exigeSenhaAdmin: true },
+      { tab: 'gestao_usuarios', icon: '🔐', label: 'Logins e Senhas', papeis: null, exigeSenhaAdmin: true },
+      { tab: 'lixeira', icon: '🛡️', label: 'Governança & Lixeira', papeis: null, exigeSenhaAdmin: true },
+      { tab: 'power_bi', icon: '🔌', label: 'Conector Power BI', papeis: null, exigeSenhaAdmin: true }
+    ]
+  }
+];
+
+// Papel do usuário para efeito de menu. Ordem: o `role` gravado no cadastro
+// (autoridade), depois a derivação pelo departamento, depois nada — e "nada"
+// aqui significa menu inteiro, nunca menu vazio.
+//
+// A derivação pelo departamento é rede de segurança e não cobre tudo:
+// mapDeptToRoleAndCargo() procura "GERENTE" e "SUPERVISOR OPERAÇÃO", que são
+// os nomes de DEPARTAMENTOS_PADRAO (tela de autocadastro). Já a lista de
+// db.data.departamentos, usada na tela "Logins e Senhas", traz outros nomes
+// — "GERÊNCIA GERAL", "GERÊNCIA OPERACIONAL", "SUPERVISÃO", "COMERCIAL",
+// "COMPRAS" — que nenhuma dessas comparações reconhece e que cairiam no
+// padrão 'SAC'. É justamente a gerência e a supervisão perdendo acesso.
+// Enquanto as duas listas não forem unificadas, quem tem departamento não
+// reconhecido vê o menu inteiro em vez de ver o menu errado.
+function navPapelDoUsuario(user) {
+  if (!user) return null;
+  const papeisValidos = ['SAC', 'CD', 'FINANCEIRO', 'MANUTENCAO', 'GESTOR', 'ADMIN'];
+  const papelGravado = String(user.role || '').toUpperCase().trim();
+  if (papeisValidos.indexOf(papelGravado) > -1) return papelGravado;
+
+  if (user.departamento && typeof mapDeptToRoleAndCargo === 'function') {
+    try {
+      const resposta = mapDeptToRoleAndCargo(user.departamento);
+      const derivado = String(resposta.role || '').toUpperCase();
+      if (papeisValidos.indexOf(derivado) > -1) {
+        // Veio do cadastro de departamentos: alguém decidiu isso de propósito
+        // na tela de "Logins e Senhas". Vale como resposta, inclusive 'SAC'.
+        if (resposta.origem === 'cadastro') return derivado;
+        // Veio da heurística por nome: aí o 'SAC' final é o "não sei dizer",
+        // não uma resposta — só aceitamos quando o nome é mesmo do SAC.
+        if (derivado !== 'SAC') return derivado;
+        if (String(user.departamento).toUpperCase().indexOf('SAC') > -1) return 'SAC';
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+function navItemVisivel(item, papel) {
+  if (window._navVerTudo) return true;
+  if (!papel) return true;           // falha aberto: cadastro incompleto vê tudo
+  if (!item.papeis) return true;     // item sem restrição (Dashboard)
+  return item.papeis.indexOf(papel) > -1;
+}
+
+function toggleNavGrupo(id) {
+  if (!window._navGruposAbertos) window._navGruposAbertos = {};
+  window._navGruposAbertos[id] = !window._navGruposAbertos[id];
+  renderNavMenu();
+}
+window.toggleNavGrupo = toggleNavGrupo;
+
+function toggleNavVerTudo() {
+  window._navVerTudo = !window._navVerTudo;
+  renderNavMenu();
+}
+window.toggleNavVerTudo = toggleNavVerTudo;
+
+// Atalho direto para uma sub-aba de Controle de Viagens. Precisa ser uma
+// função em window: `activeViagensSubTab` é declarada com `let` no escopo do
+// script e um onclick inline (que roda no escopo global) não enxerga esse
+// tipo de binding. Mesmo motivo do atalho 'rota_ocorrencias' já existente.
+function switchTabViagensSub(sub) {
+  activeViagensSubTab = sub;
+  switchTab('controle_viagens');
+}
+window.switchTabViagensSub = switchTabViagensSub;
+
 function renderNavMenu() {
   const menuEl = document.getElementById('nav-menu');
   if (!menuEl) return;
@@ -2479,23 +2633,78 @@ function renderNavMenu() {
   }
 
   const wasOpen = document.getElementById('mobile-menu-dropdown')?.classList.contains('open');
+  const papel = navPapelDoUsuario(user);
 
-  const items = [
-    { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo' },
-    { tab: 'sac_abertura', icon: '📝', label: 'Devolução SAC' },
-    { tab: 'sac_investigacao', icon: '🔍', label: 'Análise & Causa Raiz' },
-    { tab: 'gestao_gestor', icon: '👔', label: 'Tratativas do Gestor' },
-    { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico CD' },
-    { tab: 'controle_viagens', icon: '🚍', label: 'Controle de Viagens' },
-    { tab: 'disponibilidade_frota', icon: '🚛', label: 'Disponibilidade da Frota' },
-    { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário CD' },
-    { tab: 'boletim_gerencial', icon: '📄', label: 'Boletim Gerencial' },
-    { tab: 'cadastros_dados', icon: '⚙️', label: 'Cadastros Mestres' },
-    { tab: 'lixeira', icon: '🛡️', label: 'Governança & Lixeira' },
-    { tab: 'gestao_usuarios', icon: '🔐', label: 'Logins e Senhas' },
-    { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro' },
-    { tab: 'power_bi', icon: '🔌', label: 'Conector Power BI' }
-  ];
+  if (!window._navGruposAbertos) {
+    // Primeira abertura da sessão: o grupo do próprio papel já vem aberto,
+    // os outros recolhidos. Depois disso quem manda é o clique do usuário.
+    const doPapel = {
+      SAC: 'sac', CD: 'cd', FINANCEIRO: 'visao_geral',
+      MANUTENCAO: 'frota', GESTOR: 'visao_geral', ADMIN: 'visao_geral'
+    }[papel] || 'visao_geral';
+    window._navGruposAbertos = {};
+    window._navGruposAbertos[doPapel] = true;
+  }
+
+  const grupoDaTelaAtiva = (NAV_GRUPOS.find(g => g.itens.some(i => i.tab === activeTab)) || {}).id;
+
+  // Ao MUDAR de tela, o grupo da tela nova abre sozinho — senão o item ativo
+  // ficaria escondido dentro de um grupo fechado.
+  //
+  // Mas isso vale só no momento da troca, não a cada render: manter o grupo
+  // ativo aberto à força deixaria a setinha dele sem efeito visível, e uma
+  // setinha que não responde parece defeito.
+  if (window._navUltimaTabRenderizada !== activeTab) {
+    if (grupoDaTelaAtiva) window._navGruposAbertos[grupoDaTelaAtiva] = true;
+    window._navUltimaTabRenderizada = activeTab;
+  }
+
+  const gruposVisiveis = NAV_GRUPOS
+    .map(g => ({ grupo: g, itens: g.itens.filter(i => navItemVisivel(i, papel)) }))
+    .filter(x => x.itens.length > 0);
+
+  const totalItens = NAV_GRUPOS.reduce((s, g) => s + g.itens.length, 0);
+  const itensMostrados = gruposVisiveis.reduce((s, x) => s + x.itens.length, 0);
+  const temItemOculto = itensMostrados < totalItens;
+
+  const htmlGrupos = gruposVisiveis.map(({ grupo, itens }) => {
+    const aberto = !!window._navGruposAbertos[grupo.id];
+    const temAtivo = itens.some(i => i.tab === activeTab);
+
+    const htmlItens = itens.map(i => {
+      const ativo = activeTab === i.tab;
+      const botao = `
+        <button onclick="switchTab('${i.tab}')" class="w-full text-left pl-4 pr-3 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2.5 ${ativo ? 'bg-emerald-800 text-white shadow' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}">
+          <span class="text-base">${i.icon}</span>
+          <span class="flex-1">${i.label}</span>
+          ${i.exigeSenhaAdmin && (typeof areaAdminDesbloqueada !== 'function' || !areaAdminDesbloqueada())
+            ? '<span class="text-[10px] opacity-60" title="Exige a senha de administrador">🔒</span>' : ''}
+        </button>`;
+
+      // Sub-abas só aparecem quando a tela-mãe está aberta: manter as 5 de
+      // Controle de Viagens sempre visíveis devolveria o menu ao tamanho de
+      // antes, que é o problema que este trabalho veio resolver.
+      if (!i.sub || !ativo) return botao;
+
+      const htmlSub = i.sub.map(s => `
+        <button onclick="switchTabViagensSub('${s.valor}')" class="w-full text-left pl-9 pr-3 py-1.5 rounded-lg text-[11px] font-semibold transition flex items-center gap-2 ${activeViagensSubTab === s.valor ? 'text-emerald-300 bg-slate-800/60' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}">
+          <span>${s.icon}</span> ${s.label}
+        </button>`).join('');
+
+      return botao + `<div class="mt-0.5 space-y-0.5 border-l border-slate-800 ml-5">${htmlSub}</div>`;
+    }).join('');
+
+    return `
+      <div class="space-y-0.5">
+        <button onclick="toggleNavGrupo('${grupo.id}')" class="w-full text-left px-2 py-1.5 rounded-lg flex items-center justify-between transition hover:bg-slate-800/60 group">
+          <span class="text-[10px] font-black uppercase tracking-wider flex items-center gap-2 ${temAtivo ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300'}">
+            <span class="text-xs">${grupo.icon}</span> ${grupo.titulo}
+          </span>
+          <span class="text-[9px] text-slate-600 transition-transform ${aberto ? 'rotate-90' : ''}">▶</span>
+        </button>
+        ${aberto ? `<div class="space-y-0.5 pb-1">${htmlItens}</div>` : ''}
+      </div>`;
+  }).join('');
 
   menuEl.innerHTML = `
     <div id="nav-menu-overlay" class="${wasOpen ? 'open' : ''}" onclick="toggleMobileMenu(false)"></div>
@@ -2510,13 +2719,13 @@ function renderNavMenu() {
         </div>
         <button onclick="toggleMobileMenu(false)" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition text-sm font-bold" title="Fechar Menu">✕</button>
       </div>
-      <div class="py-1 space-y-1 overflow-y-auto flex-grow">
-        ${items.map(i => `
-          <button onclick="switchTab('${i.tab}')" class="w-full text-left px-3 py-2.5 rounded-lg text-xs font-bold transition flex items-center gap-2.5 ${activeTab === i.tab ? 'bg-emerald-800 text-white shadow' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}">
-            <span class="text-base">${i.icon}</span> ${i.label}
-          </button>
-        `).join('')}
+      <div class="py-1 space-y-1.5 overflow-y-auto flex-grow">
+        ${htmlGrupos}
       </div>
+      ${(temItemOculto || window._navVerTudo) ? `
+        <button onclick="toggleNavVerTudo()" class="w-full text-center px-3 py-2 rounded-lg text-[10px] font-bold transition border border-dashed ${window._navVerTudo ? 'border-emerald-700 text-emerald-400 hover:bg-slate-800' : 'border-slate-700 text-slate-500 hover:text-slate-300 hover:bg-slate-800'}">
+          ${window._navVerTudo ? '🎯 Mostrar só as telas do meu setor' : '👁️ Ver todas as telas'}
+        </button>` : ''}
       <div class="pt-2.5 border-t border-slate-800 text-[10px] text-slate-500 font-medium px-2 flex justify-between items-center">
         <span>JR Oper v2.0</span>
         <button onclick="handleLogout()" class="text-red-400 hover:underline font-bold">Sair</button>

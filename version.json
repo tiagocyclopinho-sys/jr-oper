@@ -1,5 +1,5 @@
 {
-  "build": "sync-4.8.9",
-  "publicado_em": "2026-08-23",
-  "resumo": "A hora que volta da nuvem vinha sem marcador de fuso e era lida como horario local, adiantando todo carimbo em 3 horas. Sintoma: SLA aparecia certo e virava 'sem referencia' no primeiro ciclo de sincronizacao. Corrigido na raiz: carimbo sem fuso passa a ser lido como UTC, que e como o banco guarda. Alcanca SLA dos alertas, faixas 24h/48h, SLA de frota 4h/8h, MTTR, lead time e filtro por periodo."
+  "build": "sync-4.9.0",
+  "publicado_em": "2026-08-25",
+  "resumo": "Uniao das duas linhas que haviam divergido: o motor de sincronizacao da 4.8.9 (Ondas 1+2 - guarda na escrita, registro de aparelhos, paginacao por cursor, exclusao duravel, carimbo de reset) somado ao menu agrupado por departamento da linha de UI (NAV_GRUPOS - 6 grupos, filtro por papel com falha aberta, sub-abas de Controle de Viagens e as entradas de Dossie do Motorista e Acompanhamento do Funcionario)."
 }
