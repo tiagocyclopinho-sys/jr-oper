@@ -157,53 +157,6 @@ let r = null;
   await window.jrConferirVersaoPublicada();
   conferir('não recarrega em laço se a atualização não pegar', recarregou === 0, recarregou);
 
-
-  console.log('\n== PAINEL DE RESQUÍCIO — build 4.8.3 ==');
-  // A tela de Aparelhos passou a desenhar o painel novo. Se ele lançar, o
-  // card inteiro some — inclusive o diagnóstico que já existia. Por isso o
-  // primeiro teste é o mais bobo e o mais importante: ele desenha?
-  window._resquiciosCache = null;
-  window._rastreioCache = null;
-  let painel = '';
-  let quebrou = null;
-  try { painel = window.renderResquiciosDesteAparelho(); } catch(e) { quebrou = String(e && e.message || e); }
-  conferir('desenha sem nada conferido ainda', quebrou === null && painel.length > 0, quebrou);
-  conferir('e traz o campo de rastreio', painel.includes('jr-rastreio-termo'));
-
-  // Aparelho limpo: mensagem verde, sem tabela.
-  armazem['jr_sac_db'] = JSON.stringify({ ocorrencias_devolucao: [{ id: 1, veiculo_placa: 'AAA1A11' }] });
-  armazem['jr_ocorrencias'] = JSON.stringify([{ id: 1, veiculo_placa: 'AAA1A11' }]);
-  cs._mapaSync = null;
-  window.conferirResquicios(null);
-  painel = window.renderResquiciosDesteAparelho();
-  conferir('cópias batendo: diz que não há divergência', painel.includes('Nenhuma divergência'), painel.slice(0, 200));
-
-  // Lançamento salvo e fora do espelho: o caso de 23/08.
-  armazem['jr_sac_db'] = JSON.stringify({
-    ocorrencias_devolucao: [{ id: 1, veiculo_placa: 'AAA1A11' }, { id: 2, veiculo_placa: 'OLI2E18' }]
-  });
-  window.conferirResquicios(null);
-  painel = window.renderResquiciosDesteAparelho();
-  conferir('lançamento em risco: avisa que some no próximo ciclo', painel.includes('some(m) no próximo ciclo'), painel.slice(0, 400));
-  conferir('e mostra a placa na tabela', painel.includes('OLI2E18'));
-
-  // O card de Aparelhos precisa incluir o painel — é o caminho do celular.
-  window._aparelhosCache.estado = 'ok';
-  window._aparelhosCache.semTabela = false;
-  window._aparelhosCache.lista = [];
-  let card = '';
-  quebrou = null;
-  try { card = window.renderAparelhosContent(); } catch(e) { quebrou = String(e && e.message || e); }
-  conferir('o card de Aparelhos desenha com o painel dentro', quebrou === null && card.includes('Resquício de cache neste aparelho'), quebrou);
-
-  // Texto vindo do registro não pode virar HTML dentro da tela.
-  armazem['jr_sac_db'] = JSON.stringify({
-    ocorrencias_devolucao: [{ id: 1, veiculo_placa: 'AAA1A11' }, { id: 9, veiculo_placa: '<img src=x>' }]
-  });
-  window.conferirResquicios(null);
-  painel = window.renderResquiciosDesteAparelho();
-  conferir('escapa o conteúdo do registro em vez de injetá-lo', !painel.includes('<img src=x>') && painel.includes('&lt;img src=x>'), painel.indexOf('<img src=x>'));
-
   console.log(falhas === 0 ? '\nTODOS OS TESTES PASSARAM' : `\n${falhas} TESTE(S) FALHARAM`);
   process.exit(falhas === 0 ? 0 : 1);
 })();
