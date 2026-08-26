@@ -3649,19 +3649,47 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
   const valorFormatado = (parseFloat(registro.valor_reclamado || registro.valor || registro.custo_socorro || 0) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
   // Coleta todas as mídias (fotos e vídeos)
+  //
+  // CORRIGIDO EM 26/08/2026. Esta lista lia foto_url, video_url, fotos,
+  // midia_fotos e anexos - e NENHUM desses e o campo onde a devolucao guarda a
+  // midia de verdade. Os campos reais sao fotos_abertura / videos_abertura
+  // (gravados em addDevolucao) e fotos_investigacao / videos_investigacao
+  // (acumulados em updateInvestigacao). foto_url e video_url sao so aliases do
+  // PRIMEIRO item de cada array, mantidos por compatibilidade.
+  //
+  // O efeito: uma ocorrencia com 6 fotos e 2 videos abria aqui mostrando 1 foto
+  // e 1 video, toda a evidencia da investigacao sumia, e o contador do titulo
+  // ("Evidencias & Midias Anexadas (2)") confirmava o numero errado. Quem
+  // decidia pela tela decidia sem ver a prova.
   const fotos = [];
   const videos = [];
-  if (registro.foto_url) fotos.push(registro.foto_url);
-  if (registro.video_url) videos.push(registro.video_url);
-  if (registro.video_investigacao_url) videos.push(registro.video_investigacao_url);
-  if (Array.isArray(registro.fotos)) fotos.push(...registro.fotos);
-  if (Array.isArray(registro.videos)) videos.push(...registro.videos);
-  if (Array.isArray(registro.midia_fotos)) fotos.push(...registro.midia_fotos);
-  if (Array.isArray(registro.midia_videos)) videos.push(...registro.midia_videos);
+  const empurrar = (destino, valor) => {
+    if (!valor) return;
+    (Array.isArray(valor) ? valor : [valor]).forEach(v => {
+      if (v && typeof v === 'string' && !destino.includes(v)) destino.push(v);
+    });
+  };
+
+  // Campos reais da devolução, na ordem em que a ocorrência os produz.
+  empurrar(fotos, registro.fotos_abertura);
+  empurrar(fotos, registro.fotos_investigacao);
+  empurrar(videos, registro.videos_abertura);
+  empurrar(videos, registro.videos_investigacao);
+
+  // Aliases legados e campos de outros módulos (rota, reentrega, sinistro), que
+  // passam por este mesmo modal. Como empurrar() ignora repetido, os aliases
+  // não duplicam o que os arrays acima já trouxeram.
+  empurrar(fotos, registro.foto_url);
+  empurrar(videos, registro.video_url);
+  empurrar(videos, registro.video_investigacao_url);
+  empurrar(fotos, registro.fotos);
+  empurrar(videos, registro.videos);
+  empurrar(fotos, registro.midia_fotos);
+  empurrar(videos, registro.midia_videos);
   if (Array.isArray(registro.anexos)) {
     registro.anexos.forEach(a => {
-      if (typeof a === 'string' && (a.startsWith('data:image') || a.match(/\.(jpeg|jpg|png|webp|gif)/i))) fotos.push(a);
-      else if (typeof a === 'string' && (a.startsWith('data:video') || a.match(/\.(mp4|webm|mov|avi|3gp|mkv)/i))) videos.push(a);
+      if (typeof a === 'string' && (a.startsWith('data:image') || a.match(/\.(jpeg|jpg|png|webp|gif)/i))) empurrar(fotos, a);
+      else if (typeof a === 'string' && (a.startsWith('data:video') || a.match(/\.(mp4|webm|mov|avi|3gp|mkv)/i))) empurrar(videos, a);
     });
   }
 
@@ -6018,41 +6046,145 @@ function abrirMidiaLightbox(url, tipo) {
 // (Abertura no SAC / Análise e Investigação), para dar o "histórico
 // completo da ocorrência" nas telas de Gestão de Tratativas e Recepção CD.
 function renderGaleriaMidia(dev, opcoes = {}) {
-  const { titulo = null, vazio = 'Nenhuma foto ou vídeo anexado nesta ocorrência.' } = opcoes;
+  const {
+    titulo = null,
+    vazio = 'Nenhuma foto ou vídeo anexado nesta ocorrência.',
+    permitirExcluir = true
+  } = opcoes;
   const fotosAbertura = Array.isArray(dev.fotos_abertura) ? dev.fotos_abertura : (dev.foto_url ? [dev.foto_url] : []);
   const videosAbertura = Array.isArray(dev.videos_abertura) ? dev.videos_abertura : (dev.video_url ? [dev.video_url] : []);
   const fotosInvestigacao = Array.isArray(dev.fotos_investigacao) ? dev.fotos_investigacao : [];
   const videosInvestigacao = Array.isArray(dev.videos_investigacao) ? dev.videos_investigacao : (dev.video_investigacao_url ? [dev.video_investigacao_url] : []);
 
   const grupos = [
-    { label: '📋 Abertura (SAC)', fotos: fotosAbertura, videos: videosAbertura },
-    { label: '🔎 Análise / Investigação', fotos: fotosInvestigacao, videos: videosInvestigacao }
+    { label: '📋 Abertura (SAC)', campoFotos: 'fotos_abertura', campoVideos: 'videos_abertura', fotos: fotosAbertura, videos: videosAbertura },
+    { label: '🔎 Análise / Investigação', campoFotos: 'fotos_investigacao', campoVideos: 'videos_investigacao', fotos: fotosInvestigacao, videos: videosInvestigacao }
   ].filter(g => g.fotos.length > 0 || g.videos.length > 0);
 
-  const renderItemMidia = (url, tipo) => {
+  // O 🗑️ só aparece quando há um id para excluir DE: as galerias recebem
+  // sempre um registro de devolução, mas um registro ainda não salvo (preview
+  // de abertura) não tem id e não tem o que apagar no banco.
+  const podeExcluir = permitirExcluir && !!dev.id;
+
+  // As próprias opções viajam no HTML para que atualizarGaleriasMidia()
+  // consiga redesenhar ESTA instância depois de uma exclusão sem precisar de
+  // renderApp() — ver o comentário lá embaixo, e o motivo de existir.
+  const marcadores = `data-galeria-dev="${dev.id != null ? dev.id : ''}" `
+    + `data-galeria-op="${encodeURIComponent(JSON.stringify({ titulo, vazio, permitirExcluir }))}"`;
+
+  const renderItemMidia = (url, tipo, campo, indice) => {
     const urlEscapada = String(url).replace(/'/g, "\\'");
-    return tipo === 'video'
-      ? `<div onclick="abrirMidiaLightbox('${urlEscapada}','video')" class="w-16 h-16 rounded-lg border border-blue-700 cursor-pointer hover:opacity-80 hover:border-blue-400 bg-slate-950 flex items-center justify-center text-xl shrink-0" title="Ver vídeo">▶️</div>`
-      : `<img src="${url}" onclick="abrirMidiaLightbox('${urlEscapada}','foto')" class="w-16 h-16 object-cover rounded-lg border border-slate-700 cursor-pointer hover:opacity-80 hover:border-emerald-500 shrink-0" alt="Foto da ocorrência" title="Ver foto">`;
+    const miolo = tipo === 'video'
+      ? `<div onclick="abrirMidiaLightbox('${urlEscapada}','video')" class="w-16 h-16 rounded-lg border border-blue-700 cursor-pointer hover:opacity-80 hover:border-blue-400 bg-slate-950 flex items-center justify-center text-xl" title="Ver vídeo">▶️</div>`
+      : `<img src="${url}" onclick="abrirMidiaLightbox('${urlEscapada}','foto')" class="w-16 h-16 object-cover rounded-lg border border-slate-700 cursor-pointer hover:opacity-80 hover:border-emerald-500" alt="Foto da ocorrência" title="Ver foto">`;
+
+    if (!podeExcluir) return `<div class="shrink-0">${miolo}</div>`;
+
+    return `
+      <div class="relative shrink-0 group">
+        ${miolo}
+        <button type="button"
+          onclick="event.stopPropagation(); confirmarExclusaoMidia('${dev.id}', '${campo}', ${indice}, '${tipo}')"
+          class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-700 hover:bg-red-600 border border-red-400 text-white text-[10px] leading-none flex items-center justify-center shadow-lg opacity-60 group-hover:opacity-100 focus:opacity-100 transition"
+          title="Excluir esta ${tipo === 'video' ? 'gravação' : 'foto'} da ocorrência">🗑️</button>
+      </div>`;
   };
 
   if (grupos.length === 0) {
-    return `<div class="text-[10px] text-slate-500 italic">${vazio}</div>`;
+    // O marcador vai TAMBÉM no estado vazio: sem ele, apagar o último item
+    // arrancaria o próprio nó que a atualização usa para se achar, e a galeria
+    // pararia de responder até um reload.
+    return `<div ${marcadores} class="text-[10px] text-slate-500 italic">${vazio}</div>`;
   }
 
   return `
-    <div class="space-y-2.5">
+    <div ${marcadores} class="space-y-2.5">
       ${titulo ? `<div class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">${titulo}</div>` : ''}
       ${grupos.map(g => `
         <div class="space-y-1">
           <div class="text-[9px] text-slate-500 font-bold uppercase">${g.label} (${g.fotos.length + g.videos.length})</div>
-          <div class="flex flex-wrap gap-1.5">
-            ${g.fotos.map(f => renderItemMidia(f, 'foto')).join('')}
-            ${g.videos.map(v => renderItemMidia(v, 'video')).join('')}
+          <div class="flex flex-wrap gap-2.5">
+            ${g.fotos.map((f, i) => renderItemMidia(f, 'foto', g.campoFotos, i)).join('')}
+            ${g.videos.map((v, i) => renderItemMidia(v, 'video', g.campoVideos, i)).join('')}
           </div>
         </div>`).join('')}
+      ${podeExcluir ? `<div class="text-[9px] text-slate-600 italic">🗑️ exclui o item da ocorrência. A exclusão é definitiva e fica registrada no histórico com o seu nome.</div>` : ''}
     </div>`;
 }
+
+// Redesenha SÓ as galerias da ocorrência, em qualquer lugar da tela onde elas
+// estejam — inclusive dentro do modal de Editar Análise, que fica por cima da
+// lista e tem a sua própria cópia.
+//
+// POR QUE NÃO renderApp(). A tela de Análise & Causa Raiz é uma lista de
+// formulários ABERTOS: cada card tem causa raiz, tipo de erro, ação tomada e
+// responsável, tudo preenchível. renderApp() remonta o HTML inteiro a partir
+// do estado, e tudo que a analista tivesse digitado e ainda não salvo se
+// perderia — apagar uma foto duplicada custaria o parágrafo de apuração que
+// ela acabou de escrever. Trocar um <img> não justifica esse preço.
+function atualizarGaleriasMidia(devId) {
+  const dev = db.getDevolucoes().find(d => String(d.id) === String(devId));
+  if (!dev) return;
+  document.querySelectorAll(`[data-galeria-dev="${devId}"]`).forEach(el => {
+    let op = {};
+    try { op = JSON.parse(decodeURIComponent(el.getAttribute('data-galeria-op') || '')) || {}; } catch (e) { op = {}; }
+    const molde = document.createElement('div');
+    molde.innerHTML = renderGaleriaMidia(dev, op);
+    const novo = molde.firstElementChild;
+    if (novo) el.replaceWith(novo);
+  });
+}
+window.atualizarGaleriasMidia = atualizarGaleriasMidia;
+
+// Exclusão de UMA mídia da ocorrência. Foi decidido em 26/08/2026 que qualquer
+// perfil pode excluir, JUSTAMENTE porque toda exclusão passa por aqui e vira
+// linha em audit_logs (quem, quando, qual protocolo, qual item, o que restou).
+//
+// A ordem importa: tira do registro PRIMEIRO, tenta o bucket DEPOIS. Se fosse
+// ao contrário e o registro falhasse em salvar, o arquivo já teria ido e a tela
+// continuaria mostrando um endereço morto. Do jeito que está, o pior caso é um
+// arquivo órfão no bucket — que aparece no log e dá para limpar depois.
+async function confirmarExclusaoMidia(devId, campo, indice, tipo) {
+  const rotulo = tipo === 'video' ? 'este vídeo' : 'esta foto';
+  if (!confirm(`Excluir ${rotulo} da ocorrência?\n\nA exclusão é definitiva e ficará registrada no histórico com o seu nome.`)) return;
+
+  const res = db.excluirMidiaDevolucao(devId, campo, indice);
+  if (!res.success) {
+    showToast(res.message, 'error');
+    atualizarGaleriasMidia(devId);
+    return;
+  }
+
+  atualizarGaleriasMidia(devId);
+
+  if (!res.ehArquivo) {
+    showToast('Mídia excluída da ocorrência.');
+  } else {
+    const apagado = (typeof window.jrExcluirObjetoStorage === 'function')
+      ? await window.jrExcluirObjetoStorage(res.removido)
+      : { ok: false, motivo: 'sem_funcao' };
+
+    if (apagado.ok) {
+      showToast('Mídia excluída da ocorrência e removida do servidor.');
+    } else if (apagado.motivo === 'sem_permissao') {
+      // Nao inventar sucesso: o arquivo foi conferido e AINDA ESTA no bucket.
+      // Ver database/migration_35_delete_evidencias_videos.sql.
+      showToast('Mídia removida da ocorrência, mas o arquivo continua no servidor: o bucket ainda não permite exclusão (aplicar a migration 35).', 'error');
+    } else if (apagado.motivo === 'nao_confirmado' || apagado.motivo === 'sem_rede') {
+      showToast('Mídia removida da ocorrência. Não deu para confirmar a exclusão do arquivo no servidor — sem conexão no momento.', 'error');
+      // Não inventar sucesso: o bucket recusou o DELETE. Ver
+      // database/migration_35_delete_evidencias_videos.sql.
+      showToast('Mídia removida da ocorrência, mas o arquivo continua no servidor: o bucket não permite exclusão. Aplique a migration 35.', 'error');
+    } else {
+      showToast('Mídia removida da ocorrência, mas o arquivo não pôde ser apagado do servidor (' + apagado.motivo + ').', 'error');
+    }
+  }
+
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    window.cloudStore.syncLocalToCloud().catch(() => {});
+  }
+}
+window.confirmarExclusaoMidia = confirmarExclusaoMidia;
 
 // (achado em 20/08/2026, auditoria externa) fotos de câmera de celular
 // moderno saem com 4-12MB cada; em Base64 bruto (readAsDataURL sem
@@ -6221,7 +6353,12 @@ window._videosSubindo = 0;
 
 function jrPodeSalvarComVideos() {
   if (window._videosSubindo > 0) {
-    alert('⏳ Aguarde: ' + window._videosSubindo + ' vídeo(s) ainda estão sendo enviados.\n\n'
+    // O contador cobre compressão E envio desde 26/08/2026 — a compressão roda
+    // em tempo real e é a fase mais demorada das duas, então o texto não pode
+    // falar só em "enviando", ou a espera parece um travamento.
+    alert('⏳ Aguarde: ' + window._videosSubindo + ' vídeo(s) ainda estão sendo preparados ou enviados.\n\n'
+        + 'Vídeos grandes são reduzidos antes de subir — o vídeo vai INTEIRO, nada é cortado — e isso leva '
+        + 'mais ou menos o tempo de duração do vídeo.\n\n'
         + 'Salvar agora gravaria o registro SEM o vídeo. A barra de progresso some quando terminar.');
     return false;
   }
@@ -6248,16 +6385,33 @@ function _cartaoVideo(inner, file) {
 
   const legenda = document.createElement('div');
   legenda.className = 'text-[9px] text-blue-300 font-bold mt-1';
-  legenda.textContent = 'enviando... 0%';
+  legenda.textContent = 'preparando...';
 
   box.appendChild(nome);
   box.appendChild(trilho);
   box.appendChild(legenda);
   if (inner) inner.appendChild(box);
 
+  // A barra tem DUAS fases agora, e elas custam tempos bem diferentes: a
+  // compressao roda em tempo real (video de 2 min leva ~2 min) e o envio vai
+  // na velocidade da rede. Misturar as duas numa barra so faria a analista
+  // achar que travou no meio - por isso cada fase tem cor e texto proprios.
   return {
-    progresso(pct) {
+    comprimindo(pct) {
+      barra.className = 'h-full bg-amber-500 transition-all';
       barra.style.width = pct + '%';
+      legenda.className = 'text-[9px] text-amber-300 font-bold mt-1';
+      legenda.textContent = 'reduzindo o video... ' + pct + '%';
+    },
+    comprimido(antes, depois) {
+      const mb = b => (b / 1024 / 1024).toFixed(1).replace(".", ",") + " MB";
+      legenda.className = 'text-[9px] text-emerald-300 font-bold mt-1';
+      legenda.textContent = 'reduzido: ' + mb(antes) + ' -> ' + mb(depois) + ' (video inteiro)';
+    },
+    progresso(pct) {
+      barra.className = 'h-full bg-blue-500 transition-all';
+      barra.style.width = pct + '%';
+      legenda.className = 'text-[9px] text-blue-300 font-bold mt-1';
       legenda.textContent = 'enviando... ' + pct + '%';
     },
     pronto(url) {
@@ -6300,9 +6454,40 @@ async function handleVideoUpload(inputEl, context, devId) {
 
   for (const file of files) {
     const cartao = _cartaoVideo(inner, file);
+    // O contador que trava o Salvar cobre a COMPRESSÃO também: ela acontece
+    // antes do upload e leva mais tempo que ele. Salvar no meio gravaria o
+    // registro sem o vídeo — a mesma perda silenciosa de sempre.
     window._videosSubindo++;
     try {
-      const r = await window.videoStore.subir(file, alvo, pct => cartao.progresso(pct));
+      // COMPRESSÃO ANTES DO ENVIO. O vídeo sobe INTEIRO; o que encolhe é a
+      // resolução, nunca a duração. Ver o bloco VideoCompressor em
+      // js/fotoStore.js para o porquê (teto de 50 MB do plano Free, e o 1 GB
+      // total, que é o limite que realmente aperta).
+      let arquivo = file;
+      if (window.videoCompressor) {
+        const r = await window.videoCompressor.comprimir(file, pct => cartao.comprimindo(pct));
+        arquivo = r.file;
+        if (r.comprimido) {
+          cartao.comprimido(r.antes, r.depois);
+        } else if (r.motivo !== 'ja_cabe' && r.motivo !== 'nao_encolheu' && arquivo.size > (window.JR_VIDEO_LIMIAR_COMPRIMIR || 0)) {
+          // A compressão não rolou E o arquivo é grande: quase certo que a
+          // validação abaixo vai recusar. Dizer POR QUE a redução falhou é o
+          // que separa "o sistema recusou meu vídeo" de "sei o que fazer".
+          const porque = r.motivo === 'saida_incompleta'
+            ? 'a redução saiu incompleta e foi descartada para não gravar um vídeo cortado'
+            : r.motivo === 'navegador_sem_suporte' || r.motivo === 'sem_codec'
+              ? 'este navegador não sabe reduzir vídeo (tente pelo Chrome ou Edge)'
+              : 'não foi possível reduzir este arquivo (' + r.motivo + ')';
+          if (typeof showToast === 'function') showToast('Atenção: ' + porque + '. O vídeo vai ser enviado no tamanho original.', 'error');
+        }
+      }
+
+      // Só agora dá para saber se cabe: o arquivo que vai subir é o de depois
+      // da compressão, não o que a pessoa escolheu.
+      const problema = window.videoStore.validar(arquivo);
+      if (problema) throw new Error(problema);
+
+      const r = await window.videoStore.subir(arquivo, alvo, pct => cartao.progresso(pct));
       if (context === 'sac') uploadedVideosBase64.push(r.url);
       else uploadedVideosBase64Inv.push(r.url);
       cartao.pronto(r.url);
@@ -7365,6 +7550,34 @@ function editarInvestigacaoModal(id) {
           <textarea id="ed-inv-acao" rows="2" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${d.acao_tomada||''}</textarea>
         </div>
 
+        <!-- MIDIA DA OCORRENCIA (26/08/2026)
+             Este modal nao tinha nada de midia: dava para corrigir a causa raiz
+             e a acao tomada, mas nao para tirar a foto errada que motivou a
+             correcao. Agora a galeria vem inteira, com exclusao item a item, e
+             da para anexar evidencia nova sem sair da edicao. -->
+        <div class="bg-slate-950 border border-slate-800 rounded p-3 space-y-3">
+          <div class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">📎 Mídia da Ocorrência</div>
+          ${renderGaleriaMidia(d, { vazio: 'Nenhuma foto ou vídeo anexado nesta ocorrência.' })}
+
+          <div class="pt-2 border-t border-slate-800 space-y-2">
+            <div class="text-[10px] font-bold text-slate-400 uppercase">Anexar nova evidência (opcional)</div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label class="block text-[10px] text-slate-400 mb-1">📷 Fotos</label>
+                <input type="file" id="ed-inv-foto-file-${d.id}" accept="image/*" multiple onchange="handleFotoUpload(this, 'inv', '${d.id}')"
+                  class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-emerald-700 file:text-white">
+              </div>
+              <div>
+                <label class="block text-[10px] text-slate-400 mb-1">🎥 Vídeos</label>
+                <input type="file" id="ed-inv-video-file-${d.id}" accept="video/*" multiple onchange="handleVideoUpload(this, 'inv', '${d.id}')"
+                  class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-blue-700 file:text-white">
+              </div>
+            </div>
+            <div id="inv-foto-preview-container-${d.id}" class="hidden"></div>
+            <div id="inv-video-preview-container-${d.id}" class="hidden"></div>
+          </div>
+        </div>
+
         <div class="flex justify-end gap-2 pt-2">
           <button type="button" onclick="closeModal()" class="bg-slate-800 text-slate-300 font-bold px-3 py-1.5 rounded">Cancelar</button>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-1.5 rounded shadow">Salvar Edição</button>
@@ -7376,6 +7589,12 @@ function editarInvestigacaoModal(id) {
 
 function handleSalvarEdicaoInvestigacao(e, id) {
   e.preventDefault();
+
+  // O modal ganhou upload de evidencia em 26/08/2026, e o video sobe para o
+  // Storage de forma assincrona. Salvar no meio do envio gravaria o registro
+  // SEM o video - mesma trava que a tela de abertura ja usa.
+  if (typeof jrPodeSalvarComVideos === 'function' && !jrPodeSalvarComVideos()) return;
+
   const dev = db.data.ocorrencias_devolucao.find(x => x.id == id);
   if (dev) {
     db.saveVersion('ocorrencias_devolucao', dev);
@@ -7385,8 +7604,17 @@ function handleSalvarEdicaoInvestigacao(e, id) {
     tipo_erro: document.getElementById('ed-inv-erro').value,
     separador_apurado: document.getElementById('ed-inv-sep').value,
     conferente_apurado: document.getElementById('ed-inv-conf').value,
-    acao_tomada: document.getElementById('ed-inv-acao').value
+    acao_tomada: document.getElementById('ed-inv-acao').value,
+    // Os inputs do modal usam handleFotoUpload/handleVideoUpload com o contexto
+    // 'inv', que enche estes mesmos globais - sem passa-los adiante, a evidencia
+    // anexada aqui aparecia no preview e nao era gravada em lugar nenhum.
+    fotos_investigacao_novas: (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : [],
+    videos_investigacao_novas: (typeof uploadedVideosBase64Inv !== 'undefined' && Array.isArray(uploadedVideosBase64Inv)) ? uploadedVideosBase64Inv : []
   });
+
+  if (typeof uploadedFotosBase64Inv !== 'undefined') uploadedFotosBase64Inv = [];
+  if (typeof uploadedVideosBase64Inv !== 'undefined') uploadedVideosBase64Inv = [];
+
   closeModal();
   showToast('Investigação e apuração atualizadas com sucesso!');
   renderApp();
@@ -12667,10 +12895,24 @@ async function handleRotaVideosUpload(input) {
 
   for (const file of files) {
     window._videosSubindo++;
-    aviso.textContent = 'Enviando "' + file.name + '"... 0%';
+    aviso.textContent = 'Preparando "' + file.name + '"...';
     try {
+      // Mesma compressão da devolução (26/08/2026): a ocorrência em rota é
+      // filmada no mesmo celular, esbarra no mesmo teto de 50 MB do plano, e
+      // um vídeo de acidente ou retenção também não pode ser cortado para
+      // caber. Ver o bloco VideoCompressor em js/fotoStore.js.
+      let arquivo = file;
+      if (window.videoCompressor) {
+        const c = await window.videoCompressor.comprimir(file, pct => {
+          aviso.textContent = 'Reduzindo "' + file.name + '" (vídeo inteiro)... ' + pct + '%';
+        });
+        arquivo = c.file;
+      }
+      const problema = window.videoStore.validar(arquivo);
+      if (problema) throw new Error(problema);
+
       const r = await window.videoStore.subir(
-        file,
+        arquivo,
         { modulo: 'ocorrencia_rota', registro_id: 'nova', etapa: 'midia' },
         pct => { aviso.textContent = 'Enviando "' + file.name + '"... ' + pct + '%'; }
       );
@@ -18788,7 +19030,7 @@ function renderSubabaResumoDiario(p) {
                 <tr>
                   <th class="p-1.5 border-r border-slate-800">Cód Item</th>
                   <th class="p-1.5 border-r border-slate-800">Descrição do Produto</th>
-                  <th class="p-1.5 border-r border-slate-800 font-bold text-amber-300 text-center">Qtd Cortada (Kg)</th>
+                  <th class="p-1.5 border-r border-slate-800 font-bold text-amber-300 text-center">Qtd Cortada</th>
                   <th class="p-1.5 border-r border-slate-800 text-right">Valor (R$)</th>
                   <th class="p-1.5 text-center">Ação</th>
                 </tr>
@@ -18799,7 +19041,7 @@ function renderSubabaResumoDiario(p) {
                   <tr>
                     <td class="p-1.5 font-bold text-emerald-400">${c.codigo_item}</td>
                     <td class="p-1.5 font-bold text-white uppercase">${c.descricao}</td>
-                    <td class="p-1.5 text-center font-bold text-amber-300">${c.quantidade}</td>
+                    <td class="p-1.5 text-center font-bold text-amber-300">${_qtdCorteNumero(c.quantidade)}</td>
                     <td class="p-1.5 text-right font-extrabold text-red-400">R$ ${(parseFloat(c.valor)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
                     <td class="p-1.5 text-center whitespace-nowrap">
                       <button onclick="editarCorteResumoModal('${p.fData}', '${p.fTurno}', ${idx})" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
@@ -19416,8 +19658,8 @@ function editarCorteResumoModal(data, turno, index) {
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada (Kg)</label>
-            <input type="text" id="md-cr-qtd" value="${c.quantidade}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada</label>
+            <input type="text" id="md-cr-qtd" value="${_qtdCorteNumero(c.quantidade)}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Valor Total (R$)</label>
@@ -19462,8 +19704,8 @@ function adicionarCorteResumo(data, turno) {
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada (Kg)</label>
-            <input type="text" id="md-cr-qtd" placeholder="ex: 45.00 Kg ou 15.5" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada</label>
+            <input type="text" id="md-cr-qtd" placeholder="ex: 45.00 ou 15,5" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Valor Total (R$)</label>
@@ -19495,14 +19737,43 @@ function autoFillProdutoCorte(val) {
   }
 }
 
+// Normaliza a quantidade cortada para NUMERO PURO, sem unidade.
+//
+// Serve para dois momentos: o que se digita hoje e o que ja esta gravado. Ate
+// 26/08/2026 o campo salvava a string com " Kg" colado ("36.00 Kg"), entao os
+// registros antigos carregam a unidade dentro do proprio dado - e continuariam
+// exibindo "36.00 Kg" na tela, no PDF e na exportacao mesmo depois de o rotulo
+// da coluna mudar. Limpar na leitura resolve os antigos sem precisar de
+// migracao de dados, e limpar na gravacao impede que voltem a aparecer.
+//
+// Aceita virgula ou ponto e devolve sempre com 2 casas. O que nao for numero
+// (alguem escreveu "3 PACKS") volta como veio, sem a unidade solta no fim -
+// melhor preservar o que a pessoa quis dizer do que zerar o registro.
+function _qtdCorteNumero(valor) {
+  const bruto = String(valor == null ? '' : valor).trim();
+  if (!bruto) return '0.00';
+  const semUnidade = bruto.replace(/\s*(kg|kgs|quilos?)\s*$/i, '').trim();
+  // Só formata como número quando o que sobrou É um número inteiro — nada de
+  // parseFloat solto aqui. parseFloat('3 PACKS') devolve 3, e o campo passaria
+  // a exibir "3.00", jogando fora a unidade que a pessoa digitou de propósito
+  // justamente porque o produto não é vendido por peso. Se não é número puro,
+  // volta como está: preservar o que ela quis dizer vale mais que padronizar.
+  if (!/^-?\d+([.,]\d+)?$/.test(semUnidade)) return semUnidade || bruto;
+  return parseFloat(semUnidade.replace(',', '.')).toFixed(2);
+}
+window._qtdCorteNumero = _qtdCorteNumero;
+
 function confirmarSalvarCorteResumo(data, turno, editIndex = -1) {
   const codigo = document.getElementById('md-cr-cod')?.value;
   if (!codigo) { alert('Informe o código ou selecione um produto!'); return; }
   const descricao = document.getElementById('md-cr-desc')?.value || '';
-  let quantidade = document.getElementById('md-cr-qtd')?.value || '0.00 Kg';
-  if (quantidade && !isNaN(parseFloat(quantidade.replace(',', '.'))) && !quantidade.toLowerCase().includes('kg')) {
-    quantidade = `${parseFloat(quantidade.replace(',', '.')).toFixed(2)} Kg`;
-  }
+  // A UNIDADE SAIU DAQUI EM 26/08/2026. Este campo carimbava " Kg" no valor
+  // salvo, e nem todo produto do CD e vendido por peso - tem pack e tem
+  // unidade. "36,00 Kg" num item que sai em pack de 12 nao e formatacao
+  // errada, e informacao errada, e ela viajava para o PDF e para a exportacao.
+  // Agora guarda so o numero; quem sabe a unidade e o cadastro do produto.
+  let quantidade = document.getElementById('md-cr-qtd')?.value || '0.00';
+  quantidade = _qtdCorteNumero(quantidade);
   const valor = parseFloat(document.getElementById('md-cr-valor')?.value) || 0;
 
   const resumo = db.getResumoDiarioCD(data, turno);
@@ -19824,7 +20095,7 @@ function gerarResumoDiarioPdf(data, turno) {
           <tr>
             <th>Cód Item</th>
             <th>Descrição do Produto</th>
-            <th style="text-align:center;">Qtd Cortada (Kg)</th>
+            <th style="text-align:center;">Qtd Cortada</th>
             <th style="text-align:right;">Valor (R$)</th>
           </tr>
         </thead>
@@ -19834,7 +20105,7 @@ function gerarResumoDiarioPdf(data, turno) {
             <tr>
               <td><b>${c.codigo_item}</b></td>
               <td>${c.descricao}</td>
-              <td style="text-align:center;">${c.quantidade}</td>
+              <td style="text-align:center;">${_qtdCorteNumero(c.quantidade)}</td>
               <td style="text-align:right;"><b>R$ ${(parseFloat(c.valor)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</b></td>
             </tr>
           `).join('')}
@@ -20056,7 +20327,7 @@ function imprimirBoletimGerencialExecutivo() {
     <thead><tr><th style="width: 15%;">Cód Item</th><th style="width: 50%;">Descrição do Produto</th><th class="text-center" style="width: 15%;">Quantidade</th><th class="text-right" style="width: 20%;">Valor Total (R$)</th></tr></thead>
     <tbody>
       ${cortesList.length===0?'<tr><td colspan="4" class="text-center" style="color: #64748b;">Nenhum corte registrado no período</td></tr>':
-      cortesList.map(c=>`<tr><td><b>${c.codigo_item||'—'}</b></td><td>${c.descricao||'—'}</td><td class="text-center font-bold" style="color: #b45309;">${c.quantidade}</td><td class="text-right" style="color: #dc2626; font-weight: bold;">R$ ${(parseFloat(c.valor)||0).toFixed(2)}</td></tr>`).join('')}
+      cortesList.map(c=>`<tr><td><b>${c.codigo_item||'—'}</b></td><td>${c.descricao||'—'}</td><td class="text-center font-bold" style="color: #b45309;">${_qtdCorteNumero(c.quantidade)}</td><td class="text-right" style="color: #dc2626; font-weight: bold;">R$ ${(parseFloat(c.valor)||0).toFixed(2)}</td></tr>`).join('')}
     </tbody>
   </table>
 
@@ -20423,7 +20694,7 @@ const MODULE_COLUMNS_MAP = {
     { id: 'turno_resumo', label: 'Turno' },
     { id: 'codigo_item', label: 'Código Item' },
     { id: 'descricao', label: 'Descrição Produto' },
-    { id: 'quantidade', label: 'Qtd Cortada (Kg)' },
+    { id: 'quantidade', label: 'Qtd Cortada' },
     { id: 'valor', label: 'Valor Total Corte (R$)' }
   ],
   resumos_cd: [
@@ -20579,7 +20850,11 @@ function getRawDataParaModulo(modulo) {
     list.forEach(r => {
       if (r && Array.isArray(r.cortes)) {
         r.cortes.forEach(c => {
-          result.push({ ...c, data_resumo: r.data, turno_resumo: r.turno });
+          // Sem o normalizador, o Power BI e o Excel recebiam "36.00 Kg" como
+          // TEXTO nos registros anteriores a 26/08/2026 — coluna que deveria
+          // somar e que não soma, além de afirmar peso num item vendido em
+          // pack ou unidade.
+          result.push({ ...c, quantidade: _qtdCorteNumero(c.quantidade), data_resumo: r.data, turno_resumo: r.turno });
         });
       }
     });
@@ -21170,7 +21445,7 @@ function renderBoletimGerencialView() {
                       <tr class="hover:bg-slate-800/40">
                         <td class="p-2 font-bold text-emerald-400">${c.codigo_item||'—'}</td>
                         <td class="p-2 font-bold text-white uppercase">${c.descricao||'—'}</td>
-                        <td class="p-2 text-center font-bold text-amber-300">${c.quantidade}</td>
+                        <td class="p-2 text-center font-bold text-amber-300">${_qtdCorteNumero(c.quantidade)}</td>
                         <td class="p-2 text-right font-bold text-red-400">R$ ${(parseFloat(c.valor)||0).toFixed(2)}</td>
                       </tr>`).join('')}
                   </tbody>
@@ -22717,7 +22992,7 @@ function gerarRelatorioCortesCdPdf() {
               <tr>
                 <td><b>${c.codigo_item || '-'}</b></td>
                 <td><b>${c.descricao || '-'}</b></td>
-                <td style="text-align:center; font-weight:bold; color:#b45309;">${c.quantidade || 0}</td>
+                <td style="text-align:center; font-weight:bold; color:#b45309;">${_qtdCorteNumero(c.quantidade)}</td>
                 <td style="text-align:right; font-weight:bold; color:#b91c1c;">R$ ${(parseFloat(c.valor)||0).toFixed(2)}</td>
               </tr>
             `).join('')}

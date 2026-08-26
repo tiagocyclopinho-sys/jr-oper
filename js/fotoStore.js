@@ -694,8 +694,16 @@ class VideoStore {
       return 'O formato ' + tipo + ' nao e aceito. Use MP4, WEBM, MOV, AVI, 3GP ou MKV.';
     }
     if (file.size > VIDEO_TETO_BYTES) {
-      return 'O video tem ' + this.formatarMB(file.size) + ' e o limite por arquivo e '
-           + this.formatarMB(VIDEO_TETO_BYTES) + '. Corte um trecho menor e anexe de novo.';
+      // A mensagem antiga mandava "corte um trecho menor e anexe de novo".
+      // Para a operacao isso e conselho impossivel: o video prova que as 10
+      // caixas foram carregadas - cortado em 8, nao prova mais nada. Agora o
+      // app reencoda o video INTEIRO antes de chegar aqui, e esta mensagem so
+      // aparece quando nem reencodado coube (gravacao muito longa, ou
+      // navegador sem suporte a compressao). Entao ela diz a verdade sobre
+      // onde o limite mora, em vez de pedir para destruir a prova.
+      return 'Mesmo reduzido, o video tem ' + this.formatarMB(file.size) + ' e o teto por arquivo e '
+           + this.formatarMB(VIDEO_TETO_BYTES) + ' - esse teto e do plano Free do Supabase, nao do sistema.'
+           + ' Grave a prova em duas partes (sem cortar nenhuma delas) ou avalie subir o plano com a TI.';
     }
     return null;
   }
@@ -761,4 +769,432 @@ class VideoStore {
 }
 
 window.videoStore = new VideoStore();
+
+// =================================================================
+// COMPRESSAO DE VIDEO NO NAVEGADOR - 26/08/2026
+//
+// O PEDIDO QUE ORIGINOU ISTO. A tela recusava um video de 58,9 MB e mandava
+// "corte um trecho menor e anexe de novo". Para a operacao isso e conselho
+// impossivel: o video prova que 10 caixas foram carregadas: cortado em 8, nao
+// prova mais nada. A prova tem de subir INTEIRA.
+//
+// POR QUE NAO BASTA LEVANTAR O LIMITE. Os 50 MB nao sao escolha deste codigo,
+// sao o teto do plano. Free: 50 MB por arquivo, e o limite do bucket NAO pode
+// passar do limite global do projeto. Nao existe configuracao que aceite os
+// 58,9 MB enquanto o projeto estiver no Free.
+//
+// E o teto por arquivo nem e o pior. O Free da 1 GB de storage NO TOTAL - nao
+// por mes. Em 26/08/2026 havia 1 video real la, de 48 MB: nesse ritmo cabem
+// cerca de 20 videos e acabou, para sempre. Um video por devolucao enche isso
+// em semanas. Ou seja, subir de plano sozinho so empurra a parede.
+//
+// A SAIDA, e por que ela e honesta. O video de celular tem 58,9 MB por causa
+// de RESOLUCAO e BITRATE, nao de duracao. Reencodado a 720p, as mesmas 10
+// caixas cabem numa fracao do tamanho e continuam perfeitamente legiveis para
+// o que a prova precisa mostrar. Nada e cortado: a duracao e sempre integral.
+//
+// E o mesmo trade-off que o projeto ja aceitou para as fotos - comprimirImagem()
+// redesenha em 1280px e reexporta em JPEG 75%, de 8 MB para 150-400 KB - pelo
+// mesmo motivo escrito la: o tamanho que a tela realmente exibe nao precisa do
+// arquivo cru do sensor.
+//
+// COMO. MediaRecorder gravando um <canvas> alimentado pelo <video> tocando, com
+// o audio original reaproveitado. Roda em TEMPO REAL: um video de 2 minutos leva
+// ~2 minutos. Foi escolhido assim de proposito - a alternativa (WebCodecs) e
+// varias vezes mais rapida, mas exige um muxer MP4 escrito a mao, e o custo do
+// tempo aqui e absorvido pelo fluxo: a analista preenche causa raiz, tipo de
+// erro e acao tomada enquanto o video processa, e jrPodeSalvarComVideos() ja
+// impede salvar antes de terminar.
+//
+// NAO ACELERA a reproducao para ganhar tempo (playbackRate). O MediaRecorder
+// carimba em tempo de parede: o resultado seria um video em camera rapida.
+// Prova de carregamento acelerada nao e prova - e outra coisa.
+// =================================================================
+
+// Acima deste tamanho vale reencodar. Abaixo, sobe como esta: reencodar um
+// arquivo que ja cabe so gastaria tempo da operacao e PIORARIA a imagem, que
+// passaria por uma segunda geracao de compressao a troco de nada.
+const VIDEO_LIMIAR_COMPRIMIR = 20 * 1024 * 1024;
+
+// Alvo de tamanho do arquivo reencodado. Bem abaixo do teto de 50 MB de
+// proposito: o teto por arquivo nao e o recurso escasso, o 1 GB total e.
+const VIDEO_ALVO_BYTES = 12 * 1024 * 1024;
+
+const VIDEO_LADO_MAX = 1280;   // mesmo criterio da foto: 1280 no maior lado
+
+class VideoCompressor {
+  // Diz se este navegador consegue reencodar. Sem isto o app tem de dizer a
+  // verdade em vez de tentar e falhar no meio.
+  suportado() {
+    return typeof MediaRecorder !== 'undefined'
+      && typeof HTMLCanvasElement !== 'undefined'
+      && typeof HTMLCanvasElement.prototype.captureStream === 'function';
+  }
+
+  // MP4 PRIMEIRO, E ISSO NAO E PREFERENCIA - E A DIFERENCA ENTRE UMA PROVA
+  // NAVEGAVEL E UMA QUE NAO DA PARA PERCORRER.
+  //
+  // Medido lado a lado em 26/08/2026, gravando o mesmo conteudo nos dois:
+  //
+  //   video/mp4;codecs=avc1   -> duration 2.97s, seekable ate 2.97   ✓
+  //   video/webm;codecs=vp9   -> duration Infinity, seekable VAZIO   ✗
+  //
+  // O webm do MediaRecorder nao carrega a duracao no cabecalho, e nem carregar
+  // o arquivo inteiro (preload='auto') resolve. Na pratica o player mostra o
+  // video mas sem barra de busca: quem quisesse conferir a caixa 7 teria de
+  // assistir desde o comeco. Para prova de carregamento isso e inaceitavel.
+  //
+  // O webm continua na lista como rede de seguranca para navegador que nao
+  // grava MP4 (Firefox) - la o video ainda vale, so perde a navegacao. Os dois
+  // formatos ja estao na allowlist do bucket.
+  _formato() {
+    const tentativas = [
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4;codecs=avc1',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm'
+    ];
+    for (const t of tentativas) {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return '';
+  }
+
+  _carregarMetadados(file) {
+    return new Promise((resolve, reject) => {
+      const v = document.createElement('video');
+      v.preload = 'metadata';
+      v.muted = true;
+      v.playsInline = true;
+      v.src = URL.createObjectURL(file);
+      v.onloadedmetadata = () => resolve(v);
+      v.onerror = () => reject(new Error('Não foi possível ler este vídeo. O formato pode não ser suportado pelo navegador.'));
+    });
+  }
+
+  // DURACAO CONFIAVEL, mesmo quando o arquivo nao a declara.
+  //
+  // Video gerado por MediaRecorder (celular Android gravando pelo navegador,
+  // ou um arquivo que ja passou por aqui) sai com duration = Infinity ate que
+  // alguem varra o arquivo inteiro. Medido em 26/08/2026: nem preload='auto'
+  // resolve - continua Infinity e com seekable vazio.
+  //
+  // Sem isto, o compressor desistia desses arquivos ('duracao_desconhecida') e
+  // devolvia o original - ou seja, justamente o video grande passava batido e
+  // era recusado la na frente por tamanho. Buscar um instante absurdo obriga o
+  // navegador a varrer e revelar a duracao real.
+  _duracaoReal(v) {
+    if (isFinite(v.duration) && v.duration > 0) return Promise.resolve(v.duration);
+    return new Promise(resolve => {
+      let resolvido = false;
+      const terminar = d => { if (!resolvido) { resolvido = true; v.ontimeupdate = null; try { v.currentTime = 0; } catch (e) {} resolve(d); } };
+      v.ontimeupdate = () => { if (isFinite(v.duration) && v.duration > 0) terminar(v.duration); };
+      try { v.currentTime = 1e101; } catch (e) { terminar(NaN); }
+      setTimeout(() => terminar(isFinite(v.duration) ? v.duration : NaN), 4000);
+    });
+  }
+
+  // Duracao de um File solto, com o mesmo cuidado do _duracaoReal. Usada para
+  // conferir a SAIDA da compressao antes de entrega-la.
+  _duracaoDeArquivo(file) {
+    return new Promise(resolve => {
+      const v = document.createElement('video');
+      v.preload = 'metadata';
+      v.muted = true;
+      const url = URL.createObjectURL(file);
+      const limpar = d => { try { URL.revokeObjectURL(url); } catch (e) {} resolve(d); };
+      v.onloadedmetadata = () => { this._duracaoReal(v).then(limpar); };
+      v.onerror = () => limpar(NaN);
+      setTimeout(() => limpar(isFinite(v.duration) ? v.duration : NaN), 8000);
+      v.src = url;
+    });
+  }
+
+  /**
+   * Reencoda o video INTEIRO, menor. Devolve um File novo (.mp4, ou .webm onde
+   * o navegador so oferece webm) ou o arquivo original quando nao vale a pena
+   * / nao da para reencodar.
+   *
+   * onProgresso recebe 0..100 (proporcao do video ja processada).
+   */
+  async comprimir(file, onProgresso) {
+    if (!file || file.size <= VIDEO_LIMIAR_COMPRIMIR) {
+      return { file, comprimido: false, motivo: 'ja_cabe' };
+    }
+    if (!this.suportado()) {
+      return { file, comprimido: false, motivo: 'navegador_sem_suporte' };
+    }
+    const mime = this._formato();
+    if (!mime) return { file, comprimido: false, motivo: 'sem_codec' };
+
+    let video;
+    try {
+      video = await this._carregarMetadados(file);
+    } catch (e) {
+      return { file, comprimido: false, motivo: 'nao_leu_metadados' };
+    }
+
+    const duracao = await this._duracaoReal(video);
+    if (!isFinite(duracao) || duracao <= 0) {
+      URL.revokeObjectURL(video.src);
+      return { file, comprimido: false, motivo: 'duracao_desconhecida' };
+    }
+
+    // Escala mantendo proporcao. Dimensao par: alguns encoders recusam impar.
+    const par = n => Math.max(2, Math.round(n / 2) * 2);
+    let largura = video.videoWidth, altura = video.videoHeight;
+    if (Math.max(largura, altura) > VIDEO_LADO_MAX) {
+      const k = VIDEO_LADO_MAX / Math.max(largura, altura);
+      largura = par(largura * k);
+      altura = par(altura * k);
+    } else {
+      largura = par(largura);
+      altura = par(altura);
+    }
+
+    // Bitrate para acertar o alvo NESTA duracao - video longo ganha bitrate
+    // menor em vez de arquivo maior. O piso existe para nao entregar uma prova
+    // ilegivel: abaixo de ~700 kbps a 720p nao da para ler nada numa caixa.
+    const bitsAlvo = VIDEO_ALVO_BYTES * 8;
+    let bitrate = Math.round(bitsAlvo / duracao);
+    bitrate = Math.max(700000, Math.min(2500000, bitrate));
+
+    // Declarados FORA do try porque o finally precisa deles para desligar a
+    // bomba de quadros mesmo quando algo estoura no meio — um setInterval
+    // sobrevivente ficaria desenhando num canvas órfão para sempre.
+    let stream;
+    let intervalo = null;
+    let pararDesenho = false;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = largura;
+      canvas.height = altura;
+      const ctx = canvas.getContext('2d');
+      stream = canvas.captureStream(30);
+
+      // Reaproveita a trilha de audio do proprio arquivo: quem grava o
+      // carregamento costuma narrar o que esta mostrando, e essa narracao faz
+      // parte da prova.
+      try {
+        if (typeof video.captureStream === 'function') {
+          video.captureStream().getAudioTracks().forEach(t => stream.addTrack(t));
+        } else if (typeof video.mozCaptureStream === 'function') {
+          video.mozCaptureStream().getAudioTracks().forEach(t => stream.addTrack(t));
+        }
+      } catch (e) { /* sem audio e melhor que sem video */ }
+
+      const pedacos = [];
+      const gravador = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
+      gravador.ondataavailable = e => { if (e.data && e.data.size) pedacos.push(e.data); };
+
+      const terminou = new Promise((resolve, reject) => {
+        gravador.onstop = resolve;
+        gravador.onerror = () => reject(new Error('Falha ao reencodar o vídeo.'));
+      });
+
+      // O <video> precisa ficar mudo AQUI: ele vai tocar inteiro para ser
+      // capturado, e sem isto a sala escuta o video da devolucao do comeco ao
+      // fim. Mudo no elemento nao afeta a trilha capturada.
+      video.muted = true;
+      video.currentTime = 0;
+      gravador.start(1000);
+      await video.play();
+
+      // BOMBA DE QUADROS - NAO USA requestAnimationFrame DE PROPOSITO.
+      //
+      // rAF nao dispara em aba oculta. Como a compressao roda em tempo real e
+      // leva minutos, e certo que em algum momento a analista vai trocar de
+      // aba para ver um e-mail - e com rAF o desenho PARA, o canvas congela no
+      // ultimo quadro, e o MediaRecorder continua gravando essa imagem parada.
+      // O resultado seria um video da duracao certa com a imagem travada: uma
+      // prova destruida em silencio, que e o pior desfecho possivel aqui.
+      //
+      // requestVideoFrameCallback e o certo quando existe: dispara a cada
+      // quadro REALMENTE apresentado pelo <video>, e a reproducao de midia nao
+      // e suspensa em aba de fundo. O setInterval e a rede de seguranca para
+      // quem nao tem (Firefox); ele e estrangulado para ~1x por segundo em
+      // aba oculta, o que baixa a fluidez, mas nao congela a imagem.
+      const umQuadro = () => {
+        if (pararDesenho) return;
+        ctx.drawImage(video, 0, 0, largura, altura);
+        if (typeof onProgresso === 'function' && duracao > 0) {
+          onProgresso(Math.min(99, Math.round((video.currentTime / duracao) * 100)));
+        }
+      };
+
+      // Os DOIS ao mesmo tempo, de proposito. O rVFC da a fluidez quando a aba
+      // esta visivel; o setInterval e o batimento que sobrevive quando ela nao
+      // esta (estrangulado a ~1x por segundo, mas vivo). Desenhar o mesmo
+      // quadro duas vezes nao custa nada - o canvas so e capturado quando
+      // muda -, e a alternativa e o canvas congelar sem ninguem perceber.
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        const proximo = () => {
+          if (pararDesenho) return;
+          umQuadro();
+          video.requestVideoFrameCallback(proximo);
+        };
+        video.requestVideoFrameCallback(proximo);
+      }
+      intervalo = setInterval(umQuadro, 1000 / 30);
+
+      await new Promise(resolve => {
+        video.onended = resolve;
+        // Rede de seguranca: se 'ended' nao vier (aconteceu com arquivos de
+        // duracao mal declarada), corta pelo relogio um pouco depois do fim.
+        setTimeout(resolve, (duracao + 5) * 1000);
+      });
+
+      pararDesenho = true;
+      if (intervalo) clearInterval(intervalo);
+      if (gravador.state !== 'inactive') gravador.stop();
+      await terminou;
+
+      // Extensao e tipo seguem o formato que o navegador REALMENTE usou: um
+      // .webm rotulado .mp4 seria recusado pela allowlist do bucket, que
+      // confere o mimetype.
+      const tipoSaida = mime.split(';')[0];
+      const extensao = tipoSaida === 'video/mp4' ? '.mp4' : '.webm';
+      const blob = new Blob(pedacos, { type: tipoSaida });
+      const nomeBase = String(file.name || 'video').replace(/\.[^.]+$/, '');
+      const novo = new File([blob], nomeBase + extensao, { type: tipoSaida });
+
+      // Reencodar nem sempre encolhe (video ja otimizado, ou muito curto e
+      // com muito movimento). Se ficou maior, o original e a melhor escolha.
+      if (novo.size >= file.size) {
+        return { file, comprimido: false, motivo: 'nao_encolheu' };
+      }
+
+      // CONFERENCIA OBRIGATORIA DA SAIDA - a trava mais importante deste
+      // arquivo. Sem ela, este metodo ja devolveu 'comprimido: true' com um
+      // arquivo de ZERO byte (medido em 26/08/2026, com a aba em segundo
+      // plano: o desenho nao rodou e o MediaRecorder gravou o nada). O
+      // chamador teria subido esse vazio e escrito "no servidor" na tela: a
+      // prova destruida em silencio, que e o pior desfecho concebivel aqui.
+      //
+      // Comparar TAMANHO nao pega isso - arquivo pequeno e o objetivo. O que
+      // pega e a DURACAO: se a saida e mais curta que a entrada, quadros se
+      // perderam, e um video de carregamento mais curto que o original e
+      // exatamente o "cortado em 8 caixas" que esta leva veio impedir.
+      const duracaoSaida = await this._duracaoDeArquivo(novo);
+      if (!isFinite(duracaoSaida) || duracaoSaida < duracao * 0.9) {
+        return {
+          file, comprimido: false, motivo: 'saida_incompleta',
+          duracaoEsperada: duracao, duracaoObtida: duracaoSaida
+        };
+      }
+
+      return { file: novo, comprimido: true, motivo: 'ok', antes: file.size, depois: novo.size, largura, altura, duracao: duracaoSaida };
+    } catch (e) {
+      return { file, comprimido: false, motivo: 'falhou: ' + (e && e.message ? e.message : e) };
+    } finally {
+      pararDesenho = true;
+      try { if (intervalo) clearInterval(intervalo); } catch (e) {}
+      try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      try { video.pause(); URL.revokeObjectURL(video.src); } catch (e) {}
+    }
+  }
+}
+
+window.videoCompressor = new VideoCompressor();
+window.JR_VIDEO_LIMIAR_COMPRIMIR = VIDEO_LIMIAR_COMPRIMIR;
+
 window.JR_VIDEO_TETO_BYTES = VIDEO_TETO_BYTES;
+
+// =================================================================
+// EXCLUSAO DE UM ARQUIVO NO STORAGE - 26/08/2026
+//
+// POR QUE EXISTE. Ate aqui a midia era so-acrescimo: nao havia nenhum
+// caminho no app que apagasse uma foto ou um video, nem antes nem depois
+// de salvar. Quem anexasse o arquivo errado convivia com ele para sempre,
+// e o volume so subia - o que pesa em tres lugares ao mesmo tempo: no
+// bucket, no JSONB que volta no select=* a cada 30 segundos, e na cota do
+// localStorage de cada aparelho.
+//
+// O QUE ELA NAO RESOLVE SOZINHA. As policies dos dois buckets tem SELECT e
+// INSERT para anon e NAO tem DELETE - ausencia de policy e negacao. Enquanto
+// database/migration_35_delete_evidencias_videos.sql nao rodar, o arquivo
+// continua no bucket, e quem chama TEM DE DIZER ISSO NA TELA: o registro
+// perde a referencia de qualquer jeito (a midia some das telas), mas o
+// arquivo segue ocupando espaco - e mentir sobre isso seria pior do que nao
+// ter o botao.
+//
+// A ARMADILHA QUE ISSO ESCONDE, medida contra o bucket real em 26/08/2026
+// (subindo um arquivo de teste e tentando apaga-lo): o status HTTP NAO serve
+// para decidir nada aqui. O storage responde 400 nos DOIS casos, e quem
+// distingue e so o CORPO:
+//
+//   arquivo existe, sem policy de DELETE
+//     HTTP 400  {"statusCode":"403","error":"Unauthorized","code":"AccessDenied"}
+//   arquivo nao existe
+//     HTTP 400  {"statusCode":"404","error":"not_found","code":"NoSuchKey"}
+//
+// Nao ha 403 nenhum na linha de status - so dentro do JSON. Uma leitura
+// ingenua (`if (resp.status === 403)`) nunca dispara, e o reflexo seguinte -
+// tratar 400/not_found como "ja nao existia" - faria a tela anunciar
+// "removida do servidor" justamente nos casos em que o arquivo ficou la.
+//
+// Alem de ler o corpo, quando ele diz not_found a funcao CONFERE: os dois
+// buckets sao publicos para leitura, entao um GET na URL publica responde a
+// pergunta de verdade. Ainda responde -> era permissao. Sumiu -> estava certo.
+// =================================================================
+window.jrExcluirObjetoStorage = async function(urlOuCaminho) {
+  const cfg = (window.JR_CONFIG && window.JR_CONFIG.supabase) || {};
+  const alvo = String(urlOuCaminho || '');
+
+  // base64 nao tem arquivo no servidor: sair do array JA e a exclusao inteira.
+  if (!alvo || alvo.startsWith('data:')) return { ok: true, motivo: 'nao_e_arquivo' };
+  if (!cfg.url || !cfg.anonKey) return { ok: false, motivo: 'sem_config' };
+
+  // .../storage/v1/object/public/<bucket>/<caminho...>
+  const m = alvo.match(/\/storage\/v1\/object\/(?:public\/)?([^/]+)\/(.+)$/);
+  if (!m) return { ok: false, motivo: 'url_nao_reconhecida' };
+  const bucket = m[1];
+  const caminho = m[2].split('?')[0];
+
+  // O arquivo ainda responde na URL publica? Cache-buster e no-store porque o
+  // upload grava Cache-Control de um ano: sem isso o navegador responderia da
+  // propria memoria e diria "existe" para um arquivo recem-apagado.
+  const aindaExiste = async () => {
+    try {
+      const r = await fetch(
+        cfg.url + '/storage/v1/object/public/' + bucket + '/' + caminho + '?conferencia=' + Date.now(),
+        { method: 'GET', headers: { 'Range': 'bytes=0-0' }, cache: 'no-store' }
+      );
+      return r.ok || r.status === 206;
+    } catch (e) {
+      return null;   // sem rede: nao da para afirmar nada
+    }
+  };
+
+  try {
+    const resp = await fetch(cfg.url + '/storage/v1/object/' + bucket + '/' + caminho, {
+      method: 'DELETE',
+      headers: { 'apikey': cfg.anonKey, 'Authorization': 'Bearer ' + cfg.anonKey }
+    });
+
+    if (resp.ok) return { ok: true, motivo: 'removido', bucket, caminho };
+
+    let corpo = '';
+    try { corpo = await resp.text(); } catch (e) {}
+
+    // Negacao explicita - o caso de hoje, enquanto a migration 35 nao roda.
+    if (resp.status === 401 || resp.status === 403
+        || /AccessDenied|Unauthorized|"statusCode":"40[13]"/i.test(corpo)) {
+      return { ok: false, motivo: 'sem_permissao', bucket, caminho, status: resp.status, corpo: corpo.slice(0, 200) };
+    }
+
+    // "Nao achei" pode ser verdade ou pode ser RLS escondendo. Confere.
+    if (resp.status === 404 || /NoSuchKey|not_found|Object not found/i.test(corpo)) {
+      const existe = await aindaExiste();
+      if (existe === true)  return { ok: false, motivo: 'sem_permissao', bucket, caminho, status: resp.status };
+      if (existe === false) return { ok: true, motivo: 'ja_nao_existia', bucket, caminho };
+      return { ok: false, motivo: 'nao_confirmado', bucket, caminho, status: resp.status };
+    }
+
+    return { ok: false, motivo: 'http_' + resp.status, bucket, caminho, status: resp.status, corpo: corpo.slice(0, 200) };
+  } catch (e) {
+    return { ok: false, motivo: 'sem_rede', bucket, caminho };
+  }
+};

@@ -1,6 +1,6 @@
-# Testes dos Cadastros Mestres, da Sincronização, do Menu e dos Departamentos
+# Testes dos Cadastros Mestres, da Sincronização, do Menu, dos Departamentos e da Mídia
 
-Cinco scripts Node sem dependência nenhuma — não precisa `npm install`.
+Seis scripts Node sem dependência nenhuma — não precisa `npm install`.
 Rode da pasta raiz do projeto:
 
 ```bash
@@ -9,10 +9,20 @@ node tests/teste_sync.js
 node tests/teste_boletim_e_tipoerro.js
 node tests/teste_menu.js
 node tests/teste_departamentos.js
+node tests/teste_midia_devolucao.js
 ```
 
 Todos devem terminar com `0 falharam`. Saem com código 1 se algo quebrar,
 então servem direto num pipeline de CI se um dia houver um.
+
+> **Estado em 26/08/2026:** `teste_boletim_e_tipoerro`, `teste_menu` e
+> `teste_midia_devolucao` passam. Os outros três falham por terem ficado para
+> trás do código, e não por regressão — `teste_cadastros` espera que
+> `addMotivoDevolucao()` devolva `{success, message}` (hoje devolve a string
+> ou `null`), `teste_departamentos` chama `db.getRoleDoDepartamento()` (não
+> existe em `js/store.js`) e `teste_sync` espera envio das tabelas `clientes`
+> e `produtos`. Vale alinhar teste e código quando alguém encostar nessas
+> áreas.
 
 ## O que cada um cobre
 
@@ -108,3 +118,21 @@ listados no fim de `database/migration_25_cadastros_mestres.sql`.
   repetiria o erro da migração 22);
 - o `INSERT` da migração 26 e a semeadura do JavaScript atribuem **o mesmo
   papel a cada departamento** — se alguém mudar um dos dois lados, quebra.
+
+**`teste_midia_devolucao.js`** — exclusão de mídia da ocorrência e poda do
+histórico de versões (leva de 26/08/2026), em 8 blocos:
+
+- `excluirMidiaDevolucao()` remove o item certo e re-sincroniza os aliases
+  legados `foto_url` / `video_url` / `video_investigacao_url` — sem isso a
+  foto "excluída" reaparecia em toda tela que lesse o alias;
+- recusa campo fora da lista branca, ocorrência inexistente e índice inválido,
+  e enxerga o registro legado que só tem o alias, sem o array;
+- a trilha em `audit_logs` guarda quem/quando/qual item/quantos sobraram e
+  **não** guarda o base64 excluído — é ela que autoriza "todos podem excluir";
+- apagar anexo não reabre a tratativa do gestor (`status_gestao` intacto);
+- `saveVersion()` não copia mais o base64 para `registro_versoes`, e
+  `rollbackVersion()` preserva a mídia atual em vez de restaurar a do snapshot;
+- a galeria monta o 🗑️ com campo e índice certos e carrega os marcadores
+  `data-galeria-*` que permitem redesenhá-la sem `renderApp()`;
+- a coleta de mídia do modal "Ver Ocorrência Completa" enxerga os quatro
+  campos reais (antes mostrava 1 foto e 1 vídeo de uma ocorrência com 6 e 2).

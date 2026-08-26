@@ -1200,6 +1200,81 @@ class Store {
     return newDev;
   }
 
+  // ---------------------------------------------------------------
+  // EXCLUSAO DE UMA MIDIA DA OCORRENCIA - 26/08/2026
+  //
+  // A midia era so-acrescimo: addDevolucao gravava os arrays, updateInvestigacao
+  // so dava push, e renderGaleriaMidia so abria o lightbox. Nao existia caminho
+  // de remocao em lugar nenhum - anexou errado, conviveu com o erro.
+  //
+  // DE PROPOSITO NAO CHAMA saveVersion(). saveVersion faz
+  // JSON.parse(JSON.stringify(record)), ou seja, copia o registro INTEIRO para
+  // registro_versoes - e as fotos da abertura sao base64 dentro do proprio
+  // registro. Versionar aqui duplicaria o base64 que estamos tentando eliminar:
+  // a "exclusao" faria o banco CRESCER. O rastro fica em audit_logs, que guarda
+  // so os metadados (quem, quando, qual item, endereco ou impressao digital do
+  // base64) e nunca o conteudo.
+  //
+  // TAMBEM NAO MEXE em status_gestao. updateInvestigacao reabre a tratativa do
+  // gestor a cada edicao, e isso faz sentido para a apuracao; apagar um anexo
+  // duplicado nao e reapuracao e nao deve reabrir nada.
+  excluirMidiaDevolucao(id, campo, indice) {
+    const CAMPOS_OK = ['fotos_abertura', 'videos_abertura', 'fotos_investigacao', 'videos_investigacao'];
+    if (!CAMPOS_OK.includes(campo)) {
+      return { success: false, message: 'Campo de mídia inválido: ' + campo };
+    }
+
+    const dev = this.data.ocorrencias_devolucao.find(d => d.id == id);
+    if (!dev) return { success: false, message: 'Ocorrência não encontrada neste aparelho.' };
+
+    // Registros antigos guardam a midia unica em foto_url/video_url e nunca
+    // chegaram a ter o array. A galeria mostra esses casos usando o alias como
+    // se fosse o item 0 do array, entao a exclusao precisa enxergar o mesmo.
+    if (!Array.isArray(dev[campo])) {
+      const alias = campo === 'fotos_abertura' ? 'foto_url'
+                  : campo === 'videos_abertura' ? 'video_url'
+                  : campo === 'videos_investigacao' ? 'video_investigacao_url' : null;
+      dev[campo] = (alias && dev[alias]) ? [dev[alias]] : [];
+    }
+
+    const i = parseInt(indice, 10);
+    if (isNaN(i) || i < 0 || i >= dev[campo].length) {
+      return { success: false, message: 'Esta mídia já não está mais na ocorrência.' };
+    }
+
+    const removido = dev[campo][i];
+    dev[campo].splice(i, 1);
+
+    // Os aliases legados sao espelho do 1o item (ver addDevolucao). Se ficarem
+    // apontando para o que acabou de sair, a midia "excluida" reaparece em
+    // qualquer tela que leia o alias - inclusive no modal de detalhes.
+    if (campo === 'fotos_abertura')      dev.foto_url = dev.fotos_abertura[0] || '';
+    if (campo === 'videos_abertura')     dev.video_url = dev.videos_abertura[0] || '';
+    if (campo === 'videos_investigacao') dev.video_investigacao_url = dev.videos_investigacao[0] || '';
+
+    dev.atualizado_em = agoraIsoBrasilia();
+    dev.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+
+    const ehArquivo = typeof removido === 'string' && /^https?:/i.test(removido);
+    this.logAudit({
+      acao: 'EXCLUSAO_MIDIA',
+      modulo: 'ocorrencias_devolucao',
+      registro_id: id,
+      diff: {
+        campo,
+        indice: i,
+        protocolo: dev.numero_devolucao || dev.numero_protocolo || '',
+        // Endereco quando e arquivo no Storage; quando e base64, so o tamanho e
+        // o inicio - nunca o conteudo, que e justamente o peso que se quer tirar.
+        referencia: ehArquivo ? removido : ('base64 ~' + Math.round(String(removido).length / 1024) + ' KB'),
+        restantes: dev[campo].length
+      }
+    });
+
+    this.save();
+    return { success: true, removido, ehArquivo, message: 'Mídia excluída da ocorrência.' };
+  }
+
   updateInvestigacao(id, updateData) {
     const dev = this.data.ocorrencias_devolucao.find(d => d.id == id);
     if (dev) {
@@ -2168,6 +2243,32 @@ class Store {
     }
   }
 
+  // Uma versao guarda o registro INTEIRO, e nas devolucoes a foto da abertura
+  // e base64 dentro do proprio registro. Sem esta poda, cada clique em "Salvar
+  // Edicao" copiava todas as fotos para registro_versoes: o historico crescia
+  // em MEGABYTES por edicao, dentro do mesmo localStorage que ja estourou
+  // cota neste projeto (ver migration 34) e do mesmo select=* que volta a cada
+  // 30 segundos. Pior, isso derrotava a exclusao de midia introduzida em
+  // 26/08/2026 - a foto apagada continuava viva na versao anterior.
+  //
+  // O que a versao precisa provar e QUE HAVIA midia e quanta, nao o pixel. O
+  // marcador guarda o tamanho; o endereco de arquivos no Storage (http) fica
+  // inteiro, porque ali sao ~120 bytes e continuam servindo de rastro.
+  _podarMidiaDaVersao(valor) {
+    if (typeof valor === 'string') {
+      return (valor.startsWith('data:') && valor.length > 500)
+        ? '[mídia não versionada — ~' + Math.round(valor.length / 1024) + ' KB no registro original]'
+        : valor;
+    }
+    if (Array.isArray(valor)) return valor.map(v => this._podarMidiaDaVersao(v));
+    if (valor && typeof valor === 'object') {
+      const saida = {};
+      for (const k of Object.keys(valor)) saida[k] = this._podarMidiaDaVersao(valor[k]);
+      return saida;
+    }
+    return valor;
+  }
+
   saveVersion(collection, record) {
     if (!this.data.registro_versoes) this.data.registro_versoes = [];
     const versions = this.data.registro_versoes.filter(v => v.collection === collection && v.registro_id == record.id);
@@ -2177,7 +2278,7 @@ class Store {
       collection,
       registro_id: record.id,
       versao: versaoNum,
-      dados_json: JSON.parse(JSON.stringify(record)),
+      dados_json: this._podarMidiaDaVersao(JSON.parse(JSON.stringify(record))),
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
       criado_em: agoraIsoBrasilia()
     });
@@ -2202,7 +2303,18 @@ class Store {
     const idx = list.findIndex(x => x.id == recordId);
     if (idx < 0) return { success: false, message: 'Registro atual não encontrado' };
 
-    list[idx] = JSON.parse(JSON.stringify(versionObj.dados_json));
+    // A versao nao carrega mais o base64 da midia (ver _podarMidiaDaVersao),
+    // entao restaurar o snapshot cru trocaria as fotos por marcadores de texto.
+    // A midia atual e preservada de proposito, e isso e o comportamento certo
+    // independente da poda: voltar a causa raiz para o valor anterior nao deve
+    // ressuscitar uma evidencia excluida nem apagar uma anexada depois.
+    const CAMPOS_MIDIA = [
+      'fotos_abertura', 'videos_abertura', 'fotos_investigacao', 'videos_investigacao',
+      'foto_url', 'video_url', 'video_investigacao_url'
+    ];
+    const midiaAtual = {};
+    CAMPOS_MIDIA.forEach(c => { if (c in list[idx]) midiaAtual[c] = list[idx][c]; });
+    list[idx] = Object.assign(JSON.parse(JSON.stringify(versionObj.dados_json)), midiaAtual);
     this.logAudit({ acao: 'ROLLBACK_VERSAO', modulo: collection, registro_id: recordId, diff: { versao_restaurada: versionObj.versao } });
     this.save();
     return { success: true };
