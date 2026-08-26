@@ -1835,7 +1835,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "sync-5.1.0";
+CloudStore.BUILD = "video-storage-5.3.0";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
@@ -2151,6 +2151,32 @@ CloudStore.ARQUIVOS_DO_APP = [
   './manifest.json'
 ];
 
+// Compara duas marcas de build pelo NUMERO DE VERSAO, nao pela string inteira.
+//
+// Por que: a marca carrega um codinome que muda a cada leva ('sync-5.1.0',
+// 'menu-periodo-5.2.0'). Comparando a string inteira, esquecer de subir
+// CloudStore.BUILD junto com o version.json faz a tarja "versao antiga"
+// acender em TODO aparelho e nunca mais apagar - foi o que aconteceu na
+// 5.2.0, e ja tinha acontecido na 5.0.0 (ver comentario de CloudStore.BUILD).
+// Como o aparelho de fato TEM o codigo novo, recarregar nao resolve nada: o
+// aviso que existe para achar cache velho vira ruido permanente, e ai
+// ninguem olha mais para ele.
+//
+// Comparando so o x.y.z, o codinome pode divergir sem acender a tarja - o
+// que a tarja precisa detectar e o aparelho rodando codigo de OUTRA VERSAO.
+// Se algum dos dois lados nao tiver x.y.z, cai na comparacao antiga.
+function jrVersaoNumerica(marca) {
+  const m = String(marca || '').match(/([0-9]+)[.]([0-9]+)[.]([0-9]+)/);
+  return m ? m[1] + '.' + m[2] + '.' + m[3] : null;
+}
+
+function jrMesmaVersao(publicada, local) {
+  const a = jrVersaoNumerica(publicada);
+  const b = jrVersaoNumerica(local);
+  if (a && b) return a === b;
+  return publicada === local;
+}
+
 window.jrConferirVersaoPublicada = async function() {
   let publicada = null;
   try {
@@ -2161,7 +2187,7 @@ window.jrConferirVersaoPublicada = async function() {
   } catch(e) {
     return null;   // sem rede: segue com o que tem, sem incomodar ninguém
   }
-  if (!publicada || publicada === CloudStore.BUILD) return publicada;
+  if (!publicada || jrMesmaVersao(publicada, CloudStore.BUILD)) return publicada;
 
   console.warn(`[CloudStore] Versão publicada (${publicada}) diferente da que está rodando aqui (${CloudStore.BUILD}). Atualizando...`);
 

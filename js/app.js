@@ -3661,7 +3661,7 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
   if (Array.isArray(registro.anexos)) {
     registro.anexos.forEach(a => {
       if (typeof a === 'string' && (a.startsWith('data:image') || a.match(/\.(jpeg|jpg|png|webp|gif)/i))) fotos.push(a);
-      else if (typeof a === 'string' && (a.startsWith('data:video') || a.match(/\.(mp4|webm|mov)/i))) videos.push(a);
+      else if (typeof a === 'string' && (a.startsWith('data:video') || a.match(/\.(mp4|webm|mov|avi|3gp|mkv)/i))) videos.push(a);
     });
   }
 
@@ -6181,7 +6181,98 @@ function renderUploadFotosSinistro(grupo, label, fotosExistentes, fotosHerdadas)
     </div>`;
 }
 
-function handleVideoUpload(inputEl, context, devId) {
+// =============================================================================
+// VÍDEO DE EVIDÊNCIA — REESCRITO EM 26/08/2026
+//
+// O QUE ESTAVA ERRADO. Esta função fazia readAsDataURL() do arquivo inteiro e
+// guardava a string base64 no array que vai para dentro do registro — e o
+// registro vai para o localStorage no save(). A conta:
+//
+//     vídeo de 3 MB  →  ~4 MB em base64 (+33%)  →  ~8 MB de cota
+//     (localStorage guarda UTF-16: 2 bytes por caractere)
+//
+// A cota do navegador fica entre 5 e 10 MB POR ORIGEM. Ela não tem relação
+// nenhuma com a memória do PC nem com o espaço do Supabase — é um teto
+// cravado no navegador. Ou seja: um único vídeo estourava tudo sozinho.
+//
+// O estrago era duplo, e o segundo lado é o pior: além de derrubar o
+// save() (tarja "o último registro NÃO foi salvo", lançamento perdido), o
+// vídeo NUNCA chegava na nuvem — conferido no banco em 26/08/2026, a coluna
+// videos_abertura tinha 0 byte de vídeo em todos os registros. A pessoa
+// anexava a prova, via o preview na tela, e não havia prova nenhuma.
+//
+// O QUE MUDA. O arquivo sobe direto para o Supabase Storage no momento em
+// que é escolhido (window.videoStore, em js/fotoStore.js), e o que entra no
+// array — e portanto no registro — é a URL pública, ~120 bytes. Todas as
+// telas já montam <video src="${v}">, então a exibição não muda, e os
+// registros antigos gravados em base64 continuam abrindo normalmente.
+//
+// POR QUE SUBIR NA HORA, e não em fila como as fotos: a foto é capturada na
+// doca, onde pode não haver sinal no instante em que o caminhão está parado
+// — por isso ela tem fila no IndexedDB. O vídeo é anexado na tela de
+// abertura e na de análise, com o arquivo já pronto no aparelho; dá para
+// exigir rede e dizer NA HORA se subiu ou não, em vez de descobrir depois.
+// =============================================================================
+
+// Quantos uploads estão em andamento agora. Os submits consultam antes de
+// gravar: salvar no meio do envio gravaria o registro sem o vídeo, que é
+// exatamente o tipo de perda silenciosa que esta leva veio corrigir.
+window._videosSubindo = 0;
+
+function jrPodeSalvarComVideos() {
+  if (window._videosSubindo > 0) {
+    alert('⏳ Aguarde: ' + window._videosSubindo + ' vídeo(s) ainda estão sendo enviados.\n\n'
+        + 'Salvar agora gravaria o registro SEM o vídeo. A barra de progresso some quando terminar.');
+    return false;
+  }
+  return true;
+}
+
+// Cartão de um vídeo dentro da galeria: barra de progresso enquanto sobe,
+// player quando termina, recado em vermelho quando falha.
+function _cartaoVideo(inner, file) {
+  const box = document.createElement('div');
+  box.className = 'w-48 rounded border border-blue-500/70 bg-slate-900 p-1.5 shrink-0';
+
+  const nome = document.createElement('div');
+  nome.className = 'text-[9px] text-slate-400 font-bold truncate mb-1';
+  nome.title = file.name;
+  nome.textContent = file.name;
+
+  const trilho = document.createElement('div');
+  trilho.className = 'h-1.5 bg-slate-800 rounded overflow-hidden';
+  const barra = document.createElement('div');
+  barra.className = 'h-full bg-blue-500 transition-all';
+  barra.style.width = '0%';
+  trilho.appendChild(barra);
+
+  const legenda = document.createElement('div');
+  legenda.className = 'text-[9px] text-blue-300 font-bold mt-1';
+  legenda.textContent = 'enviando... 0%';
+
+  box.appendChild(nome);
+  box.appendChild(trilho);
+  box.appendChild(legenda);
+  if (inner) inner.appendChild(box);
+
+  return {
+    progresso(pct) {
+      barra.style.width = pct + '%';
+      legenda.textContent = 'enviando... ' + pct + '%';
+    },
+    pronto(url) {
+      box.innerHTML = '<video src="' + url + '" controls class="w-full max-h-24 rounded"></video>'
+        + '<div class="text-[9px] text-emerald-400 font-bold mt-1">✓ no servidor</div>';
+    },
+    erro(msg) {
+      box.className = 'w-48 rounded border border-red-500/70 bg-red-950/40 p-1.5 shrink-0';
+      box.innerHTML = '<div class="text-[9px] text-red-300 font-bold truncate mb-1">' + file.name + '</div>'
+        + '<div class="text-[9px] text-red-200 leading-tight">⛔ ' + msg + '</div>';
+    }
+  };
+}
+
+async function handleVideoUpload(inputEl, context, devId) {
   context = context || 'sac';
   const files = Array.from(inputEl.files || []);
   if (!files.length) return;
@@ -6198,22 +6289,30 @@ function handleVideoUpload(inputEl, context, devId) {
   }
   const inner = document.getElementById(innerId);
 
-  files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      if (context === 'sac') uploadedVideosBase64.push(e.target.result);
-      else uploadedVideosBase64Inv.push(e.target.result);
+  // Guarda de ordem de deploy, igual à das fotos de reentrega: index.html
+  // pode estar no ar pedindo um js/fotoStore.js que ainda não subiu.
+  if (!window.videoStore) {
+    if (inner) inner.innerHTML = '<div class="text-[10px] text-amber-400 font-bold">⚠️ Recarregue a página (Ctrl+Shift+R): falta um arquivo desta versão.</div>';
+    return;
+  }
 
-      if (inner) {
-        const video = document.createElement('video');
-        video.src = e.target.result;
-        video.controls = true;
-        video.className = 'w-48 max-h-24 rounded border border-blue-500 shadow';
-        inner.appendChild(video);
-      }
-    };
-    reader.readAsDataURL(file);
-  });
+  const alvo = { modulo: 'devolucao_sac', registro_id: devId || 'abertura', etapa: context === 'sac' ? 'abertura' : 'investigacao' };
+
+  for (const file of files) {
+    const cartao = _cartaoVideo(inner, file);
+    window._videosSubindo++;
+    try {
+      const r = await window.videoStore.subir(file, alvo, pct => cartao.progresso(pct));
+      if (context === 'sac') uploadedVideosBase64.push(r.url);
+      else uploadedVideosBase64Inv.push(r.url);
+      cartao.pronto(r.url);
+    } catch (err) {
+      cartao.erro(err.message);
+      if (typeof showToast === 'function') showToast('Não foi possível anexar "' + file.name + '": ' + err.message, 'error');
+    } finally {
+      window._videosSubindo--;
+    }
+  }
 }
 
 function toggleSemItens(checked) {
@@ -6909,6 +7008,8 @@ async function handleSacAberturaSubmit(e) {
     return;
   }
 
+  if (typeof jrPodeSalvarComVideos === 'function' && !jrPodeSalvarComVideos()) return;
+
   const veicSel = document.getElementById('sac-veiculo-id');
   const veicOpt = veicSel.options[veicSel.selectedIndex];
   // Mesma causa raiz do fix de importação de escala (21/08/2026): os
@@ -7553,6 +7654,8 @@ function handleInvestigacaoSubmit(e, devId) {
     alert('Por favor, descreva a Ação Tomada / Encaminhamento!');
     return;
   }
+
+  if (typeof jrPodeSalvarComVideos === 'function' && !jrPodeSalvarComVideos()) return;
 
   let videoInvUrl = '';
   if (typeof uploadedVideosBase64Inv !== 'undefined' && Array.isArray(uploadedVideosBase64Inv) && uploadedVideosBase64Inv.length) {
@@ -12544,18 +12647,44 @@ function handleRotaFotosUpload(input) {
   input.value = '';
 }
 
-function handleRotaVideosUpload(input) {
-  if (input.files && input.files.length > 0) {
-    Array.from(input.files).forEach(file => {
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        uploadedRotaVideos.push(e.target.result);
-        renderRotaVideosPreview();
-      };
-      reader.readAsDataURL(file);
-    });
-  }
+// Mesma correção de handleVideoUpload (ver o comentarário grande lá): o
+// vídeo sobe para o Storage e o array guarda a URL, não o base64. Aqui a
+// coluna de destino é midia_videos, de ocorrencias_rota.
+async function handleRotaVideosUpload(input) {
+  const files = Array.from(input.files || []);
   input.value = '';
+  if (!files.length) return;
+
+  if (!window.videoStore) {
+    if (typeof showToast === 'function') showToast('⚠️ Recarregue a página (Ctrl+Shift+R): falta um arquivo desta versão.', 'error');
+    return;
+  }
+
+  const preview = document.getElementById('rota-videos-preview');
+  const aviso = document.createElement('div');
+  aviso.className = 'text-[10px] text-blue-300 font-bold w-full';
+  if (preview) preview.appendChild(aviso);
+
+  for (const file of files) {
+    window._videosSubindo++;
+    aviso.textContent = 'Enviando "' + file.name + '"... 0%';
+    try {
+      const r = await window.videoStore.subir(
+        file,
+        { modulo: 'ocorrencia_rota', registro_id: 'nova', etapa: 'midia' },
+        pct => { aviso.textContent = 'Enviando "' + file.name + '"... ' + pct + '%'; }
+      );
+      uploadedRotaVideos.push(r.url);
+      renderRotaVideosPreview();
+    } catch (err) {
+      if (typeof showToast === 'function') showToast('Não foi possível anexar "' + file.name + '": ' + err.message, 'error');
+    } finally {
+      window._videosSubindo--;
+    }
+  }
+
+  try { aviso.remove(); } catch (e) {}
+  renderRotaVideosPreview();
 }
 
 function removeRotaFoto(index) {
@@ -14720,6 +14849,9 @@ function onOcRotaCargaSelect(cargaNum) {
 
 async function handleNovaRotaSubmit(e) {
   e.preventDefault();
+  // Depois do preventDefault, sempre: um return antes dele deixaria o
+  // formulario submeter de verdade e recarregar a pagina, perdendo tudo.
+  if (typeof jrPodeSalvarComVideos === 'function' && !jrPodeSalvarComVideos()) return;
   const veicSel = document.getElementById('rota-veiculo-id');
   const veicOpt = veicSel ? veicSel.options[veicSel.selectedIndex] : null;
   const statusVeic = document.getElementById('rota-status-veiculo')?.value || 'Aguardando Manutenção';

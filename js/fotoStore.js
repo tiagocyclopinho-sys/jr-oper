@@ -618,3 +618,147 @@ window.addEventListener('beforeunload', e => {
     return '';
   }
 });
+
+// =================================================================
+// VIDEOS DE EVIDENCIA -> Supabase Storage (bucket 'evidencias-videos')
+//
+// POR QUE ESTE BLOCO EXISTE (26/08/2026)
+// As fotos sairam do localStorage na v5.1.0 (todo o arquivo acima). O video
+// FICOU PARA TRAS: handleVideoUpload() ainda fazia readAsDataURL() do arquivo
+// inteiro e empurrava a string base64 para dentro do registro - e do registro
+// para o localStorage, no save().
+//
+// A conta de por que isso nao tinha como funcionar:
+//   video de 3 MB -> ~4 MB em base64 (+33%) -> ~8 MB no localStorage, que
+//   guarda UTF-16 (2 bytes por caractere). A cota do navegador fica entre
+//   5 e 10 MB e NAO tem relacao nenhuma com a memoria do PC nem com o espaco
+//   do Supabase: e um teto por origem, cravado no navegador.
+//
+// O efeito medido em producao: setItem() estourava, a tarja "o ultimo
+// registro NAO foi salvo" acendia, e o lancamento se perdia. Pior: a coluna
+// videos_abertura do banco tinha 0 byte de video em TODOS os registros - o
+// video nunca chegava na nuvem, morria no navegador. A pessoa anexava a
+// prova, via o preview na tela, e nao havia prova nenhuma.
+//
+// DIFERENCA DE DESENHO EM RELACAO A FOTO: a foto tem fila (IndexedDB) porque
+// e capturada na doca, onde pode nao haver sinal no instante em que o
+// caminhao esta parado esperando. O video e anexado na tela de abertura e na
+// de analise, com o arquivo ja pronto no aparelho - da para exigir rede e
+// dizer na hora se subiu ou nao. E por isso o upload aqui e IMEDIATO, na
+// selecao do arquivo: quando o operador clica em Salvar, o video ja esta no
+// servidor e o registro carrega so o endereco (~120 bytes).
+//
+// O QUE VAI PARA O REGISTRO passa a ser a URL publica. Todas as telas ja
+// montam <video src="${v}">, entao nada muda na exibicao - e os registros
+// antigos, que guardam base64, continuam abrindo do mesmo jeito.
+// =================================================================
+const VIDEO_BUCKET = 'evidencias-videos';
+
+// Igual ao file_size_limit do bucket. Vale conferir os dois quando mudar:
+// o navegador barra antes de gastar a rede, o bucket barra de verdade.
+const VIDEO_TETO_BYTES = 50 * 1024 * 1024;
+
+const VIDEO_MIMES_OK = [
+  'video/mp4', 'video/webm', 'video/quicktime',
+  'video/x-msvideo', 'video/3gpp', 'video/x-matroska'
+];
+
+class VideoStore {
+  _cfg() {
+    return (window.JR_CONFIG && window.JR_CONFIG.supabase) || {};
+  }
+
+  configurado() {
+    const c = this._cfg();
+    return !!(c.url && c.anonKey && String(c.url).startsWith('https://'));
+  }
+
+  urlPublica(caminho) {
+    const c = this._cfg();
+    if (!c.url || !caminho) return '';
+    if (/^https?:/i.test(String(caminho))) return caminho;   // ja e URL inteira
+    return c.url + '/storage/v1/object/public/' + VIDEO_BUCKET + '/'
+         + String(caminho).replace(/^\/+/, '');
+  }
+
+  formatarMB(bytes) {
+    return (Number(bytes || 0) / 1024 / 1024).toFixed(1).replace('.', ',') + ' MB';
+  }
+
+  // Recusa o arquivo ANTES de gastar rede. Devolve null quando esta tudo bem,
+  // ou o texto do problema, pronto para mostrar na tela.
+  validar(file) {
+    if (!file) return 'Arquivo vazio.';
+    const tipo = String(file.type || '').toLowerCase();
+    if (tipo && !VIDEO_MIMES_OK.includes(tipo)) {
+      return 'O formato ' + tipo + ' nao e aceito. Use MP4, WEBM, MOV, AVI, 3GP ou MKV.';
+    }
+    if (file.size > VIDEO_TETO_BYTES) {
+      return 'O video tem ' + this.formatarMB(file.size) + ' e o limite por arquivo e '
+           + this.formatarMB(VIDEO_TETO_BYTES) + '. Corte um trecho menor e anexe de novo.';
+    }
+    return null;
+  }
+
+  _caminho(file, alvo) {
+    const a = alvo || {};
+    const ext = (String(file.name || '').split('.').pop() || 'mp4')
+                  .toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) || 'mp4';
+    const aleatorio = Math.random().toString(36).slice(2, 10);
+    // Nome nao adivinhavel pelo mesmo motivo das fotos: o bucket e publico
+    // para leitura, entao o que protege o video e o endereco nao sair do id
+    // do registro.
+    const pasta = (a.modulo || 'ocorrencias') + '/' + (a.registro_id || 'sem-id') + '/' + (a.etapa || 'geral');
+    return pasta + '/' + Date.now() + '-' + aleatorio + '.' + ext;
+  }
+
+  /**
+   * Sobe UM video e devolve { caminho, url, bytes }.
+   * onProgresso recebe 0..100 - XMLHttpRequest em vez de fetch existe por
+   * isso: fetch nao informa progresso de upload, e um video de 40 MB numa
+   * rede do CD leva tempo suficiente para a tela precisar dizer algo.
+   */
+  subir(file, alvo, onProgresso) {
+    return new Promise((resolve, reject) => {
+      const problema = this.validar(file);
+      if (problema) return reject(new Error(problema));
+      if (!this.configurado()) {
+        return reject(new Error('Supabase nao configurado neste aparelho - o video nao tem para onde ir.'));
+      }
+
+      const cfg = this._cfg();
+      const caminho = this._caminho(file, alvo);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', cfg.url + '/storage/v1/object/' + VIDEO_BUCKET + '/' + caminho, true);
+      xhr.setRequestHeader('apikey', cfg.anonKey);
+      xhr.setRequestHeader('Authorization', 'Bearer ' + cfg.anonKey);
+      xhr.setRequestHeader('Content-Type', file.type || 'video/mp4');
+      xhr.setRequestHeader('x-upsert', 'true');
+      xhr.setRequestHeader('Cache-Control', 'max-age=31536000');
+
+      if (xhr.upload && typeof onProgresso === 'function') {
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable) onProgresso(Math.round((e.loaded / e.total) * 100));
+        };
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({ caminho, url: this.urlPublica(caminho), bytes: file.size });
+        } else {
+          let detalhe = '';
+          try { detalhe = (JSON.parse(xhr.responseText || '{}').message) || ''; } catch (e) {}
+          reject(new Error('O servidor recusou o video (HTTP ' + xhr.status + ')'
+                           + (detalhe ? ': ' + detalhe : '.')));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Sem conexao com o servidor. Confira a internet e anexe de novo.'));
+      xhr.ontimeout = () => reject(new Error('O envio demorou demais. Tente de novo, de preferencia com um video menor.'));
+      xhr.timeout = 5 * 60 * 1000;
+      xhr.send(file);
+    });
+  }
+}
+
+window.videoStore = new VideoStore();
+window.JR_VIDEO_TETO_BYTES = VIDEO_TETO_BYTES;
