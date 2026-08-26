@@ -19,9 +19,26 @@ function extrair(marcadorInicio, marcadorFim) {
   return ORIGEM.slice(i, j + marcadorFim.length);
 }
 
-const sandbox = {};
+// dataRefDoRegistro() normaliza a data pelos mesmos helpers que o resto do
+// sistema usa — _parseDataFlex (app.js) e dataIsoBrasilia (config.js) — em vez
+// de ter uma cópia da lógica de fuso só para o filtro de período. Por isso o
+// harness precisa carregar os dois: o teste exercita o caminho real, não um
+// atalho escrito para passar no teste.
+const CONFIG = fs.readFileSync(path.join(__dirname, '..', 'js', 'config.js'), 'utf8');
+function extrairDe(fonte, marcadorInicio, marcadorFim) {
+  const i = fonte.indexOf(marcadorInicio);
+  if (i < 0) throw new Error(`Não encontrei "${marcadorInicio}" — o bloco foi renomeado ou removido?`);
+  const j = fonte.indexOf(marcadorFim, i);
+  if (j < 0) throw new Error(`Não encontrei o fim "${marcadorFim}" a partir de "${marcadorInicio}".`);
+  return fonte.slice(i, j + marcadorFim.length);
+}
+
+const sandbox = { window: { JR_FUSO: 'America/Sao_Paulo' }, Intl, Date, isNaN, Number, String, JSON };
 vm.createContext(sandbox);
 vm.runInContext([
+  extrairDe(CONFIG, 'function dataIsoBrasilia(', '\n}'),
+  extrair('function _parseDataFlex(', '\n}'),
+  extrair('function _paraIsoDeComparacao(', '\n}'),
   extrair('function dataNoPeriodo(', '\n}'),
   extrair('const CAMPOS_DATA_POR_COLECAO = {', '\n};'),
   extrair('function dataRefDoRegistro(', '\n}'),
@@ -132,9 +149,18 @@ secao('6. Tipo de Erro: saiu OUTRO, entrou ERRO CLIENTE');
   const ordenada = TIPOS_ERRO.slice().sort((a, b) => a.localeCompare(b, 'pt-BR'));
   ok(JSON.stringify(ordenada) === JSON.stringify(TIPOS_ERRO), 'a lista está em ordem alfabética');
 
-  // a lista é usada em três telas — todas devem apontar para a constante
-  const usos = (ORIGEM.match(/= TIPOS_ERRO;/g) || []).length;
-  ok(usos === 3, `as 3 telas usam a mesma constante (encontrei ${usos})`);
+  // A lista é usada em três telas — todas devem apontar para a mesma fonte.
+  //
+  // Esta checagem contava `= TIPOS_ERRO;` três vezes, uma por tela que copiava
+  // a constante para uma variável local antes de montar os <option> à mão. As
+  // três passaram a chamar opcoesTipoErro(), então não existe mais variável
+  // local nenhuma para contar — e a regra ficou mais forte: uma fonte só para
+  // a lista E uma só para a marcação do valor selecionado e do legado.
+  const usos = (ORIGEM.match(/\$\{opcoesTipoErro\(/g) || []).length;
+  ok(usos === 3, `as 3 telas montam as opções pela mesma função (encontrei ${usos})`);
+
+  const declaracoes = (ORIGEM.match(/const TIPOS_ERRO = \[/g) || []).length;
+  ok(declaracoes === 1, `TIPOS_ERRO é declarada num lugar só (encontrei ${declaracoes})`);
   ok(!/const (erros|tiposErro) = \["ERRO CARREGAMENTO"/.test(ORIGEM),
      'nenhuma cópia solta da lista sobrou no arquivo');
 }

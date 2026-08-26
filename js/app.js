@@ -493,8 +493,71 @@ function renderFilaFotosPanel() {
     </div>`;
 }
 
+// =============================================================================
+// PORTÃO DA ÁREA ADMINISTRATIVA (26/08/2026)
+//
+// O menu mostra as quatro telas administrativas para TODO MUNDO de propósito
+// (`papeis: null` em NAV_GRUPOS): quem protege elas é a senha de admin, não o
+// papel do usuário. Só que a senha era cobrada em UMA delas — "Logins e
+// Senhas", pela trava `window._gestaoUsuariosDesbloqueado`. Cadastros
+// Mestres, Governança & Lixeira e Conector Power BI abriam direto para
+// qualquer pessoa logada: dava para apagar cadastro mestre, restaurar item da
+// lixeira e baixar o JSON inteiro do banco sem senha nenhuma.
+//
+// Agora as quatro dividem a MESMA tranca de sessão: desbloqueou uma,
+// desbloqueou a área; handleLogout() tranca tudo de novo. A tranca vive só em
+// memória — F5 fecha a porta, que é o comportamento desejado.
+// =============================================================================
+function areaAdminDesbloqueada() {
+  return window._areaAdminDesbloqueada === true;
+}
+
+function renderPortaoAdmin(titulo, descricao) {
+  return `
+    <div class="max-w-md mx-auto mt-16 text-center space-y-4">
+      <div class="text-5xl">🔒</div>
+      <h2 class="text-lg font-black text-white">${titulo || 'Área Administrativa'}</h2>
+      <p class="text-sm text-slate-400 leading-relaxed">${descricao || 'Esta área requer autorização do administrador.'}</p>
+      <button onclick="desbloquearAreaAdmin()" class="bg-red-700 hover:bg-red-600 text-white font-bold px-5 py-2.5 rounded-xl text-sm shadow inline-flex items-center gap-2 transition">
+        🔑 Desbloquear com Senha Admin
+      </button>
+      <p class="text-[11px] text-slate-500">Vale para as quatro telas de Administração até você sair do sistema.</p>
+    </div>`;
+}
+
+function desbloquearAreaAdmin() {
+  abrirModalConfirmacaoAdmin({
+    titulo: 'Acesso à Área Administrativa',
+    mensagem: 'Informe a senha de administrador para abrir Cadastros Mestres, Logins e Senhas, Governança &amp; Lixeira e o Conector Power BI.',
+    onConfirm: (pwd) => {
+      // .trim() para casar com o que o store faz nas próprias conferências
+      // (resetGlobalTreinamento, expurgo): espaço colado no fim da senha não
+      // pode virar "senha incorreta".
+      if (String(pwd).trim() !== db.getAdminPassword()) {
+        alert('❌ Senha de administrador incorreta.');
+        return;
+      }
+      window._areaAdminDesbloqueada = true;
+      renderApp();
+    }
+  });
+}
+
+function bloquearAreaAdmin() {
+  window._areaAdminDesbloqueada = false;
+  renderApp();
+}
+
+// Botão "Bloquear novamente", igual nas quatro telas administrativas.
+function botaoBloquearAreaAdmin() {
+  return `<button onclick="bloquearAreaAdmin()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded-lg text-xs transition shrink-0" title="Tranca as quatro telas de Administração">🔒 Bloquear novamente</button>`;
+}
+
 // ===== MÓDULO: LIXEIRA DO SISTEMA (GOVERNANÇA, AUDITORIA & RETENÇÃO) =====
 function renderLixeiraView() {
+  if (!areaAdminDesbloqueada()) return renderPortaoAdmin('Governança &amp; Lixeira',
+    'Esta área requer autorização do administrador. Aqui é possível restaurar registros excluídos, expurgar a lixeira em definitivo e consultar o log de auditoria.');
+
   const activeSub = window._activeLixeiraSubTab || 'lixeira';
   const items = db.getLixeiraItems ? db.getLixeiraItems() : [];
   const logs = db.data.audit_logs || [];
@@ -576,17 +639,8 @@ function diasParaExpurgo(deletedAt) {
 // abrirModalConfirmacaoAdmin() já usado em Rollback/Expurgo/Reset Global. =====
 
 function renderGestaoUsuariosView() {
-  if (!window._gestaoUsuariosDesbloqueado) {
-    return `
-      <div class="max-w-md mx-auto mt-16 text-center space-y-4">
-        <div class="text-5xl">🔒</div>
-        <h2 class="text-lg font-black text-white">Logins e Senhas</h2>
-        <p class="text-sm text-slate-400 leading-relaxed">Esta área requer autorização do administrador. Aqui é possível editar cadastros de usuário, redefinir senhas e ativar/desativar acessos.</p>
-        <button onclick="desbloquearGestaoUsuarios()" class="bg-red-700 hover:bg-red-600 text-white font-bold px-5 py-2.5 rounded-xl text-sm shadow inline-flex items-center gap-2 transition">
-          🔑 Desbloquear com Senha Admin
-        </button>
-      </div>`;
-  }
+  if (!areaAdminDesbloqueada()) return renderPortaoAdmin('Logins e Senhas',
+    'Esta área requer autorização do administrador. Aqui é possível editar cadastros de usuário, redefinir senhas e ativar/desativar acessos.');
 
   const usuarios = (db.data.usuarios || []).slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
 
@@ -597,7 +651,7 @@ function renderGestaoUsuariosView() {
           <h2 class="text-lg font-black text-white flex items-center gap-2">🔐 Logins e Senhas</h2>
           <p class="text-xs text-slate-400">Cadastro de usuários do sistema — visível apenas para administradores autorizados nesta sessão.</p>
         </div>
-        <button onclick="window._gestaoUsuariosDesbloqueado=false; renderApp();" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded-lg text-xs transition">🔒 Bloquear novamente</button>
+        ${botaoBloquearAreaAdmin()}
       </div>
 
       <div class="overflow-x-auto rounded-xl border border-slate-800">
@@ -640,21 +694,6 @@ function renderGestaoUsuariosView() {
         </table>
       </div>
     </div>`;
-}
-
-function desbloquearGestaoUsuarios() {
-  abrirModalConfirmacaoAdmin({
-    titulo: 'Acesso a Logins e Senhas',
-    mensagem: 'Informe a senha de administrador para editar cadastros de usuário, redefinir senhas e ativar/desativar acessos.',
-    onConfirm: (pwd) => {
-      if (pwd !== db.getAdminPassword()) {
-        alert('❌ Senha de administrador incorreta.');
-        return;
-      }
-      window._gestaoUsuariosDesbloqueado = true;
-      renderApp();
-    }
-  });
 }
 
 function abrirModalEditarUsuario(userId) {
@@ -2514,12 +2553,27 @@ window.executarResetGlobalTreinamento = executarResetGlobalTreinamento;
 // mapDeptToRoleAndCargo(); e na tela "Logins e Senhas", escolhido à mão pelo
 // admin num select próprio, independente do departamento.
 //
-// O filtro FALHA ABERTO de propósito: papel ausente, vazio ou desconhecido
-// mostra o menu inteiro. Ninguém pode perder acesso a uma tela por causa de
-// um cadastro incompleto — e há casos reais disso (ver o comentário em
-// navPapelDoUsuario). O botão "Ver todas as telas" no rodapé desliga o
-// filtro a qualquer momento, para qualquer usuário.
+// O filtro está DESLIGADO hoje — ver NAV_FILTRO_POR_PAPEL logo abaixo. Quando
+// voltar a valer, ele FALHA ABERTO de propósito: papel ausente, vazio ou
+// desconhecido mostra o menu inteiro. Ninguém pode perder acesso a uma tela
+// por causa de um cadastro incompleto — e há casos reais disso (ver o
+// comentário em navPapelDoUsuario). O botão "Ver todas as telas" no rodapé
+// desliga o filtro a qualquer momento, para qualquer usuário; com o filtro
+// desligado ele não aparece, porque não há nada oculto para revelar.
 // =============================================================================
+// FILTRO POR PAPEL DESLIGADO (26/08/2026)
+//
+// O combinado é que TODO MUNDO vê TODAS as telas enquanto a tela de Admin
+// para liberar acesso por usuário não existir. Com o filtro ligado, quem
+// tinha role 'SAC' perdia 8 telas do menu (Boletim, Tratativas do Gestor, as
+// duas do CD, as duas de Frota e as duas de Pessoas) sem ter onde pedir
+// acesso — só o botão "Ver todas as telas", que ninguém sabia que existia.
+//
+// Os `papeis` de cada item continuam declarados de propósito: são a matéria-
+// prima da futura tela de Admin (ela vai virar o padrão sugerido por papel).
+// Para reativar o comportamento antigo basta voltar esta constante para true.
+const NAV_FILTRO_POR_PAPEL = false;
+
 const NAV_GRUPOS = [
   {
     id: 'visao_geral', icon: '📊', titulo: 'Visão Geral',
@@ -2619,6 +2673,7 @@ function navPapelDoUsuario(user) {
 }
 
 function navItemVisivel(item, papel) {
+  if (!NAV_FILTRO_POR_PAPEL) return true;  // combinado: todo mundo vê todas as telas
   if (window._navVerTudo) return true;
   if (!papel) return true;           // falha aberto: cadastro incompleto vê tudo
   if (!item.papeis) return true;     // item sem restrição (Dashboard)
@@ -2848,8 +2903,12 @@ function renderApp() {
       case 'boletim_gerencial':
         html = renderBoletimGerencialView();
         break;
+      // Apelido antigo do Conector Power BI: nenhum switchTab() aponta para
+      // cá hoje, mas ele chamava renderConectorDadosView() direto e por isso
+      // passava por fora do portão de admin. Passa pela mesma porta que
+      // 'power_bi' — não existe entrada dos fundos.
       case 'conector_dados':
-        html = renderConectorDadosView();
+        html = renderPowerBiView();
         break;
       case 'power_bi':
         html = renderPowerBiView();
@@ -3261,7 +3320,7 @@ function scrollToTop(smooth = true) {
 window.scrollToTop = scrollToTop;
 
 function changeRole(newRole) { db.switchRole(newRole); updateUserHeader(); renderApp(); }
-function handleLogout() { db.logout(); window._gestaoUsuariosDesbloqueado = false; updateUserHeader(); renderApp(); }
+function handleLogout() { db.logout(); window._areaAdminDesbloqueada = false; updateUserHeader(); renderApp(); }
 
 function switchTab(tab) {
   window._isSwitchingMainTab = true;
@@ -4197,6 +4256,11 @@ function _paraIsoDeComparacao(val) {
   return dataIsoBrasilia(ms);
 }
 
+// Primitivo: compara uma data que você JÁ TEM em mãos com um período. As telas
+// não chamam esta função — elas usam registroNoPeriodo(), logo abaixo, que
+// primeiro descobre QUAL campo do registro é a data. Continua aqui porque é
+// esta função que define a regra "sem data reconhecível, deixa passar", e
+// porque o teste do período a usa para demonstrar o comportamento antigo.
 function dataNoPeriodo(dStr, de, ate) {
   if (!dStr) return true;
   const d = _paraIsoDeComparacao(dStr);
@@ -4206,6 +4270,119 @@ function dataNoPeriodo(dStr, de, ate) {
   if (de && d < de) return false;
   if (ate && d > ate) return false;
   return true;
+}
+
+// =============================================================================
+// PERÍODO: UMA TABELA SÓ DE CAMPOS DE DATA (26/08/2026)
+//
+// O recorte por período era escrito à mão em cada tela, e as três discordavam
+// entre si sobre a MESMA devolução:
+//
+//   Dashboard  — dataNoPeriodo(d.data_abertura || d.data || d.criado_em)
+//   Boletim    — d.criado_em ? split('T')[0] : (d.data_abertura || '')
+//   PDF        — (d.criado_em || '').split('T')[0]
+//
+// Três diferenças reais saíam daí:
+//
+// 1. REGISTRO SEM DATA. O Dashboard mostrava (dataNoPeriodo devolve true sem
+//    data, de propósito); Boletim e PDF sumiam com ele, porque '' >= '2026-08-01'
+//    é false e o registro caía fora de qualquer período.
+// 2. FUSO. Dashboard convertia para Brasília via _paraIsoDeComparacao; Boletim
+//    e PDF cortavam a string no 'T', que é UTC. Tudo lançado entre 21h e 0h
+//    contava no dia seguinte para eles e no dia certo para o Dashboard.
+// 3. NOME DO CAMPO. Para ocorrência em rota o Dashboard olhava data_chamado e
+//    o Boletim data_ocorrencia. Para ocorrência de viagem o Boletim olhava só
+//    `data`, sem cair para criado_em.
+//
+// Agora existe UM lugar dizendo de onde sai a data de cada coleção, e as três
+// telas passam por registroNoPeriodo(). Comportamento adotado: o do Dashboard
+// — Brasília para o fuso, e registro sem data aparece em vez de sumir.
+//
+// Ordem dos campos = prioridade. Os nomes marcados como (legado) NUNCA são
+// gravados pelo store — conferido campo a campo — e só podem chegar por
+// importação de planilha; ficam na frente porque, se um dia chegarem, são a
+// data que a operação escreveu, mais específica que o carimbo de criação.
+// =============================================================================
+const CAMPOS_DATA_POR_COLECAO = {
+  ocorrencias_devolucao: ['data_abertura', 'criado_em'],                 // data_abertura (legado)
+  ocorrencias_rota:      ['data_chamado', 'data_ocorrencia', 'criado_em'], // ambos (legado)
+  controle_viagens:      ['data_saida', 'data_viagem', 'criado_em'],     // data_viagem (legado)
+  ocorrencias_viagens:   ['data', 'criado_em'],
+  trocas_veiculos:       ['data', 'data_troca', 'criado_em'],            // data_troca (legado)
+  reentregas:            ['data', 'criado_em'],
+  resumo_diario_cd:      ['data', 'criado_em'],
+  retencoes_frota:       ['data_parada', 'criado_em'],
+  transporte_oc_operacionais: ['data', 'criado_em'],
+  sinistros:             ['data_acidente', 'criado_em']
+};
+
+// Data de calendário (Brasília, 'AAAA-MM-DD') que representa o registro para
+// efeito de período. Devolve '' quando o registro não tem nenhuma data
+// reconhecível — quem chama decide o que fazer com isso.
+function dataRefDoRegistro(registro, colecao) {
+  if (!registro) return '';
+  const campos = CAMPOS_DATA_POR_COLECAO[colecao] || ['data', 'criado_em'];
+  for (let i = 0; i < campos.length; i++) {
+    const bruto = registro[campos[i]];
+    if (bruto === null || bruto === undefined || bruto === '') continue;
+    const iso = _paraIsoDeComparacao(bruto);
+    if (iso) return iso;
+  }
+  return '';
+}
+
+// O filtro de período de TODAS as telas. Sem data reconhecível o registro
+// entra: some de um relatório é pior do que aparecer num período que talvez
+// não seja o dele — e é assim que o Dashboard sempre se comportou.
+function registroNoPeriodo(registro, colecao, de, ate) {
+  const d = dataRefDoRegistro(registro, colecao);
+  if (!d) return true;
+  if (de && d < de) return false;
+  if (ate && d > ate) return false;
+  return true;
+}
+
+// =============================================================================
+// TIPO DE ERRO — FONTE ÚNICA (26/08/2026)
+//
+// A lista estava copiada e colada em três telas (Análise & Causa Raiz, o modal
+// de editar análise e o filtro das Tratativas do Gestor). Três cópias da mesma
+// lista significam que mudá-la exige lembrar dos três lugares — e "OUTRO"
+// precisava sair justamente porque não classificava nada: virava o destino de
+// tudo que dava trabalho classificar, e a análise de causa raiz do mês inteiro
+// terminava com uma fatia grande de "OUTRO" que não responde nada.
+//
+// No lugar dele entrou ERRO CLIENTE, que faltava: recusa por parte do cliente
+// (endereço errado, ninguém para receber, pedido cancelado na porta) não é
+// erro de carregamento nem responsabilidade não identificada.
+//
+// As análises antigas gravadas como OUTRO NÃO são migradas nem apagadas — ver
+// opcoesTipoErro(): o valor continua aparecendo no campo, marcado como
+// categoria antiga, para o gestor reclassificar quando abrir o registro. Zerar
+// o campo obrigaria a reclassificar tudo de uma vez para conseguir salvar.
+// =============================================================================
+const TIPOS_ERRO = [
+  'ERRO CARREGAMENTO',
+  'ERRO CLIENTE',
+  'ERRO COMERCIAL',
+  'ERRO INDÚSTRIA',
+  'ERRO LOGÍSTICO',
+  'ERRO MOTORISTA',
+  'PROBLEMA MECÂNICO',
+  'RESP. NÃO IDENTIFICADO'
+];
+
+// <option>s do campo Tipo de Erro. `valorAtual` é o que está gravado no
+// registro; `incluirLegado` força a opção antiga a aparecer mesmo sem estar
+// selecionada — serve para o FILTRO do gestor, que precisa conseguir procurar
+// os registros que ainda estão como OUTRO.
+function opcoesTipoErro(valorAtual, incluirLegado) {
+  const atual = String(valorAtual || '').trim().toUpperCase();
+  const partes = TIPOS_ERRO.map(t => `<option value="${t}"${atual === t ? ' selected' : ''}>${t}</option>`);
+  // 'OUTRO' não é mais oferecido como escolha nova: só reaparece para não
+  // apagar silenciosamente a classificação de um registro antigo.
+  if (atual === 'OUTRO' || incluirLegado) partes.push(`<option value="OUTRO"${atual === 'OUTRO' ? ' selected' : ''}>OUTRO (categoria antiga)</option>`);
+  return partes.join('');
 }
 
 // ===== DASHBOARD =====
@@ -4462,33 +4639,27 @@ function renderDashboardView() {
   const allTrocas = db.getTrocasVeiculos();
   const rawResumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
 
-  // Filtragem periódica por intervalo de datas
-  // O FILTRO POR PERÍODO NÃO FILTRAVA NADA — correção de 23/08/2026.
+  // Filtragem periódica por intervalo de datas.
   //
-  // Cada linha destas procurava um campo que NENHUMA tela grava:
-  // data_abertura, data_chamado, data_viagem e data_troca não existem em
-  // lugar nenhum do store.js (conferido, zero ocorrências), e nem como
-  // coluna no banco. Sobrava o `|| d.data`, que também não existe em
-  // devolução nem em ocorrência de rota.
+  // Histórico, porque explica por que existe uma tabela em vez de uma cadeia
+  // de `||` aqui: até 23/08/2026 estas linhas procuravam campos que NENHUMA
+  // tela grava (data_abertura, data_chamado, data_viagem, data_troca — zero
+  // ocorrências no store.js e nenhuma coluna no banco). Como dataNoPeriodo()
+  // devolve TRUE quando não recebe data — de propósito, para não esconder
+  // registro por falta de carimbo —, o resultado era um filtro inerte: com
+  // "Hoje", "Esta Semana" ou "Este Mês" marcado, TODOS os registros passavam
+  // e os números do Dashboard nunca mudavam.
   //
-  // E dataNoPeriodo() devolve TRUE quando não recebe data — de propósito,
-  // para nunca esconder um registro por falta de carimbo. As duas decisões
-  // juntas davam nisto: com "Hoje", "Esta Semana" ou "Este Mês" marcado,
-  // TODOS os registros passavam pelo filtro e os números do Dashboard não
-  // mudavam. O painel parecia funcionar e mostrava sempre o histórico
-  // inteiro. (Achado ao investigar por que uma devolução aparecia sem SLA:
-  // o registro tinha criado_em e data_abertura undefined — e foi esse
-  // undefined que denunciou o filtro.)
-  //
-  // criado_em é o carimbo que TODAS estas coleções têm de verdade, gravado
-  // na criação e com DEFAULT no banco. Os nomes antigos ficam na frente por
-  // segurança: se algum registro importado tiver um deles, ele ganha.
-  const devs = allDevs.filter(d => dataNoPeriodo(d.data_abertura || d.data || d.criado_em, fDe, fAte));
-  const rotas = allRotas.filter(r => dataNoPeriodo(r.data_chamado || r.data || r.criado_em, fDe, fAte));
-  const viagens = allViagens.filter(v => dataNoPeriodo(v.data_viagem || v.data || v.data_saida || v.criado_em, fDe, fAte));
-  const ocViagens = allOcViagens.filter(o => dataNoPeriodo(o.data_chamado || o.data || o.criado_em, fDe, fAte));
-  const trocas = allTrocas.filter(t => dataNoPeriodo(t.data_troca || t.data || t.criado_em, fDe, fAte));
-  const resumosCdArr = rawResumosCd.filter(r => r && dataNoPeriodo(r.data, fDe, fAte));
+  // (26/08/2026) A escolha do campo saiu daqui para CAMPOS_DATA_POR_COLECAO,
+  // que Boletim e PDFs também consultam: cada tela escrevia essa cadeia do
+  // seu jeito e as três discordavam sobre o mesmo registro. Ver o comentário
+  // longo na tabela.
+  const devs = allDevs.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDe, fAte));
+  const rotas = allRotas.filter(r => registroNoPeriodo(r, 'ocorrencias_rota', fDe, fAte));
+  const viagens = allViagens.filter(v => registroNoPeriodo(v, 'controle_viagens', fDe, fAte));
+  const ocViagens = allOcViagens.filter(o => registroNoPeriodo(o, 'ocorrencias_viagens', fDe, fAte));
+  const trocas = allTrocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
+  const resumosCdArr = rawResumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
   // Cálculos CD
   let pesoExpedicao = 0;
@@ -4558,7 +4729,7 @@ function renderDashboardView() {
 
   // ===== REENTREGAS NO PERÍODO =====
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
-  const reentregasPeriodo = todasReentregas.filter(r => dataNoPeriodo(r.data || r.criado_em, fDe, fAte));
+  const reentregasPeriodo = todasReentregas.filter(r => registroNoPeriodo(r, 'reentregas', fDe, fAte));
   // Alerta: pendencia atual, sem filtro de periodo (ver bloco acima).
   const reentregasPendentes = todasReentregas.filter(reentregaEmAberto);
   const maisAntigaReentregaDash = getMaisAntigaPendente(reentregasPendentes, ['criado_em', 'data'], { atencao: 24, estourado: 48 });
@@ -4566,7 +4737,7 @@ function renderDashboardView() {
   const indiceReentregaViagemPct = viagensIniciadas > 0 ? ((reentregasPeriodo.length / viagensIniciadas) * 100).toFixed(1) : '0.0';
 
   // ===== NOVOS KPIs: TRANSPORTE =====
-  const ocOperacionais = (Array.isArray(db.data.transporte_oc_operacionais) ? db.data.transporte_oc_operacionais : []).filter(o => dataNoPeriodo(o.data || o.criado_em, fDe, fAte));
+  const ocOperacionais = (Array.isArray(db.data.transporte_oc_operacionais) ? db.data.transporte_oc_operacionais : []).filter(o => registroNoPeriodo(o, 'transporte_oc_operacionais', fDe, fAte));
   const totOcOperacionais = ocOperacionais.length;
   const totOcOperacionaisPend = ocOperacionais.filter(o => o.status !== 'FINALIZADA').length;
   const totFusionIniciado = viagens.filter(v => (v.fusion || '').toUpperCase() === 'INICIADO').length;
@@ -4605,7 +4776,7 @@ function renderDashboardView() {
   // 2. MTTR Operacional / Tempo Médio de Imobilização (Formato hh:mm:ss — Tempo médio entre parada e liberação)
   let totalMttrMs = 0;
   let countMttr = 0;
-  const retencoesPeriodo = allRetencoes.filter(r => dataNoPeriodo(r.data_parada || r.criado_em, fDe, fAte));
+  const retencoesPeriodo = allRetencoes.filter(r => registroNoPeriodo(r, 'retencoes_frota', fDe, fAte));
   retencoesPeriodo.forEach(r => {
     const msIniR = r.criado_em ? _parseDataFlex(r.criado_em) : (r.data_parada ? _parseDataFlex(r.data_parada + 'T08:00:00') : null);
     const dtInicio = msIniR === null ? null : new Date(msIniR);
@@ -6805,19 +6976,14 @@ function renderSacInvestigacaoView() {
   const usuariosAtivos = (db.getUsuarios && db.getUsuarios().length > 0) ? db.getUsuarios().filter(u => u.ativo !== false) : (db.data.usuarios || []);
   const separadores = (typeof db !== 'undefined' && typeof db.getSeparadores === 'function') ? db.getSeparadores() : (db.data.separadores_conferentes || []);
   const conferentes = (typeof db !== 'undefined' && typeof db.getConferentes === 'function') ? db.getConferentes() : (db.data.separadores_conferentes || []);
-  const erros = ["ERRO CARREGAMENTO","ERRO COMERCIAL","ERRO INDÚSTRIA","ERRO LOGÍSTICO","ERRO MOTORISTA","OUTRO","PROBLEMA MECÂNICO","RESP. NÃO IDENTIFICADO"];
 
   const fDataDe = window._invFiltroDataDe || '';
   const fDataAte = window._invFiltroDataAte || '';
   const fTexto = window._invFiltroTexto || '';
 
   let devsFiltrados = todosDevs;
-  if (fDataDe) {
-    devsFiltrados = devsFiltrados.filter(d => (d.criado_em||'').split('T')[0] >= fDataDe);
-  }
-  if (fDataAte) {
-    devsFiltrados = devsFiltrados.filter(d => (d.criado_em||'').split('T')[0] <= fDataAte);
-  }
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  devsFiltrados = devsFiltrados.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDataDe, fDataAte));
   if (fTexto) {
     const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
     const q = norm(fTexto);
@@ -6976,7 +7142,7 @@ function renderSacInvestigacaoView() {
                 <label class="block text-[10px] text-slate-300 mb-1">Tipo de Erro / Categoria *</label>
                 <select id="inv-erro-${d.id}" required onchange="toggleOutroErro('${d.id}', this.value)" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-2 text-xs">
                   <option value="">-- Selecione o Tipo de Erro --</option>
-                  ${erros.map(e => `<option value="${e}" ${d.tipo_erro===e?'selected':''}>${e}</option>`).join('')}
+                  ${opcoesTipoErro(d.tipo_erro)}
                 </select>
                 <input type="text" id="inv-erro-outro-${d.id}" value="${d.tipo_erro_outro||''}" placeholder="Especifique o outro erro..." class="${d.tipo_erro==='OUTRO'?'':'hidden'} mt-1 w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
               </div>
@@ -7050,7 +7216,6 @@ function editarInvestigacaoModal(id) {
   if (!d) return;
 
   const causasRaiz = db.getMotivosDevolucao ? db.getMotivosDevolucao() : (db.data.motivos_devolucao || []);
-  const erros = ["ERRO CARREGAMENTO","ERRO COMERCIAL","ERRO INDÚSTRIA","ERRO LOGÍSTICO","ERRO MOTORISTA","OUTRO","PROBLEMA MECÂNICO","RESP. NÃO IDENTIFICADO"];
   const separadores = db.data.separadores_conferentes || [];
 
   const modalContainer = document.getElementById('modal-container');
@@ -7073,7 +7238,7 @@ function editarInvestigacaoModal(id) {
         <div>
           <label class="block text-[10px] text-amber-400 font-bold mb-1">Tipo de Erro *</label>
           <select id="ed-inv-erro" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 font-bold">
-            ${erros.map(e => `<option value="${e}" ${d.tipo_erro===e?'selected':''}>${e}</option>`).join('')}
+            ${opcoesTipoErro(d.tipo_erro)}
           </select>
         </div>
 
@@ -7429,7 +7594,6 @@ function handleInvestigacaoSubmit(e, devId) {
 // ===== MÓDULO: GESTÃO DO GESTOR =====
 function renderGestaoGestorView() {
   const todosDevs = db.getDevolucoes();
-  const tiposErro = ["ERRO CARREGAMENTO","ERRO COMERCIAL","ERRO INDÚSTRIA","ERRO LOGÍSTICO","ERRO MOTORISTA","OUTRO","PROBLEMA MECÂNICO","RESP. NÃO IDENTIFICADO"];
 
   const activeGestorTab = window._activeGestorSubTab || 'pendentes';
 
@@ -7568,7 +7732,7 @@ function renderGestaoGestorView() {
             <label class="block text-[10px] text-amber-400 font-bold mb-1">Filtro: Tipo de Erro</label>
             <select id="filtro-gestor-tipo-erro" onchange="aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded-lg p-2 text-xs">
               <option value="">Todos os Tipos de Erro</option>
-              ${tiposErro.map(t => `<option value="${t}" ${filtroTipoErro===t?'selected':''}>${t}</option>`).join('')}
+              ${opcoesTipoErro(filtroTipoErro, true)}
             </select>
           </div>
           <div>
@@ -7788,8 +7952,8 @@ function renderCdRecepcaoView() {
   const fCarga   = window._cdFiltroCarga   || '';
 
   let historico = devs.filter(d => d.status_fechamento !== 'PENDENTE_FISICO');
-  if (fDataDe)  historico = historico.filter(d => (d.criado_em||'').split('T')[0] >= fDataDe);
-  if (fDataAte) historico = historico.filter(d => (d.criado_em||'').split('T')[0] <= fDataAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  historico = historico.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDataDe, fDataAte));
   if (fPlaca)   historico = historico.filter(d => (d.veiculo_placa||'').toLowerCase().includes(fPlaca.toLowerCase()));
   if (fRota)    historico = historico.filter(d => (d.carga_rota||'').toLowerCase().includes(fRota.toLowerCase()));
   if (fCarga)   historico = historico.filter(d => String(d.carga_numero||'').includes(fCarga));
@@ -15114,11 +15278,17 @@ function handleEditarRotaSubmit(e, id) {
 
 // ===== MÓDULO 5: CADASTROS =====
 function renderCadastrosDadosView() {
+  if (!areaAdminDesbloqueada()) return renderPortaoAdmin('Cadastros Mestres',
+    'Esta área requer autorização do administrador. Aqui é possível criar, editar e excluir equipes, veículos, rotas, clientes, produtos e motivos de devolução — cadastros que todas as outras telas consomem.');
+
   return `
     <div class="space-y-5">
-      <div>
-        <h1 class="text-xl font-black text-white flex items-center gap-2"><span>⚙️</span> Cadastros Mestres</h1>
-        <p class="text-xs text-slate-400">Tabelas de apoio: equipes, veículos, rotas e produtos</p>
+      <div class="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 class="text-xl font-black text-white flex items-center gap-2"><span>⚙️</span> Cadastros Mestres</h1>
+          <p class="text-xs text-slate-400">Tabelas de apoio: equipes, veículos, rotas e produtos</p>
+        </div>
+        ${botaoBloquearAreaAdmin()}
       </div>
       <!-- SUB-TABS rolável horizontal no mobile -->
       <div class="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
@@ -15733,6 +15903,9 @@ function renderConectorDadosView() {
 }
 
 function renderPowerBiView() {
+  if (!areaAdminDesbloqueada()) return renderPortaoAdmin('Conector Power BI',
+    'Esta área requer autorização do administrador. Aqui ficam a string de conexão do banco, o script do schema e a exportação do JSON completo dos dados.');
+
   return renderConectorDadosView();
 }
 
@@ -19564,44 +19737,20 @@ function imprimirBoletimGerencialExecutivo() {
   const allTrocas = db.getTrocasVeiculos();
   const allReentregas = db.getReentregas();
 
-  const devs = allDevs.filter(d => {
-    const dt = d.criado_em ? d.criado_em.split('T')[0] : (d.data_abertura || '');
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const rotas = allRotas.filter(r => {
-    const dt = r.criado_em ? r.criado_em.split('T')[0] : (r.data_ocorrencia || '');
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const ocViagens = allOcViagens.filter(o => {
-    const dt = o.data || '';
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const trocas = allTrocas.filter(t => {
-    const dt = t.data || (t.criado_em ? t.criado_em.split('T')[0] : '');
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const reentregas = allReentregas.filter(re => {
-    const dt = re.data || (re.criado_em ? re.criado_em.split('T')[0] : '');
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
+  // (26/08/2026) Eram cinco recortes escritos à mão, iguais aqui e no outro
+  // Boletim (tela e PDF executivo tinham o bloco duplicado), e diferentes da
+  // regra do Dashboard em dois pontos: cortavam a data no 'T' — que é UTC, não
+  // Brasília — e faziam registro sem data DESAPARECER, porque '' nunca é >= uma
+  // data de início. Era daí que vinha o "Boletim diz 0, Dashboard diz 2".
+  const devs = allDevs.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDe, fAte));
+  const rotas = allRotas.filter(r => registroNoPeriodo(r, 'ocorrencias_rota', fDe, fAte));
+  const ocViagens = allOcViagens.filter(o => registroNoPeriodo(o, 'ocorrencias_viagens', fDe, fAte));
+  const trocas = allTrocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
+  const reentregas = allReentregas.filter(re => registroNoPeriodo(re, 'reentregas', fDe, fAte));
 
   let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  if (fDe)  resumosCd = resumosCd.filter(r => r && (r.data||'') >= fDe);
-  if (fAte) resumosCd = resumosCd.filter(r => r && (r.data||'') <= fAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
   let pesoExpedicao = 0;
   let pesoRecebimento = 0;
@@ -20618,44 +20767,20 @@ function renderBoletimGerencialView() {
   const allTrocas = db.getTrocasVeiculos();
   const allReentregas = db.getReentregas();
 
-  const devs = allDevs.filter(d => {
-    const dt = d.criado_em ? d.criado_em.split('T')[0] : (d.data_abertura || '');
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const rotas = allRotas.filter(r => {
-    const dt = r.criado_em ? r.criado_em.split('T')[0] : (r.data_ocorrencia || '');
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const ocViagens = allOcViagens.filter(o => {
-    const dt = o.data || '';
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const trocas = allTrocas.filter(t => {
-    const dt = t.data || (t.criado_em ? t.criado_em.split('T')[0] : '');
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
-
-  const reentregas = allReentregas.filter(re => {
-    const dt = re.data || (re.criado_em ? re.criado_em.split('T')[0] : '');
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
+  // (26/08/2026) Eram cinco recortes escritos à mão, iguais aqui e no outro
+  // Boletim (tela e PDF executivo tinham o bloco duplicado), e diferentes da
+  // regra do Dashboard em dois pontos: cortavam a data no 'T' — que é UTC, não
+  // Brasília — e faziam registro sem data DESAPARECER, porque '' nunca é >= uma
+  // data de início. Era daí que vinha o "Boletim diz 0, Dashboard diz 2".
+  const devs = allDevs.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDe, fAte));
+  const rotas = allRotas.filter(r => registroNoPeriodo(r, 'ocorrencias_rota', fDe, fAte));
+  const ocViagens = allOcViagens.filter(o => registroNoPeriodo(o, 'ocorrencias_viagens', fDe, fAte));
+  const trocas = allTrocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
+  const reentregas = allReentregas.filter(re => registroNoPeriodo(re, 'reentregas', fDe, fAte));
 
   let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  if (fDe)  resumosCd = resumosCd.filter(r => r && (r.data||'') >= fDe);
-  if (fAte) resumosCd = resumosCd.filter(r => r && (r.data||'') <= fAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
   let pesoExpedicao = 0;
   let pesoRecebimento = 0;
@@ -22028,8 +22153,8 @@ function confirmarEGerarPdf(pdfType) {
 
 function gerarRelatorioOcorrenciasPdfComFiltro(filtros) {
   let devs = db.getDevolucoes();
-  if (filtros.fDe) devs = devs.filter(d => (d.criado_em || d.data_abertura || '').split('T')[0] >= filtros.fDe);
-  if (filtros.fAte) devs = devs.filter(d => (d.criado_em || d.data_abertura || '').split('T')[0] <= filtros.fAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  devs = devs.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', filtros.fDe, filtros.fAte));
   if (filtros.rota) devs = devs.filter(d => (d.carga_rota || '') === filtros.rota);
   if (filtros.status) devs = devs.filter(d => (d.status_fechamento || d.status || '') === filtros.status);
   if (filtros.motorista) devs = devs.filter(d => (d.motorista_nome || '') === filtros.motorista);
@@ -22144,8 +22269,8 @@ function gerarRelatorioDevolucoesPorRotaPdf() {
   const fStatus = window._pdfFiltroStatus || '';
 
   let devs = db.getDevolucoes();
-  if (fDe) devs = devs.filter(d => (d.criado_em||'').split('T')[0] >= fDe);
-  if (fAte) devs = devs.filter(d => (d.criado_em||'').split('T')[0] <= fAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  devs = devs.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDe, fAte));
   if (fRota) devs = devs.filter(d => (d.carga_rota||'') === fRota);
   if (fStatus) devs = devs.filter(d => (d.status_fechamento||d.status||'') === fStatus);
 
@@ -22362,12 +22487,8 @@ function gerarRelatorioTrocasVeiculosPdf() {
   const fDe = window._pdfFiltroDe || '';
   const fAte = window._pdfFiltroAte || '';
 
-  let filtrados = trocas.filter(t => {
-    const dt = t.data || '';
-    if (fDe && dt < fDe) return false;
-    if (fAte && dt > fAte) return false;
-    return true;
-  });
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  let filtrados = trocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
 
   const win = window.open('', '_blank');
   win.document.write(`
@@ -22423,8 +22544,8 @@ function gerarRelatorioCortesCdPdf() {
   const fAte = window._pdfFiltroAte || '';
 
   let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  if (fDe) resumosCd = resumosCd.filter(r => r && (r.data || '') >= fDe);
-  if (fAte) resumosCd = resumosCd.filter(r => r && (r.data || '') <= fAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
   let cortes = [];
   resumosCd.forEach(r => {
@@ -22481,8 +22602,8 @@ function gerarRelatorioOcorrenciasCdPdf() {
   const fAte = window._pdfFiltroAte || '';
 
   let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  if (fDe) resumosCd = resumosCd.filter(r => r && (r.data || '') >= fDe);
-  if (fAte) resumosCd = resumosCd.filter(r => r && (r.data || '') <= fAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
   let ocs = [];
   resumosCd.forEach(r => {
@@ -22601,8 +22722,8 @@ function gerarRelatorioAcertosFinanceirosPdf() {
   const fDe = window._pdfFiltroDe || '';
   const fAte = window._pdfFiltroAte || '';
   let devs = db.getDevolucoes();
-  if (fDe) devs = devs.filter(d => (d.criado_em||'').split('T')[0] >= fDe);
-  if (fAte) devs = devs.filter(d => (d.criado_em||'').split('T')[0] <= fAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  devs = devs.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDe, fAte));
 
   const totalGeral = devs.reduce((acc, d) => acc + (parseFloat(d.valor_reclamado)||0), 0);
 
@@ -22664,8 +22785,8 @@ function gerarRelatorioFaltasDisciplinarPdf() {
   const fAte = window._pdfFiltroAte || '';
 
   let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  if (fDe) resumosCd = resumosCd.filter(r => r && (r.data || '') >= fDe);
-  if (fAte) resumosCd = resumosCd.filter(r => r && (r.data || '') <= fAte);
+  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
+  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
   let faltas = [];
   resumosCd.forEach(r => {

@@ -21,14 +21,16 @@ function extrair(marcadorInicio, marcadorFim) {
 const sandbox = { window: {} };
 vm.createContext(sandbox);
 vm.runInContext([
+  extrair('const NAV_FILTRO_POR_PAPEL = ', ';'),
   extrair('const NAV_GRUPOS = [', '\n];'),
   extrair('function mapDeptToRoleAndCargo(', '\n}'),
   extrair('function navPapelDoUsuario(', '\n}'),
   extrair('function navItemVisivel(', '\n}'),
-  'this.NAV_GRUPOS = NAV_GRUPOS;'
+  'this.NAV_GRUPOS = NAV_GRUPOS;',
+  'this.NAV_FILTRO_POR_PAPEL = NAV_FILTRO_POR_PAPEL;'
 ].join('\n\n'), sandbox);
 
-const { NAV_GRUPOS, navPapelDoUsuario, navItemVisivel } = sandbox;
+const { NAV_GRUPOS, NAV_FILTRO_POR_PAPEL, navPapelDoUsuario, navItemVisivel } = sandbox;
 
 let falhas = 0, passes = 0;
 function ok(cond, titulo, detalhe) {
@@ -117,14 +119,26 @@ secao('3b. A setinha do grupo não pode fechar a gaveta (bug de 23/08)');
   const listener = i > -1 ? ORIGEM.slice(i, i + 1800) : '';
 
   ok(listener.length > 0, 'o listener de clique-fora foi localizado');
-  ok(/if \(!document\.contains\(e\.target\)\) return;/.test(listener),
+
+  // Duas formas corretas de perguntar "esse nó ainda está no documento?":
+  // `!document.contains(e.target)` e `e.target.isConnected === false`. O que
+  // importa é a pergunta ser feita e o listener desistir — não qual idioma
+  // foi escolhido. Testar a string exata reprovava a correção de 25/08, que
+  // usa isConnected.
+  const REGEX_GUARDA = /(!document\.contains\(e\.target\)|e\.target\.isConnected === false)/;
+  ok(REGEX_GUARDA.test(listener),
      'o listener ignora clique cujo alvo já saiu do documento');
 
   // A guarda tem que vir ANTES da decisão de fechar, senão não serve.
-  const posGuarda = listener.indexOf('!document.contains(e.target)');
+  const casada = listener.match(REGEX_GUARDA);
+  const posGuarda = casada ? listener.indexOf(casada[0]) : -1;
   const posFechar = listener.indexOf('toggleMobileMenu(false)');
   ok(posGuarda > -1 && posFechar > -1 && posGuarda < posFechar,
      'a guarda vem antes do fechamento');
+
+  // E precisa mesmo desistir, não só perguntar.
+  const trechoGuarda = posGuarda > -1 ? listener.slice(posGuarda, posGuarda + 60) : '';
+  ok(/return;/.test(trechoGuarda), 'a guarda faz o listener desistir do clique', trechoGuarda);
 
   // O grupo da tela ativa NÃO pode ser forçado a ficar aberto a cada render:
   // isso deixava a setinha dele sem efeito visível, e setinha que não
@@ -175,17 +189,43 @@ secao('5. As duas listas de departamento não coincidem — e o menu falha abert
 }
 
 // ---------------------------------------------------------------
-secao('6. Filtro por papel: ninguém fica sem menu, ADMIN vê tudo');
+secao('6. Combinado de 26/08: todo mundo vê todas as telas');
 {
-  PAPEIS.forEach(p => {
+  // Enquanto não existir a tela de Admin para liberar acesso por usuário, o
+  // filtro por papel fica desligado. Ele foi ligado sem essa tela em 23/08 e
+  // o SAC passou a abrir o menu com 8 itens a menos, sem ter onde pedir
+  // acesso.
+  ok(NAV_FILTRO_POR_PAPEL === false,
+     'o filtro por papel está desligado', 'valor: ' + NAV_FILTRO_POR_PAPEL);
+
+  PAPEIS.concat([null]).forEach(p => {
     const vis = visiveisPara(p);
-    ok(vis.length > 0, `${p} enxerga pelo menos uma tela`, 'itens: ' + vis.length);
-    ok(vis.some(i => i.tab === 'dashboard'), `${p} enxerga o Dashboard`);
+    ok(vis.length === todosItens.length,
+       `${p || 'sem papel'} vê as ${todosItens.length} telas`, 'viu: ' + vis.length);
   });
 
-  ok(visiveisPara('ADMIN').length === todosItens.length, 'ADMIN vê todas as telas');
+  // O caso que motivou a mudança, dito com todas as letras.
+  const tabsSac = visiveisPara('SAC').map(i => i.tab);
+  const ANTES_OCULTAS_DO_SAC = ['boletim_gerencial', 'gestao_gestor', 'cd_recepcao',
+    'resumo_diario_cd', 'disponibilidade_frota', 'sinistros', 'dossie_motorista',
+    'acompanhamento_funcionario'];
+  const faltamNoSac = ANTES_OCULTAS_DO_SAC.filter(t => tabsSac.indexOf(t) < 0);
+  ok(faltamNoSac.length === 0, 'o SAC enxerga as abas que o filtro escondia dele',
+     'faltou: ' + faltamNoSac.join(', '));
+}
 
-  // Cada departamento vê o que é dele.
+// ---------------------------------------------------------------
+secao('6a. Os papéis declarados seguem válidos para a futura tela de Admin');
+{
+  // O filtro está desligado, mas os `papeis` de cada item continuam sendo a
+  // matéria-prima da tela de Admin que ainda vai existir: se apodrecerem
+  // agora, ela nasce com o padrão errado. Aqui olhamos o METADADO, não a
+  // visibilidade — por isso não passa por navItemVisivel().
+  const invalidos = todosItens.filter(i => i.papeis !== null &&
+    (!Array.isArray(i.papeis) || i.papeis.some(x => PAPEIS.indexOf(x) < 0)));
+  ok(invalidos.length === 0, 'todo item declara papeis null ou uma lista de papéis conhecidos',
+     invalidos.map(i => i.tab).join(', '));
+
   const deve = {
     SAC: ['sac_abertura', 'sac_investigacao'],
     CD: ['cd_recepcao', 'resumo_diario_cd'],
@@ -194,10 +234,16 @@ secao('6. Filtro por papel: ninguém fica sem menu, ADMIN vê tudo');
     GESTOR: ['dossie_motorista', 'acompanhamento_funcionario', 'boletim_gerencial']
   };
   Object.keys(deve).forEach(p => {
-    const tabs = visiveisPara(p).map(i => i.tab);
-    const faltou = deve[p].filter(t => tabs.indexOf(t) < 0);
-    ok(faltou.length === 0, `${p} enxerga as telas do próprio setor`, 'faltou: ' + faltou.join(', '));
+    const faltou = deve[p].filter(t => {
+      const item = todosItens.find(i => i.tab === t);
+      return !item || (item.papeis && item.papeis.indexOf(p) < 0);
+    });
+    ok(faltou.length === 0, `as telas do setor ${p} continuam declaradas para ${p}`,
+       'faltou: ' + faltou.join(', '));
   });
+
+  const semAdmin = todosItens.filter(i => i.papeis && i.papeis.indexOf('ADMIN') < 0);
+  ok(semAdmin.length === 0, 'nenhum item exclui o ADMIN', semAdmin.map(i => i.tab).join(', '));
 }
 
 // ---------------------------------------------------------------
@@ -220,6 +266,16 @@ secao('6b. Administração: quem protege é a senha, não o papel');
     const tabs = visiveisPara(p).map(i => i.tab);
     const faltou = ADMIN_TABS.filter(t => tabs.indexOf(t) < 0);
     ok(faltou.length === 0, `${p} enxerga a porta da Administração`, 'faltou: ' + faltou.join(', '));
+  });
+
+  // E continuaria valendo se o filtro por papel voltasse a ser ligado.
+  PAPEIS.forEach(p => {
+    const faltou = ADMIN_TABS.filter(t => {
+      const item = todosItens.find(i => i.tab === t);
+      return item && item.papeis && item.papeis.indexOf(p) < 0;
+    });
+    ok(faltou.length === 0, `${p} veria a Administração mesmo com o filtro ligado`,
+       'faltou: ' + faltou.join(', '));
   });
 
   // A porta tem que estar trancada de verdade: cada tela administrativa
@@ -249,6 +305,9 @@ secao('6b. Administração: quem protege é a senha, não o papel');
 
 // ---------------------------------------------------------------
 secao('7. "Ver todas as telas" devolve o menu inteiro a qualquer papel');
+// Hoje o botão nem chega a ser desenhado: renderNavMenu() só o mostra quando
+// há item oculto, e com o filtro desligado nunca há. Segue testado porque é a
+// rede de segurança de quando o filtro voltar.
 {
   PAPEIS.concat([null]).forEach(p => {
     sandbox.window._navVerTudo = true;

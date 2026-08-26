@@ -4,7 +4,11 @@
 // Cache offline para funcionar sem internet
 // =================================================================
 
-const CACHE_NAME = 'jr-oper-v5.1.0';
+// Sobe junto com JR_CONFIG.appVersion. Mudar este nome faz o activate abaixo
+// APAGAR o cache da versao anterior, entao nenhum aparelho fica servindo um
+// js/app.js velho quando abrir sem sinal. Trocar o byte do sw.js e tambem o
+// que faz o navegador reinstalar o service worker.
+const CACHE_NAME = 'jr-oper-v5.2.0';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
