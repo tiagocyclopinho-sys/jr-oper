@@ -811,16 +811,71 @@ window.videoStore = new VideoStore();
 // Prova de carregamento acelerada nao e prova - e outra coisa.
 // =================================================================
 
-// Acima deste tamanho vale reencodar. Abaixo, sobe como esta: reencodar um
-// arquivo que ja cabe so gastaria tempo da operacao e PIORARIA a imagem, que
-// passaria por uma segunda geracao de compressao a troco de nada.
-const VIDEO_LIMIAR_COMPRIMIR = 20 * 1024 * 1024;
+// -----------------------------------------------------------------------------
+// QUANDO VALE REENCODAR - 26/08/2026, revisado
+//
+// A primeira versao decidia por TAMANHO: acima de 20 MB reencoda, abaixo sobe
+// como esta. Esse corte deixava passar inteiro justamente o caso mais comum -
+// o clipe de 20 a 60 segundos de celular, que sai entre 8 e 19 MB. Ou seja, o
+// grosso do que enche o bucket subia cru, e a compressao so pegava a excecao.
+//
+// E tamanho nao responde a pergunta certa. 15 MB e MUITO para 20 segundos
+// (6 Mbps - vale reencodar, encolhe para uns 3 MB sem ninguem notar) e POUCO
+// para 5 minutos (400 kbps - reencodar so degrada uma prova que ja esta
+// enxuta). O mesmo numero, duas decisoes opostas. Quem sabe distinguir e o
+// BITRATE de entrada, comparado com o que este app produziria.
+//
+// Sobra so um corte por tamanho, e por um motivo diferente: a compressao roda
+// em TEMPO REAL. Gastar dois minutos da analista para poupar 2 MB de um 1 GB
+// nao se paga. Abaixo deste piso, sobe como esta.
+const VIDEO_LIMIAR_COMPRIMIR = 3 * 1024 * 1024;
 
 // Alvo de tamanho do arquivo reencodado. Bem abaixo do teto de 50 MB de
 // proposito: o teto por arquivo nao e o recurso escasso, o 1 GB total e.
-const VIDEO_ALVO_BYTES = 12 * 1024 * 1024;
+const VIDEO_ALVO_BYTES = 8 * 1024 * 1024;
 
-const VIDEO_LADO_MAX = 1280;   // mesmo criterio da foto: 1280 no maior lado
+// -----------------------------------------------------------------------------
+// DEGRAUS DE QUALIDADE - RESOLUCAO E BITRATE ESCOLHIDOS JUNTOS
+//
+// A primeira versao fixava 720p e mexia so no bitrate para acertar o alvo, com
+// piso de 700 kbps. O proprio comentario de la dizia que "abaixo de ~700 kbps a
+// 720p nao da para ler nada numa caixa" - e o codigo entregava exatamente isso
+// em todo video acima de ~2,3 minutos, que caia no piso. Ficava o pior dos dois
+// mundos: resolucao alta o suficiente para espalhar os bits, bitrate baixo
+// demais para qualquer um deles estar certo. A imagem virava blocos.
+//
+// O que decide legibilidade nao e a resolucao sozinha, e quantos bits sobram
+// POR PIXEL. Um 480p com 850 kbps tem ~0,086 bit por pixel; um 720p com os
+// mesmos 850 kbps tem ~0,038. Menos pixels, mas cada um deles correto - e para
+// contar caixa numa carga isso e melhor que o dobro de pixels borrados.
+//
+// Entao resolucao e bitrate andam juntos, em degraus. Escolhe-se o degrau MAIS
+// ALTO cujo arquivo ainda caiba em VIDEO_ALVO_BYTES nesta duracao; video longo
+// desce de degrau em vez de virar mingau em 720p.
+//
+// O ultimo degrau e piso: video muito longo passa do alvo em vez de descer
+// abaixo dele. Prova ilegivel nao economiza espaco nenhum - ocupa bytes e nao
+// prova nada, que e a pior troca possivel aqui.
+const VIDEO_DEGRAUS = [
+  { nome: '720p', lado: 1280, bitrate: 1600000 },
+  { nome: '540p', lado:  960, bitrate: 1100000 },
+  { nome: '480p', lado:  854, bitrate:  850000 },
+  { nome: '360p', lado:  640, bitrate:  600000 }
+];
+
+// 24 em vez de 30. Num bitrate fixo todo quadro disputa os mesmos bits: a 24
+// cada quadro fica com 25% mais. Carga parada num caminhao nao precisa de 30
+// quadros por segundo, e precisa muito que o quadro esteja nitido.
+const VIDEO_FPS = 24;
+
+// A narracao de quem filma faz parte da prova, mas e voz - 64 kbps a entrega
+// inteligivel. O padrao do navegador costuma ser 128 kbps, que a ~0,5 MB por
+// minuto sai caro para nao acrescentar nada que se ouca.
+//
+// Declarar o audio tambem conserta a conta: antes so videoBitsPerSecond era
+// informado, e o alvo era calculado como se o arquivo inteiro fosse video -
+// entao a saida estourava o alvo pela fatia do audio, sempre.
+const VIDEO_AUDIO_BPS = 64000;
 
 class VideoCompressor {
   // Diz se este navegador consegue reencodar. Sem isto o app tem de dizer a
@@ -920,6 +975,8 @@ class VideoCompressor {
    * onProgresso recebe 0..100 (proporcao do video ja processada).
    */
   async comprimir(file, onProgresso) {
+    // Unico corte por tamanho que sobrou, e nao e sobre qualidade: a compressao
+    // roda em tempo real, e nao se gasta minuto de operacao para poupar 2 MB.
     if (!file || file.size <= VIDEO_LIMIAR_COMPRIMIR) {
       return { file, comprimido: false, motivo: 'ja_cabe' };
     }
@@ -942,11 +999,22 @@ class VideoCompressor {
       return { file, comprimido: false, motivo: 'duracao_desconhecida' };
     }
 
+    // DEGRAU: o mais alto que ainda cabe no alvo NESTA duracao. O audio entra
+    // na conta porque tambem ocupa o arquivo. Nenhum degrau coube? Fica o
+    // ultimo, que e piso de legibilidade - o arquivo passa do alvo, e passar do
+    // alvo e melhor que entregar prova que nao da para ler.
+    const bitsAlvo = VIDEO_ALVO_BYTES * 8;
+    const degrau = VIDEO_DEGRAUS.find(d => (d.bitrate + VIDEO_AUDIO_BPS) * duracao <= bitsAlvo)
+                || VIDEO_DEGRAUS[VIDEO_DEGRAUS.length - 1];
+
     // Escala mantendo proporcao. Dimensao par: alguns encoders recusam impar.
+    // Nunca AUMENTA: fonte menor que o degrau sobe do jeito que esta - inflar
+    // pixel nao cria detalhe, so cria bytes.
     const par = n => Math.max(2, Math.round(n / 2) * 2);
     let largura = video.videoWidth, altura = video.videoHeight;
-    if (Math.max(largura, altura) > VIDEO_LADO_MAX) {
-      const k = VIDEO_LADO_MAX / Math.max(largura, altura);
+    const maiorLado = Math.max(largura, altura);
+    if (maiorLado > degrau.lado) {
+      const k = degrau.lado / maiorLado;
       largura = par(largura * k);
       altura = par(altura * k);
     } else {
@@ -954,12 +1022,27 @@ class VideoCompressor {
       altura = par(altura);
     }
 
-    // Bitrate para acertar o alvo NESTA duracao - video longo ganha bitrate
-    // menor em vez de arquivo maior. O piso existe para nao entregar uma prova
-    // ilegivel: abaixo de ~700 kbps a 720p nao da para ler nada numa caixa.
-    const bitsAlvo = VIDEO_ALVO_BYTES * 8;
-    let bitrate = Math.round(bitsAlvo / duracao);
-    bitrate = Math.max(700000, Math.min(2500000, bitrate));
+    // O bitrate do degrau e dimensionado para o quadro CHEIO daquele degrau. Se
+    // a saida ficou menor que isso (fonte pequena, ou 4:3 em vez de 16:9), o
+    // mesmo bitrate seria gordura: acompanha a proporcao de pixels realmente
+    // usados, com piso para nao despencar em video minusculo.
+    const pixelsDegrau = degrau.lado * (degrau.lado * 9 / 16);
+    const proporcao = Math.min(1, (largura * altura) / pixelsDegrau);
+    const bitrate = Math.max(350000, Math.round(degrau.bitrate * proporcao));
+
+    // JA E ENXUTO? Aqui a decisao para de olhar tamanho e olha bitrate. Um
+    // arquivo que ja chega no bitrate que sairia daqui nao tem o que ganhar
+    // com uma segunda geracao de compressao - so tem o que perder, mais os
+    // minutos de tempo real que a operacao ficaria esperando. A margem de 15%
+    // evita reencodar de graca por uma diferenca que ninguem enxerga.
+    const bitrateEntrada = (file.size * 8) / duracao;
+    if (bitrateEntrada <= (bitrate + VIDEO_AUDIO_BPS) * 1.15) {
+      URL.revokeObjectURL(video.src);
+      return {
+        file, comprimido: false, motivo: 'ja_e_enxuto',
+        bitrateEntrada: Math.round(bitrateEntrada), bitrateAlvo: bitrate
+      };
+    }
 
     // Declarados FORA do try porque o finally precisa deles para desligar a
     // bomba de quadros mesmo quando algo estoura no meio — um setInterval
@@ -972,7 +1055,7 @@ class VideoCompressor {
       canvas.width = largura;
       canvas.height = altura;
       const ctx = canvas.getContext('2d');
-      stream = canvas.captureStream(30);
+      stream = canvas.captureStream(VIDEO_FPS);
 
       // Reaproveita a trilha de audio do proprio arquivo: quem grava o
       // carregamento costuma narrar o que esta mostrando, e essa narracao faz
@@ -986,7 +1069,11 @@ class VideoCompressor {
       } catch (e) { /* sem audio e melhor que sem video */ }
 
       const pedacos = [];
-      const gravador = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate });
+      const gravador = new MediaRecorder(stream, {
+        mimeType: mime,
+        videoBitsPerSecond: bitrate,
+        audioBitsPerSecond: VIDEO_AUDIO_BPS
+      });
       gravador.ondataavailable = e => { if (e.data && e.data.size) pedacos.push(e.data); };
 
       const terminou = new Promise((resolve, reject) => {
@@ -1037,6 +1124,11 @@ class VideoCompressor {
         };
         video.requestVideoFrameCallback(proximo);
       }
+      // 30, e nao VIDEO_FPS, DE PROPOSITO: quem define a cadencia da gravacao e
+      // o captureStream(VIDEO_FPS). Este batimento so precisa garantir que o
+      // canvas esteja sempre atualizado quando ele for amostrado - desenhar um
+      // pouco mais rapido que a captura nao custa nada, e desenhar no mesmo
+      // ritmo deixaria a captura amostrar quadro velho a cada deriva de relogio.
       intervalo = setInterval(umQuadro, 1000 / 30);
 
       await new Promise(resolve => {
@@ -1085,7 +1177,12 @@ class VideoCompressor {
         };
       }
 
-      return { file: novo, comprimido: true, motivo: 'ok', antes: file.size, depois: novo.size, largura, altura, duracao: duracaoSaida };
+      return {
+        file: novo, comprimido: true, motivo: 'ok',
+        antes: file.size, depois: novo.size,
+        largura, altura, duracao: duracaoSaida,
+        degrau: degrau.nome, bitrate, fps: VIDEO_FPS
+      };
     } catch (e) {
       return { file, comprimido: false, motivo: 'falhou: ' + (e && e.message ? e.message : e) };
     } finally {
@@ -1099,6 +1196,8 @@ class VideoCompressor {
 
 window.videoCompressor = new VideoCompressor();
 window.JR_VIDEO_LIMIAR_COMPRIMIR = VIDEO_LIMIAR_COMPRIMIR;
+window.JR_VIDEO_ALVO_BYTES = VIDEO_ALVO_BYTES;
+window.JR_VIDEO_DEGRAUS = VIDEO_DEGRAUS;
 
 window.JR_VIDEO_TETO_BYTES = VIDEO_TETO_BYTES;
 

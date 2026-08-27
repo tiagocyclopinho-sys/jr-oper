@@ -1201,6 +1201,61 @@ class Store {
   }
 
   // ---------------------------------------------------------------
+  // EXCLUSAO DA OCORRENCIA INTEIRA - 26/08/2026
+  //
+  // POR QUE FALTAVA. A 5.4.0 deu a exclusao da MIDIA (excluirMidiaDevolucao,
+  // logo abaixo), e parou ai. A ocorrencia em si nao tinha saida em etapa
+  // nenhuma: nem na Analise & Causa Raiz, nem nas Tratativas do Gestor, nem
+  // na Recepcao CD. Todo outro modulo do app ja tinha - deleteOcorrenciaRota
+  // para chamado em rota, deleteCad para os cadastros, e a propria
+  // getLixeiraItems() JA LISTAVA 'ocorrencias_devolucao' como coleccao
+  // restauravel. Ou seja, a Lixeira sabia receber devolucao desde sempre;
+  // o que nao existia era alguem que a mandasse para la.
+  //
+  // O RESULTADO PRATICO DISSO foi a DEV-2026-001 e a DEV-2026-002: registros
+  // de teste de 23/08 que ninguem conseguiu tirar da tela, sobreviveram ao
+  // Reset Global de 26/08 e ficaram no meio da producao. Quando a unica
+  // ferramenta de limpeza e o Reset Global, limpar uma linha exige zerar
+  // tudo - e ninguem faz isso com a operacao rodando.
+  //
+  // E SOFT DELETE, e nao definitivo, pelo mesmo criterio dos outros modulos:
+  // vai para Governanca & Lixeira, pode ser restaurado, e a exclusao
+  // definitiva continua atras da senha de administrador la. Devolucao e
+  // documento de valor contratual; quem apaga por engano precisa de volta.
+  //
+  // NAO EXIGE SENHA no soft delete, igual a deleteOcorrenciaRota - quem
+  // autoriza e o rastro: softDelete grava EXCLUSAO_LOGICA em audit_logs com
+  // nome e hora, e getLixeiraItems mostra a linha com quem excluiu.
+  deleteDevolucao(id) {
+    const item = (this.data.ocorrencias_devolucao || []).find(x => x.id == id);
+    if (!item) return { success: false, message: `Devolucao ID ${id} nao encontrada.` };
+    if (item.is_deleted) return { success: false, message: 'Esta devolucao ja esta na Lixeira.' };
+
+    // Os itens filhos acompanham. Sem isto eles viram orfaos: somem da tela
+    // junto com a ocorrencia (nada os le sozinhos), mas continuam contando em
+    // qualquer relatorio que leia itens_devolucao direto - e o Power BI le.
+    let itensMarcados = 0;
+    (this.data.itens_devolucao || []).forEach(it => {
+      if (it.ocorrencia_devolucao_id == id && !it.is_deleted) {
+        it.is_deleted = true;
+        it.deleted_at = agoraIsoBrasilia();
+        it.deleted_by_usuario_id = this.currentUser ? this.currentUser.id : null;
+        it.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+        itensMarcados++;
+      }
+    });
+
+    const ok = this.softDelete('ocorrencias_devolucao', id);
+    if (!ok) return { success: false, message: 'Nao foi possivel mover esta devolucao para a Lixeira.' };
+
+    return {
+      success: true,
+      protocolo: item.numero_devolucao || item.numero_protocolo || `ID #${id}`,
+      itens: itensMarcados
+    };
+  }
+
+  // ---------------------------------------------------------------
   // EXCLUSAO DE UMA MIDIA DA OCORRENCIA - 26/08/2026
   //
   // A midia era so-acrescimo: addDevolucao gravava os arrays, updateInvestigacao
@@ -2095,6 +2150,23 @@ class Store {
     const item = this.data[collection].find(x => x.id == id);
     if (!item) return false;
     item.is_deleted = false;
+
+    // SIMETRIA COM deleteDevolucao(): ela marca os itens filhos junto, então
+    // a restauracao tem de desmarca-los. Sem isto, restaurar uma devolucao
+    // devolveria a ocorrencia SEM os itens reclamados - e o valor da tela
+    // deixaria de bater com o da linha, sem nada na interface explicando por
+    // que. Restaurar pela metade e pior que nao restaurar.
+    if (collection === 'ocorrencias_devolucao') {
+      (this.data.itens_devolucao || []).forEach(it => {
+        if (it.ocorrencia_devolucao_id == id && it.is_deleted) {
+          it.is_deleted = false;
+          it.deleted_at = null;
+          it.deleted_by_usuario_id = null;
+          it.deleted_by_nome = null;
+        }
+      });
+    }
+
     // achado em 20/08/2026: restored_at/restored_by não existem em nenhuma
     // tabela do schema.sql — mesmo bug de softDelete() (coluna desconhecida
     // derruba o upsert inteiro). Quem restaurou e quando já fica registrado
@@ -2109,15 +2181,60 @@ class Store {
     return true;
   }
 
-  hardDelete(collection, id, password) {
+  /**
+   * Exclusão definitiva. PASSOU A SER async EM 26/08/2026, e a mudança não é
+   * cosmética: até aqui este método apagava só o array local e dizia
+   * "success". O registro continuava inteiro na nuvem, e o pull de 30
+   * segundos o trazia de volta — cloudStore._mesclarPorRegistro() vê um id
+   * que está na nuvem e não está aqui e conclui que este aparelho ainda não
+   * o conhece, então adota o da nuvem. A exclusão "definitiva" durava menos
+   * de meio minuto, e falhava sem nenhuma mensagem: quem apagava via a linha
+   * sumir e só reencontrava o registro depois, sem saber por quê.
+   *
+   * ORDEM IMPORTA: apaga na NUVEM primeiro. Se a nuvem recusar (ou o aparelho
+   * estiver sem rede), NÃO apaga aqui e devolve o erro. Apagar só do lado
+   * local seria voltar exatamente ao bug — com o agravante de o usuário achar
+   * que funcionou.
+   */
+  async hardDelete(collection, id, password) {
     if (String(password).trim() !== this.getAdminPassword()) {
       return { success: false, message: 'Senha de administrador incorreta.' };
     }
     if (!this.data[collection]) return { success: false, message: 'Coleção não encontrada' };
     const item = this.data[collection].find(x => x.id == id);
     if (!item) return { success: false, message: 'Registro não encontrado' };
-    
+
+    if (window.cloudStore && typeof window.cloudStore.apagarRegistro === 'function') {
+      const naNuvem = await window.cloudStore.apagarRegistro(collection, id);
+      if (!naNuvem.success) {
+        return {
+          success: false,
+          message: 'O registro NÃO foi excluído.\n\n'
+            + (naNuvem.message || 'A nuvem recusou a exclusão.')
+            + '\n\nEle continua na nuvem, e apagar só neste aparelho faria a '
+            + 'sincronização trazê-lo de volta em até 30 segundos. Tente de novo '
+            + 'com o aparelho conectado.'
+        };
+      }
+    }
+
     this.data[collection] = this.data[collection].filter(x => x.id != id);
+
+    // Filhos da devolucao vao junto, aqui e na nuvem. Um item_devolucao cujo
+    // pai nao existe mais nao aparece em tela nenhuma (nada le itens soltos),
+    // mas continua somando em quem le itens_devolucao direto - e o Power BI
+    // le. Orfao invisivel que mexe em numero e o tipo de sujeira que so
+    // aparece meses depois, numa divergencia de relatorio.
+    if (collection === 'ocorrencias_devolucao') {
+      const filhos = (this.data.itens_devolucao || []).filter(it => it.ocorrencia_devolucao_id == id);
+      this.data.itens_devolucao = (this.data.itens_devolucao || []).filter(it => it.ocorrencia_devolucao_id != id);
+      if (window.cloudStore && typeof window.cloudStore.apagarRegistro === 'function') {
+        for (const filho of filhos) {
+          await window.cloudStore.apagarRegistro('itens_devolucao', filho.id);
+        }
+      }
+    }
+
     this.logAudit({
       acao: 'EXCLUSAO_DEFINITIVA',
       modulo: collection,

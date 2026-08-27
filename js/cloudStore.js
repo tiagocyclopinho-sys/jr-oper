@@ -1272,6 +1272,64 @@ class CloudStore {
     }
   }
 
+  // ---------------------------------------------------------------
+  // APAGAR UM REGISTRO NA NUVEM — 26/08/2026
+  //
+  // POR QUE ISTO PRECISOU EXISTIR. store.js -> hardDelete() ("Exclusão
+  // Definitiva", com senha de administrador, na tela de Governança &
+  // Lixeira) fazia UMA coisa só: tirar o registro do array local e salvar.
+  // Na nuvem ele continuava inteiro. E aí o ciclo de 30 segundos o trazia
+  // de volta, porque _mesclarPorRegistro() vê um id que existe na nuvem e
+  // não existe aqui e conclui — corretamente, dado o que ele sabe — que
+  // este aparelho ainda não conhece o registro:
+  //
+  //     const local = porId.get(id);
+  //     if (!local) { resultado.push(nuvem); ... }
+  //
+  // Ou seja: a exclusão definitiva era definitiva por menos de meio minuto.
+  // Quem apagava via a linha sumir, recarregava depois e a encontrava lá,
+  // sem nenhuma mensagem de erro no meio — o pior formato de falha, o que
+  // parece ter funcionado.
+  //
+  // O MESMO BURACO EXPLICA A DEV-2026-001 E A DEV-2026-002, que
+  // atravessaram o Reset Global de 26/08/2026 09:02: o reset limpa a nuvem,
+  // mas o aparelho que ainda tinha os registros em cache os reenviou no push
+  // seguinte pelo caminho de baixo de _mesclarPorRegistro ("nunca subiu: é
+  // trabalho local pendente"). Apagar dos dois lados é o que fecha o ciclo.
+  //
+  // NÃO USA A ROTA DE LOTE do clearCloudTrainingData de propósito: aqui o
+  // filtro é `id=eq.X`, um registro nomeado. Um erro de digitação em
+  // `id=not.is.null` esvazia a tabela inteira, e essa distância é a única
+  // proteção que existe entre uma exclusão e um acidente.
+  async apagarRegistro(tableName, id) {
+    if (!this.isConfigured()) return { success: true, skipped: true };
+    if (id === undefined || id === null || String(id).trim() === '') {
+      return { success: false, message: 'ID vazio — nada foi apagado na nuvem.' };
+    }
+    try {
+      const url = `${this.config.url}/rest/v1/${tableName}?id=eq.${encodeURIComponent(String(id))}`;
+      const resp = await fetch(url, {
+        method: 'DELETE',
+        headers: this._headers({ 'Prefer': 'return=minimal' })
+      });
+      if (!resp.ok) {
+        const corpo = await resp.text();
+        console.warn(`[CloudStore] Não foi possível apagar ${tableName} id=${id} na nuvem:`, resp.status, corpo);
+        return { success: false, message: `A nuvem recusou a exclusão (HTTP ${resp.status}).`, corpo };
+      }
+      // Sai também do mapa de sync: senão o id fica lá como "conhecido" e o
+      // mapa cresce sem parar com fantasmas.
+      try {
+        const mapa = this._lerMapaSync();
+        if (mapa[tableName]) { delete mapa[tableName][String(id)]; this._mapaSync = mapa; this._gravarMapaSync(); }
+      } catch(e) {}
+      return { success: true };
+    } catch(e) {
+      console.warn(`[CloudStore] Falha de rede ao apagar ${tableName} id=${id}:`, e.message);
+      return { success: false, message: `Sem rede para apagar na nuvem: ${e.message}` };
+    }
+  }
+
   async clearCloudTrainingData() {
     if (!this.isConfigured()) return { success: true, skipped: true };
     const tabelas = [
@@ -1835,7 +1893,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "exclusao-midia-5.4.0";
+CloudStore.BUILD = "video-e-exclusao-5.5.0";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase

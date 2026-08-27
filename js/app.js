@@ -2490,8 +2490,11 @@ function expurgarDefinitivoLixeira(collection, id) {
     titulo: 'Exclusão Definitiva',
     mensagem: 'Esta ação remove o registro permanentemente do banco de dados e NÃO pode ser desfeita.',
     palavraConfirmacao: 'EXCLUIR',
-    onConfirm: (pwd) => {
-      const res = db.hardDelete(collection, id, pwd);
+    // async porque hardDelete passou a apagar na NUVEM antes de apagar aqui
+    // (26/08/2026). Sem esperar a resposta, a tela diria "excluído" enquanto
+    // o DELETE ainda estava no ar — e mentiria toda vez que ele falhasse.
+    onConfirm: async (pwd) => {
+      const res = await db.hardDelete(collection, id, pwd);
       if (res.success) {
         showToast('Registro excluído definitivamente com sucesso!');
         renderApp();
@@ -6403,10 +6406,15 @@ function _cartaoVideo(inner, file) {
       legenda.className = 'text-[9px] text-amber-300 font-bold mt-1';
       legenda.textContent = 'reduzindo o video... ' + pct + '%';
     },
-    comprimido(antes, depois) {
+    // O degrau (720p/540p/480p/360p) aparece na legenda de proposito: e a
+    // unica pista na tela de QUANTO a imagem foi reduzida. Quem anexa a prova
+    // consegue conferir na hora se o que sobrou ainda mostra o que precisava
+    // mostrar - e, se nao mostrar, refilmar mais perto ainda da tempo.
+    comprimido(antes, depois, degrau) {
       const mb = b => (b / 1024 / 1024).toFixed(1).replace(".", ",") + " MB";
       legenda.className = 'text-[9px] text-emerald-300 font-bold mt-1';
-      legenda.textContent = 'reduzido: ' + mb(antes) + ' -> ' + mb(depois) + ' (video inteiro)';
+      legenda.textContent = 'reduzido: ' + mb(antes) + ' -> ' + mb(depois)
+        + (degrau ? ' em ' + degrau : '') + ' (video inteiro)';
     },
     progresso(pct) {
       barra.className = 'h-full bg-blue-500 transition-all';
@@ -6468,11 +6476,19 @@ async function handleVideoUpload(inputEl, context, devId) {
         const r = await window.videoCompressor.comprimir(file, pct => cartao.comprimindo(pct));
         arquivo = r.file;
         if (r.comprimido) {
-          cartao.comprimido(r.antes, r.depois);
-        } else if (r.motivo !== 'ja_cabe' && r.motivo !== 'nao_encolheu' && arquivo.size > (window.JR_VIDEO_LIMIAR_COMPRIMIR || 0)) {
-          // A compressão não rolou E o arquivo é grande: quase certo que a
-          // validação abaixo vai recusar. Dizer POR QUE a redução falhou é o
-          // que separa "o sistema recusou meu vídeo" de "sei o que fazer".
+          cartao.comprimido(r.antes, r.depois, r.degrau);
+        } else if (r.motivo !== 'ja_cabe' && r.motivo !== 'ja_e_enxuto' && r.motivo !== 'nao_encolheu'
+                   && arquivo.size > (window.JR_VIDEO_ALVO_BYTES || 0)) {
+          // A compressão não rolou E o arquivo passa do alvo: ou a validação
+          // abaixo vai recusar, ou ele sobe pesando no 1 GB do plano. Dizer POR
+          // QUE a redução falhou é o que separa "o sistema recusou meu vídeo"
+          // de "sei o que fazer".
+          //
+          // 'ja_cabe' e 'ja_e_enxuto' NÃO entram aqui: não são falha, são a
+          // decisão certa. O primeiro é arquivo pequeno demais para valer os
+          // minutos de reencode; o segundo é vídeo que já chega no bitrate que
+          // sairia daqui — reencodar só degradaria. Avisar nesses casos seria
+          // alarme falso, e alarme falso ensina a ignorar o alarme.
           const porque = r.motivo === 'saida_incompleta'
             ? 'a redução saiu incompleta e foi descartada para não gravar um vídeo cortado'
             : r.motivo === 'navegador_sem_suporte' || r.motivo === 'sem_codec'
@@ -7393,6 +7409,9 @@ function renderSacInvestigacaoView() {
                 <button onclick="editarInvestigacaoModal('${d.id}')" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1">
                   ✏️ Editar Análise
                 </button>` : ''}
+              <button onclick="deleteDevolucaoSac('${d.id}')" class="bg-red-950/60 hover:bg-red-900/80 text-red-300 font-bold px-2.5 py-1.5 rounded-lg text-xs border border-red-800 shadow-sm transition" title="Mover para a Lixeira (Soft Delete)">
+                🗑️
+              </button>
             </div>
           </div>
 
@@ -8099,6 +8118,9 @@ function renderGestaoGestorView() {
               ${d.status_gestao==='CONCLUIDO'
                 ? '<span class="bg-emerald-900/60 text-emerald-300 border border-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold">✅ CONCLUÍDO</span>'
                 : '<span class="bg-amber-900/60 text-amber-300 border border-amber-700 px-2 py-0.5 rounded text-[10px] font-bold animate-pulse">⏳ PENDENTE</span>'}
+              <button onclick="deleteDevolucaoSac('${d.id}')" class="bg-red-950/60 hover:bg-red-900/80 text-red-300 font-bold px-2 py-1 rounded border border-red-800 text-[11px] shadow-sm transition" title="Mover para a Lixeira (Soft Delete)">
+                🗑️
+              </button>
             </div>
           </div>
 
@@ -8338,15 +8360,18 @@ function renderCdRecepcaoView() {
       </td>
       <td class="p-3 hidden sm:table-cell font-semibold text-emerald-400 text-[11px]">${formatarDestinoLabel(d.destino_cd)}</td>
       <td class="p-3 text-right">
-        ${showBtn
-          ? `<button onclick="openCdModal('${d.id}')" class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 rounded font-bold text-xs shadow">📥 Conferência & Entrada</button>`
-          : `<div class="flex items-center justify-end gap-1.5">
-               ${(String(d.tipo_erro||'').toUpperCase().includes('MOTORISTA') && Array.isArray(db.data.relatorios_divergencia) && db.data.relatorios_divergencia.some(r => String(r.ocorrencia_id) === String(d.id))) ? `
+        <div class="flex items-center justify-end gap-1.5">
+          ${showBtn
+            ? `<button onclick="openCdModal('${d.id}')" class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 rounded font-bold text-xs shadow">📥 Conferência & Entrada</button>`
+            : `${(String(d.tipo_erro||'').toUpperCase().includes('MOTORISTA') && Array.isArray(db.data.relatorios_divergencia) && db.data.relatorios_divergencia.some(r => String(r.ocorrencia_id) === String(d.id))) ? `
                  <button onclick="gerarAdiantamentoDivergenciaPdf('${d.id}')" class="bg-amber-500 hover:bg-amber-400 text-slate-950 px-2.5 py-1 rounded font-bold text-[11px] shadow inline-flex items-center gap-1" title="Emitir Adiantamento (PDF)">
                    <span>📄</span> Adiantamento (PDF)
                  </button>` : ''}
-               <span class="text-[10px] text-slate-500">${(d.data_entrada_cd||d.criado_em||'').split('T')[0]}</span>
-             </div>`}
+               <span class="text-[10px] text-slate-500">${(d.data_entrada_cd||d.criado_em||'').split('T')[0]}</span>`}
+          <button onclick="deleteDevolucaoSac('${d.id}')" class="bg-red-950/60 hover:bg-red-900/80 text-red-300 font-bold px-2 py-1 rounded border border-red-800 text-[11px] shadow-sm transition shrink-0" title="Mover para a Lixeira (Soft Delete)">
+            🗑️
+          </button>
+        </div>
       </td>
     </tr>`;
   };
@@ -12907,6 +12932,13 @@ async function handleRotaVideosUpload(input) {
           aviso.textContent = 'Reduzindo "' + file.name + '" (vídeo inteiro)... ' + pct + '%';
         });
         arquivo = c.file;
+        // Mesma legenda da devolução: dizer o degrau é o que permite conferir
+        // na hora se a imagem que sobrou ainda mostra a placa, o dano, a via.
+        if (c.comprimido) {
+          const mb = b => (b / 1024 / 1024).toFixed(1).replace('.', ',') + ' MB';
+          aviso.textContent = 'Reduzido: ' + mb(c.antes) + ' -> ' + mb(c.depois)
+            + (c.degrau ? ' em ' + c.degrau : '') + ' (vídeo inteiro)';
+        }
       }
       const problema = window.videoStore.validar(arquivo);
       if (problema) throw new Error(problema);
@@ -15358,6 +15390,37 @@ function deleteOcorrenciaRota(id) {
     renderApp();
   } else {
     alert('Erro ao excluir o chamado.');
+  }
+}
+
+// Espelha deleteOcorrenciaRota logo acima, de propósito: mesma confirmação,
+// mesmo destino (Governança & Lixeira), mesma trilha. A devolução era o único
+// módulo operacional SEM saída — ver o comentário de db.deleteDevolucao().
+//
+// A confirmação diz o protocolo e quantos itens vão junto porque o botão
+// aparece em três telas diferentes, e em duas delas o card está no meio de
+// uma lista: sem o número na pergunta, é fácil confirmar a linha errada.
+function deleteDevolucaoSac(id) {
+  const item = (db.getDevolucoes ? db.getDevolucoes() : []).find(x => x.id == id);
+  const desc = item ? (item.numero_devolucao || item.numero_protocolo) : `ID #${id}`;
+  const cliente = item && item.cliente_nome ? ` — ${item.cliente_nome}` : '';
+  const nItens = item && Array.isArray(item.itens) ? item.itens.length : 0;
+
+  if (!confirm(
+    `Mover a devolução [${desc}${cliente}] para a Lixeira?\n\n`
+    + `• Ela sai de TODAS as etapas (Análise & Causa Raiz, Tratativas do Gestor e Recepção CD).\n`
+    + (nItens > 0 ? `• Os ${nItens} item(ns) reclamado(s) vão junto.\n` : '')
+    + `• Fica preservada em Governança & Lixeira e pode ser restaurada.\n`
+    + `• A exclusão definitiva continua exigindo senha de administrador, lá.\n`
+    + `• A ação é registrada na trilha de auditoria com seu nome e a hora.`
+  )) return;
+
+  const res = db.deleteDevolucao(id);
+  if (res.success) {
+    showToast(`🗑️ Devolução ${res.protocolo} movida para a Lixeira.`, 'success');
+    renderApp();
+  } else {
+    alert(res.message || 'Erro ao excluir a devolução.');
   }
 }
 
