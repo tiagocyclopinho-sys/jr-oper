@@ -10339,17 +10339,282 @@ function handleImportEscalaFile(event) {
   reader.readAsArrayBuffer(file);
 }
 
-function toggleFiltroStatusViagem(statusVal) {
-  if (!Array.isArray(window._vgFiltroStatus)) {
-    window._vgFiltroStatus = window._vgFiltroStatus ? [window._vgFiltroStatus] : [];
+// ─────────────────────────────────────────────────────────────────────────────
+// FILTROS MULTISSELEÇÃO SUSPENSOS DA LARGADA (estilo AutoFiltro do Excel)
+// ─────────────────────────────────────────────────────────────────────────────
+// Antes, o filtro de Status era o ÚNICO multisseleção da tela e vinha escrito à
+// mão: seis blocos de <label><input type="checkbox"> copiados, com rótulo, cor e
+// onchange repetidos em cada um. Esticava o painel para nove linhas de altura,
+// desalinhava os outros quatro cartões, e adicionar um status novo significava
+// colar um sétimo bloco. Rota, Setor e Motorista não tinham filtro nenhum — a
+// rota só entrava de raspão na busca livre do campo Carga.
+//
+// Agora existe UM componente para os quatro. A lista de opções virou dado
+// (VG_STATUS_OPCOES / as opções derivadas das próprias viagens), o painel abre
+// suspenso sobre a tabela e o cartão fechado ocupa uma linha só.
+//
+// POR QUE O ESTADO DE ABERTO É GLOBAL: renderApp() reconstrói #main-content
+// inteiro a cada clique. Se "qual dropdown está aberto" morasse no DOM, marcar
+// um checkbox fecharia o painel — que é exatamente o que não se quer num filtro
+// de multisseleção. Mesma razão para o texto da busca viver em
+// window._vgDropdownBusca.
+
+const VG_STATUS_OPCOES = [
+  { val: 'EM ANDAMENTO',          cls: 'text-amber-400'   },
+  { val: 'EM ANDAMENTO (PALMAS)', cls: 'text-amber-400'   },
+  { val: 'EM RETORNO',            cls: 'text-blue-400'    },
+  { val: 'FINALIZADO',            cls: 'text-emerald-400' },
+  { val: 'ADIADA',                cls: 'text-orange-400'  },
+  { val: 'REENTREGA',             cls: 'text-purple-400'  }
+];
+
+const VG_FILTROS_MULTI = {
+  status: {
+    win: '_vgFiltroStatus', icone: '🚦', titulo: 'Status Viagem', rotulo: 'STATUS', busca: false,
+    txt: 'text-amber-400', badge: 'bg-amber-950 text-amber-300 border-amber-800',
+    ring: 'focus:border-amber-500', chk: 'text-amber-500 focus:ring-amber-500'
+  },
+  rota: {
+    win: '_vgFiltroRota', icone: '🗺️', titulo: 'Rota', rotulo: 'ROTA', busca: true,
+    txt: 'text-sky-400', badge: 'bg-sky-950 text-sky-300 border-sky-800',
+    ring: 'focus:border-sky-500', chk: 'text-sky-500 focus:ring-sky-500'
+  },
+  setor: {
+    win: '_vgFiltroSetor', icone: '❄️', titulo: 'Setor', rotulo: 'SETOR', busca: false,
+    txt: 'text-rose-400', badge: 'bg-rose-950 text-rose-300 border-rose-800',
+    ring: 'focus:border-rose-500', chk: 'text-rose-500 focus:ring-rose-500'
+  },
+  motorista: {
+    win: '_vgFiltroMotorista', icone: '🧑‍✈️', titulo: 'Motorista', rotulo: 'MOTORISTA', busca: true,
+    txt: 'text-indigo-400', badge: 'bg-indigo-950 text-indigo-300 border-indigo-800',
+    ring: 'focus:border-indigo-500', chk: 'text-indigo-500 focus:ring-indigo-500'
   }
-  const idx = window._vgFiltroStatus.indexOf(statusVal);
-  if (idx > -1) {
-    window._vgFiltroStatus.splice(idx, 1);
-  } else {
-    window._vgFiltroStatus.push(statusVal);
-  }
+};
+
+/** Normaliza para comparação: a escala importada do XLSX diverge do cadastro em
+ *  espaço e caixa ("Lagoa da Confusão" vs "LAGOA DA CONFUSÃO "). */
+function vgNorm(v) { return String(v == null ? '' : v).trim().toUpperCase(); }
+
+/** Escapa para dentro de uma string JS que vive num atributo HTML (onclick). */
+function vgEscAttr(s) {
+  return String(s == null ? '' : s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '&quot;');
+}
+
+/** Escapa para texto/valor de atributo. */
+function vgEscTxt(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Une várias listas descartando repetição por valor NORMALIZADO, preservando a
+ *  primeira grafia vista. Sem isso, cadastro e planilha gerariam duas linhas
+ *  para a mesma rota, e marcar uma delas esconderia as viagens da outra. */
+function vgUnicos(listas) {
+  const mapa = new Map();
+  (listas || []).forEach(arr => (arr || []).forEach(x => {
+    const s = String(x == null ? '' : x).trim();
+    if (!s) return;
+    const k = vgNorm(s);
+    if (!mapa.has(k)) mapa.set(k, s);
+  }));
+  return Array.from(mapa.values())
+    .sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true, sensitivity: 'base' }));
+}
+
+/** Devolve (normalizando para array) a lista de selecionados de um filtro. */
+function vgListaFiltro(chave) {
+  const cfg = VG_FILTROS_MULTI[chave];
+  if (!cfg) return [];
+  const raw = window[cfg.win];
+  if (Array.isArray(raw)) return raw;
+  window[cfg.win] = raw ? [raw] : [];
+  return window[cfg.win];
+}
+
+function vgToggleFiltroMulti(chave, valor) {
+  const lista = vgListaFiltro(chave);
+  const idx = lista.indexOf(valor);
+  if (idx > -1) lista.splice(idx, 1); else lista.push(valor);
   renderApp();
+}
+
+/** Alias histórico — o markup antigo e qualquer chamada externa continuam valendo. */
+function toggleFiltroStatusViagem(statusVal) { vgToggleFiltroMulti('status', statusVal); }
+
+/** Marca ou desmarca tudo. As opções vêm de window._vgOpcoesFiltro, gravado no
+ *  render — evita despejar a lista inteira dentro de um atributo onclick. */
+function vgMarcarTodosFiltro(chave) {
+  const cfg = VG_FILTROS_MULTI[chave];
+  if (!cfg) return;
+  const opcoes = (window._vgOpcoesFiltro || {})[chave] || [];
+  const lista = vgListaFiltro(chave);
+  const todosMarcados = opcoes.length > 0 && opcoes.every(o => lista.includes(o));
+  window[cfg.win] = todosMarcados ? [] : opcoes.slice();
+  renderApp();
+}
+
+function vgLimparFiltroMulti(chave) {
+  const cfg = VG_FILTROS_MULTI[chave];
+  if (!cfg) return;
+  window[cfg.win] = [];
+  renderApp();
+}
+
+function vgAbrirDropdown(chave) {
+  window._vgDropdownAberto = (window._vgDropdownAberto === chave) ? null : chave;
+  renderApp();
+  const inp = document.getElementById('vg-dd-busca-' + chave);
+  if (inp) { try { inp.focus(); } catch (e) {} }
+}
+
+function vgFecharDropdowns() {
+  if (!window._vgDropdownAberto) return;
+  window._vgDropdownAberto = null;
+  renderApp();
+}
+
+/** Busca dentro do dropdown aberto. Filtra por display, SEM renderApp() — num
+ *  campo de digitação, um render completo do app por tecla é o que se está
+ *  justamente tentando eliminar nesta tela. */
+function vgBuscaDropdown(chave, texto) {
+  if (!window._vgDropdownBusca) window._vgDropdownBusca = {};
+  window._vgDropdownBusca[chave] = texto || '';
+  const lista = document.getElementById('vg-dd-lista-' + chave);
+  if (!lista) return;
+  const q = vgNorm(texto);
+  let visiveis = 0;
+  lista.querySelectorAll('[data-vg-opt]').forEach(el => {
+    const ok = !q || vgNorm(el.getAttribute('data-vg-opt')).includes(q);
+    el.style.display = ok ? '' : 'none';
+    if (ok) visiveis++;
+  });
+  const vazio = document.getElementById('vg-dd-vazio-' + chave);
+  if (vazio) vazio.classList.toggle('hidden', visiveis > 0);
+}
+
+/** Clique fora e Esc fecham o dropdown. Registrado uma vez só, na fase de
+ *  bolha: em captura, o fechamento rodaria ANTES do onclick do elemento clicado
+ *  e o renderApp() destruiria o botão antes de ele receber o próprio clique. */
+function vgInicializarDropdownsFiltro() {
+  if (window._vgDropdownInit) return;
+  window._vgDropdownInit = true;
+
+  document.addEventListener('click', function (e) {
+    if (!window._vgDropdownAberto) return;
+    if (e.target && e.target.closest && e.target.closest('[data-vg-dropdown]')) return;
+    vgFecharDropdowns();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') vgFecharDropdowns();
+  });
+}
+
+/**
+ * Monta um filtro de multisseleção suspenso.
+ * @param {string} chave        chave em VG_FILTROS_MULTI
+ * @param {string[]} opcoes     opções já deduplicadas e ordenadas
+ * @param {object} [opts]       { classesOpcao: { VALOR: 'text-amber-400' } }
+ */
+function renderDropdownMultiFiltro(chave, opcoes, opts) {
+  const cfg = VG_FILTROS_MULTI[chave];
+  if (!cfg) return '';
+  opts = opts || {};
+  const classesOpcao = opts.classesOpcao || {};
+  opcoes = opcoes || [];
+
+  if (!window._vgOpcoesFiltro) window._vgOpcoesFiltro = {};
+  window._vgOpcoesFiltro[chave] = opcoes.slice();
+
+  const sel    = vgListaFiltro(chave);
+  const aberto = window._vgDropdownAberto === chave;
+  const busca  = ((window._vgDropdownBusca || {})[chave]) || '';
+  const q      = vgNorm(busca);
+
+  const resumo = sel.length === 0 ? 'Todos'
+               : sel.length === 1 ? sel[0]
+               : sel.length + ' selecionados';
+
+  const visiveis = opcoes.filter(o => !q || vgNorm(o).includes(q)).length;
+  const todosMarcados = opcoes.length > 0 && opcoes.every(o => sel.includes(o));
+
+  const itens = opcoes.map((o, i) => {
+    const oculto = (q && !vgNorm(o).includes(q)) ? ' style="display:none"' : '';
+    const clsTxt = classesOpcao[o] || 'text-slate-200';
+    return `<label data-vg-opt="${vgEscTxt(o)}"${oculto} class="flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer hover:bg-slate-800 select-none">
+      <input type="checkbox" id="vg-dd-opt-${chave}-${i}" ${sel.includes(o) ? 'checked' : ''} onchange="vgToggleFiltroMulti('${chave}','${vgEscAttr(o)}')" class="rounded border-slate-700 bg-slate-900 ${cfg.chk} w-3.5 h-3.5 cursor-pointer shrink-0">
+      <span class="font-bold ${clsTxt} truncate" title="${vgEscTxt(o)}">${vgEscTxt(o)}</span>
+    </label>`;
+  }).join('');
+
+  return `
+    <div data-vg-dropdown="${chave}" class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1.5 relative ${aberto ? 'z-40' : ''}">
+      <div class="flex items-center justify-between gap-1">
+        <label class="block text-[10px] ${cfg.txt} font-bold uppercase truncate">${cfg.icone} ${cfg.titulo}</label>
+        ${sel.length > 0
+          ? `<span class="text-[9px] ${cfg.badge} border px-1.5 rounded font-bold shrink-0">${sel.length} sel.</span>`
+          : `<span class="text-[9px] text-slate-500 font-medium shrink-0">Todos</span>`}
+      </div>
+
+      <button type="button" onclick="vgAbrirDropdown('${chave}')" title="${vgEscTxt(sel.length ? sel.join(', ') : 'Todos')}"
+        class="w-full flex items-center justify-between gap-1 bg-slate-900 border ${aberto ? 'border-slate-500' : 'border-slate-700'} rounded p-1 text-left hover:border-slate-600 transition">
+        <span class="truncate text-[11px] ${sel.length ? 'text-white font-semibold' : 'text-slate-500'}">${vgEscTxt(resumo)}</span>
+        <span class="text-slate-400 text-[9px] shrink-0">${aberto ? '▲' : '▼'}</span>
+      </button>
+
+      ${aberto ? `
+      <div class="absolute left-0 right-0 top-full mt-1 z-40 bg-slate-900 border border-slate-600 rounded-xl shadow-2xl p-2 space-y-1.5">
+        ${cfg.busca ? `<input type="text" id="vg-dd-busca-${chave}" value="${vgEscTxt(busca)}" autocomplete="off" placeholder="🔎 Buscar..." oninput="vgBuscaDropdown('${chave}', this.value)" class="w-full bg-slate-950 border border-slate-700 text-white rounded p-1 text-[11px] placeholder:text-slate-600 ${cfg.ring} focus:outline-none">` : ''}
+
+        <div class="flex items-center justify-between border-b border-slate-800 pb-1">
+          <button type="button" onclick="vgMarcarTodosFiltro('${chave}')" class="text-[10px] font-bold ${cfg.txt} hover:underline">${todosMarcados ? '☐ Desmarcar todos' : '☑ Selecionar todos'}</button>
+          <span class="text-[9px] text-slate-500">${opcoes.length} opç.</span>
+        </div>
+
+        <div id="vg-dd-lista-${chave}" class="max-h-56 overflow-y-auto space-y-0.5 text-[11px] pr-0.5">
+          ${itens}
+          <div id="vg-dd-vazio-${chave}" class="${visiveis > 0 ? 'hidden ' : ''}px-2 py-3 text-center text-[10px] text-slate-500">Nenhuma opção encontrada</div>
+        </div>
+
+        <div class="flex items-center justify-between border-t border-slate-800 pt-1.5">
+          <button type="button" onclick="vgLimparFiltroMulti('${chave}')" class="text-[10px] font-bold text-red-400 hover:underline">Limpar</button>
+          <button type="button" onclick="vgFecharDropdowns()" class="text-[10px] font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-0.5 rounded">Fechar</button>
+        </div>
+      </div>` : ''}
+    </div>`;
+}
+
+/** Chips do que está marcado. Com o dropdown fechado, o cartão só mostra
+ *  "3 selecionados" — os chips dizem QUAIS, e cada um sai no próprio ✕. */
+function renderChipsFiltrosViagem() {
+  const chips = [];
+  Object.keys(VG_FILTROS_MULTI).forEach(chave => {
+    const cfg = VG_FILTROS_MULTI[chave];
+    vgListaFiltro(chave).forEach(v => {
+      chips.push(`<span class="inline-flex items-center gap-1 ${cfg.badge} border px-1.5 py-0.5 rounded text-[9px] font-bold">
+        <span class="opacity-70">${cfg.rotulo}:</span> ${vgEscTxt(v)}
+        <button type="button" onclick="vgToggleFiltroMulti('${chave}','${vgEscAttr(v)}')" title="Remover este filtro" class="text-slate-400 hover:text-red-400 leading-none font-black">✕</button>
+      </span>`);
+    });
+  });
+  if (chips.length === 0) return '';
+  return `<div class="flex flex-wrap items-center gap-1.5">${chips.join('')}</div>`;
+}
+
+/** Nº da Carga com debounce: o valor entra no estado na hora (nada se perde),
+ *  mas o renderApp() só dispara na pausa. Antes era um render completo do app
+ *  por TECLA digitada. */
+function vgFiltroCargaInput(el) {
+  if (typeof forcarMaiuscula === 'function') forcarMaiuscula(el);
+  window._vgFiltroCarga = el.value;
+  clearTimeout(window._vgFiltroCargaTimer);
+  window._vgFiltroCargaTimer = setTimeout(function () { renderApp(); }, 250);
 }
 
 function limparFiltrosViagens() {
@@ -10359,9 +10624,15 @@ function limparFiltrosViagens() {
   window._vgFiltroRetornoDe = '';
   window._vgFiltroRetornoAte = '';
   window._vgFiltroStatus = [];
+  window._vgFiltroRota = [];
+  window._vgFiltroSetor = [];
+  window._vgFiltroMotorista = [];
   window._vgFiltroChkSaida = '';
   window._vgFiltroChkChegada = '';
   window._vgFiltroFusion = '';
+  window._vgDropdownAberto = null;
+  window._vgDropdownBusca = {};
+  clearTimeout(window._vgFiltroCargaTimer);
   renderApp();
 }
 
@@ -10387,6 +10658,8 @@ function renderRetornoFisicoBadge(v) {
 }
 
 function renderViagensLargadaSubTab() {
+  vgInicializarDropdownsFiltro();
+
   const todasViagens = db.getControleViagens();
   const veiculos = (db.data.veiculos||[]).filter(v => v.situacao !== 'Inativo');
   const motoristas = db.data.motoristas;
@@ -10398,11 +10671,28 @@ function renderViagensLargadaSubTab() {
   const fSaidaAte   = window._vgFiltroSaidaAte   || '';
   const fRetornoDe  = window._vgFiltroRetornoDe  || '';
   const fRetornoAte = window._vgFiltroRetornoAte || '';
-  const fStatusRaw  = window._vgFiltroStatus;
-  const fStatusList = Array.isArray(fStatusRaw) ? fStatusRaw : (fStatusRaw ? [fStatusRaw] : []);
+  const fStatusList    = vgListaFiltro('status');
+  const fRotaList      = vgListaFiltro('rota');
+  const fSetorList     = vgListaFiltro('setor');
+  const fMotoristaList = vgListaFiltro('motorista');
   const fChkSaida   = window._vgFiltroChkSaida   || '';
   const fChkChegada = window._vgFiltroChkChegada || '';
   const fFusion     = window._vgFiltroFusion     || '';
+
+  // Opções dos multisseleção: cadastro UNIDO ao que existe de fato nas viagens.
+  // A escala vem de XLSX e traz rota/motorista que podem não estar cadastrados —
+  // se a lista saísse só do cadastro, essas viagens ficariam invisíveis ao
+  // filtro. Setor não tem cadastro próprio (db.data.setores é o de
+  // encaminhamento do SAC, outra coisa), então sai só das viagens.
+  const opcoesRota      = vgUnicos([rotas, todasViagens.map(v => v.rota)]);
+  const opcoesSetor     = vgUnicos([todasViagens.map(v => String(v.setor || 'FRIO').toUpperCase())]);
+  const opcoesMotorista = vgUnicos([
+    (motoristas || []).map(m => (m && m.nome) || m),
+    todasViagens.map(v => v.motorista)
+  ]);
+
+  const classesStatus = {};
+  VG_STATUS_OPCOES.forEach(s => { classesStatus[s.val] = s.cls; });
 
   let viagens = todasViagens.filter(v => {
     const dSaida = v.data_saida || '';
@@ -10427,6 +10717,13 @@ function renderViagensLargadaSubTab() {
     if (fRetornoAte && dRetorno > fRetornoAte) return false;
 
     if (fStatusList.length > 0 && !fStatusList.includes(v.status_viagem)) return false;
+
+    // Comparação normalizada: a mesma rota chega do cadastro e da planilha com
+    // caixa e espaçamento diferentes, e uma comparação crua devolveria vazio.
+    if (fRotaList.length > 0 && !fRotaList.some(r => vgNorm(r) === vgNorm(v.rota))) return false;
+    if (fSetorList.length > 0 && !fSetorList.some(s => vgNorm(s) === vgNorm(v.setor || 'FRIO'))) return false;
+    if (fMotoristaList.length > 0 && !fMotoristaList.some(m => vgNorm(m) === vgNorm(v.motorista))) return false;
+
     if (fChkSaida && v.checklist_saida !== fChkSaida) return false;
     if (fChkChegada && v.checklist_chegada !== fChkChegada) return false;
     if (fFusion && v.fusion !== fFusion) return false;
@@ -10434,7 +10731,9 @@ function renderViagensLargadaSubTab() {
     return true;
   });
 
-  const temFiltroAtivo = fCarga || fSaidaDe || fSaidaAte || fRetornoDe || fRetornoAte || fStatusList.length > 0 || fChkSaida || fChkChegada || fFusion;
+  const temFiltroAtivo = fCarga || fSaidaDe || fSaidaAte || fRetornoDe || fRetornoAte
+    || fStatusList.length > 0 || fRotaList.length > 0 || fSetorList.length > 0 || fMotoristaList.length > 0
+    || fChkSaida || fChkChegada || fFusion;
 
   return `
     <div class="space-y-4">
@@ -10470,13 +10769,15 @@ function renderViagensLargadaSubTab() {
           </div>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
+        ${renderChipsFiltrosViagem()}
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-xs">
           <!-- Filtro Número da Carga -->
           <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
             <label class="block text-[10px] text-cyan-400 font-bold uppercase">📦 Nº da Carga</label>
             <div>
-              <span class="text-[9px] text-slate-400 block">Número da Carga:</span>
-              <input type="text" id="vg-filtro-carga" value="${fCarga}" placeholder="Ex: 43125..." oninput="forcarMaiuscula(this); window._vgFiltroCarga=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px] placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
+              <span class="text-[9px] text-slate-400 block">Carga, placa, motorista ou rota:</span>
+              <input type="text" id="vg-filtro-carga" value="${fCarga}" placeholder="Ex: 43125..." oninput="vgFiltroCargaInput(this)" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px] placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
             </div>
           </div>
 
@@ -10486,11 +10787,11 @@ function renderViagensLargadaSubTab() {
             <div class="grid grid-cols-2 gap-1.5">
               <div>
                 <span class="text-[9px] text-slate-400 block">De:</span>
-                <input type="date" value="${fSaidaDe}" onchange="window._vgFiltroSaidaDe=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
+                <input type="date" id="vg-filtro-saida-de" value="${fSaidaDe}" onchange="window._vgFiltroSaidaDe=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
               </div>
               <div>
                 <span class="text-[9px] text-slate-400 block">Até:</span>
-                <input type="date" value="${fSaidaAte}" onchange="window._vgFiltroSaidaAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
+                <input type="date" id="vg-filtro-saida-ate" value="${fSaidaAte}" onchange="window._vgFiltroSaidaAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
               </div>
             </div>
           </div>
@@ -10501,48 +10802,20 @@ function renderViagensLargadaSubTab() {
             <div class="grid grid-cols-2 gap-1.5">
               <div>
                 <span class="text-[9px] text-slate-400 block">De:</span>
-                <input type="date" value="${fRetornoDe}" onchange="window._vgFiltroRetornoDe=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
+                <input type="date" id="vg-filtro-retorno-de" value="${fRetornoDe}" onchange="window._vgFiltroRetornoDe=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
               </div>
               <div>
                 <span class="text-[9px] text-slate-400 block">Até:</span>
-                <input type="date" value="${fRetornoAte}" onchange="window._vgFiltroRetornoAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
+                <input type="date" id="vg-filtro-retorno-ate" value="${fRetornoAte}" onchange="window._vgFiltroRetornoAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
               </div>
             </div>
           </div>
 
-          <!-- Filtro por Status da Viagem (Multimarcação) -->
-          <div id="filtro-status-viagem" class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1.5">
-            <div class="flex items-center justify-between">
-              <label class="block text-[10px] text-amber-400 font-bold uppercase">🚦 Status Viagem</label>
-              ${fStatusList.length > 0 ? `<span class="text-[9px] bg-amber-950 text-amber-300 border border-amber-800 px-1.5 rounded font-bold">${fStatusList.length} sel.</span>` : '<span class="text-[9px] text-slate-500 font-medium">Todos</span>'}
-            </div>
-            <div class="space-y-1 text-[11px] pt-0.5">
-              <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
-                <input type="checkbox" ${fStatusList.includes('EM ANDAMENTO') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('EM ANDAMENTO')" class="rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500 w-3.5 h-3.5 cursor-pointer">
-                <span class="font-bold text-amber-400">EM ANDAMENTO</span>
-              </label>
-              <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
-                <input type="checkbox" ${fStatusList.includes('EM ANDAMENTO (PALMAS)') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('EM ANDAMENTO (PALMAS)')" class="rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-amber-500 w-3.5 h-3.5 cursor-pointer">
-                <span class="font-bold text-amber-400">EM ANDAMENTO (PALMAS)</span>
-              </label>
-              <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
-                <input type="checkbox" ${fStatusList.includes('EM RETORNO') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('EM RETORNO')" class="rounded border-slate-700 bg-slate-900 text-blue-500 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer">
-                <span class="font-bold text-blue-400">EM RETORNO</span>
-              </label>
-              <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
-                <input type="checkbox" ${fStatusList.includes('FINALIZADO') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('FINALIZADO')" class="rounded border-slate-700 bg-slate-900 text-emerald-500 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer">
-                <span class="font-bold text-emerald-400">FINALIZADO</span>
-              </label>
-              <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
-                <input type="checkbox" ${fStatusList.includes('ADIADA') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('ADIADA')" class="rounded border-slate-700 bg-slate-900 text-orange-500 focus:ring-orange-500 w-3.5 h-3.5 cursor-pointer">
-                <span class="font-bold text-orange-400">ADIADA</span>
-              </label>
-              <label class="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
-                <input type="checkbox" ${fStatusList.includes('REENTREGA') ? 'checked' : ''} onchange="toggleFiltroStatusViagem('REENTREGA')" class="rounded border-slate-700 bg-slate-900 text-purple-500 focus:ring-purple-500 w-3.5 h-3.5 cursor-pointer">
-                <span class="font-bold text-purple-400">REENTREGA</span>
-              </label>
-            </div>
-          </div>
+          <!-- Filtros de multisseleção suspensos (Status, Rota, Setor, Motorista) -->
+          ${renderDropdownMultiFiltro('status', VG_STATUS_OPCOES.map(s => s.val), { classesOpcao: classesStatus })}
+          ${renderDropdownMultiFiltro('rota', opcoesRota)}
+          ${renderDropdownMultiFiltro('setor', opcoesSetor)}
+          ${renderDropdownMultiFiltro('motorista', opcoesMotorista)}
 
           <!-- Filtro Fusion & Checklists -->
           <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
@@ -10550,7 +10823,7 @@ function renderViagensLargadaSubTab() {
             <div class="grid grid-cols-1 gap-1">
               <div>
                 <span class="text-[9px] text-slate-400 block">Fusion:</span>
-                <select onchange="window._vgFiltroFusion=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
+                <select id="vg-filtro-fusion" onchange="window._vgFiltroFusion=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
                   <option value="">Todos</option>
                   <option value="INICIADO" ${fFusion==='INICIADO'?'selected':''}>INICIADO</option>
                   <option value="NÃO INICIADO" ${fFusion==='NÃO INICIADO'?'selected':''}>NÃO INICIADO</option>
@@ -10559,7 +10832,7 @@ function renderViagensLargadaSubTab() {
               <div class="grid grid-cols-2 gap-1.5">
                 <div>
                   <span class="text-[9px] text-slate-400 block">Chk Saída:</span>
-                  <select onchange="window._vgFiltroChkSaida=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
+                  <select id="vg-filtro-chk-saida" onchange="window._vgFiltroChkSaida=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
                     <option value="">Todos</option>
                     <option value="INICIADO" ${fChkSaida==='INICIADO'?'selected':''}>INICIADO</option>
                     <option value="NÃO INICIADO" ${fChkSaida==='NÃO INICIADO'?'selected':''}>NÃO INICIADO</option>
@@ -10567,7 +10840,7 @@ function renderViagensLargadaSubTab() {
                 </div>
                 <div>
                   <span class="text-[9px] text-slate-400 block">Chk Chegada:</span>
-                  <select onchange="window._vgFiltroChkChegada=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
+                  <select id="vg-filtro-chk-chegada" onchange="window._vgFiltroChkChegada=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
                     <option value="">Todos</option>
                     <option value="INICIADO" ${fChkChegada==='INICIADO'?'selected':''}>INICIADO</option>
                     <option value="NÃO INICIADO" ${fChkChegada==='NÃO INICIADO'?'selected':''}>NÃO INICIADO</option>
