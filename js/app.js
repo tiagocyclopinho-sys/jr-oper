@@ -92,9 +92,19 @@ window.addEventListener('jr-cloud-sync', () => {
   // evento disparar), só a TELA não é redesenhada ainda — ela pega os
   // dados atualizados normalmente na próxima renderização (ex: ao enviar
   // o formulário, fechar um modal, trocar de aba).
+  //
+  // 28/08/2026 — O FOCO SOZINHO DEIXOU DE BASTAR. A partir desta versão a
+  // sincronização também dispara quando a pessoa VOLTA para a tela (ver
+  // "SINCRONIZA AO VOLTAR PARA A TELA" no fim do cloudStore.js), e é
+  // justamente aí que o formulário tende a estar preenchido SEM foco em
+  // nada: no celular se toca fora do campo para fechar o teclado antes de
+  // trocar de app, e ao voltar o activeElement é o <body>. Com o teste
+  // antigo, esse era o caminho para o redesenho apagar o que já estava
+  // digitado. Por isso vale também a MARCA de digitação, acesa pelo
+  // listener logo abaixo e apagada em todo renderApp().
   const emCampoEditavel = document.activeElement && document.activeElement.matches &&
     document.activeElement.matches('input, textarea, select');
-  if (emCampoEditavel) {
+  if (emCampoEditavel || window._jrTelaComDigitacao) {
     if (typeof showToast === 'function') {
       showToast('🔄 Novos dados chegaram da nuvem. A tela atualiza sozinha assim que você terminar aqui.', 'warning');
     }
@@ -102,6 +112,18 @@ window.addEventListener('jr-cloud-sync', () => {
   }
   if (typeof renderApp === 'function') renderApp();
 });
+
+// Acende a marca de "tem coisa digitada nesta tela ainda não salva". Só vale
+// para o #main-content: o que está em #modal-container não corre risco,
+// porque renderApp() troca apenas o #main-content e não encosta no modal.
+// Na fase de captura para pegar o evento mesmo em campo que interrompe a
+// propagação.
+document.addEventListener('input', (ev) => {
+  const alvo = ev.target;
+  if (alvo && alvo.closest && alvo.closest('#main-content')) {
+    window._jrTelaComDigitacao = true;
+  }
+}, true);
 
 // ===== UTILITÁRIOS GLOBAIS DE FORMATAÇÃO E NORMALIZAÇÃO DE DATA (DD/MM/AAAA) =====
 function formatarData(val, fallback = '—') {
@@ -2935,6 +2957,12 @@ function renderApp() {
   const prevScrollY = window.scrollY || (document.documentElement && document.documentElement.scrollTop) || 0;
 
   container.innerHTML = html;
+  // A tela foi redesenhada: o que estava digitado nela ou já foi salvo, ou
+  // já se perdeu por decisão de quem chamou este render. Zerar aqui é o que
+  // impede a marca de digitação (ver o listener 'jr-cloud-sync' no topo
+  // deste arquivo) de ficar acesa para sempre depois de um formulário
+  // abandonado, bloqueando as atualizações vindas da nuvem.
+  window._jrTelaComDigitacao = false;
   updateUserHeader();
   renderNavMenu();
   decorarTabelasOrdenaveis();

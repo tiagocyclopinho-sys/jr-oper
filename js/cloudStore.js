@@ -22,6 +22,20 @@ class CloudStore {
     // cache contaminado este aparelho tentou empurrar. Zero em aparelho
     // limpo — qualquer número aqui identifica a máquina da ETAPA 3.
     this._bloqueadosNaEscrita = null;
+
+    // ATRASO ENTRE APARELHOS (28/08/2026) — ver o comentário grande em
+    // syncCloudToLocal() e o bloco "SINCRONIZA AO VOLTAR PARA A TELA" no
+    // fim do arquivo.
+    //   _pullEmAndamento    a Promise do pull que está rodando agora, ou
+    //                       null. Serve de trava de reentrância: um ciclo
+    //                       leva 25+ requisições e pode passar dos 30s do
+    //                       timer, e dois pulls simultâneos sobre as mesmas
+    //                       chaves são uma corrida, não o dobro da rapidez.
+    //   _ultimoPullOkMs     Date.now() do último pull que terminou. É o que
+    //                       responde "há quanto tempo esta tela é verdade?"
+    //                       no tooltip do indicador de nuvem.
+    this._pullEmAndamento = null;
+    this._ultimoPullOkMs = 0;
   }
 
   // ---------------------------------------------------------------
@@ -65,7 +79,18 @@ class CloudStore {
       ultimoErro: this._ultimoErroSync,
       // Item 7 (22/08/2026): registros recusados no envio por terem estado
       // de checklist no lugar da data de saída. Ver _aplicarGuardaDeEscrita.
-      bloqueadosNaEscrita: this._bloqueadosNaEscrita
+      bloqueadosNaEscrita: this._bloqueadosNaEscrita,
+      // 28/08/2026 — o que responder quando dois aparelhos mostram coisas
+      // diferentes. Rode jrDiagnosticoSync() nos dois e compare a IDADE: o
+      // que estiver com segundosDesdeUltimaAtualizacao alto é o atrasado,
+      // e não há por que procurar defeito no outro.
+      ultimaAtualizacaoDaNuvem: this._ultimoPullOkMs
+        ? new Date(this._ultimoPullOkMs).toLocaleTimeString('pt-BR')
+        : null,
+      segundosDesdeUltimaAtualizacao: this._ultimoPullOkMs
+        ? Math.round((Date.now() - this._ultimoPullOkMs) / 1000)
+        : null,
+      pullEmAndamento: !!this._pullEmAndamento
     };
   }
 
@@ -1403,7 +1428,18 @@ class CloudStore {
         console.warn('[CloudStore] Envio bloqueado: há um Reset Global mais recente na nuvem que este aparelho ainda não aplicou. Baixando o estado novo antes de enviar qualquer coisa.');
         this._aplicandoReset = true;
         try {
-          await this.syncCloudToLocal();
+          // CHAMA _pullDaNuvem() DIRETO, E NÃO syncCloudToLocal() (28/08/2026).
+          //
+          // Este push pode estar rodando DE DENTRO de um pull: a primeira
+          // coisa que _pullDaNuvem() faz é dar vazão a um envio pendente do
+          // debounce, e é este caminho aqui. Se pedíssemos syncCloudToLocal(),
+          // a trava de reentrância devolveria a Promise do pull que está
+          // esperando por ESTE push — os dois ficariam esperando um pelo
+          // outro para sempre, e como _pullEmAndamento nunca se limparia, o
+          // aparelho pararia de sincronizar de vez, sem erro nenhum na tela.
+          // Chamando o corpo direto, o comportamento é o mesmo de antes da
+          // trava existir: um pull aninhado, que roda e volta.
+          await this._pullDaNuvem();
         } finally {
           this._aplicandoReset = false;
         }
@@ -1516,8 +1552,33 @@ class CloudStore {
   // ---------------------------------------------------------------
   // SINCRONIZAÇÃO AUTOMÁTICA: Nuvem → Local
   // Pega os dados do Supabase e atualiza o LocalStorage
+  //
+  // TRAVA DE REENTRÂNCIA (28/08/2026) — o corpo de verdade é
+  // _pullDaNuvem(); esta função só garante que existe UM pull por vez.
+  //
+  // O ciclo faz uma requisição SEQUENCIAL por tabela, 25 delas. Num 4G da
+  // doca, com 300ms de ida e volta por requisição, o ciclo passa de 8s, e
+  // com tabela grande (mais de 500 linhas = mais de uma página) passa
+  // fácil dos 30s do setInterval. Quando isso acontecia, o timer disparava
+  // o pull seguinte com o anterior ainda no meio do laço: os dois escreviam
+  // as mesmas chaves-espelho e o mesmo jr_sac_db, o mais lento terminando
+  // por último e sobrepondo o mais novo. O aparelho ficava MAIS atrasado
+  // quanto pior estivesse a rede — exatamente ao contrário do que se
+  // espera. Agora, quem chega no meio de um pull recebe a Promise do que já
+  // está rodando em vez de abrir um segundo.
   // ---------------------------------------------------------------
-  async syncCloudToLocal() {
+  syncCloudToLocal() {
+    if (!this.isConfigured()) return Promise.resolve(false);
+    if (this._pullEmAndamento) return this._pullEmAndamento;
+
+    this._pullEmAndamento = this._pullDaNuvem()
+      .then((r) => { this._ultimoPullOkMs = Date.now(); return r; })
+      .finally(() => { this._pullEmAndamento = null; });
+
+    return this._pullEmAndamento;
+  }
+
+  async _pullDaNuvem() {
     if (!this.isConfigured()) return false;
 
     // Se existe um envio local (push) agendado e ainda não disparado (ex:
@@ -1821,6 +1882,9 @@ class CloudStore {
       // Sem await de propósito: um upload lento não pode atrasar a
       // sincronização dos dados, que é o que mantém a tela honesta.
       if (window.fotoStore) window.fotoStore.processarFila().catch(() => {});
+      // Repinta o indicador para o "há Xmin" andar sozinho mesmo quando
+      // nada muda de status.
+      this._updateStatusIndicator(this._connectionStatus);
     }, interval);
   }
 
@@ -1829,6 +1893,37 @@ class CloudStore {
       clearInterval(this._syncTimer);
       this._syncTimer = null;
     }
+  }
+
+  // ---------------------------------------------------------------
+  // SINCRONIZAÇÃO SOB DEMANDA (28/08/2026)
+  //
+  // Puxa e depois empurra, na hora, sem esperar o próximo tique dos 30s.
+  // É o que os gatilhos de "voltou para a tela" chamam.
+  //
+  // O `idadeMinimaMs` evita ida à rede à toa: alternar entre duas abas dez
+  // vezes em dez segundos não é dez motivos para baixar 25 tabelas. Se o
+  // último pull terminou há menos que isso, a tela já é recente o bastante
+  // e a chamada não faz nada. O padrão é 3s — só para agrupar rajadas de
+  // eventos (visibilitychange + focus + pageshow chegam juntos no mesmo
+  // gesto de destravar o celular), nunca para segurar dado.
+  // ---------------------------------------------------------------
+  sincronizarAgora(motivo, idadeMinimaMs = 3000) {
+    if (!this.isConfigured()) return Promise.resolve(false);
+
+    const idade = Date.now() - this._ultimoPullOkMs;
+    if (this._ultimoPullOkMs && idade < idadeMinimaMs) return Promise.resolve(false);
+
+    console.log(`[CloudStore] Sincronizando agora (${motivo}) — última atualização há ${Math.round(idade / 1000)}s.`);
+
+    // Puxa ANTES de empurrar, pelo mesmo motivo do reconectar: o cache
+    // deste aparelho é o que pode estar velho, não a nuvem.
+    return this.syncCloudToLocal()
+      .catch(e => { console.warn(`[CloudStore] Falha ao puxar da nuvem (${motivo}):`, e); return false; })
+      .then((r) => this.syncLocalToCloud().then(() => r).catch(e => {
+        console.warn(`[CloudStore] Falha ao enviar para a nuvem (${motivo}):`, e);
+        return r;
+      }));
   }
 
   // ---------------------------------------------------------------
@@ -1872,8 +1967,25 @@ class CloudStore {
       return;
     }
 
-    indicator.innerHTML = `<span style="color:${colors[status]}">${icons[status]}</span> <span style="color:#cbd5e1;font-size:10px;">${labels[status]}</span>`;
-    indicator.title = `Status do Banco de Dados: ${labels[status]}`;
+    // IDADE DA TELA (28/08/2026). "Nuvem Ativa" respondia se há CONEXÃO, e
+    // a pergunta de quem está com três aparelhos abertos lado a lado é
+    // outra: "o que estou vendo é de quando?". Sem isso, um aparelho que
+    // parou de sincronizar (aba em segundo plano, celular que dormiu) é
+    // visualmente idêntico a um em dia — e a única saída era desconfiar do
+    // sistema. Acima de 60s o número entra no rótulo; abaixo disso ele só
+    // polui, porque o ciclo normal é de 30s.
+    const idadeMs = this._ultimoPullOkMs ? Date.now() - this._ultimoPullOkMs : null;
+    let sufixo = '';
+    if (status === 'online' && idadeMs !== null && idadeMs > 60000) {
+      const min = Math.floor(idadeMs / 60000);
+      sufixo = ` <span style="color:#fbbf24;font-size:10px;">· há ${min}min</span>`;
+    }
+
+    indicator.innerHTML = `<span style="color:${colors[status]}">${icons[status]}</span> <span style="color:#cbd5e1;font-size:10px;">${labels[status]}</span>${sufixo}`;
+    indicator.title = `Status do Banco de Dados: ${labels[status]}`
+      + (this._ultimoPullOkMs
+          ? `\nÚltima atualização vinda da nuvem: ${new Date(this._ultimoPullOkMs).toLocaleTimeString('pt-BR')} (há ${Math.round(idadeMs / 1000)}s)`
+          : '\nAinda não baixou dados da nuvem nesta sessão.');
   }
 }
 
@@ -1893,7 +2005,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "compartilhar-pdf-5.7.0";
+CloudStore.BUILD = "sincronizar-ao-voltar-5.7.1";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
@@ -2168,6 +2280,64 @@ window.addEventListener('offline', () => {
   console.log('[CloudStore] Conexão de rede perdida — voltando para modo local até reconectar.');
   if (window.cloudStore) window.cloudStore._setStatus('offline');
 });
+
+// =================================================================
+// SINCRONIZA AO VOLTAR PARA A TELA (28/08/2026)
+//
+// A CAUSA PRINCIPAL DO "TRÊS APARELHOS DESSINCRONIZADOS AO MESMO TEMPO,
+// NA MESMA REDE". Toda a atualização deste app dependia de um
+// setInterval de 30s — e o navegador NÃO deixa esse timer rodar quando a
+// tela não está à vista:
+//
+//   - Aba em segundo plano (desktop e Android): o timer é limitado a UMA
+//     execução por minuto. Já dobra o atraso.
+//   - Aba de fundo parada por ~5 min no Chrome: a página é CONGELADA
+//     (Page Lifecycle / freeze). O timer para de existir.
+//   - Celular com a tela apagada, ou o app trocado: iOS suspende a página
+//     na hora; o Android congela logo depois.
+//
+// Ou seja: o aparelho no bolso do conferente e a aba aberta atrás da
+// planilha no PC não estavam atrasados 30 segundos — estavam parados
+// desde a hora em que saíram de vista, fossem 10 minutos ou 3 horas. E
+// quando a pessoa voltava para a tela, o app mostrava o cache antigo por
+// até mais 30s, até o timer descongelar e o próximo tique cair. Nada
+// disso aparece no indicador, que continuava verde: verde só quer dizer
+// "tem rede", não "isto aqui é de agora".
+//
+// O evento 'online' já existente NÃO cobre este caso: a rede nunca caiu.
+// O aparelho estava conectado o tempo todo — quem parou foi o timer.
+//
+// Os três eventos escutados aqui existem porque nenhum deles cobre
+// sozinho os aparelhos que a operação usa:
+//   visibilitychange  o principal — vale para trocar de aba, minimizar,
+//                     destravar o celular e voltar ao app pelo alternador.
+//   pageshow          quando a página volta do bfcache (voltar do
+//                     navegador, Safari do iPhone). Aqui o
+//                     visibilitychange pode não disparar.
+//   focus             rede de segurança para janelas de desktop lado a
+//                     lado, onde a aba nunca fica "hidden" mas o Chrome
+//                     ainda desacelera a janela sem foco.
+// Disparar três vezes no mesmo gesto não custa três sincronizações: o
+// idadeMinimaMs de sincronizarAgora() agrupa a rajada, e a trava de
+// reentrância do syncCloudToLocal() impede pulls sobrepostos.
+// =================================================================
+(function sincronizarAoVoltarParaATela() {
+  const acordar = (motivo) => {
+    if (!window.cloudStore || !window.cloudStore.isConfigured()) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    window.cloudStore.sincronizarAgora(motivo).catch(() => {});
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') acordar('voltou para a tela');
+  });
+
+  window.addEventListener('pageshow', (ev) => {
+    if (ev.persisted) acordar('página restaurada do cache do navegador');
+  });
+
+  window.addEventListener('focus', () => acordar('janela recebeu foco'));
+})();
 
 // =================================================================
 // AUTO-ATUALIZAÇÃO — Onda 2, item 11 (22/08/2026)
