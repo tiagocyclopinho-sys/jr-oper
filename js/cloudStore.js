@@ -36,6 +36,12 @@ class CloudStore {
     //                       no tooltip do indicador de nuvem.
     this._pullEmAndamento = null;
     this._ultimoPullOkMs = 0;
+
+    // Preenchido por _gravarCacheDoPull() quando o aparelho não consegue
+    // mais guardar o que baixa da nuvem (cota cheia). Enquanto está
+    // preenchido, a tela está certa mas o cache está para trás: um F5
+    // devolve o aparelho ao retrato velho.
+    this._falhaAoGravarCache = null;
   }
 
   // ---------------------------------------------------------------
@@ -64,6 +70,71 @@ class CloudStore {
     this._setStatus(this._connectionStatus); // repinta o indicador com o alerta
   }
 
+  // ---------------------------------------------------------------
+  // GRAVA O CACHE DO PULL, E GRITA SE NÃO CONSEGUIR (28/08/2026)
+  //
+  // O caminho de ESCRITA do app (store.js:save()) já tratava estouro de
+  // cota há tempos: libera espaço de auditoria, tenta de novo, e se ainda
+  // assim falhar acende uma tarja vermelha fixa na tela
+  // (_alertarFalhaDeGravacao). O caminho de LEITURA não tinha nada disso —
+  // era um `catch(e) {}` vazio. A mesma cota cheia, no mesmo aparelho, era
+  // barulhenta ao salvar e muda ao baixar.
+  //
+  // Aqui a leitura passa a usar exatamente a mesma escada do save(), e a
+  // falha final vai para o indicador de nuvem em vez de para lugar nenhum.
+  // ---------------------------------------------------------------
+  _gravarCacheDoPull(fullDb) {
+    const payload = JSON.stringify(fullDb);
+    try {
+      localStorage.setItem('jr_sac_db', payload);
+      this._falhaAoGravarCache = null;
+      return true;
+    } catch (e) {
+      console.warn('[CloudStore] Cota estourada ao gravar o que veio da nuvem — tentando liberar espaço.', e.message);
+
+      let liberou = false;
+      try {
+        liberou = !!(window.db && typeof window.db.pruneOldAuditData === 'function'
+                     && window.db.pruneOldAuditData());
+      } catch (ePrune) {
+        console.warn('[CloudStore] Falha ao liberar espaço:', ePrune);
+      }
+
+      if (liberou) {
+        try {
+          localStorage.setItem('jr_sac_db', payload);
+          console.info('[CloudStore] Cache da nuvem gravado após liberar espaço (histórico de auditoria reduzido).');
+          this._falhaAoGravarCache = null;
+          return true;
+        } catch (e2) { /* cai no registro de falha abaixo */ }
+      }
+
+      // Desistiu. A TELA continua certa (a memória foi atualizada antes de
+      // chegar aqui), mas este aparelho não consegue mais guardar o que
+      // baixa: ao recarregar, volta para o retrato velho. Isso precisa
+      // aparecer, e some sozinho no primeiro ciclo que conseguir gravar.
+      this._falhaAoGravarCache = {
+        detalhe: String((e && e.message) || e || 'desconhecido').slice(0, 200),
+        // Chamada defensiva: este é o tratador de uma falha, e ele não pode
+        // ser o próximo a estourar. A bancada carrega o cloudStore sem o
+        // config.js, onde agoraIsoBrasilia() não existe.
+        quando: (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString()
+      };
+      console.error('[CloudStore] ARMAZENAMENTO CHEIO — os dados baixados da nuvem não couberam neste aparelho.',
+                    this._falhaAoGravarCache);
+
+      // Reaproveita a tarja vermelha que o save() já sabe desenhar.
+      try {
+        if (window.db && typeof window.db._alertarFalhaDeGravacao === 'function') {
+          window.db._alertarFalhaDeGravacao(e);
+        }
+      } catch (eTarja) {}
+
+      this._setStatus(this._connectionStatus);   // repinta o indicador
+      return false;
+    }
+  }
+
   // Diagnóstico rápido: chame jrDiagnosticoSync() no console do navegador.
   getDiagnostico() {
     return {
@@ -90,7 +161,16 @@ class CloudStore {
       segundosDesdeUltimaAtualizacao: this._ultimoPullOkMs
         ? Math.round((Date.now() - this._ultimoPullOkMs) / 1000)
         : null,
-      pullEmAndamento: !!this._pullEmAndamento
+      pullEmAndamento: !!this._pullEmAndamento,
+      // 28/08/2026 — se vier preenchido, este aparelho não consegue mais
+      // guardar o que baixa: a tela está certa agora e volta a ficar velha
+      // no próximo F5. É a explicação de "mesma versão, números diferentes".
+      armazenamentoCheio: this._falhaAoGravarCache,
+      usoDoArmazenamento: (() => {
+        try {
+          return (window.db && window.db.getStorageUsageInfo) ? window.db.getStorageUsageInfo() : null;
+        } catch(e) { return null; }
+      })()
     };
   }
 
@@ -560,7 +640,27 @@ class CloudStore {
     try {
       localStorage.setItem('jr_sync_hashes', JSON.stringify(this._mapaSync || {}));
     } catch(e) {
-      console.warn('[CloudStore] Não foi possível gravar o mapa de sincronização (o envio volta a mandar tudo):', e.message);
+      // 28/08/2026 — o comentário acima descreve só metade do estrago, e é a
+      // metade boa. Quando o mapa não é gravado, ele não fica AUSENTE: fica
+      // VELHO. E mapa velho não significa apenas "reenvia demais" — na
+      // mesclagem, todo registro que mudou na nuvem desde a última gravação
+      // bem-sucedida passa a ter hash local diferente do `conhecidos`, ou
+      // seja, é lido como ALTERAÇÃO LOCAL NÃO ENVIADA. E a mesclagem, por
+      // desenho, deixa a versão local ganhar nesse caso. O aparelho passa a
+      // ACEITAR registro novo e RECUSAR atualização de registro que já tem —
+      // que é o aparelho que mostra a devolução certa com a análise em
+      // branco, mesmo já preenchida por outra pessoa.
+      //
+      // Não se conserta aqui mudando quem ganha a mesclagem: a regra existe
+      // para não perder o que foi digitado offline. Conserta-se liberando
+      // espaço — e é a mesma cota do _gravarCacheDoPull(), então acende o
+      // mesmo alarme, em vez de mais um console.warn que ninguém lê.
+      console.warn('[CloudStore] Não foi possível gravar o mapa de sincronização — este aparelho vai recusar atualizações vindas da nuvem até haver espaço:', e.message);
+      this._falhaAoGravarCache = {
+        detalhe: 'mapa de sincronização não coube (' + String((e && e.message) || e).slice(0, 120) + ')',
+        quando: (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString()
+      };
+      try { this._setStatus(this._connectionStatus); } catch(eSt) {}
     }
   }
 
@@ -1761,11 +1861,46 @@ class CloudStore {
     }
 
     if (anyChange) {
+      // =============================================================
+      // A MEMÓRIA É ATUALIZADA ANTES DO DISCO (28/08/2026)
+      //
+      // ESTE ERA O DEFEITO QUE CONGELAVA APARELHO INTEIRO. A ordem aqui
+      // era: grava jr_sac_db -> atualiza window.db.data, tudo dentro de um
+      // try com `catch(e) {}` VAZIO. Quando o localStorage estourava a cota
+      // (o catálogo estático sozinho ocupa 2,9 MB de ~5 MB, e o Safari do
+      // iPhone para perto disso), o setItem lançava na PRIMEIRA linha — e
+      // levava junto a atualização da memória, que vinha depois e não tem
+      // nada a ver com cota.
+      //
+      // O resultado é a pior combinação possível:
+      //   - o pull baixou tudo certo, e o dado foi jogado fora;
+      //   - `db.data` continua com o retrato do dia em que o aparelho
+      //     encheu, e é dele que a tela desenha;
+      //   - o `catch` vazio engole o erro: nada no console, nada na tela;
+      //   - o indicador segue VERDE, porque o ENVIO continua funcionando
+      //     (é ele que carimba "visto por último" no painel Aparelhos);
+      //   - o aparelho continua empurrando o retrato velho para a nuvem.
+      //
+      // Ou seja: um aparelho com a cota cheia para no tempo e continua
+      // parecendo saudável, na versão certa e "visto agora". Como cada
+      // aparelho enche num dia diferente, cada um congela num retrato
+      // diferente — que é exatamente o relato de três telas discordando na
+      // mesma rede, na mesma versão.
+      //
+      // Memória primeiro, porque é de graça e não pode falhar por cota: a
+      // TELA passa a mostrar a verdade mesmo num aparelho que não consegue
+      // mais gravar. O cache em disco é otimização (abrir offline e rápido);
+      // a tela é a operação.
+      // =============================================================
+      if (window.db && window.db.data) {
+        Object.assign(window.db.data, pulledUpdates);
+      }
+
       try {
         const rawFullNow = localStorage.getItem('jr_sac_db');
         const fullDb = rawFullNow ? JSON.parse(rawFullNow) : {};
         Object.assign(fullDb, pulledUpdates);
-        localStorage.setItem('jr_sac_db', JSON.stringify(fullDb));
+        this._gravarCacheDoPull(fullDb);
 
         // NÃO substituir window.db.data por fullDb (achado de 22/08/2026,
         // erro "Cannot read properties of undefined (reading 'filter')" na
@@ -1781,9 +1916,7 @@ class CloudStore {
         // cada pull — a lista de clientes sumia e db.data.produtos virava
         // undefined, quebrando a tela de Cadastros. Mesclamos apenas as chaves
         // que realmente vieram da nuvem, preservando o resto de db.data.
-        if (window.db && window.db.data) {
-          Object.assign(window.db.data, pulledUpdates);
-        } else if (window.db) {
+        if (window.db && !window.db.data) {
           window.db.data = fullDb;
         }
 
@@ -1797,7 +1930,13 @@ class CloudStore {
         // Reinserimos aqui o que a planilha Dados SAC garante, ANTES do
         // push. Assim o que falta na nuvem sobe em vez de o que sobra no
         // aparelho descer.
-      } catch(e) {}
+      } catch(e) {
+        // Deixou de ser `catch(e) {}`. Um erro aqui significa que o cache em
+        // disco ficou para trás do que a tela mostra — não é fatal (a
+        // memória já foi atualizada acima), mas some depois de um F5, e
+        // silêncio foi o que fez isso durar dias.
+        console.error('[CloudStore] Erro ao aplicar no aparelho os dados baixados da nuvem:', e);
+      }
     }
 
     // ITEM 8 (Onda 2, 22/08/2026) — AQUI RODAVA restaurarCadastrosDaPlanilha(),
@@ -1957,6 +2096,17 @@ class CloudStore {
     // enquanto nenhum dado transacional chegava ao banco — era esse verde
     // que fazia o problema passar despercebido. Se há tabela recusada pela
     // nuvem, o indicador precisa dizer isso na cara do usuário.
+    // Armazenamento cheio vem ANTES da pendência de envio: aqui o envio
+    // pode estar perfeito e o aparelho ainda assim ter parado no tempo ao
+    // recarregar. Era o estado que não tinha como aparecer.
+    if (this._falhaAoGravarCache) {
+      indicator.innerHTML = `<span style="color:#ef4444">🔴</span> <span style="color:#fca5a5;font-size:10px;">Armazenamento cheio — dados novos não ficam salvos</span>`;
+      indicator.title = `Este aparelho baixou os dados novos, mas não conseguiu guardá-los: ${this._falhaAoGravarCache.detalhe}\n\n`
+        + 'A TELA está atualizada, mas ao recarregar o app ele volta para os dados antigos — e é assim que este aparelho passa a mostrar números diferentes dos outros.\n\n'
+        + 'Libere espaço em Configurações > Governança, ou limpe os dados do site neste aparelho.';
+      return;
+    }
+
     const pendentes = this._tabelasPendentesDeEnvio ? this._tabelasPendentesDeEnvio.size : 0;
     if (status === 'online' && pendentes > 0) {
       const err = this._ultimoErroSync;
@@ -2005,7 +2155,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "sincronizar-ao-voltar-5.7.1";
+CloudStore.BUILD = "cache-cheio-5.7.2";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
