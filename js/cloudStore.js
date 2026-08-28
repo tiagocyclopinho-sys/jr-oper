@@ -1893,7 +1893,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "filtros-largada-5.6.0";
+CloudStore.BUILD = "compartilhar-pdf-5.7.0";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase

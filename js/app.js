@@ -10115,9 +10115,9 @@ function renderControleViagensView() {
 
         <div class="flex flex-wrap items-center gap-2">
           <!-- Botão Relatório de Largada -->
-          <button onclick="gerarRelatorioLargadaOperacaoModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow flex items-center gap-1.5" title="Relatório Corporativo de Largada">
+          <div class="flex gap-2"><button onclick="gerarRelatorioLargadaOperacaoModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow flex items-center gap-1.5" title="Relatório Corporativo de Largada">
             <span>📄</span> Relatório de Largada
-          </button>
+          </button>${btnCompartilharPdf('gerarRelatorioLargadaOperacaoModal', 'Boletim de Largada')}</div>
 
           <!-- SELETOR DE SUB-ABAS -->
           <div class="flex flex-wrap gap-1 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg">
@@ -19181,6 +19181,7 @@ function renderSubabaResumoDiario(p) {
           <button onclick="gerarResumoDiarioPdf('${p.fData}', '${p.fTurno}')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5" title="Imprimir / PDF A4">
             🖨️ Imprimir PDF
           </button>
+          ${btnCompartilharPdf('gerarResumoDiarioPdf', 'Resumo Diario CD', ['${p.fData}', '${p.fTurno}'], 'px-3 py-2 rounded-lg', '${p.fData}')}
         </div>
       </div>
 
@@ -20463,6 +20464,213 @@ function gerarResumoDiarioPdf(data, turno) {
   }
 }
 
+// ===== COMPARTILHAMENTO DE RELATORIOS EM PDF (BANDEJA DO SISTEMA / WHATSAPP) =====
+// (28/08/2026) Os 25 geradores de relatorio deste arquivo terminam todos no
+// mesmo lugar: montam uma string de HTML e jogam num window.open() que se
+// auto-imprime. Isso produz PAPEL, nao ARQUIVO. Para mandar o Boletim no
+// WhatsApp alguem tinha que abrir a caixa de impressao, escolher "Salvar como
+// PDF", achar o arquivo no aparelho e anexar na mao, todo dia.
+//
+// POR QUE INTERCEPTAR O window.open EM VEZ DE REESCREVER OS GERADORES: a
+// alternativa era extrair o HTML de cada um dos 25 para uma funcao propria.
+// Isso e 25 oportunidades de o PDF passar a divergir da tela - exatamente o
+// defeito que o comentario do recorte de periodo (no boletim, logo abaixo)
+// documenta ter custado semanas de "Boletim diz 0, Dashboard diz 2". Aqui o
+// gerador roda INTEIRO e SEM ALTERACAO; so trocamos o destino do HTML que ele
+// ja produzia. Uma fonte de numeros, um caminho.
+//
+// CALIBRAGEM (medida em harness isolado, 28/08/2026): JPEG q=0.85 com scale=2
+// deu 0,34 MB num relatorio curto e 2,29 MB num de 7 paginas, ambos em ~1s.
+// PNG foi descartado - 8,2s e arquivo MAIOR. Acima do teto o perfil cai, em
+// vez de gerar anexo que trava no aparelho de quem recebe.
+const PDF_PERFIL_PADRAO   = { escala: 2,   qualidade: 0.85 };
+const PDF_PERFIL_REDUZIDO = { escala: 1.5, qualidade: 0.75 };
+const PDF_TETO_MB = 4;
+
+// Nome do arquivo que chega no WhatsApp. Sem acento e sem espaco de proposito:
+// e o texto que aparece no card do anexo e na pasta de Download do Android.
+function _pdfNomeArquivo(rotulo, dataRef) {
+  const base = String(rotulo || 'relatorio')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+  return base + '_' + (dataRef || hojeIsoBrasilia()) + '.pdf';
+}
+
+// Roda o gerador com um window.open() falso no lugar do verdadeiro e devolve o
+// HTML que ele tentou escrever. O Proxy responde funcao vazia para qualquer
+// coisa que o gerador chame na janela (focus, print, close), porque os 25 nao
+// usam todos as mesmas propriedades e nao ha por que descobrir uma a uma.
+// O finally restaura o window.open MESMO SE O GERADOR ESTOURAR - sem ele, um
+// erro em um relatorio quebraria a impressao de todos os outros ate o F5.
+function _capturarHtmlDoGerador(nomeFn, args) {
+  const gerador = window[nomeFn];
+  if (typeof gerador !== 'function') {
+    throw new Error('Gerador "' + nomeFn + '" nao encontrado.');
+  }
+
+  let capturado = '';
+  const documentoFalso = {
+    write:   function (h) { capturado += h; },
+    writeln: function (h) { capturado += h + '\n'; },
+    open:    function () {},
+    close:   function () {}
+  };
+  const janelaFalsa = new Proxy({ document: documentoFalso, closed: false }, {
+    get: function (alvo, prop) {
+      if (prop in alvo) return alvo[prop];
+      return function () {};
+    },
+    set: function (alvo, prop, valor) { alvo[prop] = valor; return true; }
+  });
+
+  const openOriginal = window.open;
+  window.open = function () { return janelaFalsa; };
+  try {
+    gerador.apply(window, args || []);
+  } finally {
+    window.open = openOriginal;
+  }
+  return capturado;
+}
+
+// Converte o HTML do relatorio em PDF dentro de um IFRAME, nao na pagina.
+// O motivo e concreto: todo relatorio deste arquivo traz um <style> com regras
+// em `body` e em `*` (font-size:10px, background:#fff, box-sizing). Injetado
+// num <div> da propria pagina, isso repinta o app inteiro por baixo do usuario.
+// No iframe o documento e outro e nada vaza (conferido em bancada: as regras do
+// app ficaram intactas durante a geracao).
+async function _pdfDeHtml(htmlContent, perfil) {
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;visibility:hidden;';
+  document.body.appendChild(iframe);
+  try {
+    // Os geradores disparam a impressao de duas formas diferentes: uns com
+    // <script>window.onload = ... window.print()</script>, outros com
+    // <body onload="window.print()">. Dentro do iframe QUALQUER uma das duas
+    // abriria a caixa de impressao do navegador no meio da geracao do PDF.
+    // As duas saem aqui.
+    const htmlLimpo = String(htmlContent)
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/(<body[^>]*?)\s+onload\s*=\s*("[^"]*"|'[^']*')/gi, '$1');
+
+    const doc = iframe.contentDocument;
+    doc.open();
+    doc.write(htmlLimpo);
+    doc.close();
+
+    // O logo do cabecalho e um <img src="./public/logo.png">. Sem esperar, o
+    // html2canvas fotografa antes de a imagem chegar e o PDF sai sem a marca.
+    const imagens = Array.prototype.slice.call(doc.images || []);
+    await Promise.all(imagens.map(function (img) {
+      if (img.complete) return null;
+      return new Promise(function (resolve) {
+        img.onload = resolve;
+        img.onerror = resolve;
+        setTimeout(resolve, 3000);
+      });
+    }));
+    await new Promise(function (r) { setTimeout(r, 250); });
+
+    return await html2pdf().set({
+      margin: 8,
+      image: { type: 'jpeg', quality: perfil.qualidade },
+      html2canvas: { scale: perfil.escala, useCORS: true, backgroundColor: '#ffffff', windowWidth: 794 },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
+      pagebreak: { mode: ['css', 'legacy'], avoid: 'tr' }
+    }).from(doc.body).outputPdf('blob');
+  } finally {
+    iframe.remove();
+  }
+}
+
+// Entrega o arquivo. Em celular (Android/iOS) abre a bandeja do sistema e o
+// WhatsApp aparece como destino, ja com o PDF anexado. Em desktop o
+// navigator.share com arquivo em geral NAO existe - conferido em bancada, onde
+// navigator.share veio undefined - entao o caminho de baixar nao e um erro
+// raro, e o comportamento normal de metade dos aparelhos. Por isso ele diz o
+// que fazer, em vez de baixar em silencio.
+async function _entregarPdf(blob, nomeArquivo, rotulo) {
+  const arquivo = new File([blob], nomeArquivo, { type: 'application/pdf' });
+
+  if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [arquivo] })) {
+    try {
+      await navigator.share({ files: [arquivo], title: rotulo });
+      showToast('Relatorio enviado para o app escolhido.');
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') { showToast('Envio cancelado.', 'warning'); return; }
+      console.warn('[PDF] navigator.share falhou, caindo para download:', e);
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nomeArquivo;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+  showToast('PDF baixado (' + nomeArquivo + '). Neste aparelho nao ha envio direto - anexe no WhatsApp.', 'warning');
+}
+
+// PONTO DE ENTRADA DOS BOTOES. Uso:
+//   compartilharRelatorioPdf('imprimirBoletimGerencialExecutivo', 'Boletim Gerencial')
+//   compartilharRelatorioPdf('gerarResumoDiarioPdf', 'Resumo Diario CD', ['2026-08-27','MANHA'])
+async function compartilharRelatorioPdf(nomeFn, rotulo, args, dataRef) {
+  if (typeof html2pdf === 'undefined') {
+    showToast('Biblioteca de PDF nao carregada. Recarregue a pagina (Ctrl+F5).', 'error');
+    return;
+  }
+
+  let htmlContent = '';
+  try {
+    htmlContent = _capturarHtmlDoGerador(nomeFn, args);
+  } catch (e) {
+    console.error('[PDF] falha ao montar o relatorio:', e);
+    showToast('Nao foi possivel montar o relatorio: ' + e.message, 'error');
+    return;
+  }
+
+  // Varios geradores desistem no meio (alert de "sem dados no periodo") e nunca
+  // chegam a escrever nada. Sem esta guarda o usuario receberia um PDF em
+  // branco sem entender por que.
+  if (!htmlContent || htmlContent.replace(/\s/g, '').length < 80) {
+    showToast('Este relatorio nao gerou conteudo para o periodo selecionado.', 'warning');
+    return;
+  }
+
+  showToast('Gerando PDF, aguarde...', 'warning');
+  try {
+    let blob = await _pdfDeHtml(htmlContent, PDF_PERFIL_PADRAO);
+    if (blob.size > PDF_TETO_MB * 1024 * 1024) {
+      console.warn('[PDF] ' + (blob.size / 1048576).toFixed(1) + ' MB acima do teto, refazendo em perfil reduzido.');
+      blob = await _pdfDeHtml(htmlContent, PDF_PERFIL_REDUZIDO);
+    }
+    await _entregarPdf(blob, _pdfNomeArquivo(rotulo, dataRef), rotulo);
+  } catch (e) {
+    console.error('[PDF] falha ao gerar:', e);
+    showToast('Falha ao gerar o PDF: ' + (e.message || e), 'error');
+  }
+}
+
+// Botao padrao de compartilhar, para nao repetir 12 vezes a mesma classe.
+// `args` entra como literal JS dentro do onclick, entao vai por JSON.stringify
+// com as aspas escapadas para caber no atributo HTML.
+function btnCompartilharPdf(nomeFn, rotulo, args, extraClasse, dataRef) {
+  const argsAttr = JSON.stringify(args || []).replace(/"/g, '&quot;');
+  const rotuloAttr = String(rotulo).replace(/"/g, '&quot;');
+  const dataAttr = dataRef ? ', &quot;' + dataRef + '&quot;' : '';
+  return '<button onclick="compartilharRelatorioPdf(&quot;' + nomeFn + '&quot;, &quot;' + rotuloAttr + '&quot;, ' + argsAttr + dataAttr + ')"'
+    + ' class="' + (extraClasse || '') + ' bg-green-700 hover:bg-green-600 text-white font-bold py-2 px-3 rounded-lg text-xs shadow flex items-center justify-center gap-1.5 transition"'
+    + ' title="Gera o PDF e abre o compartilhamento (WhatsApp, e-mail...)">'
+    + '<span>&#128242;</span> Enviar</button>';
+}
+
+
 // ===== IMPRESSOR EXECUTIVO DO BOLETIM GERENCIAL MASTER (D-1 FECHADO) =====
 function imprimirBoletimGerencialExecutivo() {
   const dMenosUmStr = somaDiasIso(hojeIsoBrasilia(), -1);
@@ -21618,9 +21826,12 @@ function renderBoletimGerencialView() {
                 <span>📅</span> Ontem (D-1)
               </button>
             </div>
-            <button onclick="imprimirBoletimGerencialExecutivo()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs shadow-lg flex items-center gap-2 transition">
-              <span>🖨️</span> Gerar Boletim Master (PDF / Impressão A4)
-            </button>
+            <div class="flex items-center gap-2">
+              <button onclick="imprimirBoletimGerencialExecutivo()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold px-5 py-2.5 rounded-xl text-xs shadow-lg flex items-center gap-2 transition">
+                <span>🖨️</span> Gerar Boletim Master (PDF / Impressão A4)
+              </button>
+              ${btnCompartilharPdf('imprimirBoletimGerencialExecutivo', 'Boletim Gerencial', [], 'px-5 py-2.5 rounded-xl font-extrabold shadow-lg', fDe)}
+            </div>
           </div>
 
           <!-- ETAPA 1: MÓDULO CENTRO DE DISTRIBUIÇÃO (CD) -->
@@ -22180,9 +22391,9 @@ function renderBoletimGerencialView() {
                     <div class="text-xs font-bold text-emerald-300 uppercase flex items-center gap-1"><span>🚚</span> Análise por Rota & Motorista</div>
                     <div class="text-[11px] text-slate-400 mt-1">Consolidação de ocorrências de devolução agrupadas por motorista e rota.</div>
                   </div>
-                  <button onclick="gerarRelatorioDevolucoesPorRotaPdf()" class="w-full bg-emerald-800 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
+                  <div class="flex gap-2"><button onclick="gerarRelatorioDevolucoesPorRotaPdf()" class="flex-1 bg-emerald-800 hover:bg-emerald-700 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
                     <span>📊</span> Análise por Rota (PDF)
-                  </button>
+                  </button>${btnCompartilharPdf('gerarRelatorioDevolucoesPorRotaPdf', 'Analise por Rota')}</div>
                 </div>
 
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-emerald-700/60 transition">
@@ -22211,9 +22422,9 @@ function renderBoletimGerencialView() {
                     <div class="text-xs font-bold text-blue-300 uppercase flex items-center gap-1"><span>🟢</span> Boletim de Largada de Operação</div>
                     <div class="text-[11px] text-slate-400 mt-1">Extrato corporativo da saída de frota, horários, checklist e status Fusion.</div>
                   </div>
-                  <button onclick="gerarRelatorioLargadaOperacaoModal()" class="w-full bg-blue-700 hover:bg-blue-600 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
+                  <div class="flex gap-2"><button onclick="gerarRelatorioLargadaOperacaoModal()" class="flex-1 bg-blue-700 hover:bg-blue-600 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
                     <span>🚍</span> Relatório Largada (PDF)
-                  </button>
+                  </button>${btnCompartilharPdf('gerarRelatorioLargadaOperacaoModal', 'Boletim de Largada')}</div>
                 </div>
 
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-blue-700/60 transition">
@@ -22241,9 +22452,9 @@ function renderBoletimGerencialView() {
                     <div class="text-xs font-bold text-blue-300 uppercase flex items-center gap-1"><span>🔄</span> Trocas e Substituições de Veículos</div>
                     <div class="text-[11px] text-slate-400 mt-1">Histórico completo de trocas de caminhão, motoristas e placas afetadas.</div>
                   </div>
-                  <button onclick="gerarRelatorioTrocasVeiculosPdf()" class="w-full bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold py-2 rounded-lg text-xs border border-blue-700/50 flex items-center justify-center gap-1">
+                  <div class="flex gap-2"><button onclick="gerarRelatorioTrocasVeiculosPdf()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold py-2 rounded-lg text-xs border border-blue-700/50 flex items-center justify-center gap-1">
                     <span>📋</span> Histórico Trocas (PDF)
-                  </button>
+                  </button>${btnCompartilharPdf('gerarRelatorioTrocasVeiculosPdf', 'Trocas de Veiculos')}</div>
                 </div>
 
                 <!-- CARD 5: DISPONIBILIDADE DA FROTA (A4) -->
@@ -22302,9 +22513,9 @@ function renderBoletimGerencialView() {
                     <div class="text-xs font-bold text-amber-300 uppercase flex items-center gap-1"><span>✂️</span> Relatório Executivo de Cortes</div>
                     <div class="text-[11px] text-slate-400 mt-1">Extrato consolidado dos cortes de mercadoria, códigos de itens e valores afetados.</div>
                   </div>
-                  <button onclick="gerarRelatorioCortesCdPdf()" class="w-full bg-amber-800 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
+                  <div class="flex gap-2"><button onclick="gerarRelatorioCortesCdPdf()" class="flex-1 bg-amber-800 hover:bg-amber-700 text-white font-bold py-2 rounded-lg text-xs shadow flex items-center justify-center gap-1">
                     <span>✂️</span> Extrato de Cortes (PDF)
-                  </button>
+                  </button>${btnCompartilharPdf('gerarRelatorioCortesCdPdf', 'Cortes CD')}</div>
                 </div>
 
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-amber-700/60 transition">
@@ -22312,9 +22523,9 @@ function renderBoletimGerencialView() {
                     <div class="text-xs font-bold text-amber-300 uppercase flex items-center gap-1"><span>📢</span> Ocorrências do Galpão / Operação CD</div>
                     <div class="text-[11px] text-slate-400 mt-1">Detalhamento das ocorrências internas de separação e estoque no armazém.</div>
                   </div>
-                  <button onclick="gerarRelatorioOcorrenciasCdPdf()" class="w-full bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold py-2 rounded-lg text-xs border border-amber-700/50 flex items-center justify-center gap-1">
+                  <div class="flex gap-2"><button onclick="gerarRelatorioOcorrenciasCdPdf()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold py-2 rounded-lg text-xs border border-amber-700/50 flex items-center justify-center gap-1">
                     <span>📢</span> Ocorrências CD (PDF)
-                  </button>
+                  </button>${btnCompartilharPdf('gerarRelatorioOcorrenciasCdPdf', 'Ocorrencias CD')}</div>
                 </div>
               </div>
             </div>
@@ -22353,9 +22564,9 @@ function renderBoletimGerencialView() {
                     <div class="text-xs font-bold text-red-300 uppercase flex items-center gap-1"><span>📊</span> Extrato de Acertos Financeiros</div>
                     <div class="text-[11px] text-slate-400 mt-1">Consolidação de indenizações, ressarcimentos e acertos operacionais.</div>
                   </div>
-                  <button onclick="gerarRelatorioAcertosFinanceirosPdf()" class="w-full bg-slate-800 hover:bg-slate-700 text-red-300 font-bold py-2 rounded-lg text-xs border border-red-700/50 flex items-center justify-center gap-1">
+                  <div class="flex gap-2"><button onclick="gerarRelatorioAcertosFinanceirosPdf()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-red-300 font-bold py-2 rounded-lg text-xs border border-red-700/50 flex items-center justify-center gap-1">
                     <span>📈</span> Acertos Financeiros (PDF)
-                  </button>
+                  </button>${btnCompartilharPdf('gerarRelatorioAcertosFinanceirosPdf', 'Acertos Financeiros')}</div>
                 </div>
               </div>
             </div>
@@ -22416,9 +22627,9 @@ function renderBoletimGerencialView() {
                     <div class="text-xs font-bold text-purple-300 uppercase flex items-center gap-1"><span>👤</span> Faltas & Ausências</div>
                     <div class="text-[11px] text-slate-400 mt-1">Extrato de acompanhamento de faltas, condutas e faltas injustificadas.</div>
                   </div>
-                  <button onclick="gerarRelatorioFaltasDisciplinarPdf()" class="w-full bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold py-2 rounded-lg text-xs border border-purple-700/50 flex items-center justify-center gap-1">
+                  <div class="flex gap-2"><button onclick="gerarRelatorioFaltasDisciplinarPdf()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold py-2 rounded-lg text-xs border border-purple-700/50 flex items-center justify-center gap-1">
                     <span>📊</span> Relatório Faltas (PDF)
-                  </button>
+                  </button>${btnCompartilharPdf('gerarRelatorioFaltasDisciplinarPdf', 'Faltas e Disciplinar')}</div>
                 </div>
               </div>
             </div>
