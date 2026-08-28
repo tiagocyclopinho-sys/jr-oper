@@ -42,6 +42,11 @@ class CloudStore {
     // preenchido, a tela está certa mas o cache está para trás: um F5
     // devolve o aparelho ao retrato velho.
     this._falhaAoGravarCache = null;
+
+    // Ligado quando a cota estoura ao gravar um espelho. A partir daí este
+    // aparelho para de manter as cópias de diagnóstico e usa o espaço para
+    // o dado real. Ver _gravarEspelho().
+    this._espelhosSuspensos = false;
   }
 
   // ---------------------------------------------------------------
@@ -92,10 +97,15 @@ class CloudStore {
     } catch (e) {
       console.warn('[CloudStore] Cota estourada ao gravar o que veio da nuvem — tentando liberar espaço.', e.message);
 
-      let liberou = false;
+      // ORDEM IMPORTA: primeiro as CÓPIAS, depois o histórico.
+      // Os espelhos são duplicata pura do que está aqui mesmo neste
+      // payload; o histórico de auditoria é dado que só existe uma vez.
+      // Jogar fora cópia antes de jogar fora original.
+      let liberou = this._purgarEspelhos() > 0;
+      if (liberou) this._espelhosSuspensos = true;
       try {
-        liberou = !!(window.db && typeof window.db.pruneOldAuditData === 'function'
-                     && window.db.pruneOldAuditData());
+        if (window.db && typeof window.db.pruneOldAuditData === 'function'
+            && window.db.pruneOldAuditData()) liberou = true;
       } catch (ePrune) {
         console.warn('[CloudStore] Falha ao liberar espaço:', ePrune);
       }
@@ -135,6 +145,61 @@ class CloudStore {
     }
   }
 
+  // ---------------------------------------------------------------
+  // ESPELHO: SEGUNDA CÓPIA, PRIMEIRA A SER SACRIFICADA (28/08/2026)
+  //
+  // POR QUE O APARELHO ENCHE. localStorage é limitado a ~5 MB POR ORIGEM
+  // pelo navegador — não pelo disco. Uma máquina com 1 TB livre continua
+  // tendo 5 MB aqui, e é por isso que "a máquina tem espaço de sobra" não
+  // resolve. Dentro desses 5 MB este app guarda:
+  //
+  //   jr_sac_static   ~2,9 MB   catálogo de clientes e produtos
+  //   jr_sac_db          ...    a fatia operacional — A VERDADE local
+  //   25 chaves-espelho  ...    UMA SEGUNDA CÓPIA INTEIRA da mesma coisa
+  //
+  // Ou seja: o operacional cabe duas vezes na mesma cota, e o espelho é a
+  // cópia. Quando falta espaço, sacrificar a cópia é a decisão óbvia — o
+  // espelho se reconstrói sozinho no próximo pull que couber, e nenhum
+  // dado de negócio mora só nele.
+  //
+  // Ao estourar, purgamos TODOS os espelhos de uma vez em vez de só o que
+  // falhou: liberar 40 KB para a próxima tabela estourar em seguida seria
+  // trocar uma tabela congelada por outra. Purgar tudo devolve o espaço do
+  // operacional inteiro de uma vez, e é o que faz o jr_sac_db do fim do
+  // pull voltar a caber.
+  // ---------------------------------------------------------------
+  _gravarEspelho(localKey, conteudo) {
+    if (this._espelhosSuspensos) return false;
+    try {
+      localStorage.setItem(localKey, conteudo);
+      return true;
+    } catch (e) {
+      console.warn(`[CloudStore] Espelho ${localKey} não coube — liberando as cópias para o dado real caber.`, e.message);
+      this._espelhosSuspensos = true;
+      this._purgarEspelhos();
+      return false;
+    }
+  }
+
+  _purgarEspelhos() {
+    let removidos = 0;
+    try {
+      for (const m of CloudStore.MAPA_TABELAS) {
+        if (localStorage.getItem(m.localKey) !== null) {
+          localStorage.removeItem(m.localKey);
+          removidos++;
+        }
+      }
+    } catch (e) {
+      console.warn('[CloudStore] Falha ao liberar os espelhos:', e);
+    }
+    if (removidos) {
+      console.info(`[CloudStore] ${removidos} cópia(s) de diagnóstico removida(s) para liberar espaço. `
+        + 'Nenhum dado de negócio foi perdido: elas são cópia do jr_sac_db e voltam sozinhas quando houver folga.');
+    }
+    return removidos;
+  }
+
   // Diagnóstico rápido: chame jrDiagnosticoSync() no console do navegador.
   getDiagnostico() {
     return {
@@ -171,6 +236,10 @@ class CloudStore {
       // guardar o que baixa: a tela está certa agora e volta a ficar velha
       // no próximo F5. É a explicação de "mesma versão, números diferentes".
       armazenamentoCheio: this._falhaAoGravarCache,
+      // true = este aparelho abriu mão das cópias de diagnóstico para o
+      // dado real caber nos ~5 MB de localStorage. Não é perda de dado;
+      // é o sinal de que a cota está no limite neste aparelho.
+      espelhosSuspensos: !!this._espelhosSuspensos,
       usoDoArmazenamento: (() => {
         try {
           return (window.db && window.db.getStorageUsageInfo) ? window.db.getStorageUsageInfo() : null;
@@ -1938,9 +2007,36 @@ class CloudStore {
         // útil para o diagnóstico), e a fatia operacional só é marcada como
         // mudada se a mesclagem realmente mudar algo em relação ao que este
         // aparelho tem — que é o que dispara o redesenho da tela.
+        // =========================================================
+        // O ESPELHO NÃO PODE DERRUBAR A TABELA (28/08/2026)
+        //
+        // ERA AQUI. Este setItem lançava QuotaExceededError, o catch lá
+        // embaixo engolia com um console.warn, e o `continue` implícito
+        // pulava para a próxima tabela — ou seja, as DUAS linhas de baixo,
+        // que são as que entregam o dado para a tela, nunca rodavam.
+        //
+        // O pull baixava a tabela certa e a descartava inteira para
+        // proteger uma CÓPIA. Porque é isso que o espelho é: uma segunda
+        // cópia de tudo que já está em jr_sac_db, mantida para o
+        // diagnóstico (conferirCamadas) e como último recurso do envio.
+        // Dado de verdade sendo jogado fora por causa de dado derivado.
+        //
+        // E como o estouro acontece na tabela que por acaso passou do
+        // limite, cada aparelho perde uma tabela DIFERENTE, no dia em que
+        // aquela tabela cresceu. É a explicação de três telas com três
+        // números, todas "online", todas na mesma versão: não é a mesma
+        // falha em três lugares, é a mesma mecânica sorteando vítimas
+        // diferentes.
+        //
+        // Agora o espelho tem try/catch próprio e é BEST-EFFORT: se não
+        // couber, ele é sacrificado — e o dado segue para a tela.
+        // =========================================================
         if (espelhoRaw !== mescladoStr) {
-          localStorage.setItem(m.localKey, mescladoStr);
+          this._gravarEspelho(m.localKey, mescladoStr);
         }
+
+        // Fora do if do espelho de propósito: o que a tela mostra não pode
+        // depender de a segunda cópia ter cabido.
         if (localRaw !== mescladoStr) {
           pulledUpdates[m.dbKey] = mesclado;
           anyChange = true;
@@ -2245,7 +2341,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "desempate-atualizado-em-5.7.3";
+CloudStore.BUILD = "espelho-nao-derruba-tabela-5.7.4";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
