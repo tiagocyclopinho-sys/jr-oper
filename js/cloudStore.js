@@ -162,6 +162,11 @@ class CloudStore {
         ? Math.round((Date.now() - this._ultimoPullOkMs) / 1000)
         : null,
       pullEmAndamento: !!this._pullEmAndamento,
+      // 28/08/2026 — A PERGUNTA QUE FALTAVA: "de qual registro esta máquina
+      // está discordando da nuvem?". Enquanto vier vazio, o que a tela
+      // mostra é o que a nuvem tem. Se vier com ids, são exatamente os
+      // registros em que este aparelho está impondo a versão dele.
+      recusandoDaNuvem: this._recusandoDaNuvem || {},
       // 28/08/2026 — se vier preenchido, este aparelho não consegue mais
       // guardar o que baixa: a tela está certa agora e volta a ficar velha
       // no próximo F5. É a explicação de "mesma versão, números diferentes".
@@ -664,6 +669,33 @@ class CloudStore {
     }
   }
 
+  // Quando o registro foi editado pela última vez, em milissegundos, ou
+  // null se não dá para saber.
+  //
+  // Só olha atualizado_em, e de propósito: é o único campo que o app
+  // carimba em TODA edição de verdade (store.js) e em NENHUMA mutação
+  // incidental. criado_em não serve de plano B aqui — ele é igual dos dois
+  // lados e daria empate justamente onde o desempate é necessário.
+  //
+  // As colunas TIMESTAMP WITHOUT TIME ZONE voltam da nuvem sem offset
+  // ('2026-08-28 13:42:42'). Date.parse() de uma string assim varia por
+  // motor (uns leem como local, outros como UTC), e comparar duas leituras
+  // com regras diferentes erraria por 3 horas — o bastante para escolher o
+  // lado errado. Normalizamos o separador e tratamos as duas pontas com a
+  // MESMA regra: sem offset explícito, ambas são lidas como hora de
+  // parede. Como o que importa é a COMPARAÇÃO entre elas, e não o instante
+  // absoluto, ler as duas do mesmo jeito é o que basta.
+  _instanteDeAtualizacao(r) {
+    const bruto = r && r.atualizado_em;
+    if (!bruto) return null;
+    let s = String(bruto).trim();
+    if (!s) return null;
+    if (s.indexOf('T') === -1) s = s.replace(' ', 'T');
+    const temFuso = /(Z|[+-]\d{2}:?\d{2})$/.test(s);
+    const t = Date.parse(temFuso ? s : s + 'Z');
+    return isNaN(t) ? null : t;
+  }
+
   // Item 1 — separa, de uma coleção local, só o que mudou desde a última
   // confirmação da nuvem.
   _separarOQueMudou(tableName, registros) {
@@ -721,7 +753,12 @@ class CloudStore {
     // nenhum: os que ainda não subiram. Idade não importa se o dado só
     // existe aqui.
     const idsSeguros = new Set();
-    let preservados = 0, descartados = 0;
+    let preservados = 0, descartados = 0, cederam = 0;
+    // Ids que este aparelho está recusando da nuvem AGORA. Vai para o
+    // diagnóstico: é a lista que responde "de qual registro esta máquina
+    // discorda, e por quê", sem depender de ninguém ler o console na hora
+    // certa. Ver jrDiagnosticoSync().
+    const recusados = [];
 
     for (const nuvem of cloudData) {
       const id = (nuvem && nuvem.id !== undefined && nuvem.id !== null) ? String(nuvem.id) : null;
@@ -743,14 +780,61 @@ class CloudStore {
         && conhecidos[id] !== undefined
         && this._hashRegistro(local) !== conhecidos[id];
 
+      // =============================================================
+      // DESEMPATE POR atualizado_em (28/08/2026)
+      //
+      // O DEFEITO QUE ISTO FECHA. "Sujo" era decidido SÓ por hash: se o
+      // registro em memória não é byte a byte o que a nuvem confirmou da
+      // última vez, ele é tratado como alteração local e GANHA da nuvem,
+      // para sempre — até um envio confirmá-lo.
+      //
+      // Só que hash não distingue as duas coisas que podem ter mexido no
+      // objeto:
+      //   1. o operador EDITOU o registro (tem de ganhar da nuvem);
+      //   2. qualquer código escreveu um campo no objeto sem que ninguém
+      //      tenha editado nada — uma migração de init(), um campo
+      //      derivado, um relatório, um normalizador.
+      //
+      // No caso 2 o aparelho passa a RECUSAR PERMANENTEMENTE as
+      // atualizações daquele registro. Ele continua aceitando registro
+      // NOVO (id que ele não conhece), então parece que sincroniza — e é
+      // por isso que o sintoma é tão confuso: o aparelho recebe os
+      // lançamentos do dia e ignora a análise que outra pessoa preencheu
+      // numa devolução antiga. Como cada aparelho mexe num conjunto
+      // diferente de registros, cada um trava um subconjunto diferente:
+      // três telas, três números, todas "online" e na mesma versão.
+      // Reproduzido em bancada com os dados de produção.
+      //
+      // atualizado_em separa os dois casos, e é o único campo que separa:
+      // o app o carimba em TODA edição de verdade (store.js, via
+      // agoraIsoBrasilia()) e em nenhuma mutação incidental. Então, quando
+      // os dois lados divergem, ganha o mais recente — que é a regra que
+      // qualquer pessoa da operação já espera.
+      //
+      // CONSERVADOR DE PROPÓSITO, em três pontos: só cede quando a nuvem é
+      // ESTRITAMENTE mais nova (empate mantém o local); só quando os DOIS
+      // lados têm data legível; e nas tabelas sem a coluna atualizado_em
+      // (motoristas, veículos, cargas, usuários...) nada muda, continua a
+      // regra antiga. Editar offline continua protegido: quem editou de
+      // verdade tem o carimbo mais novo.
+      // =============================================================
+      let nuvemMaisNova = false;
       if (sujo) {
+        const tLocal = this._instanteDeAtualizacao(local);
+        const tNuvem = this._instanteDeAtualizacao(nuvem);
+        nuvemMaisNova = (tLocal !== null && tNuvem !== null && tNuvem > tLocal);
+      }
+
+      if (sujo && !nuvemMaisNova) {
         resultado.push(local);
         novosHashes[id] = conhecidos[id];   // segue pendente até subir
         idsSeguros.add(id);
         preservados++;
+        recusados.push(id);
       } else {
         resultado.push(nuvem);
         novosHashes[id] = this._hashRegistro(nuvem);
+        if (sujo) cederam++;
       }
     }
 
@@ -769,9 +853,15 @@ class CloudStore {
       idsSeguros.add(id);
     }
 
-    if (preservados > 0 || descartados > 0) {
-      console.log(`[CloudStore] ${tableName}: ${preservados} registro(s) local(is) preservado(s) por terem mudança não enviada; ${descartados} descartado(s) por terem sido apagados na nuvem.`);
+    if (preservados > 0 || descartados > 0 || cederam > 0) {
+      console.log(`[CloudStore] ${tableName}: ${preservados} registro(s) local(is) preservado(s) por terem mudança não enviada; ${descartados} descartado(s) por terem sido apagados na nuvem; ${cederam} atualizado(s) pela nuvem por ela estar mais recente.`);
     }
+
+    // Guarda para o diagnóstico. Só as tabelas que estão de fato recusando
+    // algo aparecem — tabela em dia sai do mapa em vez de ficar com [].
+    if (!this._recusandoDaNuvem) this._recusandoDaNuvem = {};
+    if (recusados.length) this._recusandoDaNuvem[tableName] = recusados;
+    else delete this._recusandoDaNuvem[tableName];
 
     const final = this._aplicarJanelaOperacional(tableName, resultado, novosHashes, idsSeguros);
 
@@ -2155,7 +2245,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "cache-cheio-5.7.2";
+CloudStore.BUILD = "desempate-atualizado-em-5.7.3";
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
