@@ -2642,7 +2642,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "correcao-devolucao-sac-5.10.0";
+CloudStore.BUILD = "filtros-fila-pendentes-cd-5.11.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS

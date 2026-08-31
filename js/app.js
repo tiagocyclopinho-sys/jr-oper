@@ -3319,6 +3319,26 @@ function aplicarFiltroCd() {
   renderApp();
 }
 
+// ===== FILTROS DA FILA DE PENDENTES DE ENTRADA (CD) =====
+// O painel de baixo (Histórico) já tinha cinco campos; a fila de pendentes não
+// tinha nenhum e é justamente a lista em que o encarregado trabalha o dia todo.
+// A escolha aqui é diferente de propósito: um campo de busca único (a fila é
+// curta, digitar a placa é mais rápido do que escolher em qual dos cinco
+// campos ela vai) mais dois recortes que respondem as perguntas reais do turno
+// — "o que já chegou e dá para conferir agora?" (viagem finalizada) e "o que
+// está parado há tempo demais?" (envelhecimento).
+function setFiltroPendCd(chave, valor) {
+  window['_cdPend' + chave] = valor;
+  renderApp();
+}
+
+function limparFiltrosPendCd() {
+  window._cdPendBusca = '';
+  window._cdPendViagem = '';
+  window._cdPendIdade = '';
+  renderApp();
+}
+
 function toggleItemDivergenciaInputs(idx) {
   const box = document.getElementById(`item-div-box-${idx}`);
   if (!box) return;
@@ -8372,9 +8392,98 @@ function getItensDestinadosFiltrados() {
 }
 
 // ===== MÓDULO: RECEPÇÃO NO CD =====
+
+// Status da viagem vinculada à devolução. Fonte única: o badge da linha e o
+// filtro "Viagem" precisam do MESMO critério — se cada um calculasse do seu
+// jeito, o chip diria "3 finalizadas" e a etiqueta da linha diria outra coisa.
+function statusViagemDaDevolucao(d) {
+  const cargaDev = String(d?.carga_numero || '').trim().toUpperCase();
+  if (!cargaDev) return { chave: 'SEM_VIAGEM', viagem: null };
+  const viagem = (db.getControleViagens() || [])
+    .find(v => String(v.carga || v.carga_numero || '').trim().toUpperCase() === cargaDev);
+  if (!viagem) return { chave: 'SEM_VIAGEM', viagem: null };
+  return {
+    chave: viagem.status_viagem === 'FINALIZADO' ? 'FINALIZADA' : 'EM_ROTA',
+    viagem
+  };
+}
+
+// Há quantos dias a mercadoria está parada no CD sem conferência.
+//
+// O RELÓGIO COMEÇA NA VOLTA DO VEÍCULO (controle_viagens.data_retorno), e NÃO
+// na abertura da devolução. A data de abertura é do SAC: enquanto o caminhão
+// está em rota, não existe nada parado no CD para ninguém conferir, e contar
+// dali faria um veículo que voltou hoje, de uma devolução aberta há seis dias,
+// aparecer em vermelho como atraso do CD. O atraso que este selo mede é o do
+// CD, então a âncora tem de ser o momento em que a mercadoria ficou disponível.
+//
+// Devolve null quando não há data de retorno (viagem não vinculada, ainda em
+// rota, ou data_retorno em branco — ela é preenchida à mão/por importação).
+// null não é zero: é "não há relógio para este item", e quem chama deixa a
+// coluna em branco em vez de chutar. O status da viagem, que já aparece na
+// linha, é o que explica o branco.
+function diasParadoNoCd(d, viagemJaResolvida) {
+  const viagem = viagemJaResolvida !== undefined
+    ? viagemJaResolvida
+    : statusViagemDaDevolucao(d).viagem;
+  if (!viagem) return null;
+  const iso = _paraIsoDeComparacao(viagem.data_retorno);
+  if (!iso) return null;
+  const ms = Date.parse(hojeIsoBrasilia() + 'T00:00:00Z') - Date.parse(iso + 'T00:00:00Z');
+  if (isNaN(ms)) return null;
+  return Math.max(0, Math.round(ms / 86400000));
+}
+
+// Busca única sobre a fila: nº DEV, placa, rota, carga, motorista, cliente, NF
+// e descrição dos itens. Termos separados por espaço somam (E), então
+// "colinas truck" filtra as duas coisas ao mesmo tempo.
+function pendenteCasaComBusca(d, termo) {
+  const t = String(termo || '').trim().toLowerCase();
+  if (!t) return true;
+  const alvo = [
+    d.numero_devolucao, d.numero_protocolo, d.veiculo_placa, d.veiculo_modelo,
+    d.carga_rota, d.carga_numero, d.motorista_nome, d.cliente_nome, d.nota_fiscal,
+    ...(Array.isArray(d.itens) ? d.itens.map(i => `${i.produto_codigo || ''} ${i.produto_descricao || ''}`) : [])
+  ].join(' ').toLowerCase();
+  return t.split(/\s+/).filter(Boolean).every(p => alvo.includes(p));
+}
+
 function renderCdRecepcaoView() {
   const devs = db.getDevolucoes();
   const pendentes = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
+
+  // Filtros da fila de pendentes
+  const fPendBusca  = window._cdPendBusca  || '';
+  const fPendViagem = window._cdPendViagem || '';
+  const fPendIdade  = window._cdPendIdade  || '';
+
+  const pendentesFiltrados = pendentes.filter(d => {
+    if (!pendenteCasaComBusca(d, fPendBusca)) return false;
+    if (fPendViagem && statusViagemDaDevolucao(d).chave !== fPendViagem) return false;
+    if (fPendIdade) {
+      // Sem data de retorno não há relógio: o item fica FORA dos três recortes
+      // de espera, em vez de ser jogado no balde de "atrasadas" por falta de
+      // dado. Ele continua visível em "Qualquer".
+      const dias = diasParadoNoCd(d);
+      if (dias === null) return false;
+      if (fPendIdade === 'HOJE' && dias !== 0) return false;
+      if (fPendIdade === '2' && dias < 2) return false;
+      if (fPendIdade === '5' && dias < 5) return false;
+    }
+    return true;
+  });
+  const pendFiltroAtivo = !!(fPendBusca || fPendViagem || fPendIdade);
+
+  // Contadores dos chips — o número precisa estar no botão, senão o encarregado
+  // clica em "Em rota" só para descobrir que está vazio.
+  const contViagem = { FINALIZADA: 0, EM_ROTA: 0, SEM_VIAGEM: 0 };
+  let contAtraso2 = 0;
+  pendentes.forEach(d => {
+    const { chave, viagem } = statusViagemDaDevolucao(d);
+    contViagem[chave]++;
+    const dias = diasParadoNoCd(d, viagem);
+    if (dias !== null && dias >= 2) contAtraso2++;
+  });
 
   const activeCdSubTab = window._activeCdSubTab || 'recepcao';
 
@@ -8405,15 +8514,28 @@ function renderCdRecepcaoView() {
     // saber se o veículo já finalizou a rota ou ainda está em trânsito —
     // pedido direto: "preciso que fique a informação da viagem 'finalizada'
     // no alerta de retorno pendente".
-    const cargaDev = String(d.carga_numero || '').trim().toUpperCase();
-    const viagemAssociada = cargaDev
-      ? (db.getControleViagens() || []).find(v => String(v.carga || v.carga_numero || '').trim().toUpperCase() === cargaDev)
-      : null;
+    const { chave: chaveViagem, viagem: viagemAssociada } = statusViagemDaDevolucao(d);
     const statusViagemBadge = viagemAssociada
-      ? (viagemAssociada.status_viagem === 'FINALIZADO'
+      ? (chaveViagem === 'FINALIZADA'
           ? '<span class="inline-block mt-0.5 bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold">✅ Viagem Finalizada</span>'
           : `<span class="inline-block mt-0.5 bg-blue-950 text-blue-300 border border-blue-700 px-1.5 py-0.5 rounded text-[9px] font-bold">🚚 ${viagemAssociada.status_viagem || 'Em Rota'}</span>`)
       : '';
+
+    // Envelhecimento só na fila de pendentes: no histórico a linha já mostra a
+    // data de entrada, e "há 40 dias" ali não quer dizer nada.
+    //
+    // Sem data de retorno o selo sai EM BRANCO, de propósito: o veículo ainda
+    // não voltou (ou ninguém lançou a volta), então não existe parada no CD
+    // para contar. O badge de status da viagem, logo na primeira coluna, é o
+    // que explica o branco — repetir "sem data" aqui seria ruído.
+    const diasParado = showBtn ? diasParadoNoCd(d, viagemAssociada) : null;
+    const seloIdade = (!showBtn || diasParado === null) ? '' : (
+      diasParado >= 5
+        ? `<span class="block mt-1 bg-red-950 text-red-300 border border-red-800 px-2 py-0.5 rounded text-[9px] font-bold">⏱ parado há ${diasParado} dias</span>`
+        : diasParado >= 2
+          ? `<span class="block mt-1 bg-orange-950 text-orange-300 border border-orange-800 px-2 py-0.5 rounded text-[9px] font-bold">⏱ parado há ${diasParado} dias</span>`
+          : `<span class="block mt-1 text-slate-500 text-[9px] font-semibold">⏱ ${diasParado === 0 ? 'voltou hoje' : 'há 1 dia'}</span>`
+    );
     return `
     <tr class="hover:bg-slate-800/40">
       <td class="p-3">
@@ -8436,7 +8558,7 @@ function renderCdRecepcaoView() {
       </td>
       <td class="p-3">
         ${d.status_fechamento === 'PENDENTE_FISICO'
-          ? '<span class="bg-amber-500/20 text-amber-300 border border-amber-500/50 px-2 py-1 rounded text-[10px] font-black animate-pulse block">⚠️ PENDENTE</span>'
+          ? `<span class="bg-amber-500/20 text-amber-300 border border-amber-500/50 px-2 py-1 rounded text-[10px] font-black animate-pulse block">⚠️ PENDENTE</span>${seloIdade}`
           : `<span class="bg-emerald-900/50 text-emerald-300 border border-emerald-700/50 px-2 py-1 rounded text-[10px] font-bold block">✔ ${d.status_fechamento}</span>`}
       </td>
       <td class="p-3 hidden sm:table-cell font-semibold text-emerald-400 text-[11px]">${formatarDestinoLabel(d.destino_cd)}</td>
@@ -8486,17 +8608,57 @@ function renderCdRecepcaoView() {
               <h3 class="font-bold text-white text-sm">⚠️ Pendentes de Entrada</h3>
               <p class="text-[10px] text-slate-400 mt-0.5">Devoluções aguardando conferência física no CD</p>
             </div>
-            <span class="bg-amber-500/20 text-amber-300 border border-amber-500/50 px-3 py-1 rounded-full text-xs font-black">${pendentes.length} pendente${pendentes.length!==1?'s':''}</span>
+            <span class="bg-amber-500/20 text-amber-300 border border-amber-500/50 px-3 py-1 rounded-full text-xs font-black">${pendFiltroAtivo ? `${pendentesFiltrados.length} de ${pendentes.length}` : `${pendentes.length} pendente${pendentes.length!==1?'s':''}`}</span>
           </div>
+
+          <!-- FILTROS DA FILA DE PENDENTES -->
+          <div class="p-4 border-b border-slate-800 space-y-3 bg-slate-950/40">
+            <div class="flex flex-col sm:flex-row gap-2">
+              <input type="text" id="cd-pend-busca" value="${fPendBusca}"
+                placeholder="🔎 Buscar por Nº DEV, placa, rota, carga, motorista, cliente, NF ou produto..."
+                class="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs"
+                oninput="forcarMaiuscula(this); window._cdPendBusca=this.value; renderApp()">
+              ${pendFiltroAtivo ? `<button onclick="limparFiltrosPendCd()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold px-3 py-2 rounded-lg text-xs shrink-0 transition">✖ Limpar filtros</button>` : ''}
+            </div>
+
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-[10px] text-slate-500 font-bold uppercase mr-1">Viagem:</span>
+              ${[
+                ['',            `Todas (${pendentes.length})`,                     'amber'],
+                ['FINALIZADA',  `✅ Finalizada (${contViagem.FINALIZADA})`,        'emerald'],
+                ['EM_ROTA',     `🚚 Em rota (${contViagem.EM_ROTA})`,              'blue'],
+                ['SEM_VIAGEM',  `❔ Sem viagem (${contViagem.SEM_VIAGEM})`,        'slate']
+              ].map(([val, label, cor]) => `
+                <button onclick="setFiltroPendCd('Viagem','${val}')"
+                  class="px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${fPendViagem === val
+                    ? `bg-${cor}-700 text-white border-${cor}-500 shadow`
+                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'}">${label}</button>`).join('')}
+
+              <span class="text-[10px] text-slate-500 font-bold uppercase ml-3 mr-1" title="Contado a partir da data de retorno do veículo, não da abertura da devolução">Parado no CD:</span>
+              ${[
+                ['',     'Qualquer',                       'amber'],
+                ['HOJE', 'Voltou hoje',                    'blue'],
+                ['2',    `⏱ +2 dias (${contAtraso2})`,     'orange'],
+                ['5',    '🔥 +5 dias',                     'red']
+              ].map(([val, label, cor]) => `
+                <button onclick="setFiltroPendCd('Idade','${val}')"
+                  class="px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${fPendIdade === val
+                    ? `bg-${cor}-700 text-white border-${cor}-500 shadow`
+                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'}">${label}</button>`).join('')}
+            </div>
+          </div>
+
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs text-slate-300">
               <thead class="bg-slate-950 text-slate-400 uppercase text-[10px]">
                 <tr>${rowCols}<th class="p-3">Status</th><th class="p-3 hidden sm:table-cell">Destino Geral</th><th class="p-3 text-right">Ação</th></tr>
               </thead>
               <tbody class="divide-y divide-slate-800">
-                ${pendentes.length === 0
-                  ? `<tr><td colspan="6" class="p-6 text-center text-slate-500">✅ Nenhum retorno pendente.</td></tr>`
-                  : pendentes.map(d => buildRow(d, true)).join('')}
+                ${pendentesFiltrados.length === 0
+                  ? `<tr><td colspan="6" class="p-6 text-center text-slate-500">${pendentes.length === 0
+                      ? '✅ Nenhum retorno pendente.'
+                      : 'Nenhum pendente encontrado para o filtro aplicado. <button onclick="limparFiltrosPendCd()" class="underline text-amber-400 font-bold">Limpar filtros</button>'}</td></tr>`
+                  : pendentesFiltrados.map(d => buildRow(d, true)).join('')}
               </tbody>
             </table>
           </div>
