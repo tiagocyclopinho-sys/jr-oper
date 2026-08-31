@@ -628,6 +628,7 @@ class CloudStore {
   // aparece em jrDiagnosticoSync(), e é ela que identifica o aparelho que
   // carregava os 247 fantasmas, sem precisar sair andando pela empresa.
   _aplicarGuardaDeEscrita(tableName, registros) {
+    if (tableName === 'usuarios') return this._guardaDeUsuarios(registros);
     if (tableName !== 'controle_viagens') return registros;
 
     const aprovados = [];
@@ -655,6 +656,42 @@ class CloudStore {
         `"data_saida" não é data. Este aparelho tem cache de uma build antiga (fantasmas da ETAPA 0). ` +
         (aprovados.length > 0 ? `Os outros ${aprovados.length} seguiram normalmente. ` : 'Nada deste lote foi enviado. ') +
         `Amostra: ${amostra.join(' | ')}`
+      );
+    }
+    return aprovados;
+  }
+
+  // Guarda na escrita de `usuarios` (31/08/2026) — irmã da de cima, e pelo
+  // mesmo motivo: impedir que UM registro podre leve o lote inteiro junto.
+  //
+  // nome, email, senha_hash e role são NOT NULL no banco. Um cadastro
+  // legado a que falte qualquer um deles derruba o POST com 23502 — e o
+  // lote leva junto o cadastro de quem usa ESTE aparelho. Foi assim que
+  // cinco pessoas ficaram existindo só no próprio PC (ver o comentário da
+  // lista branca de `usuarios`, no fim do arquivo).
+  //
+  // A escolha aqui é deliberada: o registro incompleto é lixo de build
+  // antiga, e ninguém consegue fazer login com ele de qualquer jeito (o
+  // login compara senha_hash). O cadastro de quem está trabalhando agora,
+  // não é. Deixa o lixo para trás e deixa o resto passar.
+  _guardaDeUsuarios(registros) {
+    const OBRIGATORIAS = ['nome', 'email', 'senha_hash', 'role'];
+    const vazio = v => (v === undefined || v === null || String(v).trim() === '');
+
+    const aprovados = [];
+    const recusados = [];
+    for (const r of registros) {
+      const faltando = r ? OBRIGATORIAS.filter(c => vazio(r[c])) : OBRIGATORIAS;
+      if (faltando.length > 0) recusados.push({ r, faltando });
+      else aprovados.push(r);
+    }
+
+    if (recusados.length > 0) {
+      console.warn(
+        `[CloudStore] GUARDA NA ESCRITA: ${recusados.length} de ${registros.length} registros de usuarios ` +
+        `recusados por falta de coluna obrigatória (NOT NULL no banco). São cadastros incompletos de build ` +
+        `antiga, e sem eles o resto do lote sobe normalmente. ` +
+        `Amostra: ${recusados.slice(0, 5).map(x => `${x.r && (x.r.nome || x.r.id)}: falta ${x.faltando.join(', ')}`).join(' | ')}`
       );
     }
     return aprovados;
@@ -2443,6 +2480,13 @@ class CloudStore {
     (spec.texto || []).forEach(c => { out[c] = vazio(r[c]) ? null : String(r[c]); });
     (spec.numero || []).forEach(c => { out[c] = vazio(r[c]) ? null : Number(r[c]); });
     (spec.booleano || []).forEach(c => { out[c] = !!r[c]; });
+    // Booleano cuja AUSÊNCIA vale true — hoje só usuarios.ativo (31/08/2026).
+    // Com o `!!` de cima, um registro legado sem a chave `ativo` subiria
+    // como false, e `ativo: false` tranca a pessoa no login com "Usuário
+    // desativado. Contate o administrador." (store.js, login()). O app
+    // inteiro já lê essa coluna assim: só `=== false` é inativo, ausente é
+    // ativo. A projeção passa a ler igual.
+    (spec.booleanoTrue || []).forEach(c => { out[c] = r[c] !== false; });
     (spec.data || []).forEach(c => { out[c] = vazio(r[c]) ? null : String(r[c]); });
     return out;
   }
@@ -2598,7 +2642,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "index-carrega-catalogostore-5.9.2";
+CloudStore.BUILD = "usuarios-lista-branca-5.9.3";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -2650,6 +2694,35 @@ CloudStore.COLUNAS_POR_TABELA = {
     numero:   ['valor_unitario_padrao', 'deleted_by_usuario_id'],
     booleano: ['is_deleted'],
     data:     ['deleted_at']
+  },
+  // usuarios (31/08/2026) — o motivo 1 acima, de novo, e caro.
+  //
+  // Em 31/08/2026, CINCO pessoas (Lucas, Melquiades, Victor Hugo, Itajaci e
+  // Robson) trabalhavam no app sem existir na tabela `usuarios`. O cadastro
+  // de cada uma vivia só no localStorage do próprio aparelho.
+  //
+  // O caminho: `usuarios` não tinha lista branca, então o objeto local subia
+  // INTEIRO. Basta UMA chave legada de build antiga (campo que já não é
+  // coluna) para o PostgREST recusar o lote todo com PGRST204 — e o
+  // igualador de chaves logo acima, que existe para o PGRST102, ESPALHA essa
+  // chave para todos os objetos do lote, então um registro podre condena o
+  // lote inteiro, para sempre, em silêncio.
+  //
+  // O estrago não é "um cadastro não sincronizou". É que login e cadastro
+  // leem só o cache local: a pessoa aparece cadastrada na tela dela,
+  // invisível para o administrador, sem conseguir se recadastrar (addUsuario
+  // recusa pelo e-mail que ele mesmo achou no cache) e sem ninguém conseguir
+  // redefinir a senha dela — a tela "Logins e Senhas" também não a enxerga.
+  // Quem estava de férias durante as atualizações caiu exatamente nisso.
+  //
+  // Só as colunas que o APP é dono. `criado_em` e `setor_id` ficam de fora
+  // de propósito, pelo mesmo motivo do `atualizado_em` no comentário acima:
+  // a projeção envia SEMPRE todas as colunas que declara, então declarar
+  // `criado_em` faria todo upsert sobrescrever com null o carimbo que o
+  // DEFAULT do banco pôs no INSERT.
+  usuarios: {
+    texto:        ['nome', 'email', 'senha_hash', 'role', 'cargo', 'departamento'],
+    booleanoTrue: ['ativo']
   }
 };
 

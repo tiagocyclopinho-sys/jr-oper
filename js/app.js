@@ -667,6 +667,32 @@ function renderGestaoUsuariosView() {
   if (!areaAdminDesbloqueada()) return renderPortaoAdmin('Logins e Senhas',
     'Esta área requer autorização do administrador. Aqui é possível editar cadastros de usuário, redefinir senhas e ativar/desativar acessos.');
 
+  // Puxa a nuvem antes de listar (31/08/2026).
+  //
+  // Esta tela lia SÓ o cache deste aparelho. Quem se cadastrou num aparelho
+  // cujo envio de `usuarios` estava sendo recusado não aparecia aqui — e
+  // como é DAQUI que se redefine senha e se ativa/desativa acesso, a única
+  // forma de socorrer essa pessoa era ir fisicamente até a máquina dela,
+  // porque o cadastro só existia lá. Com o pull, o administrador enxerga da
+  // própria mesa todo mundo que a nuvem conhece.
+  //
+  // O redesenho NÃO acontece aqui: quando o pull traz novidade, o cloudStore
+  // dispara 'jr-cloud-sync' e o listener no topo deste arquivo chama
+  // renderApp() sozinho — inclusive adiando o redesenho se houver formulário
+  // sendo preenchido. Duplicar isso aqui só criaria uma segunda regra para
+  // envelhecer.
+  //
+  // A trava de 15s existe porque render é chamado a cada redesenho da tela:
+  // sem ela, um pull que trouxesse novidade dispararia renderApp(), que
+  // pediria outro pull, em laço.
+  if (window.cloudStore && window.cloudStore.isConfigured()) {
+    const agora = Date.now();
+    if (!renderGestaoUsuariosView._ultimoPull || (agora - renderGestaoUsuariosView._ultimoPull) > 15000) {
+      renderGestaoUsuariosView._ultimoPull = agora;
+      window.cloudStore.syncCloudToLocal().catch(() => {});
+    }
+  }
+
   const usuarios = (db.data.usuarios || []).slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome)));
 
   return `
