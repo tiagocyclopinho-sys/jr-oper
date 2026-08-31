@@ -1388,7 +1388,14 @@ class Store {
       const ajudante = ajudantesArr.find(a => a.id == carga.ajudante_id) || {};
       const cliente = clientesArr.find(cli => cli.id == d.cliente_id) || {};
       
-      const itens = (this.data.itens_devolucao || []).filter(i => i.ocorrencia_devolucao_id == d.id).map(i => {
+      // !i.is_deleted entrou junto com updateDevolucaoSac (31/08/2026). Antes
+      // dele nao fazia falta: o unico jeito de um item ficar marcado era a
+      // devolucao inteira ir para a Lixeira (deleteDevolucao marca os filhos
+      // junto), e ai o pai ja saia desta lista no filtro de cima. Com a
+      // correcao de item, a lapide passou a existir SOZINHA - item trocado
+      // numa devolucao viva - e sem este filtro o produto errado continuaria
+      // aparecendo em todas as telas depois de corrigido.
+      const itens = (this.data.itens_devolucao || []).filter(i => i.ocorrencia_devolucao_id == d.id && !i.is_deleted).map(i => {
         const prod = (this.data.produtos || []).find(p => p.id == i.produto_id || String(p.codigo_produto) === String(i.produto_id)) || {};
         let valorUnit = (i.valor_unitario !== undefined && i.valor_unitario !== null && i.valor_unitario !== '') ? parseFloat(i.valor_unitario) : 0;
         if ((!valorUnit || isNaN(valorUnit)) && prod) {
@@ -1587,6 +1594,202 @@ class Store {
       success: true,
       protocolo: item.numero_devolucao || item.numero_protocolo || `ID #${id}`,
       itens: itensMarcados
+    };
+  }
+
+  // ---------------------------------------------------------------
+  // CORRECAO DA DEVOLUCAO ABERTA PELO SAC - 31/08/2026
+  //
+  // POR QUE FALTAVA. addDevolucao gravava itens_devolucao com push e ninguem
+  // mais tocava naquelas linhas: updateInvestigacao mexe na apuracao (causa
+  // raiz, separador, acao tomada) e updateDestinoCd mexe no destino fisico.
+  // Produto, quantidade, valor e motivo do item eram gravados uma vez e
+  // ficavam. Digitou o item errado na abertura, a unica saida era
+  // deleteDevolucao + reabrir - e ai a devolucao ganha numero novo
+  // (getNextSequenceNumber varre ate os excluidos, entao o numero antigo nao
+  // volta e fica um buraco na sequencia), o SAC redigita carga, cliente, NF,
+  // detalhamento e midia, e quem ja recebeu o protocolo antigo precisa ser
+  // avisado da troca.
+  //
+  // SO ANTES DO CD RECEBER. Depois de updateDestinoCd o item carrega
+  // destino_item, data_validade e status_negociacao - decisao tomada com a
+  // mercadoria na mao. Reescrever o item ali apagaria isso, entao a porta
+  // fecha em status_fechamento != 'PENDENTE_FISICO' e a correcao passa a ser
+  // a do proprio CD (openEditarItemDestinoModal).
+  //
+  // ITEM REMOVIDO VIRA LAPIDE, NUNCA splice. _mesclarPorRegistro (cloudStore)
+  // deduz exclusao de "id que eu conheco e nao veio da nuvem", o que so vale
+  // porque a leitura traz a tabela inteira: linha tirada so daqui, que
+  // continua la, volta no ciclo seguinte de 30 segundos. E o mesmo motivo
+  // pelo qual deleteDevolucao marca os filhos em vez de remove-los.
+  //
+  // NAO CRIA CAMPO NOVO no registro. O envio manda o objeto como ele esta, e
+  // coluna inexistente derruba o lote inteiro com PGRST204 - foi o que
+  // 'rota_nome' fez com cargas em 21/08/2026, levando junto toda devolucao
+  // aberta contra carga nova. Por isso o motivo da correcao vive em
+  // audit_logs.diff (JSONB, aceita qualquer forma) e nao numa coluna nova.
+  updateDevolucaoSac(id, dados, itens) {
+    const dev = (this.data.ocorrencias_devolucao || []).find(d => d.id == id);
+    if (!dev) return { success: false, message: 'Devolução não encontrada neste aparelho.' };
+    if (dev.is_deleted) return { success: false, message: 'Esta devolução está na Lixeira. Restaure-a em Governança & Lixeira antes de corrigir.' };
+
+    const statusAtual = dev.status_fechamento || 'PENDENTE_FISICO';
+    if (statusAtual !== 'PENDENTE_FISICO') {
+      return {
+        success: false,
+        message: 'O CD já recebeu o retorno físico desta devolução. A partir daqui a correção do item é feita na tela Retorno Físico CD, no ✏️ do próprio item.'
+      };
+    }
+
+    const entrada = dados || {};
+    const agora = agoraIsoBrasilia();
+    const usuarioId = this.currentUser ? this.currentUser.id : null;
+    const usuarioNome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+
+    const resumoItem = i => ({
+      id: i.id,
+      produto_id: i.produto_id,
+      quantidade: i.quantidade,
+      valor_unitario: i.valor_unitario,
+      motivo_item: i.motivo_item
+    });
+
+    const itensAntes = (this.data.itens_devolucao || [])
+      .filter(i => i.ocorrencia_devolucao_id == id && !i.is_deleted)
+      .map(resumoItem);
+
+    const cabecalhoAntes = {
+      cliente_nome: dev.cliente_nome,
+      nota_fiscal: dev.nota_fiscal,
+      motivo_reclamado: dev.motivo_reclamado,
+      forma_acerto: dev.forma_acerto,
+      valor_reclamado: dev.valor_reclamado
+    };
+
+    // Snapshot ANTES de qualquer escrita. Versionar devolucao e barato desde
+    // 26/08/2026: _podarMidiaDaVersao troca o base64 das fotos por um marcador
+    // de tamanho, entao o historico nao cresce em megabytes por edicao.
+    //
+    // A versao leva so o registro pai. itens_devolucao e outra colecao e
+    // rollbackVersion grava dados_json de volta na colecao inteira - pendurar
+    // os itens aqui faria o rollback escrever um campo que a tabela nao tem.
+    // O antes/depois dos itens fica no audit_logs, que e justamente o que o
+    // "📜 Ver histórico" do card le (abrirHistoricoRegistro).
+    this.saveVersion('ocorrencias_devolucao', dev);
+
+    const semItens = entrada.sem_itens === true || entrada.sem_itens === 'true';
+
+    dev.cliente_id = parseInt(entrada.cliente_id) || null;
+    dev.cliente_nome = String(entrada.cliente_nome || '').toUpperCase().trim();
+    dev.nota_fiscal = String(entrada.nota_fiscal || '').toUpperCase().trim();
+    dev.motivo_reclamado = String(entrada.motivo_reclamado || '').toUpperCase().trim();
+    dev.forma_acerto = String(entrada.forma_acerto || '').toUpperCase().trim();
+    dev.cliente_emite_nf = entrada.cliente_emite_nf === 'sim' || entrada.cliente_emite_nf === true;
+    dev.valor_reclamado = parseFloat(entrada.valor_reclamado) || 0;
+    dev.detalhamento_texto = String(entrada.detalhamento_texto || '').toUpperCase().trim();
+    dev.sem_itens = semItens;
+    dev.observacao_sem_itens = semItens ? String(entrada.observacao_sem_itens || '').toUpperCase().trim() : '';
+
+    if (!this.data.itens_devolucao) this.data.itens_devolucao = [];
+    const enviados = semItens ? [] : (Array.isArray(itens) ? itens : []);
+    const idsMantidos = new Set();
+    let criados = 0, atualizados = 0, removidos = 0;
+
+    enviados.forEach(f => {
+      // A busca ignora de proposito o que ja esta com lapide: id reaproveitado
+      // de item excluido entraria como linha nova, nunca como ressurreicao.
+      const existente = (f.id !== undefined && f.id !== null && String(f.id) !== '')
+        ? this.data.itens_devolucao.find(i => String(i.id) === String(f.id) && i.ocorrencia_devolucao_id == id && !i.is_deleted)
+        : null;
+
+      // Os mesmos campos que addDevolucao grava, com as mesmas conversoes, e
+      // so eles - de proposito, nos tres pontos:
+      //
+      // 1. produto_codigo/produto_descricao chegam do formulario mas sao
+      //    derivados (getDevolucoes os remonta a partir de produtos) e nao tem
+      //    coluna na tabela: gravar aqui seria o PGRST204 do cabecalho.
+      // 2. parseInt em produto_id, e nao parseFloat nem o texto cru: a coluna
+      //    e BIGINT (schema.sql, "ALTER COLUMN produto_id TYPE BIGINT"), entao
+      //    produto digitado a mao e nao encontrado no cadastro vira nulo aqui
+      //    exatamente como vira na abertura. Deixar passar o texto faria a
+      //    correcao gerar uma linha que a criacao nunca geraria, e quebraria
+      //    o envio inteiro da tabela.
+      // 3. parseInt na quantidade porque a coluna e INT. Fracao digitada e
+      //    truncada, igual na abertura - corrigir isso e mexer no tipo da
+      //    coluna, nao neste caminho.
+      const campos = {
+        produto_id: parseInt(f.produto_id),
+        quantidade: parseInt(f.quantidade) || 1,
+        valor_unitario: parseFloat(f.valor_unitario) || 0,
+        motivo_item: String(f.motivo_item || '').toUpperCase().trim()
+      };
+
+      if (existente) {
+        Object.assign(existente, campos);
+        existente.atualizado_em = agora;
+        idsMantidos.add(String(existente.id));
+        atualizados++;
+      } else {
+        const novo = Object.assign({ id: this.gerarIdUnico(), ocorrencia_devolucao_id: id }, campos);
+        novo.atualizado_em = agora;
+        this.data.itens_devolucao.push(novo);
+        idsMantidos.add(String(novo.id));
+        criados++;
+      }
+    });
+
+    this.data.itens_devolucao.forEach(i => {
+      if (i.ocorrencia_devolucao_id == id && !i.is_deleted && !idsMantidos.has(String(i.id))) {
+        i.is_deleted = true;
+        i.deleted_at = agora;
+        i.deleted_by_usuario_id = usuarioId;
+        i.deleted_by_nome = usuarioNome;
+        i.atualizado_em = agora;
+        removidos++;
+      }
+    });
+
+    const itensDepois = this.data.itens_devolucao
+      .filter(i => i.ocorrencia_devolucao_id == id && !i.is_deleted)
+      .map(resumoItem);
+
+    dev.atualizado_em = agora;
+    dev.atualizado_por = usuarioNome;
+
+    // Reabre a tratativa SO se ja havia apuracao. updateInvestigacao reabre
+    // sempre porque la, por definicao, alguem acabou de apurar; aqui a
+    // devolucao pode nunca ter passado pela Analise, e marcar PENDENTE_GESTOR
+    // colocaria na mesa do gestor um chamado sem causa raiz nenhuma. Quando ha
+    // apuracao, reabrir e obrigatorio: ela foi feita sobre o item antigo.
+    if (dev.motivo_real_causa_raiz) dev.status_gestao = 'PENDENTE_GESTOR';
+
+    this.logAudit({
+      acao: 'EDICAO_DEVOLUCAO_SAC',
+      modulo: 'ocorrencias_devolucao',
+      registro_id: id,
+      diff: {
+        motivo_correcao: String(entrada.motivo_correcao || '').toUpperCase().trim(),
+        antes: Object.assign({}, cabecalhoAntes, { itens: itensAntes }),
+        depois: {
+          cliente_nome: dev.cliente_nome,
+          nota_fiscal: dev.nota_fiscal,
+          motivo_reclamado: dev.motivo_reclamado,
+          forma_acerto: dev.forma_acerto,
+          valor_reclamado: dev.valor_reclamado,
+          itens: itensDepois
+        }
+      }
+    });
+
+    this.save();
+
+    return {
+      success: true,
+      protocolo: dev.numero_devolucao || dev.numero_protocolo || `ID #${id}`,
+      criados,
+      atualizados,
+      removidos,
+      reabriuGestor: !!dev.motivo_real_causa_raiz
     };
   }
 

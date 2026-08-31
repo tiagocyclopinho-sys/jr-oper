@@ -7120,29 +7120,49 @@ function setupItemRows() {
   if (tbody && tbody.children.length === 0) addItemRow();
 }
 
-function addItemRow() {
+// `prefill` entrou com a correção de devolução (31/08/2026) e é opcional: a
+// Abertura continua chamando addItemRow() sem argumento e ganhando a linha em
+// branco de sempre. Quando vem preenchido, carrega também o `.item-db-id` —
+// o id da linha em itens_devolucao. É por ele que updateDevolucaoSac
+// distingue "este item já existe, atualiza" de "este é novo, insere": sem
+// esse id, salvar uma correção marcaria TODOS os itens antigos com lápide e
+// recriaria tudo com id novo, quebrando a ligação com o que o CD já viu.
+function addItemRow(prefill) {
   const tbody = document.getElementById('items-tbody');
   if (!tbody) return;
   const rowId = Date.now() + Math.floor(Math.random()*100);
-  const motivosList = (db && db.data && db.data.motivos_devolucao && db.data.motivos_devolucao.length > 0) 
-    ? db.data.motivos_devolucao 
+  const motivosList = (db && db.data && db.data.motivos_devolucao && db.data.motivos_devolucao.length > 0)
+    ? db.data.motivos_devolucao
     : (INITIAL_DATA.motivos_devolucao || []);
+
+  const p = prefill || {};
+  const attr = v => String(v === undefined || v === null ? '' : v).replace(/"/g, '&quot;');
+  const motivoAtual = String(p.motivo_item || '').toUpperCase().trim();
+  // Motivo gravado que saiu do cadastro (ou nunca esteve nele) vira opção
+  // própria: sem isto o select abriria em "-- Selecione o Motivo --" e uma
+  // correção de quantidade apagaria silenciosamente o motivo do item.
+  const motivosRender = (motivoAtual && motivosList.indexOf(motivoAtual) === -1)
+    ? [motivoAtual].concat(motivosList)
+    : motivosList;
+
   const tr = document.createElement('tr');
   tr.id = `item-row-${rowId}`;
   tr.className = 'relative';
   tr.innerHTML = `
     <td class="p-1.5 relative">
       <input type="text" list="produtos-list" placeholder="Digite código ou descrição (Ex: 25555, ASA)..."
+        value="${attr(p.produto_busca)}"
         oninput="forcarMaiuscula(this); onProdutoSelect(this, '${rowId}')" onchange="onProdutoSelect(this, '${rowId}')" autocomplete="off"
         class="item-prod-busca w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs focus:border-emerald-500 focus:outline-none">
-      <input type="hidden" class="item-prod-id">
+      <input type="hidden" class="item-prod-id" value="${attr(p.produto_id)}">
+      <input type="hidden" class="item-db-id" value="${attr(p.item_id)}">
     </td>
-    <td class="p-1.5"><input type="number" value="1" min="0.01" step="0.01" onchange="calcTotalValores()" class="item-qtd w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></td>
-    <td class="p-1.5"><input type="number" step="0.01" value="0.00" onchange="calcTotalValores()" class="item-val w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></td>
+    <td class="p-1.5"><input type="number" value="${attr(p.quantidade !== undefined && p.quantidade !== null ? p.quantidade : 1)}" min="0.01" step="0.01" onchange="calcTotalValores()" class="item-qtd w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs"></td>
+    <td class="p-1.5"><input type="number" step="0.01" value="${attr(parseFloat(p.valor_unitario || 0).toFixed(2))}" onchange="calcTotalValores()" class="item-val w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs"></td>
     <td class="p-1.5">
       <select class="item-motivo w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
         <option value="">-- Selecione o Motivo --</option>
-        ${motivosList.map(m => `<option value="${m}">${m}</option>`).join('')}
+        ${motivosRender.map(m => `<option value="${m}" ${m === motivoAtual ? 'selected' : ''}>${m}</option>`).join('')}
       </select>
     </td>
     <td class="p-1.5 text-center"><button type="button" onclick="removeItemRow('${rowId}')" class="text-red-400 hover:text-red-300 font-bold text-base leading-none">✕</button></td>`;
@@ -7462,6 +7482,10 @@ function renderSacInvestigacaoView() {
                 <div class="text-base font-black text-emerald-400">R$ ${d.valor_reclamado.toFixed(2)}</div>
                 <div class="text-[10px] text-slate-400">${d.forma_acerto}</div>
               </div>
+              ${(d.status_fechamento || 'PENDENTE_FISICO') === 'PENDENTE_FISICO' ? `
+                <button onclick="editarDevolucaoSacModal('${d.id}')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-800/70 shadow-sm transition flex items-center gap-1" title="Corrigir cliente, NF e itens sem perder o número do protocolo">
+                  ✏️ Corrigir Devolução
+                </button>` : ''}
               ${d.motivo_real_causa_raiz ? `
                 <button onclick="editarInvestigacaoModal('${d.id}')" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1">
                   ✏️ Editar Análise
@@ -15879,6 +15903,292 @@ function deleteDevolucaoSac(id) {
   } else {
     alert(res.message || 'Erro ao excluir a devolução.');
   }
+}
+
+// ===== CORREÇÃO DA DEVOLUÇÃO ABERTA PELO SAC (31/08/2026) =====
+//
+// A saída para "abri a devolução com o item errado" era deleteDevolucaoSac +
+// reabrir, e isso custa o número: getNextSequenceNumber varre até os
+// excluídos, então a devolução refeita nasce com número novo e um buraco na
+// sequência, enquanto o CD e o financeiro já anotaram o antigo. Ver o
+// cabeçalho de db.updateDevolucaoSac() para o resto do porquê.
+//
+// REUSA DE PROPÓSITO OS IDs DA TELA DE ABERTURA — sac-cliente-*, items-tbody,
+// produtos-list, sac-valor-reclamado, chk-sem-itens, obs-sem-itens,
+// sem-itens-box, items-table-container, btn-add-item. Com eles, filtrarClientes(),
+// selecionarCliente(), limparCliente(), addItemRow(), onProdutoSelect(),
+// removeItemRow(), calcTotalValores() e toggleSemItens() funcionam aqui sem
+// uma linha duplicada.
+//
+// ISSO SÓ É SEGURO porque o botão que abre este modal vive na tela de Análise
+// & Causa Raiz, que não tem nenhum desses ids. Se um dia ele for colocado
+// também na tela de Abertura, os ids passam a existir duas vezes na página e
+// essas funções — todas elas usam getElementById, que devolve o primeiro —
+// vão escrever no formulário de trás. Nesse dia, prefixar os ids aqui e
+// parametrizar as funções deixa de ser opcional.
+function editarDevolucaoSacModal(id) {
+  const dev = (db.getDevolucoes ? db.getDevolucoes() : []).find(d => d.id == id);
+  if (!dev) { alert('Devolução não localizada.'); return; }
+
+  // A mesma porta que updateDevolucaoSac() fecha no store. Aqui é só para o
+  // usuário ler o motivo antes de digitar tudo; a trava que vale é a de lá.
+  if ((dev.status_fechamento || 'PENDENTE_FISICO') !== 'PENDENTE_FISICO') {
+    alert('⚠️ O CD já recebeu o retorno físico desta devolução.\n\nOs itens têm destino, validade e negociação registrados com a mercadoria na mão — reescrevê-los aqui apagaria essa conferência.\n\nA correção agora é feita na tela "Retorno Físico CD", no ✏️ do próprio item.');
+    return;
+  }
+
+  const container = document.getElementById('modal-container');
+  if (!container) return;
+
+  const motivos = (db.data.motivos_devolucao || []).slice();
+  const motivoAtual = String(dev.motivo_reclamado || '').toUpperCase().trim();
+  if (motivoAtual && motivos.indexOf(motivoAtual) === -1) motivos.unshift(motivoAtual);
+
+  const attr = v => String(v === undefined || v === null ? '' : v).replace(/"/g, '&quot;');
+  const clienteCod = (dev.cliente_codigo && String(dev.cliente_codigo) !== 'N/A') ? String(dev.cliente_codigo) : '';
+  const clienteLabel = clienteCod ? `${clienteCod} - ${dev.cliente_nome}` : String(dev.cliente_nome || '');
+  const temAnalise = !!dev.motivo_real_causa_raiz;
+
+  container.innerHTML = `
+    <div class="bg-slate-900 border border-blue-800/60 rounded-2xl max-w-3xl w-full p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-extrabold text-white flex items-center gap-2">
+          <span>✏️</span> Corrigir Devolução — <span class="text-emerald-400">${dev.numero_devolucao || dev.numero_protocolo}</span>
+        </h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+      </div>
+
+      <!-- Identidade travada: número, carga e equipe são o que o CD e o
+           financeiro já receberam. Corrigir isso é outro problema. -->
+      <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+        <div><div class="text-[9px] text-slate-500 uppercase font-bold">Carga</div><div class="text-white font-bold">${dev.carga_numero}</div></div>
+        <div><div class="text-[9px] text-slate-500 uppercase font-bold">Rota</div><div class="text-white font-bold">${dev.carga_rota}</div></div>
+        <div><div class="text-[9px] text-slate-500 uppercase font-bold">Veículo</div><div class="text-white font-bold">${dev.veiculo_placa}</div></div>
+        <div><div class="text-[9px] text-slate-500 uppercase font-bold">Motorista</div><div class="text-white font-bold">${dev.motorista_nome}</div></div>
+        <div class="col-span-2 sm:col-span-4 text-[10px] text-slate-500 italic pt-1 border-t border-slate-800">🔒 Carga, rota, veículo, motorista e o número do protocolo não mudam nesta tela.</div>
+      </div>
+
+      ${temAnalise ? `
+      <div class="bg-amber-950/40 border border-amber-700/60 rounded-lg p-3 text-[11px] text-amber-200 font-semibold">
+        ⚠️ Esta devolução já tem causa raiz apurada (<b>${dev.motivo_real_causa_raiz}</b>). A apuração foi feita sobre os itens atuais, então salvar a correção devolve o chamado para as <b>Tratativas do Gestor</b>.
+      </div>` : ''}
+
+      <form onsubmit="handleSalvarEdicaoDevolucaoSac(event, '${dev.id}')" class="space-y-5 text-xs">
+
+        <div class="space-y-3">
+          <h4 class="text-[11px] font-bold text-emerald-400 uppercase tracking-wider border-b border-slate-800 pb-1.5">Ocorrência & Cliente</h4>
+
+          <div class="relative">
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Cliente * (busque por código ou nome)</label>
+            <input type="text" id="sac-cliente-busca" value="${attr(clienteLabel)}" placeholder="Digite código ou nome do cliente..."
+              onfocus="filtrarClientes(this.value)" oninput="forcarMaiuscula(this); filtrarClientes(this.value)" autocomplete="off"
+              class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs focus:border-emerald-500 focus:outline-none">
+            <input type="hidden" id="sac-cliente-id" value="${attr(dev.cliente_id || '')}">
+            <div id="sac-cliente-selecionado" class="${clienteLabel ? '' : 'hidden'} mt-1.5 bg-emerald-950/40 border border-emerald-800/60 rounded-lg px-3 py-2 text-xs flex items-center justify-between">
+              <span id="sac-cliente-label" class="text-emerald-300 font-semibold">${clienteLabel}</span>
+              <button type="button" onclick="limparCliente()" class="text-red-400 hover:text-red-300 font-bold ml-2">✕ Limpar</button>
+            </div>
+            <div id="sac-cliente-lista" class="hidden absolute left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-700 rounded-lg overflow-y-auto max-h-48 text-xs shadow-2xl z-50"></div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Motivo Reclamado *</label>
+              <select id="edsac-motivo-reclamado" required class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+                <option value="">-- Selecione o Motivo --</option>
+                ${motivos.map(m => `<option value="${m}" ${m === motivoAtual ? 'selected' : ''}>${m}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Nota Fiscal (NF)</label>
+              <input type="text" id="edsac-nf" value="${attr(dev.nota_fiscal || '')}" placeholder="Ex: NF-99412 (opcional)" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs" oninput="forcarMaiuscula(this)">
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Cliente Emite Nota de Devolução? *</label>
+              <div class="flex gap-3 mt-1">
+                <label class="flex items-center gap-2 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg cursor-pointer hover:bg-slate-700 flex-1 justify-center">
+                  <input type="radio" name="edsac-emite-nf" value="sim" ${dev.cliente_emite_nf ? 'checked' : ''} required class="text-emerald-500">
+                  <span class="text-white font-semibold text-xs">Sim</span>
+                </label>
+                <label class="flex items-center gap-2 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg cursor-pointer hover:bg-slate-700 flex-1 justify-center">
+                  <input type="radio" name="edsac-emite-nf" value="nao" ${dev.cliente_emite_nf ? '' : 'checked'} class="text-slate-500">
+                  <span class="text-white font-semibold text-xs">Não</span>
+                </label>
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">Forma de Acerto Financeiro *</label>
+              <select id="edsac-forma-acerto" required class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+                <option value="ABATIMENTO" ${dev.forma_acerto === 'ABATIMENTO' ? 'selected' : ''}>Abatimento no Boleto / Fatura</option>
+                <option value="JR_PAGA_DIFERENCA" ${dev.forma_acerto === 'JR_PAGA_DIFERENCA' ? 'selected' : ''}>JR Paga a Diferença (Reembolso)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-1.5">
+            <h4 class="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Itens & Produtos</h4>
+            <div class="flex gap-2 items-center">
+              <label class="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer">
+                <input type="checkbox" id="chk-sem-itens" ${dev.sem_itens ? 'checked' : ''} onchange="toggleSemItens(this.checked)" class="rounded bg-slate-800">
+                Sem produtos a listar
+              </label>
+              <button type="button" onclick="addItemRow()" id="btn-add-item" class="bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-bold px-2.5 py-1 rounded">+ Item</button>
+            </div>
+          </div>
+
+          <datalist id="produtos-list">
+            ${((db.getProdutos ? db.getProdutos() : []) || db.data.produtos || []).map(p => `<option value="${p.codigo_produto} - ${p.descricao}">[${p.codigo_produto}] ${p.descricao}</option>`).join('')}
+          </datalist>
+
+          <div id="sem-itens-box" class="hidden bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 text-xs">
+            <div class="font-bold text-amber-300 mb-2">⚠️ Informe o motivo de não ter produtos:</div>
+            <textarea id="obs-sem-itens" rows="2" placeholder="Ex: Devolução apenas fiscal, item reentregue, etc." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${dev.observacao_sem_itens || ''}</textarea>
+          </div>
+
+          <div id="items-table-container" class="overflow-x-auto -mx-1">
+            <table class="w-full text-left text-xs" id="items-table">
+              <thead class="bg-slate-950 text-slate-400 uppercase text-[10px]">
+                <tr>
+                  <th class="p-2 min-w-[200px]">Produto (busque por código ou descrição)</th>
+                  <th class="p-2 w-16">Qtd</th>
+                  <th class="p-2 w-24">Vlr Unit</th>
+                  <th class="p-2 min-w-[120px]">Motivo</th>
+                  <th class="p-2 w-8"></th>
+                </tr>
+              </thead>
+              <tbody id="items-tbody" class="divide-y divide-slate-800"></tbody>
+            </table>
+            <div class="text-[10px] text-slate-500 italic mt-1.5 px-1">O ✕ retira o item da devolução. Ele sai das telas, mas continua registrado como excluído, com seu nome e a hora.</div>
+          </div>
+        </div>
+
+        <div class="space-y-3">
+          <h4 class="text-[11px] font-bold text-emerald-400 uppercase tracking-wider border-b border-slate-800 pb-1.5">Valor & Detalhamento</h4>
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Valor Total Reclamado (R$) *</label>
+            <input type="number" step="0.01" id="sac-valor-reclamado" required value="${attr(parseFloat(dev.valor_reclamado || 0).toFixed(2))}" class="w-full sm:w-1/3 bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded-lg p-2 text-xs">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1">Detalhamento da Ocorrência *</label>
+            <textarea id="edsac-detalhamento" rows="3" required class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs focus:border-emerald-500 focus:outline-none" oninput="forcarMaiuscula(this)">${dev.detalhamento_texto || ''}</textarea>
+          </div>
+        </div>
+
+        <div class="bg-blue-950/40 border border-blue-800/60 rounded-lg p-3 space-y-2">
+          <label class="block text-xs font-bold text-blue-200">Motivo da correção *</label>
+          <textarea id="edsac-motivo-correcao" rows="2" required placeholder="Ex: ITEM LANÇADO ERRADO NA ABERTURA — O CLIENTE DEVOLVEU O 25555, NÃO O 25550." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <div class="text-[10px] text-blue-300/80 italic">Fica no histórico do registro (📜) junto com o antes e o depois dos itens.</div>
+        </div>
+
+        <div class="pt-3 border-t border-slate-800 flex justify-end gap-2">
+          <button type="button" onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-2 rounded-lg text-xs">Cancelar</button>
+          <button type="submit" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-2 rounded-lg text-xs shadow-lg">Salvar Correção</button>
+        </div>
+      </form>
+    </div>`;
+
+  container.classList.remove('hidden');
+
+  // As linhas entram depois do innerHTML porque addItemRow() procura o
+  // items-tbody no documento — ele precisa já existir.
+  (dev.itens || []).forEach(it => {
+    const cod = (it.produto_codigo && String(it.produto_codigo) !== '—') ? String(it.produto_codigo) : '';
+    const desc = String(it.produto_descricao || '');
+    addItemRow({
+      item_id: it.id,
+      produto_id: it.produto_id,
+      produto_busca: cod && desc ? `${cod} - ${desc}` : (desc || cod),
+      quantidade: it.quantidade,
+      valor_unitario: it.valor_unitario,
+      motivo_item: it.motivo_item
+    });
+  });
+
+  if (dev.sem_itens) toggleSemItens(true);
+}
+
+function handleSalvarEdicaoDevolucaoSac(e, id) {
+  e.preventDefault();
+
+  const semItens = document.getElementById('chk-sem-itens')?.checked || false;
+  const obsSemItens = document.getElementById('obs-sem-itens')?.value || '';
+
+  const clienteBusca = String(document.getElementById('sac-cliente-busca')?.value || '').trim();
+  if (!clienteBusca) { alert('Por favor, informe ou selecione o cliente da ocorrência!'); return; }
+
+  // selecionarCliente() escreve o MESMO texto no input e no rótulo. Quando os
+  // dois batem, o cliente veio da lista e o id vale; quando não batem, o
+  // usuário digitou por cima e o rótulo é o do cliente anterior — usá-lo aqui
+  // gravaria a devolução no cliente errado, que é justamente o tipo de troca
+  // que esta tela existe para desfazer.
+  const labelEl = document.getElementById('sac-cliente-label');
+  const label = String(labelEl ? labelEl.textContent : '').trim();
+  const veioDaLista = !!label && label === clienteBusca;
+  const clienteLabel = veioDaLista ? label : clienteBusca;
+  const clienteId = veioDaLista ? (document.getElementById('sac-cliente-id')?.value || '') : '';
+
+  const itens = [];
+  if (!semItens) {
+    document.querySelectorAll('#items-tbody tr').forEach(r => {
+      const prodId = r.querySelector('.item-prod-id')?.value;
+      if (!prodId) return;
+      itens.push({
+        // Vazio nas linhas criadas agora — é o que faz updateDevolucaoSac
+        // inserir em vez de atualizar.
+        id: r.querySelector('.item-db-id')?.value || '',
+        produto_id: prodId,
+        quantidade: r.querySelector('.item-qtd')?.value || '1',
+        valor_unitario: String(r.querySelector('.item-val')?.value || '0').replace(',', '.'),
+        motivo_item: r.querySelector('.item-motivo')?.value || ''
+      });
+    });
+    if (itens.length === 0) {
+      alert('Adicione ao menos 1 produto ou marque "Sem produtos a listar"!');
+      return;
+    }
+  } else if (!obsSemItens.trim()) {
+    alert('Informe o motivo de não haver produtos a listar.');
+    return;
+  }
+
+  const emiteNfEl = document.querySelector('input[name="edsac-emite-nf"]:checked');
+
+  const res = db.updateDevolucaoSac(id, {
+    cliente_id: clienteId,
+    cliente_nome: clienteLabel.split(' - ').slice(1).join(' - ') || clienteLabel,
+    nota_fiscal: document.getElementById('edsac-nf')?.value || '',
+    motivo_reclamado: document.getElementById('edsac-motivo-reclamado')?.value || '',
+    forma_acerto: document.getElementById('edsac-forma-acerto')?.value || '',
+    cliente_emite_nf: emiteNfEl ? emiteNfEl.value : 'nao',
+    valor_reclamado: document.getElementById('sac-valor-reclamado')?.value || '0',
+    detalhamento_texto: document.getElementById('edsac-detalhamento')?.value || '',
+    sem_itens: semItens,
+    observacao_sem_itens: obsSemItens,
+    motivo_correcao: document.getElementById('edsac-motivo-correcao')?.value || ''
+  }, itens);
+
+  if (!res.success) {
+    alert('⚠️ ' + (res.message || 'Não foi possível salvar a correção.'));
+    return;
+  }
+
+  closeModal();
+
+  const partes = [];
+  if (res.atualizados) partes.push(`${res.atualizados} item(ns) alterado(s)`);
+  if (res.criados) partes.push(`${res.criados} incluído(s)`);
+  if (res.removidos) partes.push(`${res.removidos} retirado(s)`);
+  showToast(
+    `✏️ ${res.protocolo} corrigida${partes.length ? ' — ' + partes.join(', ') : ''}.`
+    + (res.reabriuGestor ? ' Voltou para as Tratativas do Gestor.' : ''),
+    'success'
+  );
+  renderApp();
 }
 
 function onOcRotaCargaSelectEdit(cargaNum) {
