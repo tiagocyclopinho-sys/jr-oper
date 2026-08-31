@@ -2598,7 +2598,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "filtros-dos-relatorios-5.9.1";
+CloudStore.BUILD = "index-carrega-catalogostore-5.9.2";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS

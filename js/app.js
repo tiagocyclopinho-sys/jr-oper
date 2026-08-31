@@ -481,12 +481,15 @@ function renderStorageUsagePanel() {
         <div class="font-bold ${cor.text} text-sm flex items-center gap-2">
           <span>💾</span> Uso do Armazenamento Local (Dados Operacionais)
         </div>
-        <span class="text-slate-400">${info.operacionalKB} KB usados de ~5.120 KB estimados (${info.percentual}%)</span>
+        <span class="text-slate-400">${info.totalKB} KB usados de ~5.120 KB estimados (${info.percentual}%)</span>
       </div>
       <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden mb-2">
         <div class="${cor.bar} h-2 rounded-full transition-all" style="width:${Math.min(info.percentual, 100)}%"></div>
       </div>
-      <p class="text-slate-400 leading-relaxed">${mensagem} O catálogo de clientes e produtos (~${info.estaticoKB} KB) fica em um armazenamento separado e não conta para este limite.</p>
+      <p class="text-slate-400 leading-relaxed">${mensagem} Deste total, ${info.operacionalKB} KB são os lançamentos (jr_sac_db) e o resto são caches que se refazem sozinhos.</p>
+      ${info.estaticoKB > 0
+        ? `<p class="text-amber-400 font-bold leading-relaxed mt-1">⚠️ ${info.estaticoKB} KB deste total ainda são o catálogo de clientes e produtos no formato antigo. Ele deveria ter saído daqui automaticamente na primeira abertura desta versão — se este número não zerar depois de um <b>Ctrl + Shift + R</b>, este aparelho está rodando código velho do cache.</p>`
+        : `<p class="text-slate-500 leading-relaxed mt-1">O catálogo de clientes e produtos não ocupa nada deste limite: ele vem embarcado no app e o que este aparelho tem de próprio fica no IndexedDB, que é outro armazenamento.</p>`}
       ${renderFilaFotosPanel()}
     </div>`;
 }
