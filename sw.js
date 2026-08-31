@@ -8,7 +8,7 @@
 // APAGAR o cache da versao anterior, entao nenhum aparelho fica servindo um
 // js/app.js velho quando abrir sem sinal. Trocar o byte do sw.js e tambem o
 // que faz o navegador reinstalar o service worker.
-const CACHE_NAME = 'jr-oper-v5.7.4';
+const CACHE_NAME = 'jr-oper-v5.9.1';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
@@ -18,7 +18,13 @@ const FILES_TO_CACHE = [
   './js/config.js',
   './js/cloudStore.js',
   './js/fotoStore.js',
+  './js/catalogoStore.js',
   './js/store.js',
+  // 3,1 MB, e desde 31/08/2026 ele é a ÚNICA casa do catálogo de clientes e
+  // produtos (o localStorage guarda só o delta). Sem ele no cache, abrir sem
+  // sinal traria a lista de clientes vazia. Aqui não há teto de 5 MB: cache
+  // de arquivos e localStorage são baldes diferentes.
+  './js/mockData.js',
   './js/app.js',
   './js/tailwind.cdn.js',
   './js/xlsx.full.min.js',

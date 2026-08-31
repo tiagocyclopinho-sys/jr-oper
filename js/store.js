@@ -148,28 +148,45 @@ class Store {
   }
 
   init() {
-    // ARMAZENAMENTO DIVIDIDO EM DUAS CHAVES (correção da causa raiz do risco
-    // de estouro de cota no localStorage — ver auditoria de 17/08/2026):
-    //   'jr_sac_static' → clientes + produtos (catálogos pesados, ~3MB,
-    //                      praticamente estáticos, gravados raramente)
-    //   'jr_sac_db'      → todo o resto (dados operacionais, pequenos e que
-    //                      mudam a cada ação do usuário)
-    // Isso reduz o tamanho de cada gravação normal de ~3MB para poucas
-    // dezenas de KB. Instalações antigas (formato monolítico, com
-    // clientes/produtos dentro de 'jr_sac_db') são migradas automaticamente
-    // na primeira carga com este código, sem perda de dados.
+    // =================================================================
+    // O CATÁLOGO SAIU DO localStorage — 31/08/2026
+    //
+    // O QUE HAVIA ANTES. O armazenamento era dividido em duas chaves:
+    //   'jr_sac_static' → clientes + produtos, ~2.994 KB
+    //   'jr_sac_db'     → todo o resto (a fatia operacional)
+    // Isso resolveu o problema de 17/08/2026 — cada gravação normal deixou
+    // de reescrever 3 MB —, mas não o de OCUPAÇÃO: os 2.994 KB continuavam
+    // dentro dos ~5 MB que o navegador dá POR ORIGEM. Medido em produção em
+    // 31/08/2026, um aparelho do CD estava em 5.020 KB (98%) com a tarja
+    // vermelha de "o último registro NÃO foi salvo" na tela, e SESSENTA POR
+    // CENTO dessa cota era o catálogo.
+    //
+    // POR QUE ELE NUNCA PRECISOU ESTAR AÍ. Os 15.139 clientes e 4.010
+    // produtos vêm da planilha Dados SAC EMBARCADA em js/mockData.js — um
+    // arquivo de 3,1 MB que o navegador já baixa e guarda no cache de
+    // ARQUIVOS, que não tem teto de 5 MB e não disputa cota com nada.
+    // Copiá-los para o localStorage era guardar, no balde pequeno, uma
+    // segunda cópia do que já estava no balde grande.
+    //
+    // O QUE VALE AGORA. A lista em tela continua idêntica, montada em
+    // memória a cada abertura: SEMENTE (mockData.js) + DELTA (o que este
+    // aparelho tem de diferente — cadastro novo, edição, exclusão). Só o
+    // delta é persistido, e ele mora no IndexedDB, com espelho síncrono no
+    // localStorage enquanto for pequeno. Ver js/catalogoStore.js.
+    //
+    // DOIS FORMATOS ANTIGOS SÃO MIGRADOS AQUI, sem perda e uma vez só:
+    // o monolítico (clientes/produtos dentro de 'jr_sac_db') e o de duas
+    // chaves ('jr_sac_static'). É essa migração que devolve os ~2,9 MB.
+    // =================================================================
     const isFirstInstall = !localStorage.getItem('jr_sac_db');
-    let legacyMonolithic = null;
+    let catalogoLegado = null;
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
-      const currentVersion = '6.1.0';
+      const currentVersion = '6.2.0';
       if (isFirstInstall) {
-        // Primeira vez: grava banco inicial já dividido
+        // Primeira vez: grava só a fatia operacional. O catálogo NÃO é
+        // gravado — ele vem de INITIAL_DATA a cada abertura.
         try {
-          localStorage.setItem('jr_sac_static', JSON.stringify({
-            clientes: (typeof INITIAL_DATA !== 'undefined') ? INITIAL_DATA.clientes : [],
-            produtos: (typeof INITIAL_DATA !== 'undefined') ? INITIAL_DATA.produtos : []
-          }));
           const opInicial = (typeof INITIAL_DATA !== 'undefined') ? { ...INITIAL_DATA } : {};
           delete opInicial.clientes;
           delete opInicial.produtos;
@@ -188,19 +205,20 @@ class Store {
         }
       }
       const rawDb = localStorage.getItem('jr_sac_db');
-      const rawStatic = localStorage.getItem('jr_sac_static');
       this.data = rawDb ? JSON.parse(rawDb) : null;
-      const staticData = rawStatic ? JSON.parse(rawStatic) : null;
 
-      if (this.data && (Array.isArray(this.data.clientes) || Array.isArray(this.data.produtos)) && !staticData) {
-        // Instalação antiga (formato monolítico): extrai clientes/produtos
-        // para a chave estática antes de continuar, sem perder nada.
-        legacyMonolithic = { clientes: this.data.clientes || [], produtos: this.data.produtos || [] };
-        console.info('[Store] Migrando instalação existente para armazenamento dividido (jr_sac_static + jr_sac_db)...');
-      } else if (staticData) {
-        this.data = this.data || {};
-        this.data.clientes = staticData.clientes || [];
-        this.data.produtos = staticData.produtos || [];
+      // (a) formato MONOLÍTICO: clientes/produtos dentro de 'jr_sac_db'.
+      if (this.data && (Array.isArray(this.data.clientes) || Array.isArray(this.data.produtos))) {
+        catalogoLegado = { clientes: this.data.clientes || [], produtos: this.data.produtos || [] };
+        console.info('[Store] Instalação no formato monolítico: catálogo será convertido em delta.');
+      }
+      // (b) formato DE DUAS CHAVES: 'jr_sac_static'. Vence o monolítico
+      // quando os dois existem — é o mais recente dos dois.
+      const cat = this._catalogoStore();
+      const antigo = cat ? cat.lerFormatoAntigo() : null;
+      if (antigo) {
+        catalogoLegado = antigo;
+        console.info('[Store] Convertendo jr_sac_static em delta — os KB dele voltam para a cota do aparelho.');
       }
     } catch(e) {
       console.warn("Usando INITIAL_DATA devido a exceção no localStorage:", e);
@@ -211,22 +229,18 @@ class Store {
       this.data = (typeof INITIAL_DATA !== 'undefined') ? JSON.parse(JSON.stringify(INITIAL_DATA)) : {};
     }
 
-    if (legacyMonolithic) {
-      this.data.clientes = legacyMonolithic.clientes;
-      this.data.produtos = legacyMonolithic.produtos;
-    }
+    // MONTA O CATÁLOGO: semente (mockData.js) + delta (o que é deste
+    // aparelho). É aqui que 'jr_sac_static' deixa de existir. Repare que a
+    // antiga "garantia de sincronia com as bases mestres" — que trocava a
+    // lista inteira pela planilha sempre que ela ficasse MENOR que a
+    // semente — sumiu junto, e de propósito: ela era um remendo para o
+    // catálogo persistido poder divergir da planilha, e a semente agora É a
+    // planilha, por construção. De quebra, some o efeito colateral que ela
+    // tinha: excluir clientes até a lista ficar menor que a planilha
+    // apagava, na abertura seguinte, TODO cadastro manual feito desde então.
+    let precisaRegravar = this._montarCatalogo(catalogoLegado);
 
-    // Garantir sincronia com bases mestres completas (15.139 Clientes e 4.010 Produtos da planilha Dados SAC.xlsx)
     if (typeof INITIAL_DATA !== 'undefined') {
-      if (!Array.isArray(this.data.clientes) || (INITIAL_DATA.clientes && this.data.clientes.length < INITIAL_DATA.clientes.length)) {
-        this.data.clientes = JSON.parse(JSON.stringify(INITIAL_DATA.clientes));
-        legacyMonolithic = legacyMonolithic || {}; // força regravação da chave estática abaixo
-      }
-      if (!Array.isArray(this.data.produtos) || (INITIAL_DATA.produtos && this.data.produtos.length < INITIAL_DATA.produtos.length)) {
-        this.data.produtos = JSON.parse(JSON.stringify(INITIAL_DATA.produtos));
-        legacyMonolithic = legacyMonolithic || {};
-      }
-
       // (achado de 22/08/2026) Motoristas, ajudantes e veículos também vêm da
       // planilha Dados SAC — mas, ao contrário de clientes e produtos, ELES
       // SINCRONIZAM com a nuvem. Isso os deixa expostos a um risco que os
@@ -258,17 +272,15 @@ class Store {
       let jaSemeou = false;
       try { jaSemeou = !!localStorage.getItem('jr_seed_cadastros_v1'); } catch(e) {}
       if (!jaSemeou) {
-        if (this.restaurarCadastrosDaPlanilha() > 0) {
-          legacyMonolithic = legacyMonolithic || {};
-        }
+        if (this.restaurarCadastrosDaPlanilha() > 0) precisaRegravar = true;
         try { localStorage.setItem('jr_seed_cadastros_v1', agoraIsoBrasilia()); } catch(e) {}
       }
     }
 
-    if (legacyMonolithic) {
-      // Concluir a migração/sincronia: grava a chave estática separadamente
-      // e regrava o bloco operacional já sem clientes/produtos dentro.
-      this.saveStaticCatalog();
+    if (precisaRegravar) {
+      // Regrava o bloco operacional já sem clientes/produtos dentro — é
+      // esta gravação que apaga, de vez, o catálogo que estava dentro do
+      // 'jr_sac_db' das instalações no formato monolítico.
       this.save();
     }
 
@@ -527,9 +539,10 @@ class Store {
   }
 
   // Monta o "fatia operacional" de this.data — tudo MENOS clientes/produtos,
-  // que ficam na chave separada 'jr_sac_static' (ver init()). É essa fatia
-  // que save() grava a cada operação; por isso cada gravação passou de
-  // ~3MB para poucas dezenas de KB.
+  // que desde 31/08/2026 nem sequer são persistidos por inteiro: vão para o
+  // IndexedDB, e só o delta (ver js/catalogoStore.js). É essa fatia que
+  // save() grava a cada operação; por isso cada gravação passou de ~3MB
+  // para poucas dezenas de KB.
   // Reinsere, POR ID, os cadastros da planilha Dados SAC que estiverem
   // faltando neste aparelho. É uma MESCLA, não uma substituição: um
   // motorista/veículo/ajudante cadastrado pela tela do app tem id próprio e
@@ -573,21 +586,304 @@ class Store {
     return slice;
   }
 
-  // Grava o catálogo estático (clientes/produtos) — chamado raramente:
-  // na primeira instalação, na migração de instalações antigas, e nas
-  // (futuras) telas de edição de cadastro de cliente/produto, se vierem
-  // a existir.
-  saveStaticCatalog() {
+  // =================================================================
+  // CATÁLOGO MESTRE (CLIENTES E PRODUTOS) — ver js/catalogoStore.js
+  //
+  // A lista completa não é mais persistida: ela é montada a cada abertura
+  // como SEMENTE (js/mockData.js, que não gasta cota) + DELTA (o que este
+  // aparelho tem de diferente). Só o delta vai para o disco, e ele mora no
+  // IndexedDB. Foi isso que devolveu ~2,9 MB dos ~5 MB de localStorage.
+  // =================================================================
+  _catalogoStore() {
     try {
-      localStorage.setItem('jr_sac_static', JSON.stringify({
-        clientes: this.data.clientes || [],
-        produtos: this.data.produtos || []
-      }));
-      return true;
-    } catch(e) {
-      console.error("[Store] Falha ao gravar catálogo estático (clientes/produtos):", e);
+      if (typeof window !== 'undefined' && window.catalogoStore) return window.catalogoStore;
+      if (typeof catalogoStore !== 'undefined' && catalogoStore) return catalogoStore;
+    } catch(e) {}
+    return null;
+  }
+
+  _catalogoClasse() {
+    try {
+      if (typeof window !== 'undefined' && window.CatalogoStore) return window.CatalogoStore;
+      if (typeof CatalogoStore !== 'undefined') return CatalogoStore;
+    } catch(e) {}
+    return null;
+  }
+
+  // A régua contra a qual o delta é medido. NÃO é copiada: quem usa isto
+  // só lê. Quem monta a lista de trabalho é _montarCatalogo(), e é ele que
+  // faz as cópias — assim INITIAL_DATA nunca é editado por acidente e
+  // continua sendo a mesma régua na gravação seguinte.
+  _sementeDoCatalogo() {
+    const D = (typeof INITIAL_DATA !== 'undefined') ? INITIAL_DATA : {};
+    return {
+      clientes: Array.isArray(D.clientes) ? D.clientes : [],
+      produtos: Array.isArray(D.produtos) ? D.produtos : []
+    };
+  }
+
+  // Devolve true se a fatia operacional precisa ser regravada (migração de
+  // instalação antiga, que é o que apaga o catálogo de dentro do jr_sac_db).
+  _montarCatalogo(catalogoLegado) {
+    const CS = this._catalogoStore();
+    const Classe = this._catalogoClasse();
+    const semente = this._sementeDoCatalogo();
+
+    // Sem o módulo do catálogo (arquivo não carregou) o app não pode ficar
+    // sem lista: cai na semente pura, em memória, e não persiste nada — que
+    // é exatamente o comportamento seguro, porque gravar um delta calculado
+    // contra uma régua que talvez não seja a certa apagaria cadastro.
+    if (!CS || !Classe) {
+      console.warn('[Store] js/catalogoStore.js não carregou — catálogo em memória, sem persistência de cadastro novo.');
+      this.data.clientes = JSON.parse(JSON.stringify(semente.clientes));
+      this.data.produtos = JSON.parse(JSON.stringify(semente.produtos));
+      this._catalogoPronto = false;
+      this._catalogoDeltaAplicado = null;
+      this._anotarTamanhoDoCatalogo();
       return false;
     }
+
+    let delta = null;
+    let migrou = false;
+
+    if (catalogoLegado) {
+      // MIGRAÇÃO (roda uma vez por aparelho): o catálogo inteiro que estava
+      // no localStorage vira delta. Tudo que este aparelho tinha de
+      // diferente da planilha — cadastro manual, edição, exclusão — é
+      // preservado; o que era igual à planilha simplesmente para de ocupar
+      // espaço, porque a planilha continua embarcada.
+      delta = Classe.calcularDelta(catalogoLegado, semente);
+      CS.gravar(delta);
+      const kb = CS.descartarFormatoAntigo();
+      migrou = true;
+      console.info(`[Store] Catálogo migrado para o IndexedDB. Delta deste aparelho: `
+        + `${(delta.clientes || []).length} cliente(s) e ${(delta.produtos || []).length} produto(s) `
+        + `diferentes da planilha` + (kb ? `, ${kb} KB devolvidos à cota.` : '.'));
+    } else {
+      // Caminho normal: o espelho síncrono responde antes de qualquer
+      // promise resolver, e é por isso que o primeiro paint não mudou.
+      delta = CS.lerSincrono();
+    }
+
+    // 'soIdb' é a marca deixada por catalogoStore.gravar() quando o delta
+    // cresceu além do espelho: existe delta, mas ele só chega pelo
+    // IndexedDB. Aplicar {} aqui seria montar a lista sem os cadastros
+    // manuais — e um save() antes do IndexedDB responder gravaria um delta
+    // que os apaga. Por isso a persistência fica TRAVADA até a leitura
+    // assíncrona chegar (_catalogoPronto abaixo).
+    const soIdb = !!(delta && delta.soIdb);
+    const aplicado = Classe.aplicar(semente, soIdb ? null : delta);
+    this.data.clientes = aplicado.clientes;
+    this.data.produtos = aplicado.produtos;
+    this._catalogoDeltaAplicado = soIdb ? null : JSON.stringify(delta || null);
+    this._anotarTamanhoDoCatalogo();
+
+    // Depois da migração o delta em memória JÁ é a verdade — não há o que
+    // conferir com o IndexedDB, e destravar aqui evita uma janela em que
+    // um cadastro novo não seria gravado.
+    this._catalogoPronto = migrou || !CS.disponivel();
+
+    if (!this._catalogoPronto) {
+      // Confere com a casa definitiva em segundo plano. Se o IndexedDB
+      // trouxer algo diferente do que já está na tela (outra aba cadastrou,
+      // ou o espelho não coube na última gravação), reaplica e redesenha.
+      CS.carregar().then(doIdb => {
+        try {
+          const serial = JSON.stringify(doIdb || null);
+          // Se alguma coisa mudou o catálogo enquanto isto viajava, o que
+          // está na memória é mais novo que o disco: não sobrescreve.
+          if (this._catalogoSujo) return;
+          if (serial !== this._catalogoDeltaAplicado) {
+            const novo = Classe.aplicar(semente, doIdb);
+            this.data.clientes = novo.clientes;
+            this.data.produtos = novo.produtos;
+            this._catalogoDeltaAplicado = serial;
+            this._anotarTamanhoDoCatalogo();
+            if (typeof window !== 'undefined' && window.dispatchEvent) {
+              window.dispatchEvent(new CustomEvent('jr-cloud-sync', { detail: { origem: 'catalogo' } }));
+            }
+          }
+        } finally {
+          this._catalogoPronto = true;
+        }
+      }).catch(e => {
+        console.warn('[Store] Falha ao ler o catálogo do IndexedDB — vale o espelho síncrono.', e && e.message);
+        this._catalogoPronto = true;
+      });
+    }
+
+    return migrou;
+  }
+
+  // Marca que clientes/produtos mudaram. Chamado pelos poucos pontos que de
+  // fato mexem no catálogo; save() é quem persiste. Separar os dois é o que
+  // evita recalcular o delta (uma varredura nos 19 mil registros) a cada
+  // gravação de qualquer outra tela.
+  marcarCatalogoSujo() {
+    this._catalogoSujo = true;
+  }
+
+  // =================================================================
+  // A PONTE COM A NUVEM — 31/08/2026
+  //
+  // Até esta data, cliente e produto cadastrados pela tela NÃO chegavam nos
+  // outros aparelhos: as tabelas existiam no Supabase e nunca estiveram no
+  // MAPA_TABELAS do cloudStore. O motivo era volume — sincronizar do jeito
+  // das outras 25 tabelas é ler 19 mil linhas a cada 30 segundos.
+  //
+  // Com o catálogo em semente + delta, o que precisa viajar é o DELTA. Estas
+  // duas funções são a interface: o cloudStore não sabe (e não precisa
+  // saber) o que é semente — ele pede o que este aparelho tem de próprio e
+  // entrega o que os outros mandaram.
+  // =================================================================
+
+  // O que este aparelho deve à nuvem: o delta, mais uma LÁPIDE por registro
+  // da planilha que foi excluído em definitivo aqui.
+  //
+  // A lápide é necessária porque a semente é embarcada e igual em todo
+  // aparelho: "sumiu da minha lista" não é uma informação que viaje sozinha.
+  // Ela vai como o registro da planilha marcado com is_deleted — que é
+  // exatamente o que a exclusão pela Lixeira já produz, então os outros
+  // aparelhos tratam os dois casos pelo mesmo caminho e não precisam
+  // conhecer o conceito de lápide.
+  getCatalogoParaSync() {
+    const Classe = this._catalogoClasse();
+    const vazio = { clientes: [], produtos: [] };
+    if (!Classe) return vazio;
+
+    const semente = this._sementeDoCatalogo();
+    const delta = Classe.calcularDelta(
+      { clientes: this.data.clientes || [], produtos: this.data.produtos || [] },
+      semente
+    );
+
+    const quando = agoraIsoBrasilia();
+    const comLapides = (colecao) => {
+      const saida = (delta[colecao] || []).slice();
+      const removidos = (delta.removidos && delta.removidos[colecao]) || [];
+      if (removidos.length) {
+        const naSemente = new Map((semente[colecao] || []).map(r => [String(r.id), r]));
+        removidos.forEach(id => {
+          const base = naSemente.get(String(id));
+          if (!base) return;
+          saida.push(Object.assign({}, base, {
+            is_deleted: true,
+            deleted_at: quando,
+            deleted_by_nome: (this.currentUser && this.currentUser.nome) || 'SISTEMA'
+          }));
+        });
+      }
+      return saida;
+    };
+
+    return { clientes: comLapides('clientes'), produtos: comLapides('produtos') };
+  }
+
+  // O que veio da nuvem. Recebe { clientes: [...], produtos: [...] } já
+  // filtrado pelo cloudStore (ele é quem sabe o que este aparelho está
+  // recusando por ter mudança não enviada).
+  //
+  // Para um registro que EXISTE na planilha, mescla por cima da semente em
+  // vez de substituir: a linha da nuvem só tem as colunas reais da tabela, e
+  // a da planilha carrega também `codigo` e `nome`, que são campos do app.
+  // Substituir apagaria os dois — e a projeção do resultado continua igual à
+  // linha da nuvem, então isso não faz o registro parecer alterado.
+  aplicarCatalogoDaNuvem(porColecao) {
+    if (!porColecao) return false;
+    const semente = this._sementeDoCatalogo();
+    let mudou = false;
+
+    ['clientes', 'produtos'].forEach(colecao => {
+      const chegando = porColecao[colecao];
+      if (!Array.isArray(chegando) || !chegando.length) return;
+
+      if (!Array.isArray(this.data[colecao])) this.data[colecao] = [];
+      const naSemente = new Map((semente[colecao] || []).map(r => [String(r.id), r]));
+      const posicao = new Map();
+      this.data[colecao].forEach((r, i) => {
+        if (r && r.id !== undefined && r.id !== null) posicao.set(String(r.id), i);
+      });
+
+      chegando.forEach(linha => {
+        if (!linha || linha.id === undefined || linha.id === null) return;
+        const id = String(linha.id);
+        const base = naSemente.get(id);
+        const registro = base ? Object.assign({}, base, linha) : linha;
+        const i = posicao.get(id);
+        if (i === undefined) {
+          this.data[colecao].push(registro);
+          posicao.set(id, this.data[colecao].length - 1);
+        } else {
+          this.data[colecao][i] = registro;
+        }
+        mudou = true;
+      });
+    });
+
+    if (mudou) {
+      // saveStaticCatalog() recalcula o delta a partir da lista inteira. É
+      // isso que faz a lápide local sumir sozinha quando o registro volta
+      // pela nuvem: ele passa a estar na lista, logo deixa de ser "removido".
+      this.marcarCatalogoSujo();
+      this.saveStaticCatalog();
+    }
+    return mudou;
+  }
+
+  // Rede de segurança do save(): inclusão ou exclusão que tenha esquecido
+  // marcarCatalogoSujo() ainda assim muda o TAMANHO da lista, e isso custa
+  // duas comparações de inteiro por gravação.
+  _catalogoMudouDeTamanho() {
+    const c = (this.data.clientes || []).length;
+    const p = (this.data.produtos || []).length;
+    const ref = this._catalogoTamanhos;
+    if (!ref) return false;
+    return ref.clientes !== c || ref.produtos !== p;
+  }
+
+  _anotarTamanhoDoCatalogo() {
+    this._catalogoTamanhos = {
+      clientes: (this.data.clientes || []).length,
+      produtos: (this.data.produtos || []).length
+    };
+  }
+
+  // Grava o delta do catálogo. Mantém o nome antigo porque é o que o resto
+  // do código chama; o que mudou é o destino — IndexedDB em vez dos ~2,9 MB
+  // de localStorage.
+  saveStaticCatalog() {
+    const CS = this._catalogoStore();
+    const Classe = this._catalogoClasse();
+    if (!CS || !Classe) return false;
+
+    // Trava de segurança: enquanto a leitura assíncrona não voltou, o que
+    // está em memória pode ser MENOS do que o disco tem. Gravar aqui
+    // apagaria a diferença. O ponto que sujou o catálogo continua marcado,
+    // e o save() seguinte grava.
+    if (!this._catalogoPronto) return false;
+
+    const delta = Classe.calcularDelta(
+      { clientes: this.data.clientes || [], produtos: this.data.produtos || [] },
+      this._sementeDoCatalogo()
+    );
+    const serial = JSON.stringify(delta);
+    this._catalogoSujo = false;
+    this._anotarTamanhoDoCatalogo();
+
+    // Nada mudou de fato (ex: só a ordenação do sortAll): não gasta escrita.
+    // A comparação ignora o carimbo, que muda a cada cálculo.
+    const semCarimbo = s => String(s || '').replace(/"carimbo":"[^"]*",?/, '');
+    if (semCarimbo(serial) === semCarimbo(this._catalogoDeltaAplicado)) return true;
+
+    this._catalogoDeltaAplicado = serial;
+    CS.gravar(delta).then(ok => {
+      if (!ok) {
+        // Sem IndexedDB E sem espelho: o cadastro não existe em lugar
+        // nenhum. Reaproveita a tarja vermelha que o save() já sabe pintar.
+        this._alertarFalhaDeGravacao(new Error('O cadastro de cliente/produto não pôde ser gravado neste aparelho.'));
+      }
+    }).catch(() => {});
+    return true;
   }
 
   // Rede de segurança para quando, mesmo com a fatia operacional pequena,
@@ -679,6 +975,23 @@ class Store {
     } catch(eSort) {
       console.warn("Erro ao ordenar dados antes de salvar:", eSort);
     }
+
+    // O catálogo tem casa própria desde 31/08/2026 (IndexedDB, ver
+    // js/catalogoStore.js) e por isso não viaja dentro deste payload. Se
+    // ele mudou, é aqui que vai para o disco.
+    //
+    // A checagem por TAMANHO existe ALÉM da marca explícita de propósito:
+    // hoje quem mexe no catálogo chama add*/softDelete/restoreItem, mas
+    // nada impede um caminho novo de dar push direto no array — e cadastro
+    // que não é gravado é a falha mais cara que existe aqui, porque é
+    // silenciosa. A marca pega as EDIÇÕES (que não mudam o tamanho), o
+    // tamanho pega as INCLUSÕES e EXCLUSÕES que esqueceram a marca.
+    try {
+      if (this._catalogoSujo || this._catalogoMudouDeTamanho()) this.saveStaticCatalog();
+    } catch(eCat) {
+      console.warn("[Store] Falha ao gravar o catálogo de clientes/produtos:", eCat);
+    }
+
     const payload = JSON.stringify(this._getOperationalSlice());
     try {
       localStorage.setItem('jr_sac_db', payload);
@@ -776,7 +1089,12 @@ class Store {
         totalKB += tam;
         chaves++;
         if (k === 'jr_sac_db') operacionalKB = tam;
-        else if (k === 'jr_sac_static') estaticoKB = tam;
+        // 31/08/2026: o que sobrou do catálogo aqui é só o DELTA (espelho
+        // síncrono do IndexedDB). O 'jr_sac_static' de ~2.994 KB deixou de
+        // existir — se ele ainda aparecer nesta contagem, este aparelho
+        // abriu o app numa build anterior a esta e a migração ainda não
+        // rodou. Ver js/catalogoStore.js.
+        else if (k === 'jr_sac_static_delta' || k === 'jr_sac_static') estaticoKB += tam;
         maiores.push({ chave: k, KB: Math.round(tam) });
       }
     } catch (e) {
@@ -813,7 +1131,16 @@ class Store {
       chaves,
       maiores: maiores.slice(0, 5),
       cabeMais,                            // true = ainda dá para gravar
-      nivel
+      nivel,
+      // Onde o catálogo mora agora, e quanto ele ainda custa de cota aqui.
+      // formatoAntigoAindaPresenteKB > 0 é a resposta direta para
+      // "por que este aparelho continua cheio?".
+      catalogo: (() => {
+        try {
+          const CS = this._catalogoStore();
+          return CS ? CS.getDiagnostico() : null;
+        } catch(e) { return null; }
+      })()
     };
   }
 
@@ -895,7 +1222,15 @@ class Store {
   resetData() {
     try {
       this.data = JSON.parse(JSON.stringify(INITIAL_DATA));
-      this.saveStaticCatalog();
+      // Voltar para INITIAL_DATA é, por definição, delta zero. Apagar o
+      // delta é mais honesto (e mais barato) do que gravar um delta vazio
+      // por cima: sobra menos estado antigo para explicar depois.
+      const CS = this._catalogoStore();
+      if (CS) CS.limparTudo().catch(() => {});
+      this._catalogoDeltaAplicado = null;
+      this._catalogoSujo = false;
+      this._catalogoPronto = true;
+      this._anotarTamanhoDoCatalogo();
       this.save();
     } catch(e) {
       console.warn("Erro ao resetar no localStorage, usando INITIAL_DATA em memória:", e);
@@ -1683,6 +2018,7 @@ class Store {
       valor_unitario_padrao: parseFloat(valor_unitario_padrao) || 0
     };
     this.data.produtos.push(item);
+    this.marcarCatalogoSujo();
     this.save();
     return item;
   }
@@ -2092,18 +2428,35 @@ class Store {
     // localmente em qualquer tela que lê codigo_cliente/razao_social (ex:
     // getDevolucoes) — os nomes de campo aqui nunca bateram com o resto
     // do app.
+    // 31/08/2026 — OS DOIS CÓDIGOS GERADOS PASSARAM A SAIR DO id, e não do
+    // relógio. Agora que clientes sincroniza (ver getCatalogoParaSync), os
+    // dois índices UNIQUE PARCIAIS do banco (uq_clientes_codigo e
+    // uq_clientes_cnpj, migration 24) deixaram de ser detalhe:
+    //
+    //   - codigo_cliente era `CLI-` + os 4 ÚLTIMOS dígitos do relógio. Quatro
+    //     dígitos de milissegundo repetem a cada 10 segundos — dois clientes
+    //     cadastrados no mesmo minuto tinham chance real de colidir, e uma
+    //     colisão derruba com 23505 o LOTE INTEIRO do envio, não só a linha
+    //     ruim. A própria migration 25 já tinha documentado esse risco.
+    //   - cnpj era `SN` + Date.now(), que colide se dois cadastros caírem no
+    //     mesmo milissegundo.
+    //
+    // gerarIdUnico() já resolve exatamente esse problema para o id (ver o
+    // comentário dele: carimbo do aparelho + milissegundo virtual), então os
+    // dois passam a derivar dele. 'SN' + 16 dígitos = 18 caracteres, dentro
+    // do VARCHAR(20) do cnpj.
+    const idNovo = this.gerarIdUnico();
     const item = {
-      id: this.gerarIdUnico(),
-      codigo_cliente: clienteData.codigo || clienteData.codigo_cliente || `CLI-${Date.now().toString().slice(-4)}`,
+      id: idNovo,
+      codigo_cliente: clienteData.codigo || clienteData.codigo_cliente || `CLI-${idNovo}`,
       razao_social: String(clienteData.nome || clienteData.razao_social || '').trim().toUpperCase(),
       cidade: clienteData.cidade || '',
       uf: clienteData.uf || 'GO',
-      // cnpj é VARCHAR(20) — gerarIdUnico() tem até 16 dígitos, não cabe
-      // com prefixo. Date.now() sozinho (13 dígitos) cabe com sobra.
-      cnpj: clienteData.cnpj_cpf || clienteData.cnpj || `SN${Date.now()}`
+      cnpj: clienteData.cnpj_cpf || clienteData.cnpj || `SN${idNovo}`
     };
     if (!item.razao_social) return null;
     this.data.clientes.unshift(item);
+    this.marcarCatalogoSujo();
     this.logAudit({ acao: 'CRIACAO', modulo: 'clientes', registro_id: item.id, diff: { depois: item } });
     this.save();
     return item;
@@ -2135,6 +2488,11 @@ class Store {
     item.deleted_by_usuario_id = this.currentUser ? this.currentUser.id : null;
     item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
 
+    // Cliente e produto não moram no 'jr_sac_db' que o save() abaixo grava —
+    // moram no delta do catálogo (js/catalogoStore.js). Sem esta marca, a
+    // exclusão ficaria só na memória e voltaria no F5.
+    if (collection === 'clientes' || collection === 'produtos') this.marcarCatalogoSujo();
+
     this.logAudit({
       acao: 'EXCLUSAO_LOGICA',
       modulo: collection,
@@ -2150,6 +2508,7 @@ class Store {
     const item = this.data[collection].find(x => x.id == id);
     if (!item) return false;
     item.is_deleted = false;
+    if (collection === 'clientes' || collection === 'produtos') this.marcarCatalogoSujo();
 
     // SIMETRIA COM deleteDevolucao(): ela marca os itens filhos junto, então
     // a restauracao tem de desmarca-los. Sem isto, restaurar uma devolucao
@@ -2219,6 +2578,12 @@ class Store {
     }
 
     this.data[collection] = this.data[collection].filter(x => x.id != id);
+    // Exclusão DEFINITIVA de um registro que veio da planilha embarcada é o
+    // único caso que precisa de lápide: a planilha continua trazendo o
+    // registro a cada abertura, então "sumiu da lista" não basta — quem
+    // guarda o "este aqui foi apagado" é o delta (removidos), calculado a
+    // partir desta marca. Ver js/catalogoStore.js.
+    if (collection === 'clientes' || collection === 'produtos') this.marcarCatalogoSujo();
 
     // Filhos da devolucao vao junto, aqui e na nuvem. Um item_devolucao cujo
     // pai nao existe mais nao aparece em tela nenhuma (nada le itens soltos),

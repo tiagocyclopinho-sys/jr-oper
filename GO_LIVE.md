@@ -226,21 +226,49 @@ viram texto livre quando a lista por trás está vazia. Não é um defeito do ca
 - **Carga:** a lista vem de Cargas + Controle de Viagens + ocorrências anteriores.
   O Reset Global zera tudo isso de propósito — a lista volta assim que a Largada
   do dia for lançada.
-- **Produto e Cliente:** são **dados estáticos da planilha Dados SAC** (4.010
-  produtos e 15.139 clientes), embarcados no próprio app via `mockData.js` e
-  guardados na chave `jr_sac_static`, separada de `jr_sac_db`. Já vêm iguais em
-  todo aparelho — **não passam pela sincronização, e não devem passar.**
+- **Produto e Cliente:** a **base** vem da planilha Dados SAC (4.010 produtos
+  e 15.139 clientes), embarcada no próprio app via `mockData.js`, igual em
+  todo aparelho — essa parte não trafega, e não deve trafegar.
+
+  **Mudou em 31/08/2026 (v5.8.0):** as duas listas **não são mais copiadas
+  para o `localStorage`**. A chave `jr_sac_static` deixou de existir — ela
+  sozinha ocupava 2.994 KB dos ~5 MB que o navegador dá por origem, ou seja,
+  60% da cota de cada aparelho, e foi o que levou um aparelho do CD a 98% e
+  à tarja de "o último registro NÃO foi salvo". Agora a lista é montada em
+  memória a cada abertura (`mockData.js` + o que este aparelho tem de
+  diferente), e só essa diferença é gravada, no IndexedDB. Ver
+  `js/catalogoStore.js`. A migração é automática, na primeira abertura, e
+  não perde nada.
 
   Se a lista aparecer vazia ou a tela de Cadastros der erro vermelho, não é a
-  planilha que sumiu: é o cache da tela. Um `Ctrl + Shift + R` recarrega de
-  `jr_sac_static` e resolve. Corrigido em 22/08/2026 — o pull estava
+  planilha que sumiu: é o cache da tela. Um `Ctrl + Shift + R` recarrega
+  `mockData.js` e resolve. Corrigido em 22/08/2026 — o pull estava
   substituindo `db.data` inteiro pela fatia operacional e derrubando as duas
   listas da memória a cada ciclo.
 
-  **Limitação conhecida:** um produto ou cliente cadastrado pela tela do app
-  fica só naquele aparelho. Para todos verem, ele precisa entrar na planilha
-  Dados SAC. Sincronizar essas duas listas exigiria um envio incremental (só o
-  que mudou) — enviar 19 mil linhas a cada 30 segundos não é viável.
+  **Mudou em 31/08/2026 (v5.9.0) — cadastro novo agora SINCRONIZA.** Até
+  aqui, um cliente ou produto cadastrado pela tela ficava só naquele
+  aparelho: as tabelas `clientes` e `produtos` existiam no Supabase e nunca
+  estiveram na lista de tabelas do `cloudStore`. Cliente cadastrado na doca
+  não existia para o SAC — nem no dia seguinte, nem nunca.
+
+  E era **pior do que isso**: o cadastro não sobrevivia nem ao F5 do próprio
+  aparelho. `addCliente()`/`addProduto()` chamavam `save()`, que grava a
+  fatia operacional — e a fatia operacional remove clientes e produtos de
+  propósito. O registro existia até recarregar a página e sumia sem nenhuma
+  mensagem.
+
+  O que destravou: com o catálogo em semente + delta, o que precisa viajar
+  deixou de ser a lista (19 mil linhas a cada 30 segundos, inviável) e passou
+  a ser o **delta** — dezenas de linhas. A leitura é incremental
+  (`atualizado_em >= cursor`), então um aparelho novo baixa **zero** linha da
+  planilha. Cadastro, edição e exclusão pela Lixeira chegam nos outros
+  aparelhos no ciclo normal de 30 segundos.
+
+  **Depende da `migration_36_catalogo_sync.sql`.** Sem ela o app funciona e o
+  catálogo continua fora do `localStorage`, mas o cadastro não viaja — e o
+  app diz isso em `jrDiagnosticoSync().catalogo.indisponivel` em vez de
+  falhar calado.
 
 ### 4. Edição simultânea
 

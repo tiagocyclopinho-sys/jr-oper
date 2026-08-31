@@ -10685,6 +10685,107 @@ function renderRetornoFisicoBadge(v) {
   return `<span class="mt-1 inline-block bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Retorno físico já conferido no CD">✅ Retorno Conferido</span>`;
 }
 
+// =================================================================
+// O FILTRO DA LARGADA, EM UM LUGAR SÓ — 31/08/2026
+//
+// O DEFEITO. O Boletim de Largada saía com TODAS as viagens, sempre,
+// qualquer que fosse o filtro na tela. A causa não era um filtro errado: era
+// um filtro que NÃO EXISTIA. gerarRelatorioLargadaOperacaoModal() lia
+// `window._vgFiltroDataDe` e `window._vgFiltroDataAte` — duas variáveis que
+// não são atribuídas em lugar nenhum do app.js. As de verdade se chamam
+// _vgFiltroSaidaDe/_vgFiltroSaidaAte desde que o painel de filtros foi
+// refeito (5.7.4). Como as duas liam `undefined`, os dois `if` nunca
+// entravam e a lista filtrada era a lista inteira. E o relatório ignorava
+// ainda outros DEZ filtros da tela (carga, retorno, status, rota, setor,
+// motorista, checklist de saída, checklist de chegada, fusion) — esses nunca
+// chegou a ler.
+//
+// POR QUE ISSO ACONTECEU, E POR QUE A CORREÇÃO É ESTA. O relatório
+// reimplementava, à mão, o filtro que a tela já fazia. Duas cópias da mesma
+// regra: uma foi atualizada, a outra não, e nada acusou. É exatamente o
+// defeito que o recorte de período do Boletim documenta ter custado semanas
+// de "Boletim diz 0, Dashboard diz 2" — o mesmo filtro escrito à mão em
+// cinco lugares.
+//
+// Agora existe UMA função. A tabela e o relatório chamam a mesma, então eles
+// não têm COMO divergir. E vgResumoDosFiltros() imprime no cabeçalho do PDF
+// o que foi filtrado: um relatório que ignora o filtro passa a ser visível
+// na primeira folha, em vez de precisar de alguém conferindo linha a linha.
+// =================================================================
+function vgFiltrarViagens(lista) {
+  const fCarga      = window._vgFiltroCarga      || '';
+  const fSaidaDe    = window._vgFiltroSaidaDe    || '';
+  const fSaidaAte   = window._vgFiltroSaidaAte   || '';
+  const fRetornoDe  = window._vgFiltroRetornoDe  || '';
+  const fRetornoAte = window._vgFiltroRetornoAte || '';
+  const fStatusList    = vgListaFiltro('status');
+  const fRotaList      = vgListaFiltro('rota');
+  const fSetorList     = vgListaFiltro('setor');
+  const fMotoristaList = vgListaFiltro('motorista');
+  const fChkSaida   = window._vgFiltroChkSaida   || '';
+  const fChkChegada = window._vgFiltroChkChegada || '';
+  const fFusion     = window._vgFiltroFusion     || '';
+
+  return (lista || []).filter(v => {
+    const dSaida = v.data_saida || '';
+    const dRetorno = v.data_retorno || v.data_entrega || v.data_saida || '';
+
+    if (fCarga) {
+      const fcRaw = fCarga.toLowerCase().trim().replace(/^#/, '');
+      const fcClean = fcRaw.replace(/[^a-z0-9]/g, '');
+      const cNorm = String(v.carga || '').toLowerCase();
+      const pNorm = String(v.veiculo_placa || v.placa || '').toLowerCase();
+      const pClean = pNorm.replace(/[^a-z0-9]/g, '');
+      const mNorm = String(v.motorista_nome || v.motorista || '').toLowerCase();
+      const rNorm = String(v.rota_nome || v.rota || '').toLowerCase();
+
+      if (!cNorm.includes(fcRaw) && !(fcClean && pClean.includes(fcClean)) && !pNorm.includes(fcRaw) && !mNorm.includes(fcRaw) && !rNorm.includes(fcRaw)) {
+        return false;
+      }
+    }
+    if (fSaidaDe && dSaida < fSaidaDe) return false;
+    if (fSaidaAte && dSaida > fSaidaAte) return false;
+    if (fRetornoDe && dRetorno < fRetornoDe) return false;
+    if (fRetornoAte && dRetorno > fRetornoAte) return false;
+
+    if (fStatusList.length > 0 && !fStatusList.includes(v.status_viagem)) return false;
+
+    // Comparação normalizada: a mesma rota chega do cadastro e da planilha com
+    // caixa e espaçamento diferentes, e uma comparação crua devolveria vazio.
+    if (fRotaList.length > 0 && !fRotaList.some(r => vgNorm(r) === vgNorm(v.rota))) return false;
+    if (fSetorList.length > 0 && !fSetorList.some(s => vgNorm(s) === vgNorm(v.setor || 'FRIO'))) return false;
+    if (fMotoristaList.length > 0 && !fMotoristaList.some(m => vgNorm(m) === vgNorm(v.motorista))) return false;
+
+    if (fChkSaida && v.checklist_saida !== fChkSaida) return false;
+    if (fChkChegada && v.checklist_chegada !== fChkChegada) return false;
+    if (fFusion && v.fusion !== fFusion) return false;
+
+    return true;
+  });
+}
+
+// Os filtros ativos, em texto, para o cabeçalho do relatório e para o
+// "Limpar Filtros" da tela saber se aparece.
+function vgResumoDosFiltros() {
+  const partes = [];
+  const add = (rotulo, valor) => { if (valor) partes.push(`${rotulo}: ${valor}`); };
+  const lista = (rotulo, arr) => { if (arr && arr.length) partes.push(`${rotulo}: ${arr.join(', ')}`); };
+
+  add('Busca', window._vgFiltroCarga);
+  add('Saída de', window._vgFiltroSaidaDe);
+  add('Saída até', window._vgFiltroSaidaAte);
+  add('Retorno de', window._vgFiltroRetornoDe);
+  add('Retorno até', window._vgFiltroRetornoAte);
+  lista('Status', vgListaFiltro('status'));
+  lista('Rota', vgListaFiltro('rota'));
+  lista('Setor', vgListaFiltro('setor'));
+  lista('Motorista', vgListaFiltro('motorista'));
+  add('Checklist saída', window._vgFiltroChkSaida);
+  add('Checklist chegada', window._vgFiltroChkChegada);
+  add('Fusion', window._vgFiltroFusion);
+  return partes;
+}
+
 function renderViagensLargadaSubTab() {
   vgInicializarDropdownsFiltro();
 
@@ -10722,46 +10823,12 @@ function renderViagensLargadaSubTab() {
   const classesStatus = {};
   VG_STATUS_OPCOES.forEach(s => { classesStatus[s.val] = s.cls; });
 
-  let viagens = todasViagens.filter(v => {
-    const dSaida = v.data_saida || '';
-    const dRetorno = v.data_retorno || v.data_entrega || v.data_saida || '';
+  // A MESMA função que o Boletim de Largada usa. Ver vgFiltrarViagens()
+  // acima: enquanto isto aqui era uma cópia à mão da regra, o relatório
+  // ficou para trás e saía com a operação inteira.
+  let viagens = vgFiltrarViagens(todasViagens);
 
-    if (fCarga) {
-      const fcRaw = fCarga.toLowerCase().trim().replace(/^#/, '');
-      const fcClean = fcRaw.replace(/[^a-z0-9]/g, '');
-      const cNorm = String(v.carga || '').toLowerCase();
-      const pNorm = String(v.veiculo_placa || v.placa || '').toLowerCase();
-      const pClean = pNorm.replace(/[^a-z0-9]/g, '');
-      const mNorm = String(v.motorista_nome || v.motorista || '').toLowerCase();
-      const rNorm = String(v.rota_nome || v.rota || '').toLowerCase();
-
-      if (!cNorm.includes(fcRaw) && !(fcClean && pClean.includes(fcClean)) && !pNorm.includes(fcRaw) && !mNorm.includes(fcRaw) && !rNorm.includes(fcRaw)) {
-        return false;
-      }
-    }
-    if (fSaidaDe && dSaida < fSaidaDe) return false;
-    if (fSaidaAte && dSaida > fSaidaAte) return false;
-    if (fRetornoDe && dRetorno < fRetornoDe) return false;
-    if (fRetornoAte && dRetorno > fRetornoAte) return false;
-
-    if (fStatusList.length > 0 && !fStatusList.includes(v.status_viagem)) return false;
-
-    // Comparação normalizada: a mesma rota chega do cadastro e da planilha com
-    // caixa e espaçamento diferentes, e uma comparação crua devolveria vazio.
-    if (fRotaList.length > 0 && !fRotaList.some(r => vgNorm(r) === vgNorm(v.rota))) return false;
-    if (fSetorList.length > 0 && !fSetorList.some(s => vgNorm(s) === vgNorm(v.setor || 'FRIO'))) return false;
-    if (fMotoristaList.length > 0 && !fMotoristaList.some(m => vgNorm(m) === vgNorm(v.motorista))) return false;
-
-    if (fChkSaida && v.checklist_saida !== fChkSaida) return false;
-    if (fChkChegada && v.checklist_chegada !== fChkChegada) return false;
-    if (fFusion && v.fusion !== fFusion) return false;
-
-    return true;
-  });
-
-  const temFiltroAtivo = fCarga || fSaidaDe || fSaidaAte || fRetornoDe || fRetornoAte
-    || fStatusList.length > 0 || fRotaList.length > 0 || fSetorList.length > 0 || fMotoristaList.length > 0
-    || fChkSaida || fChkChegada || fFusion;
+  const temFiltroAtivo = vgResumoDosFiltros().length > 0;
 
   return `
     <div class="space-y-4">
@@ -12557,6 +12624,42 @@ function excluirReentregaComConfirmacao(id) {
   });
 }
 
+// O filtro das Ocorrências Operacionais, em um lugar só (31/08/2026) — pela
+// mesma razão de vgFiltrarViagens(): a tela e o relatório precisam usar a
+// MESMA regra, senão um dos dois fica para trás e ninguém percebe.
+function ocFiltrarOcorrenciasViagem(lista) {
+  const fDe     = window._ocFiltroDataDe  || '';
+  const fAte    = window._ocFiltroDataAte || '';
+  const fCarga  = window._ocFiltroCarga   || '';
+  const fFunc   = window._ocFiltroFunc    || '';
+  const fPlaca  = window._ocFiltroPlaca   || '';
+  const fRota   = window._ocFiltroRota    || '';
+  const fMotivo = window._ocFiltroMotivo  || '';
+
+  let saida = lista || [];
+  if (fDe)     saida = saida.filter(o => (o.data || '') >= fDe);
+  if (fAte)    saida = saida.filter(o => (o.data || '') <= fAte);
+  if (fCarga)  saida = saida.filter(o => String(o.carga || '').includes(fCarga));
+  if (fFunc)   saida = saida.filter(o => (o.funcionario || '').toLowerCase().includes(fFunc.toLowerCase()));
+  if (fPlaca)  saida = saida.filter(o => (o.placa || '').toLowerCase().includes(fPlaca.toLowerCase()));
+  if (fRota)   saida = saida.filter(o => (o.rota || '').toLowerCase().includes(fRota.toLowerCase()));
+  if (fMotivo) saida = saida.filter(o => o.motivo === fMotivo);
+  return saida;
+}
+
+function ocResumoDosFiltros() {
+  const partes = [];
+  const add = (rotulo, valor) => { if (valor) partes.push(`${rotulo}: ${valor}`); };
+  add('Data de', window._ocFiltroDataDe);
+  add('Data até', window._ocFiltroDataAte);
+  add('Carga', window._ocFiltroCarga);
+  add('Funcionário', window._ocFiltroFunc);
+  add('Placa', window._ocFiltroPlaca);
+  add('Rota', window._ocFiltroRota);
+  add('Motivo', window._ocFiltroMotivo);
+  return partes;
+}
+
 // SUB-ABA 2: TRATAMENTO DE OCORRÊNCIAS OPERACIONAIS DE VIAGEM (DIVIDIDA EM PENDENTES E FINALIZADAS)
 function renderViagensOcorrenciasSubTab() {
   const todasOcs = db.getOcorrenciasViagens();
@@ -12578,15 +12681,8 @@ function renderViagensOcorrenciasSubTab() {
   const fRota   = window._ocFiltroRota    || '';
   const fMotivo = window._ocFiltroMotivo  || '';
 
-  let finalizadas = todasOcs.filter(o => o.status === 'FINALIZADA');
-
-  if (fDe)     finalizadas = finalizadas.filter(o => (o.data||'') >= fDe);
-  if (fAte)    finalizadas = finalizadas.filter(o => (o.data||'') <= fAte);
-  if (fCarga)  finalizadas = finalizadas.filter(o => String(o.carga||'').includes(fCarga));
-  if (fFunc)   finalizadas = finalizadas.filter(o => (o.funcionario||'').toLowerCase().includes(fFunc.toLowerCase()));
-  if (fPlaca)  finalizadas = finalizadas.filter(o => (o.placa||'').toLowerCase().includes(fPlaca.toLowerCase()));
-  if (fRota)   finalizadas = finalizadas.filter(o => (o.rota||'').toLowerCase().includes(fRota.toLowerCase()));
-  if (fMotivo) finalizadas = finalizadas.filter(o => o.motivo === fMotivo);
+  // A MESMA função que os três botões de impressão usam.
+  const finalizadas = ocFiltrarOcorrenciasViagem(todasOcs.filter(o => o.status === 'FINALIZADA'));
 
   const buildTableRow = (o) => `
     <tr class="hover:bg-slate-800/50">
@@ -14918,12 +15014,24 @@ function emitirRelatorioReentregasA4(filtro = null) {
 // ===== GERADOR DO RELATÓRIO DE LARGADA DA OPERAÇÃO (COM LOGO CORPORATIVA) =====
 function gerarRelatorioLargadaOperacaoModal() {
   const viagens = db.getControleViagens();
-  const fDataDe = window._vgFiltroDataDe || '';
-  const fDataAte = window._vgFiltroDataAte || '';
 
-  let filtradas = viagens;
-  if (fDataDe)  filtradas = filtradas.filter(v => (v.data_saida||'') >= fDataDe);
-  if (fDataAte) filtradas = filtradas.filter(v => (v.data_saida||'') <= fDataAte);
+  // 31/08/2026 — ESTAS TRÊS LINHAS ERAM O DEFEITO:
+  //
+  //   const fDataDe = window._vgFiltroDataDe || '';
+  //   const fDataAte = window._vgFiltroDataAte || '';
+  //   if (fDataDe) filtradas = filtradas.filter(...)
+  //
+  // _vgFiltroDataDe e _vgFiltroDataAte NÃO EXISTEM — não são atribuídas em
+  // lugar nenhum do app.js. As de verdade se chamam _vgFiltroSaidaDe e
+  // _vgFiltroSaidaAte desde que o painel de filtros foi refeito na 5.7.4.
+  // Lendo `undefined`, os dois `if` nunca entravam: o relatório saía com a
+  // operação inteira, qualquer que fosse o filtro na tela. E os outros DEZ
+  // filtros da tela ele nem chegava a ler.
+  //
+  // Agora chama a MESMA função que monta a tabela da tela. Ver o comentário
+  // longo em vgFiltrarViagens().
+  const filtradas = vgFiltrarViagens(viagens);
+  const filtrosAtivos = vgResumoDosFiltros();
 
   const totViagens = filtradas.length;
   const totFusionOk = filtradas.filter(v => v.fusion === 'INICIADO').length;
@@ -14967,6 +15075,19 @@ function gerarRelatorioLargadaOperacaoModal() {
       <h1>Relatório da Largada da Operação</h1>
       <p>JR Distribuidora • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
     </div>
+  </div>
+
+  <!-- O QUE FOI FILTRADO, NA PRIMEIRA FOLHA (31/08/2026). Um relatório que
+       ignora o filtro não tem como ser percebido olhando só as linhas — foi
+       assim que o Boletim saiu com a operação inteira sem ninguém notar.
+       Aqui ele DECLARA em que base foi montado, e "todas as viagens" passa a
+       ser uma afirmação explícita em vez de um silêncio. -->
+  <div style="border:1px solid #cbd5e1;background:#f8fafc;border-radius:6px;padding:8px 10px;margin-bottom:12px;font-size:10px;color:#334155;">
+    <strong style="color:#064e3b;text-transform:uppercase;">Filtros aplicados:</strong>
+    ${filtrosAtivos.length
+      ? filtrosAtivos.map(f => `<span style="display:inline-block;background:#dcfce7;color:#14532d;border:1px solid #86efac;border-radius:4px;padding:1px 6px;margin:2px 3px 0 0;font-weight:bold;">${f}</span>`).join('')
+      : '<span style="color:#b45309;font-weight:bold;">nenhum — este relatório traz TODAS as viagens da base</span>'}
+    <span style="float:right;font-weight:bold;color:#475569;">${totViagens} de ${viagens.length} viagem(ns)</span>
   </div>
 
   <div class="kpi-grid">
@@ -15045,34 +15166,29 @@ function gerarRelatorioLargadaOperacaoModal() {
 // ===== GERADOR DO RELATÓRIO DE OCORRÊNCIAS OPERACIONAIS (IMPRESSÃO / PDF) =====
 function gerarRelatorioOcOperacionaisModal(tipo = 'TODAS') {
   const todasOcs = db.getOcorrenciasViagens();
-  const fDe     = window._ocFiltroDataDe  || window._vgFiltroDataDe  || '';
-  const fAte    = window._ocFiltroDataAte || window._vgFiltroDataAte || '';
-  const fCarga  = window._ocFiltroCarga   || '';
-  const fFunc   = window._ocFiltroFunc    || '';
-  const fPlaca  = window._ocFiltroPlaca   || '';
-  const fRota   = window._ocFiltroRota    || '';
-  const fMotivo = window._ocFiltroMotivo  || '';
+
+  // 31/08/2026 — O MESMO DEFEITO DO BOLETIM DE LARGADA, EM GRAU MENOR.
+  //
+  // Este relatório aplicava os SETE filtros da tela só no ramo FINALIZADAS.
+  // Nos ramos TODAS e PENDENTES aplicava DOIS (data de / data até) e
+  // descartava os outros cinco — carga, funcionário, placa, rota e motivo.
+  // Quem filtrasse por placa e clicasse em "Imprimir Relatório Completo"
+  // recebia a frota inteira, sem nada indicando que o filtro tinha sido
+  // ignorado. Não era decisão de desenho: os cinco `if` simplesmente não
+  // foram copiados para os outros dois ramos.
+  //
+  // Agora o `tipo` decide APENAS o recorte de status, e o filtro da tela
+  // vale igual nos três. Ver ocFiltrarOcorrenciasViagem().
+  //
+  // Saiu junto o encadeamento `|| window._vgFiltroDataDe`, que apontava para
+  // uma variável inexistente (a mesma do Boletim de Largada) e por isso
+  // nunca teve efeito nenhum.
+  const filtrosAtivos = ocResumoDosFiltros();
 
   let ocs = todasOcs;
-
-  if (tipo === 'PENDENTES') {
-    ocs = ocs.filter(o => o.status !== 'FINALIZADA');
-    if (fDe)  ocs = ocs.filter(o => (o.data || '') >= fDe);
-    if (fAte) ocs = ocs.filter(o => (o.data || '') <= fAte);
-  } else if (tipo === 'FINALIZADAS') {
-    ocs = ocs.filter(o => o.status === 'FINALIZADA');
-    if (fDe)     ocs = ocs.filter(o => (o.data || '') >= fDe);
-    if (fAte)    ocs = ocs.filter(o => (o.data || '') <= fAte);
-    if (fCarga)  ocs = ocs.filter(o => String(o.carga || '').includes(fCarga));
-    if (fFunc)   ocs = ocs.filter(o => (o.funcionario || '').toLowerCase().includes(fFunc.toLowerCase()));
-    if (fPlaca)  ocs = ocs.filter(o => (o.placa || '').toLowerCase().includes(fPlaca.toLowerCase()));
-    if (fRota)   ocs = ocs.filter(o => (o.rota || '').toLowerCase().includes(fRota.toLowerCase()));
-    if (fMotivo) ocs = ocs.filter(o => o.motivo === fMotivo);
-  } else {
-    // TODAS
-    if (fDe)  ocs = ocs.filter(o => (o.data || '') >= fDe);
-    if (fAte) ocs = ocs.filter(o => (o.data || '') <= fAte);
-  }
+  if (tipo === 'PENDENTES')       ocs = ocs.filter(o => o.status !== 'FINALIZADA');
+  else if (tipo === 'FINALIZADAS') ocs = ocs.filter(o => o.status === 'FINALIZADA');
+  ocs = ocFiltrarOcorrenciasViagem(ocs);
 
   const totOcs         = ocs.length;
   const totPendentes   = ocs.filter(o => o.status !== 'FINALIZADA').length;
@@ -15153,6 +15269,17 @@ function gerarRelatorioOcOperacionaisModal(tipo = 'TODAS') {
       <h1>${headerTitle}</h1>
       <p>JR Distribuidora • Período: ${periodo} • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
     </div>
+  </div>
+
+  <!-- O que foi filtrado, declarado na primeira folha (31/08/2026). Mesma
+       razão do Boletim de Largada: relatório que ignora filtro não se
+       denuncia sozinho. -->
+  <div style="border:1px solid #cbd5e1;background:#f8fafc;border-radius:6px;padding:8px 10px;margin-bottom:12px;font-size:10px;color:#334155;">
+    <strong style="text-transform:uppercase;">Filtros aplicados:</strong>
+    ${filtrosAtivos.length
+      ? filtrosAtivos.map(f => `<span style="display:inline-block;background:#e0e7ff;color:#3730a3;border:1px solid #a5b4fc;border-radius:4px;padding:1px 6px;margin:2px 3px 0 0;font-weight:bold;">${f}</span>`).join('')
+      : '<span style="color:#b45309;font-weight:bold;">nenhum — este relatório traz TODAS as ocorrências da base</span>'}
+    <span style="float:right;font-weight:bold;color:#475569;">${ocs.length} de ${todasOcs.length} ocorrência(s)</span>
   </div>
 
   <div class="kpi-grid">
@@ -18774,12 +18901,28 @@ function imprimirFichaOficinaChamadoPdf(chamadoId) {
 function emitirRelatorioChamadosRotaA4(filtro = null) {
   const todasRotas = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
 
+  // 31/08/2026 — O MESMO DEFEITO, TERCEIRA OCORRÊNCIA. A tela de Chamados em
+  // Rota tem SEIS filtros (carga/busca, rota, veículo, motorista, motivo e
+  // status). Este relatório lia quatro: motorista e motivo ficavam de fora,
+  // e o botão que o chama se chama "Imprimir Relatório Consolidado A4 dos
+  // Chamados Filtrados". Quem filtrasse por motorista recebia os chamados de
+  // todo mundo.
+  //
+  // As duas linhas de data continuam com `window._rotaFiltroDataDe/Ate` como
+  // último recurso, mas essas variáveis NÃO EXISTEM — a tela não tem filtro
+  // de data. Elas só não fizeram estrago porque quem passa período aqui é o
+  // modal de PDF, pelo argumento `filtro`. Ficam explicitamente como null
+  // para não parecerem um filtro que funciona.
   const fStatus = (filtro && filtro.status) || window._rotaFiltroStatus || window._rotaActiveAba || 'TODOS';
-  const fDataDe = (filtro && filtro.data_de) || (filtro && filtro.fDe) || window._rotaFiltroDataDe || '';
-  const fDataAte = (filtro && filtro.data_ate) || (filtro && filtro.fAte) || window._rotaFiltroDataAte || '';
+  const fDataDe = (filtro && filtro.data_de) || (filtro && filtro.fDe) || '';
+  const fDataAte = (filtro && filtro.data_ate) || (filtro && filtro.fAte) || '';
   const fRota = (filtro && filtro.rota) || window._rotaFiltroRota || '';
   const fVeiculo = (filtro && filtro.veiculo) || window._rotaFiltroVeiculo || '';
   const fBusca = (filtro && filtro.busca) || (window._rotaFiltroCarga || '').trim().toLowerCase();
+  // Os dois que faltavam. Só valem quando o relatório sai da TELA (filtro
+  // nulo): vindo do modal de PDF, quem manda é o que foi escolhido lá.
+  const fMotorista = filtro ? ((filtro && filtro.motorista) || '') : ((window._rotaFiltroMotorista || '').trim());
+  const fMotivo    = filtro ? ((filtro && filtro.motivo) || '')    : ((window._rotaFiltroMotivo || '').trim());
 
   let lista = todasRotas;
 
@@ -18809,6 +18952,17 @@ function emitirRelatorioChamadosRotaA4(filtro = null) {
 
   if (fRota) {
     lista = lista.filter(r => r.carga_rota === fRota || r.rota_nome === fRota);
+  }
+
+  // Os dois que o relatório não aplicava (31/08/2026). Mesma comparação que a
+  // tela faz em renderChamadosRota — motorista casa por nome ou por id, e o
+  // motivo aceita o campo novo e o legado.
+  if (fMotorista) {
+    lista = lista.filter(r => r.motorista_nome === fMotorista || r.motorista_id == fMotorista);
+  }
+
+  if (fMotivo) {
+    lista = lista.filter(r => (r.motivo_resumido || r.tipo_ocorrencia) === fMotivo);
   }
 
   if (fVeiculo) {

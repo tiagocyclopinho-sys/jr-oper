@@ -153,7 +153,6 @@ class CloudStore {
   // tendo 5 MB aqui, e é por isso que "a máquina tem espaço de sobra" não
   // resolve. Dentro desses 5 MB este app guarda:
   //
-  //   jr_sac_static   ~2,9 MB   catálogo de clientes e produtos
   //   jr_sac_db          ...    a fatia operacional — A VERDADE local
   //   25 chaves-espelho  ...    UMA SEGUNDA CÓPIA INTEIRA da mesma coisa
   //
@@ -161,6 +160,13 @@ class CloudStore {
   // cópia. Quando falta espaço, sacrificar a cópia é a decisão óbvia — o
   // espelho se reconstrói sozinho no próximo pull que couber, e nenhum
   // dado de negócio mora só nele.
+  //
+  // 31/08/2026: o maior item desta lista saiu dela. 'jr_sac_static'
+  // (~2,9 MB de clientes e produtos, 60% da cota) deixou de existir — o
+  // catálogo vem de js/mockData.js, que mora no cache de ARQUIVOS, e só o
+  // delta do aparelho é persistido, no IndexedDB. Ver js/catalogoStore.js.
+  // Com isso o aperto de cota deixou de ser rotina, mas a duplicação do
+  // operacional continua de pé e continua sendo o próximo item.
   //
   // Ao estourar, purgamos TODOS os espelhos de uma vez em vez de só o que
   // falhou: liberar 40 KB para a próxima tabela estourar em seguida seria
@@ -240,6 +246,21 @@ class CloudStore {
       // dado real caber nos ~5 MB de localStorage. Não é perda de dado;
       // é o sinal de que a cota está no limite neste aparelho.
       espelhosSuspensos: !!this._espelhosSuspensos,
+      // 31/08/2026 — cadastro de cliente/produto. Se `indisponivel` vier
+      // preenchido, a migration_36 não está aplicada NESTE banco e nenhum
+      // cadastro novo viaja entre aparelhos. `cursor` é até onde este
+      // aparelho já leu; ele avança sozinho a cada cadastro que chega.
+      catalogo: {
+        indisponivel: this._catalogoIndisponivel || null,
+        cursor: this._cursorDoCatalogo(),
+        delta: (() => {
+          try {
+            if (!window.db || typeof window.db.getCatalogoParaSync !== 'function') return null;
+            const d = window.db.getCatalogoParaSync();
+            return { clientes: (d.clientes || []).length, produtos: (d.produtos || []).length };
+          } catch(e) { return null; }
+        })()
+      },
       usoDoArmazenamento: (() => {
         try {
           return (window.db && window.db.getStorageUsageInfo) ? window.db.getStorageUsageInfo() : null;
@@ -540,6 +561,15 @@ class CloudStore {
     data = this._aplicarGuardaDeEscrita(tableName, data);
     if (data.length === 0) return true;
 
+    // LISTA BRANCA DE COLUNAS (31/08/2026). Só tem efeito nas tabelas que
+    // declaram uma em CloudStore.COLUNAS_POR_TABELA — hoje, clientes e
+    // produtos. Ver o comentário lá: campo que não é coluna derruba o lote
+    // inteiro com PGRST204, e tipo que volta diferente faz o registro ser
+    // reenviado para sempre.
+    if (CloudStore.COLUNAS_POR_TABELA[tableName]) {
+      data = data.map(r => this._projetarParaTabela(tableName, r));
+    }
+
     // O PostgREST exige que, num envio em lote, todos os objetos do array
     // tenham exatamente as mesmas chaves — registros mais antigos (ex: os
     // 5 usuários padrão, sem o campo "departamento") misturados com
@@ -778,7 +808,7 @@ class CloudStore {
     for (const r of registros) {
       const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
       if (id === null) { mudados.push(r); continue; }   // sem id, não dá para saber: manda
-      if (conhecidos[id] !== this._hashRegistro(r)) mudados.push(r);
+      if (conhecidos[id] !== this._hashParaSync(tableName, r)) mudados.push(r);
     }
     return mudados;
   }
@@ -788,7 +818,7 @@ class CloudStore {
     if (!mapa[tableName]) mapa[tableName] = {};
     for (const r of enviados) {
       const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
-      if (id !== null) mapa[tableName][id] = this._hashRegistro(r);
+      if (id !== null) mapa[tableName][id] = this._hashParaSync(tableName, r);
     }
     this._mapaSync = mapa;
     this._gravarMapaSync();
@@ -837,7 +867,7 @@ class CloudStore {
       const local = porId.get(id);
       if (!local) {
         resultado.push(nuvem);
-        novosHashes[id] = this._hashRegistro(nuvem);
+        novosHashes[id] = this._hashParaSync(tableName, nuvem);
         continue;
       }
 
@@ -847,7 +877,7 @@ class CloudStore {
       // que os outros já corrigiram.
       const sujo = !primeiraVez
         && conhecidos[id] !== undefined
-        && this._hashRegistro(local) !== conhecidos[id];
+        && this._hashParaSync(tableName, local) !== conhecidos[id];
 
       // =============================================================
       // DESEMPATE POR atualizado_em (28/08/2026)
@@ -902,7 +932,7 @@ class CloudStore {
         recusados.push(id);
       } else {
         resultado.push(nuvem);
-        novosHashes[id] = this._hashRegistro(nuvem);
+        novosHashes[id] = this._hashParaSync(tableName, nuvem);
         if (sujo) cederam++;
       }
     }
@@ -1799,6 +1829,14 @@ class CloudStore {
       }
     }
     
+    // CATÁLOGO (31/08/2026): caminho próprio, porque a origem local dele não
+    // é o jr_sac_db — é o delta no IndexedDB. Fica depois do laço das 25
+    // tabelas porque não tem pressa e não é dependência de ninguém: as FKs
+    // que apontavam para clientes/produtos foram removidas na migration 22.
+    // A LEITURA do catálogo NÃO acontece aqui: ela mora no _pullDaNuvem(),
+    // junto com as outras leituras. Aqui é só o envio.
+    await this._pushCatalogo();
+
     // Item 12: a ficha do aparelho sobe junto com o ciclo normal — assim o
     // "visto por último" da tela de Aparelhos é sempre real, e a contagem de
     // recusas acompanha o que a auditoria acabou de medir.
@@ -2094,9 +2132,10 @@ class CloudStore {
         //
         // 'jr_sac_db' guarda só a FATIA OPERACIONAL: store.js:_getOperationalSlice()
         // remove clientes e produtos de propósito antes de gravar, porque são
-        // 15.139 clientes e 4.010 produtos vindos da planilha Dados SAC e ficam
-        // na chave separada 'jr_sac_static' (foi isso que derrubou o tamanho de
-        // cada gravação de ~3MB para dezenas de KB).
+        // 15.139 clientes e 4.010 produtos vindos da planilha Dados SAC — desde
+        // 31/08/2026 eles não são persistidos por inteiro em lugar nenhum do
+        // localStorage: vêm de js/mockData.js e só o delta vai para o
+        // IndexedDB (ver js/catalogoStore.js).
         //
         // Trocar db.data por fullDb apagava clientes e produtos da memória a
         // cada pull — a lista de clientes sumia e db.data.produtos virava
@@ -2159,13 +2198,22 @@ class CloudStore {
       if (window.fotoStore) window.fotoStore.limparTudo().catch(() => {});
     }
 
-    if (anyChange) {
+    // CATÁLOGO (31/08/2026): leitura incremental própria, fora do laço das
+    // 25 tabelas. Um cliente cadastrado em outro aparelho chega por aqui.
+    let veioCatalogo = false;
+    try {
+      veioCatalogo = await this._pullCatalogo() === true;
+    } catch (eCat) {
+      console.warn('[CloudStore] Falha ao baixar o catálogo:', eCat && eCat.message);
+    }
+
+    if (anyChange || veioCatalogo) {
       console.log('[CloudStore] Dados atualizados da Nuvem para este aparelho.');
       // Dispara evento para que o app atualize a tela
       window.dispatchEvent(new CustomEvent('jr-cloud-sync', { detail: { updated: true } }));
     }
 
-    return anyChange;
+    return anyChange || veioCatalogo;
   }
 
   // ---------------------------------------------------------------
@@ -2323,6 +2371,215 @@ class CloudStore {
           ? `\nÚltima atualização vinda da nuvem: ${new Date(this._ultimoPullOkMs).toLocaleTimeString('pt-BR')} (há ${Math.round(idadeMs / 1000)}s)`
           : '\nAinda não baixou dados da nuvem nesta sessão.');
   }
+
+  // =================================================================
+  // CATÁLOGO (CLIENTES E PRODUTOS): SINCRONIZAÇÃO POR DELTA — 31/08/2026
+  //
+  // O QUE ESTAVA QUEBRADO. `clientes` e `produtos` NUNCA estiveram no
+  // MAPA_TABELAS acima. As duas tabelas existiam no banco, populadas com as
+  // 15.139 + 4.010 linhas da planilha, e nenhum aparelho jamais enviou nem
+  // leu nenhuma das duas. Efeito prático: cliente cadastrado na doca não
+  // existia para o SAC. Nem no dia seguinte, nem nunca.
+  //
+  // POR QUE FICARAM DE FORA, E POR QUE AGORA DÁ. Sincronizar do jeito que as
+  // outras 25 sincronizam é ler a TABELA INTEIRA a cada 30 segundos: ~3 MB
+  // por aparelho por ciclo para propagar meia dúzia de cadastros por mês.
+  // A decisão de deixar de fora estava certa para aquele desenho. O que
+  // mudou é que o catálogo virou SEMENTE + DELTA (v5.8.0, js/catalogoStore.js):
+  // o que precisa viajar não é a lista, é o delta — dezenas de linhas.
+  //
+  // COMO ESTE CAMINHO É DIFERENTE DO DAS OUTRAS 25 TABELAS:
+  //
+  //   1. NÃO passa por jr_sac_db nem por chave-espelho. A origem e o destino
+  //      são o delta do catálogo (IndexedDB), via window.db.
+  //
+  //   2. A LEITURA É INCREMENTAL: `atualizado_em >= cursor`, com o cursor
+  //      sendo sempre um carimbo que o PRÓPRIO SERVIDOR gerou (o maior que
+  //      veio na leitura anterior). Não é o relógio do aparelho — se fosse,
+  //      uma máquina adiantada pularia registros para sempre. Ver o
+  //      cabeçalho de database/migration_36_catalogo_sync.sql.
+  //
+  //   3. NÃO usa _mesclarPorRegistro(). Aquela função deduz exclusão de
+  //      "id que eu conheço e não veio da nuvem" — o que só é verdade
+  //      quando cloudData é a tabela INTEIRA. Numa leitura incremental
+  //      quase nada vem, e ela apagaria o catálogo inteiro no primeiro
+  //      ciclo. Aqui a mesclagem é upsert por id, e exclusão viaja como
+  //      is_deleted (lápide), que é uma linha como qualquer outra.
+  //
+  //   4. TEM LISTA BRANCA DE COLUNAS. Os registros da planilha carregam
+  //      `codigo` e `nome`, que não são colunas de `clientes` — enviá-los
+  //      derruba o lote inteiro com PGRST204. A projeção também NORMALIZA
+  //      tipo (o Postgres devolve valor_unitario_padrao como "0.00", string;
+  //      localmente é 0, número): sem isso o registro pareceria alterado a
+  //      cada ciclo e seria reenviado para sempre.
+  //
+  // DEPENDE DA MIGRATION 36. Sem ela não existe `atualizado_em`, a leitura
+  // filtrada volta 400, e o catálogo NÃO sincroniza — nem sobe, nem desce.
+  // Falhar fechado aqui é de propósito: subir sem o carimbo do servidor
+  // colocaria linhas na nuvem que, depois da migration, ficariam com a data
+  // antiga do backfill e nunca seriam descobertas por ninguém.
+  // =================================================================
+  _cursorDoCatalogo() {
+    try {
+      const v = localStorage.getItem('jr_catalogo_cursor');
+      if (v) return v;
+    } catch (e) {}
+    return CloudStore.CATALOGO_EPOCA;
+  }
+
+  _gravarCursorDoCatalogo(iso) {
+    try { localStorage.setItem('jr_catalogo_cursor', iso); } catch (e) {}
+  }
+
+  // Reduz o registro às colunas que a tabela realmente tem, SEMPRE todas
+  // elas (as ausentes viram null) e com o tipo normalizado. É a mesma
+  // projeção usada para enviar, para comparar e para guardar — e ser a
+  // mesma nos três é o que impede o "reenvia para sempre".
+  _projetarParaTabela(tableName, r) {
+    const spec = CloudStore.COLUNAS_POR_TABELA[tableName];
+    if (!spec || !r) return r;
+    const out = { id: (r.id === undefined || r.id === null) ? null : String(r.id) };
+    const vazio = v => (v === undefined || v === null || v === '');
+    (spec.texto || []).forEach(c => { out[c] = vazio(r[c]) ? null : String(r[c]); });
+    (spec.numero || []).forEach(c => { out[c] = vazio(r[c]) ? null : Number(r[c]); });
+    (spec.booleano || []).forEach(c => { out[c] = !!r[c]; });
+    (spec.data || []).forEach(c => { out[c] = vazio(r[c]) ? null : String(r[c]); });
+    return out;
+  }
+
+  // O hash que decide "mudou desde o último envio". Para as tabelas sem
+  // lista branca é exatamente o _hashRegistro() de sempre.
+  _hashParaSync(tableName, r) {
+    return this._hashRegistro(this._projetarParaTabela(tableName, r));
+  }
+
+  _catalogoDisponivel() {
+    return !!(typeof window !== 'undefined' && window.db
+      && typeof window.db.getCatalogoParaSync === 'function'
+      && typeof window.db.aplicarCatalogoDaNuvem === 'function');
+  }
+
+  // Puxa o que mudou no catálogo desde o último ciclo. Devolve:
+  //   true  = chegou coisa nova (a tela precisa ser redesenhada)
+  //   false = nada novo
+  //   null  = não deu para ler (migration 36 ausente, ou rede)
+  async _pullCatalogo() {
+    if (!this.isConfigured() || !this._catalogoDisponivel()) return null;
+
+    const cursor = this._cursorDoCatalogo();
+    const local = window.db.getCatalogoParaSync();
+    const aceitos = {};
+    let maiorCarimbo = cursor;
+    let mudou = false;
+
+    for (const t of CloudStore.CATALOGO) {
+      const linhas = await this.getAll(t.tableName, 'atualizado_em=gte.' + encodeURIComponent(cursor));
+      if (linhas === null) {
+        this._catalogoIndisponivel = {
+          tabela: t.tableName,
+          motivo: 'Não foi possível ler com o filtro atualizado_em. Se isto não passa, a migration_36_catalogo_sync.sql ainda não foi aplicada neste banco.',
+          quando: (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString()
+        };
+        console.warn(`[CloudStore] Catálogo: leitura de ${t.tableName} recusada — cadastro de cliente/produto NÃO está sincronizando. Ver database/migration_36_catalogo_sync.sql.`);
+        return null;
+      }
+
+      const porIdLocal = new Map();
+      (local[t.dbKey] || []).forEach(r => {
+        if (r && r.id !== undefined && r.id !== null) porIdLocal.set(String(r.id), r);
+      });
+
+      const mapa = this._lerMapaSync();
+      const conhecidos = mapa[t.tableName];
+      const daTabela = [];
+
+      for (const bruta of linhas) {
+        if (!bruta || bruta.id === undefined || bruta.id === null) continue;
+        if (bruta.atualizado_em && String(bruta.atualizado_em) > String(maiorCarimbo)) {
+          maiorCarimbo = String(bruta.atualizado_em);
+        }
+
+        const id = String(bruta.id);
+        const nuvem = this._projetarParaTabela(t.tableName, bruta);
+        const localReg = porIdLocal.get(id);
+
+        // Mesma regra das outras tabelas (ver _mesclarPorRegistro): o que
+        // foi mexido aqui e ainda não subiu ganha da nuvem, a menos que a
+        // nuvem esteja estritamente mais recente.
+        if (localReg && conhecidos && conhecidos[id] !== undefined
+            && this._hashParaSync(t.tableName, localReg) !== conhecidos[id]) {
+          const tLocal = this._instanteDeAtualizacao(localReg);
+          const tNuvem = this._instanteDeAtualizacao(bruta);
+          if (!(tLocal !== null && tNuvem !== null && tNuvem > tLocal)) continue;
+        }
+
+        // Já é idêntico ao que está aqui: não mexe e não conta como mudança.
+        if (localReg && this._hashParaSync(t.tableName, localReg) === this._hashRegistro(nuvem)) continue;
+
+        daTabela.push(nuvem);
+      }
+
+      if (daTabela.length) {
+        aceitos[t.dbKey] = daTabela;
+        this._confirmarEnvio(t.tableName, daTabela);   // agora são o que a nuvem tem
+        mudou = true;
+      }
+    }
+
+    this._catalogoIndisponivel = null;
+    // A partir daqui o envio está liberado: a leitura filtrada funcionou,
+    // logo a migration_36 está aplicada neste banco. Ver _pushCatalogo().
+    this._catalogoPullOk = true;
+
+    if (mudou) {
+      const n = Object.keys(aceitos).reduce((s, k) => s + aceitos[k].length, 0);
+      window.db.aplicarCatalogoDaNuvem(aceitos);
+      console.log(`[CloudStore] Catálogo: ${n} cadastro(s) de cliente/produto chegaram da nuvem.`);
+    }
+
+    // O cursor só anda quando as DUAS tabelas foram lidas sem erro — senão
+    // uma leitura parcial faria o aparelho pular o que não chegou a ver.
+    if (maiorCarimbo !== cursor) this._gravarCursorDoCatalogo(maiorCarimbo);
+    return mudou;
+  }
+
+  // Sobe o delta deste aparelho. Só o que mudou desde a última confirmação:
+  // numa instalação sem cadastro manual nenhum, isto não gasta requisição.
+  async _pushCatalogo() {
+    if (!this.isConfigured() || !this._catalogoDisponivel()) return false;
+
+    // FALHA FECHADO, e é o ponto mais importante deste arquivo para quem
+    // for mexer aqui: só envia depois que uma LEITURA filtrada funcionou
+    // nesta sessão. Enviar antes disso colocaria linhas na nuvem sem o
+    // carimbo do servidor — e o backfill da migration_36 as deixaria com a
+    // data antiga, invisíveis para todo mundo, para sempre. Melhor não
+    // subir e dizer por quê do que subir para um buraco.
+    if (!this._catalogoPullOk || this._catalogoIndisponivel) return false;
+
+    const local = window.db.getCatalogoParaSync();
+    let enviouAlgo = false;
+
+    for (const t of CloudStore.CATALOGO) {
+      const registros = (local[t.dbKey] || []).map(r => this._projetarParaTabela(t.tableName, r));
+      if (!registros.length) continue;
+      const mudados = this._separarOQueMudou(t.tableName, registros);
+      if (!mudados.length) continue;
+      if (await this.upsert(t.tableName, mudados)) {
+        this._confirmarEnvio(t.tableName, mudados);
+        enviouAlgo = true;
+        console.log(`[CloudStore] Catálogo: ${mudados.length} ${t.dbKey} enviado(s) para a nuvem.`);
+      }
+    }
+    return enviouAlgo;
+  }
+
+  // NÃO existe um "sincronizarCatalogo()" que faça os dois lados de uma vez,
+  // e é de propósito: as duas metades já estão penduradas nos MESMOS dois
+  // pontos de entrada que o app inteiro usa — _pullCatalogo() dentro do
+  // _pullDaNuvem(), _pushCatalogo() dentro do syncLocalToCloud(). Um terceiro
+  // caminho seria uma segunda rota para a mesma coisa, com chance de rodar
+  // fora de ordem (empurrar antes de puxar é exatamente o defeito que a Fase
+  // 5 de 21/08/2026 removeu do startAutoSync).
 }
 
 // A build QUE ESTE ARQUIVO E. O app compara este valor com o "build" do
@@ -2341,7 +2598,60 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "espelho-nao-derruba-tabela-5.7.4";
+CloudStore.BUILD = "filtros-dos-relatorios-5.9.1";
+
+// =================================================================
+// CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
+//
+// Elas têm caminho próprio (_pullCatalogo/_pushCatalogo) porque a origem
+// local delas não é o jr_sac_db: é o delta do catálogo, no IndexedDB.
+// =================================================================
+CloudStore.CATALOGO = [
+  { dbKey: 'clientes', tableName: 'clientes' },
+  { dbKey: 'produtos', tableName: 'produtos' }
+];
+
+// O PISO da leitura incremental do catálogo. FORMA PAR COM O BACKFILL da
+// migration_36, que carimba 1999-01-01 em toda linha que já existia: assim
+// as 19 mil linhas da planilha ficam ABAIXO deste piso e nunca são baixadas
+// (elas já estão no aparelho, embarcadas em js/mockData.js), e só o que for
+// cadastrado ou alterado a partir da migration fica ACIMA e desce.
+//
+// MUDAR ISTO SEM MUDAR A MIGRATION (ou o contrário) quebra dos dois jeitos:
+// piso baixo demais = todo aparelho baixa 3 MB em toda abertura; piso alto
+// demais = ninguém recebe cadastro nenhum. As duas datas andam juntas.
+CloudStore.CATALOGO_EPOCA = '2000-01-01T00:00:00-03:00';
+
+// LISTA BRANCA DE COLUNAS, por tabela.
+//
+// Existe por dois motivos, e os dois já derrubaram sincronização aqui:
+//
+//   1. COLUNA QUE NÃO EXISTE derruba o lote inteiro (PGRST204). Os 15.139
+//      clientes da planilha carregam `codigo` e `nome`, que são campos só
+//      do app — as colunas reais são codigo_cliente e razao_social.
+//
+//   2. TIPO QUE VOLTA DIFERENTE faz o registro parecer alterado para
+//      sempre. O Postgres devolve valor_unitario_padrao como "0.00"
+//      (string) e localmente ele é 0 (número): sem normalizar, o hash
+//      nunca bate e o aparelho reenvia a mesma linha a cada 30 segundos.
+//
+// `atualizado_em` NÃO está aqui de propósito: quem carimba é o trigger do
+// banco. Enviá-lo deixaria o relógio de um aparelho definir o cursor de
+// todos os outros.
+CloudStore.COLUNAS_POR_TABELA = {
+  clientes: {
+    texto:    ['codigo_cliente', 'razao_social', 'cnpj', 'cidade', 'uf', 'deleted_by_nome'],
+    numero:   ['deleted_by_usuario_id'],
+    booleano: ['is_deleted'],
+    data:     ['deleted_at']
+  },
+  produtos: {
+    texto:    ['codigo_produto', 'descricao', 'categoria', 'deleted_by_nome'],
+    numero:   ['valor_unitario_padrao', 'deleted_by_usuario_id'],
+    booleano: ['is_deleted'],
+    data:     ['deleted_at']
+  }
+};
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
