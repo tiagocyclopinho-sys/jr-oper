@@ -4497,13 +4497,29 @@ function opcoesTipoErro(valorAtual, incluirLegado) {
 function getSlaBreakdown(list, dateField) {
   const agora = Date.now();
   let critico = 0, alerta = 0, ok = 0;
+
+  // (01/09/2026) dateField passou a aceitar LISTA de campos, além da string
+  // de sempre. Com string o comportamento é o original, byte a byte — campo
+  // ausente cai em `ok`. Com lista, a data sai de _momentoDoRegistroParaSla,
+  // a mesma cascata que getMaisAntigaPendente usa, e registro sem o campo
+  // esperado deixa de ser contado como "🟢 dentro do prazo" por omissão.
+  // Precisou disso para a fila do Gestor, cujo relógio começa em
+  // atualizado_em (quando a análise devolveu o chamado para ele) e cai para
+  // criado_em nos registros que nunca foram reeditados.
+  const campos = Array.isArray(dateField) ? dateField : null;
+
   (list || []).forEach(item => {
-    const dataRef = item ? item[dateField] : null;
-    if (!dataRef) { ok++; return; }
-    // _parseDataFlex, e não new Date(): a hora que volta da nuvem não tem
-    // fuso e seria lida como local, adiantando tudo em 3h (ver o comentário
-    // longo em _parseDataFlex).
-    const ms = _parseDataFlex(dataRef);
+    let ms;
+    if (campos) {
+      ms = _momentoDoRegistroParaSla(item, campos);
+    } else {
+      const dataRef = item ? item[dateField] : null;
+      if (!dataRef) { ok++; return; }
+      // _parseDataFlex, e não new Date(): a hora que volta da nuvem não tem
+      // fuso e seria lida como local, adiantando tudo em 3h (ver o comentário
+      // longo em _parseDataFlex).
+      ms = _parseDataFlex(dataRef);
+    }
     if (ms === null) { ok++; return; }
     const horas = (agora - ms) / 36e5;
     if (horas > 48) critico++;
@@ -4512,6 +4528,29 @@ function getSlaBreakdown(list, dateField) {
   });
   return { critico, alerta, ok };
 }
+
+// A fila do Gestor: causa raiz JÁ apurada e parecer ainda não dado.
+//
+// Não é o mesmo que a aba "Pendentes" da tela de Tratativas, que mostra tudo
+// que não está CONCLUIDO — ali entram também as devoluções que sequer passaram
+// pela Análise, e que portanto estão na mesa do analista, não na do gestor.
+// Cobrar o gestor por elas seria cobrar a pessoa errada, e o Dashboard já tem
+// um alerta próprio ("Análises Pendentes") para essa outra fila.
+//
+// O corte é status_gestao === 'PENDENTE_GESTOR', que é exatamente o carimbo
+// que updateInvestigacao põe quando a apuração termina e devolve o chamado
+// para o gestor (js/store.js:1909).
+function tratativasPendentesGestor(devs) {
+  return (devs || []).filter(d => d && d.status_gestao === 'PENDENTE_GESTOR');
+}
+
+// De quando conta o relógio do gestor: do momento em que o chamado CAIU na mesa
+// dele, não da abertura da devolução. atualizado_em é esse instante — tanto a
+// apuração inicial quanto qualquer reedição posterior o regravam junto com o
+// status_gestao = 'PENDENTE_GESTOR' (js/store.js:1909-1911). Como reedição
+// REABRE a tratativa, reiniciar a contagem ali é o certo: o parecer anterior
+// foi dado sobre outra informação.
+const CAMPOS_SLA_TRATATIVA_GESTOR = ['atualizado_em', 'criado_em', 'data_abertura', 'data'];
 
 // Encontra a ocorrência pendente mais antiga de uma lista e devolve a idade
 // dela já formatada, com o nível de SLA — é o que os cards de "Alertas &
@@ -4819,12 +4858,20 @@ function renderDashboardView() {
   const pendCdAlerta = allDevs.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
   const abertasCausaRaizAlerta = allDevs.filter(d => !d.motivo_real_causa_raiz || !d.acao_tomada);
   const veicParadosAlerta = allRotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO');
+  // (01/09/2026) A fila do Gestor era a única etapa do fluxo SEM alerta: a
+  // devolução saía da Análise com causa raiz apurada, entrava em
+  // PENDENTE_GESTOR e ficava ali sem aparecer em lugar nenhum do Dashboard.
+  // Quando este alerta foi escrito havia 15 chamados nesse estado, nenhum com
+  // parecer, o mais antigo parado desde 23/08 — nove dias sem ninguém ver.
+  const tratativasGestorAlerta = tratativasPendentesGestor(allDevs);
 
   // Idade da ocorrência pendente mais antiga em cada painel de alerta —
   // complementa a contagem por faixa (🔴🟡🟢) com "há quanto tempo está
   // parado o pior caso", que é o que mais importa para priorização.
   const maisAntigaPendCd = getMaisAntigaPendente(pendCdAlerta, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
   const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaizAlerta, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
+  const maisAntigaTratativaGestor = getMaisAntigaPendente(tratativasGestorAlerta, CAMPOS_SLA_TRATATIVA_GESTOR, { atencao: 24, estourado: 48 });
+  const slaTratativaGestor = getSlaBreakdown(tratativasGestorAlerta, CAMPOS_SLA_TRATATIVA_GESTOR);
   const maisAntigaVeicParadoRota = getMaisAntigaPendente(veicParadosAlerta, ['criado_em', 'data_chamado', 'data'], { atencao: 4, estourado: 8 });
   const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
   const sinistrosPendentesDash = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
@@ -5061,7 +5108,7 @@ function renderDashboardView() {
   // completas, nao pelas filtradas. Antes, escolher um periodo sem
   // pendencia fazia o painel inteiro sumir, escondendo o que ainda estava
   // em aberto (23/08/2026).
-  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || sinistrosPendentesDash.length > 0);
+  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || tratativasGestorAlerta.length > 0 || sinistrosPendentesDash.length > 0);
 
   return `
     <div class="space-y-6">
@@ -5184,6 +5231,25 @@ function renderDashboardView() {
                   </div>
                 </div>
                 <button onclick="switchTab('sac_investigacao')" class="bg-orange-900/40 hover:bg-orange-900/80 border border-orange-700 text-orange-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Analisar</button>
+              </div>` : ''}
+
+            <!-- ALERTA TRATATIVAS DO GESTOR PENDENTES -->
+            ${tratativasGestorAlerta.length > 0 ? `
+              <div class="bg-slate-950 border border-sky-800/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
+                <div class="flex items-center gap-3 overflow-hidden">
+                  <div class="w-9 h-9 rounded-lg bg-sky-950 border border-sky-700 text-sky-300 flex items-center justify-center shrink-0 text-base font-bold">👔</div>
+                  <div class="truncate">
+                    <div class="text-xs font-black text-sky-300 truncate">${tratativasGestorAlerta.length} Tratativa(s) do Gestor</div>
+                    <div class="text-[10px] text-slate-400 truncate">Causa raiz apurada, sem parecer</div>
+                    ${_linhaSla(maisAntigaTratativaGestor, 'Mais antiga')}
+                    <div class="flex items-center gap-2 mt-0.5 text-[10px] font-bold">
+                      <span class="text-red-400" title="Mais de 48h na mesa do gestor">🔴 ${slaTratativaGestor.critico}</span>
+                      <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaTratativaGestor.alerta}</span>
+                      <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaTratativaGestor.ok}</span>
+                    </div>
+                  </div>
+                </div>
+                <button onclick="window._activeGestorSubTab='pendentes'; switchTab('gestao_gestor')" class="bg-sky-900/50 hover:bg-sky-800 border border-sky-600 text-sky-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Tratar</button>
               </div>` : ''}
 
             <!-- ALERTA SINISTROS PENDENTES -->
@@ -5378,7 +5444,7 @@ function renderDashboardView() {
           <span class="text-xs text-slate-400 font-bold">Lead time, causas raiz e auditoria</span>
         </div>
 
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
           <!-- CARD DEVOLUÇÃO TOTAL -->
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Valor Total Reclamado</div>
@@ -5433,6 +5499,22 @@ function renderDashboardView() {
             ${maisAntigaAnalise.item ? `
             <div class="text-[10px] font-bold mt-1 ${maisAntigaAnalise.horas > 48 ? 'text-red-400' : maisAntigaAnalise.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}" title="Devolução ${maisAntigaAnalise.item.numero_devolucao || maisAntigaAnalise.item.numero_protocolo || ''}">
               ⏳ Mais antiga: ${maisAntigaAnalise.texto}
+            </div>` : ''}
+          </div>
+
+          <!-- CARD TRATATIVAS DO GESTOR PENDENTES -->
+          <div class="bg-slate-950 border ${tratativasGestorAlerta.length > 0 ? 'border-sky-800/70' : 'border-slate-800'} p-3 rounded-xl">
+            <div class="text-[10px] text-slate-400 font-bold uppercase">Tratativas do Gestor</div>
+            <div class="text-xl font-black ${tratativasGestorAlerta.length > 0 ? 'text-sky-300' : 'text-emerald-400'} mt-1">${tratativasGestorAlerta.length}</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Parecer pendente</div>
+            <div class="flex items-center gap-2 mt-1.5 text-[10px] font-bold">
+              <span class="text-red-400" title="Mais de 48h na mesa do gestor">🔴 ${slaTratativaGestor.critico}</span>
+              <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaTratativaGestor.alerta}</span>
+              <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaTratativaGestor.ok}</span>
+            </div>
+            ${maisAntigaTratativaGestor.item ? `
+            <div class="text-[10px] font-bold mt-1 ${maisAntigaTratativaGestor.horas > 48 ? 'text-red-400' : maisAntigaTratativaGestor.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}" title="Devolução ${maisAntigaTratativaGestor.item.numero_devolucao || maisAntigaTratativaGestor.item.numero_protocolo || ''}">
+              ⏳ Mais antiga: ${maisAntigaTratativaGestor.texto}
             </div>` : ''}
           </div>
         </div>
@@ -12156,6 +12238,55 @@ function reentregaEmAberto(r) {
 
 function reentregaConcluida(r) {
   return normalizarStatusReentrega(r && r.status) === 'REALIZADA';
+}
+
+// =============================================================================
+// PENDÊNCIA É FOTO DO AGORA, NÃO DO PERÍODO (01/09/2026)
+//
+// O card "Auditoria & Pendências em Aberto" do Boletim (tela e PDF) contava as
+// pendências DENTRO do período filtrado. Com o Boletim aberto em D-1, o card
+// dizia "0 Pendência(s)" enquanto existiam 12 devoluções em PENDENTE_FISICO no
+// banco, a mais antiga parada desde 26/08 — nenhuma tinha sido ABERTA em D-1.
+// O mesmo valia para o KPI "Pendente Físico CD" da seção 2.
+//
+// É a mesma decisão já tomada no Dashboard em 23/08 (ver o bloco "ALERTA NÃO SE
+// FILTRA POR PERÍODO", perto de allDevs/pendCdAlerta): KPI responde "como foi no
+// período que escolhi"; pendência em aberto responde "o que está parado AGORA".
+// Filtrar a segunda esconde justamente a pendência mais antiga, que é a que mais
+// precisa de cobrança. O Boletim tinha o recorte errado nos dois lugares.
+//
+// Duas contas estavam erradas por conta própria, além do período:
+//
+//   REENTREGA — era `re.status === 'PENDENTE'`, comparação crua. Reentrega que
+//   já andou uma etapa (RECEBIDA_CD, AGUARDANDO_DESPACHO) continua EM ABERTO e
+//   sumia da contagem. Passa a usar reentregaEmAberto(), como o Dashboard.
+//
+//   SOCORRO — era `r.status_veiculo !== 'Liberado'`, e 'Liberado' NÃO É UM
+//   STATUS que o store grave: addOcorrenciaRota nasce em 'Aguardando Manutenção'
+//   e o encerramento escreve 'Em Rota' + status 'RESOLVIDO' (js/store.js:2046 e
+//   2124-2130). Ou seja, o teste dava verdadeiro para TODO socorro, inclusive os
+//   já resolvidos — defeito que ficava escondido enquanto o filtro de período
+//   esvaziava a lista. Passa a usar o mesmo teste do Dashboard.
+//
+// Uma função só, chamada pela tela e pelo PDF, porque foi a duplicação do bloco
+// entre os dois que deixou os números divergirem em silêncio.
+// =============================================================================
+function pendenciasEmAbertoBoletim() {
+  const devs = typeof db.getDevolucoes === 'function' ? db.getDevolucoes() : [];
+  const rotas = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
+  const reentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
+  const filaGestor = tratativasPendentesGestor(devs);
+  return {
+    pendFisicoCd: devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length,
+    reentregasAbertas: reentregas.filter(reentregaEmAberto).length,
+    socorrosEmAberto: rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO').length,
+    // A fila do Gestor entrou aqui em 01/09/2026: o card se chama "Pendências
+    // em Aberto" e era a maior fila do sistema (15 chamados) justamente a que
+    // faltava. maisAntigaGestor acompanha para o boletim dizer HÁ QUANTO TEMPO,
+    // que é o que sustenta a cobrança — contagem sozinha não cobra ninguém.
+    tratativasGestor: filaGestor.length,
+    maisAntigaGestor: getMaisAntigaPendente(filaGestor, CAMPOS_SLA_TRATATIVA_GESTOR, { atencao: 24, estourado: 48 })
+  };
 }
 
 function badgeStatusReentrega(status) {
@@ -21410,7 +21541,6 @@ function imprimirBoletimGerencialExecutivo() {
   const qtdDevolucoes = devs.length;
   const corteValor = cortesList.reduce((acc, c) => acc + (parseFloat(c.valor)||0), 0);
   const qtdProdutosCorte = cortesList.length;
-  const totalPendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
 
   // KPIs Transporte & Rota (Ocorrências, Socorros, Trocas e Reentregas)
   const ocTransporteQtd = ocViagens.length;
@@ -21418,16 +21548,18 @@ function imprimirBoletimGerencialExecutivo() {
   const custoTotalSocorro = rotas.reduce((acc, r) => acc + (parseFloat(r.custo_socorro) || 0), 0);
   const qtdTrocasVeiculos = trocas.length;
   const qtdReentregas = reentregas.length;
-  const totalEntregasSaiu = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_saiu) || 0), 0);
-  const totalEntregasFeitas = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_feitas) || 0), 0);
   const totalEntregasReentrega = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_reentrega) || 0), 0);
-  const reentregasPendentes = reentregas.filter(re => re.status === 'PENDENTE').length;
-  const socorrosEmAberto = rotas.filter(r => r.status_veiculo !== 'Liberado').length;
+
+  // Pendência não se filtra por período — ver pendenciasEmAbertoBoletim().
+  const pend = pendenciasEmAbertoBoletim();
+  const totalPendCd = pend.pendFisicoCd;
+  const reentregasPendentes = pend.reentregasAbertas;
+  const socorrosEmAberto = pend.socorrosEmAberto;
+  const tratativasGestorPend = pend.tratativasGestor;
+  const totalPendencias = totalPendCd + reentregasPendentes + socorrosEmAberto + tratativasGestorPend;
 
   // KPIs Fechamento
   const impactoFinanceiroTotal = totalDevValor + corteValor + custoTotalSocorro;
-  const taxaSucessoEntregas = totalEntregasSaiu > 0 ? ((totalEntregasFeitas / totalEntregasSaiu) * 100).toFixed(1) : '100.0';
-  const taxaReentregas = totalEntregasSaiu > 0 ? ((totalEntregasReentrega / totalEntregasSaiu) * 100).toFixed(1) : '0.0';
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -21537,7 +21669,7 @@ function imprimirBoletimGerencialExecutivo() {
     <div class="kpi-box"><div class="kpi-label">Qtd Devoluções</div><div class="kpi-num">${qtdDevolucoes}</div></div>
     <div class="kpi-box"><div class="kpi-label">Cortes de Estoque (R$)</div><div class="kpi-num kpi-num-red">R$ ${corteValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
     <div class="kpi-box"><div class="kpi-label">Qtd Itens Cortados</div><div class="kpi-num">${qtdProdutosCorte}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Pendente Físico CD</div><div class="kpi-num ${totalPendCd>0?'kpi-num-amber':'kpi-num'}">${totalPendCd}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Pendente Físico CD (total em aberto)</div><div class="kpi-num ${totalPendCd>0?'kpi-num-amber':'kpi-num'}">${totalPendCd}</div></div>
   </div>
 
   <div class="sub-title"><span>Detalhamento de Devoluções SAC (${devs.length})</span></div>
@@ -21627,24 +21759,26 @@ function imprimirBoletimGerencialExecutivo() {
         </div>
       </div>
       <div class="fechamento-card">
-        <div class="kpi-label">Eficiência Operacional de Rota</div>
-        <div class="kpi-num kpi-num-blue" style="font-size: 13px; margin: 3px 0;">${taxaSucessoEntregas}% Êxito</div>
+        <div class="kpi-label">Reentregas & Rota</div>
+        <div class="kpi-num kpi-num-blue" style="font-size: 13px; margin: 3px 0;">${qtdReentregas} rota(s) com reentrega</div>
         <div style="font-size: 7.5px; color: #64748b; line-height: 1.3;">
-          • Entregas Realizadas: <b>${totalEntregasFeitas}</b> / ${totalEntregasSaiu}<br>
-          • Taxa de Reentrega: <b>${taxaReentregas}%</b> (${totalEntregasReentrega} vols)<br>
+          • Volumes a Reentregar: <b>${totalEntregasReentrega}</b><br>
+          • Reentregas em Aberto: <b>${reentregasPendentes}</b><br>
           • Trocas de Veículo: <b>${qtdTrocasVeiculos}</b> ocorrência(s)
         </div>
       </div>
       <div class="fechamento-card">
-        <div class="kpi-label">Auditoria & Pendências em Aberto</div>
-        <div class="kpi-num ${ (totalPendCd + reentregasPendentes + socorrosEmAberto) > 0 ? 'kpi-num-amber' : 'kpi-num' }" style="font-size: 13px; margin: 3px 0;">
-          ${totalPendCd + reentregasPendentes + socorrosEmAberto} Pendência(s)
+        <div class="kpi-label">Auditoria &amp; Pendências em Aberto</div>
+        <div class="kpi-num ${ totalPendencias > 0 ? 'kpi-num-amber' : 'kpi-num' }" style="font-size: 13px; margin: 3px 0;">
+          ${totalPendencias} Pendência(s)
         </div>
         <div style="font-size: 7.5px; color: #64748b; line-height: 1.3;">
           • Devoluções Pendentes Físico CD: <b>${totalPendCd}</b><br>
+          • Tratativas do Gestor sem parecer: <b>${tratativasGestorPend}</b>${pend.maisAntigaGestor && pend.maisAntigaGestor.texto ? ` <span style="color:#b45309;">(mais antiga: ${pend.maisAntigaGestor.texto})</span>` : ''}<br>
           • Reentregas Pendentes: <b>${reentregasPendentes}</b><br>
           • Socorros Aguardando Oficina: <b>${socorrosEmAberto}</b>
         </div>
+        <div style="font-size: 7px; color: #94a3b8; margin-top: 3px; font-style: italic;">Posição atual — não filtrado pelo período</div>
       </div>
     </div>
   </div>
@@ -22444,7 +22578,6 @@ function renderBoletimGerencialView() {
   const qtdDevolucoes = devs.length;
   const corteValor = cortesList.reduce((acc, c) => acc + (parseFloat(c.valor)||0), 0);
   const qtdProdutosCorte = cortesList.length;
-  const totalPendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
 
   // KPIs Transporte & Rota (Ocorrências, Socorros, Trocas e Reentregas)
   const ocTransporteQtd = ocViagens.length;
@@ -22452,16 +22585,18 @@ function renderBoletimGerencialView() {
   const custoTotalSocorro = rotas.reduce((acc, r) => acc + (parseFloat(r.custo_socorro) || 0), 0);
   const qtdTrocasVeiculos = trocas.length;
   const qtdReentregas = reentregas.length;
-  const totalEntregasSaiu = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_saiu) || 0), 0);
-  const totalEntregasFeitas = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_feitas) || 0), 0);
   const totalEntregasReentrega = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_reentrega) || 0), 0);
-  const reentregasPendentes = reentregas.filter(re => re.status === 'PENDENTE').length;
-  const socorrosEmAberto = rotas.filter(r => r.status_veiculo !== 'Liberado').length;
+
+  // Pendência não se filtra por período — ver pendenciasEmAbertoBoletim().
+  const pend = pendenciasEmAbertoBoletim();
+  const totalPendCd = pend.pendFisicoCd;
+  const reentregasPendentes = pend.reentregasAbertas;
+  const socorrosEmAberto = pend.socorrosEmAberto;
+  const tratativasGestorPend = pend.tratativasGestor;
+  const totalPendencias = totalPendCd + reentregasPendentes + socorrosEmAberto + tratativasGestorPend;
 
   // KPIs Fechamento
   const impactoFinanceiroTotal = totalDevValor + corteValor + custoTotalSocorro;
-  const taxaSucessoEntregas = totalEntregasSaiu > 0 ? ((totalEntregasFeitas / totalEntregasSaiu) * 100).toFixed(1) : '100.0';
-  const taxaReentregas = totalEntregasSaiu > 0 ? ((totalEntregasReentrega / totalEntregasSaiu) * 100).toFixed(1) : '0.0';
 
   const isD1Active = (fDe === dMenosUmStr && fAte === dMenosUmStr);
 
@@ -22625,6 +22760,7 @@ function renderBoletimGerencialView() {
               <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
                 <div class="text-[10px] text-slate-400 font-bold uppercase">Pendente Físico CD</div>
                 <div class="text-base font-black ${totalPendCd>0?'text-amber-400':'text-emerald-400'} mt-1">${totalPendCd}</div>
+                <div class="text-[9px] text-slate-500 italic leading-tight mt-0.5">total em aberto, não filtrado pelo período</div>
               </div>
             </div>
 
@@ -22852,15 +22988,15 @@ function renderBoletimGerencialView() {
                 </div>
               </div>
 
-              <!-- CARD 2: EFICIÊNCIA OPERACIONAL DE ROTA -->
+              <!-- CARD 2: REENTREGAS & ROTA -->
               <div class="bg-slate-900 border border-blue-900/60 rounded-xl p-4 shadow-lg flex flex-col justify-between space-y-3">
                 <div>
-                  <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Eficiência de Entregas & Rota</div>
-                  <div class="text-xl font-black text-blue-400 mt-1">${taxaSucessoEntregas}% de Êxito</div>
+                  <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Reentregas & Rota</div>
+                  <div class="text-xl font-black text-blue-400 mt-1">${qtdReentregas} rota(s) com reentrega</div>
                 </div>
                 <div class="space-y-1 text-xs border-t border-slate-800 pt-2 text-slate-300">
-                  <div class="flex justify-between"><span>• Entregas Realizadas:</span><b class="text-emerald-400">${totalEntregasFeitas} / ${totalEntregasSaiu}</b></div>
-                  <div class="flex justify-between"><span>• Taxa de Reentrega:</span><b class="text-amber-400">${taxaReentregas}% (${totalEntregasReentrega} vols)</b></div>
+                  <div class="flex justify-between"><span>• Volumes a Reentregar:</span><b class="text-amber-400">${totalEntregasReentrega}</b></div>
+                  <div class="flex justify-between"><span>• Reentregas em Aberto:</span><b class="${reentregasPendentes>0?'text-amber-400':'text-white'}">${reentregasPendentes}</b></div>
                   <div class="flex justify-between"><span>• Trocas de Caminhão:</span><b class="text-purple-400">${qtdTrocasVeiculos} ocorrência(s)</b></div>
                 </div>
               </div>
@@ -22869,14 +23005,17 @@ function renderBoletimGerencialView() {
               <div class="bg-slate-900 border border-amber-900/60 rounded-xl p-4 shadow-lg flex flex-col justify-between space-y-3">
                 <div>
                   <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Auditoria & Pendências em Aberto</div>
-                  <div class="text-xl font-black ${(totalPendCd + reentregasPendentes + socorrosEmAberto) > 0 ? 'text-amber-400' : 'text-emerald-400'} mt-1">
-                    ${totalPendCd + reentregasPendentes + socorrosEmAberto} Pendência(s)
+                  <div class="text-xl font-black ${totalPendencias > 0 ? 'text-amber-400' : 'text-emerald-400'} mt-1">
+                    ${totalPendencias} Pendência(s)
                   </div>
                 </div>
                 <div class="space-y-1 text-xs border-t border-slate-800 pt-2 text-slate-300">
                   <div class="flex justify-between"><span>• Devoluções Pend. Físico CD:</span><b class="${totalPendCd>0?'text-amber-400':'text-white'}">${totalPendCd}</b></div>
+                  <div class="flex justify-between"><span>• Tratativas do Gestor sem parecer:</span><b class="${tratativasGestorPend>0?'text-sky-300':'text-white'}">${tratativasGestorPend}</b></div>
+                  ${pend.maisAntigaGestor && pend.maisAntigaGestor.texto ? `<div class="text-[10px] text-slate-500 -mt-0.5 pl-2">↳ mais antiga: ${pend.maisAntigaGestor.texto}</div>` : ''}
                   <div class="flex justify-between"><span>• Reentregas Pendentes:</span><b class="${reentregasPendentes>0?'text-amber-400':'text-white'}">${reentregasPendentes}</b></div>
                   <div class="flex justify-between"><span>• Socorros Aguardando Oficina:</span><b class="${socorrosEmAberto>0?'text-amber-400':'text-white'}">${socorrosEmAberto}</b></div>
+                  <div class="text-[10px] text-slate-500 italic pt-1">Posição atual — não filtrado pelo período</div>
                 </div>
               </div>
             </div>
@@ -23742,9 +23881,22 @@ function confirmarEGerarPdf(pdfType) {
   closeModal();
 
   if (pdfType === 'boletim_executivo') {
-    if (fDe) window._boletimFiltroDe = fDe;
-    if (fAte) window._boletimFiltroAte = fAte;
-    imprimirBoletimGerencialExecutivo();
+    // (01/09/2026) O período escolhido AQUI é do PDF, não da tela. Antes ele
+    // era escrito em window._boletimFiltroDe/Ate e nunca devolvido: a Visão
+    // Executiva passava a abrir no período do último PDF em vez de D-1, sem
+    // nenhum aviso além dos dois campos de data lá em cima. Quem tirasse um PDF
+    // de um dia antigo via o Boletim do dia seguinte zerado e concluía que o
+    // sistema tinha perdido os lançamentos. Agora empresta e devolve.
+    const _deTela = window._boletimFiltroDe;
+    const _ateTela = window._boletimFiltroAte;
+    try {
+      if (fDe) window._boletimFiltroDe = fDe;
+      if (fAte) window._boletimFiltroAte = fAte;
+      imprimirBoletimGerencialExecutivo();
+    } finally {
+      window._boletimFiltroDe = _deTela;
+      window._boletimFiltroAte = _ateTela;
+    }
   } else if (pdfType === 'relatorio_ocorrencias') {
     gerarRelatorioOcorrenciasPdfComFiltro({ fDe, fAte, rota, status, motorista });
   } else if (pdfType === 'vale_motorista') {
