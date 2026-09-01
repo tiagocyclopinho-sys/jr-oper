@@ -4880,7 +4880,26 @@ function renderDashboardView() {
   const totalCortesValor = cortesList.reduce((a, c) => a + (parseFloat(c.valor)||0), 0);
   const totalCustoSocorro = rotas.reduce((a, r) => a + (parseFloat(r.custo_socorro)||0), 0);
   const viagensIniciadas = viagens.length;
-  const chkNaoRealizado = viagens.filter(v => v.status_saida === 'PENDENTE' || v.checklist_status === 'PENDENTE' || v.status === 'PENDENTE').length;
+  // 01/09/2026 — ESTE CARTÃO SEMPRE MARCOU ZERO. Filtrava por status_saida,
+  // checklist_status e status: NENHUM dos três existe no registro de viagem
+  // (ver addViagem() em store.js — os campos são checklist_saida e
+  // checklist_chegada). Como os três eram sempre undefined, o filtro nunca
+  // casava e o Dashboard exibia 0 checklist pendente enquanto a tela de
+  // Controle de Viagens mostrava vários selos vermelhos de NÃO INICIADO.
+  //
+  // "Pendente" também era o rótulo errado: pendente é o que ainda vai
+  // acontecer. Um checklist de saída de viagem que já largou não fica
+  // pendente — ele NÃO FOI REALIZADO, e é assim que o cartão passa a chamar.
+  //
+  // O CARTÃO ACUSA SÓ O QUE FOI VALIDADO: entram os checklists marcados
+  // explicitamente como NÃO INICIADO na escala. Checklist em branco NÃO é
+  // contado e NÃO aparece no cartão — em branco não é prova de que deixou de
+  // ser feito, é ausência de apontamento, e um número exibido no Dashboard
+  // vira cobrança em cima de alguém. Falta de dado se resolve na escala, não
+  // no indicador.
+  const chkSaidaNaoRealizado = viagens.filter(v => checklistNaoRealizado(v.checklist_saida)).length;
+  const chkChegadaNaoRealizado = viagens.filter(v => checklistNaoRealizado(v.checklist_chegada)).length;
+  const chkNaoRealizado = chkSaidaNaoRealizado + chkChegadaNaoRealizado;
 
   // ===== REENTREGAS NO PERÍODO =====
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
@@ -5355,9 +5374,9 @@ function renderDashboardView() {
           </div>
 
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
-            <div class="text-[10px] text-slate-400 font-bold uppercase">Checklist Pendente</div>
+            <div class="text-[10px] text-slate-400 font-bold uppercase">Checklist Não Realizado</div>
             <div class="text-xl font-black ${chkNaoRealizado > 0 ? 'text-red-400' : 'text-slate-300'} mt-1">${chkNaoRealizado}</div>
-            <div class="text-[10px] text-slate-500 mt-0.5">Saída não iniciada</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">${chkSaidaNaoRealizado} saída • ${chkChegadaNaoRealizado} chegada</div>
           </div>
 
           <!-- NOVO: OC OPERACIONAIS -->
@@ -10693,6 +10712,59 @@ const VG_STATUS_OPCOES = [
   { val: 'REENTREGA',             cls: 'text-purple-400'  }
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// LEITURA DOS CHECKLISTS DE LARGADA (SAÍDA E CHEGADA) — 01/09/2026
+// ─────────────────────────────────────────────────────────────────────────────
+// São TRÊS estados, não dois: REALIZADO, NÃO REALIZADO e NÃO INFORMADO (célula
+// vazia na escala importada). Por isso as duas funções abaixo são independentes
+// em vez de uma ser a negação da outra: um valor em branco responde  às
+// DUAS, e é isso que mantém o não informado fora das duas contagens. Misturar
+// o branco no "não realizado" faria um checklist sem apontamento ser contado
+// como falha do motorista — a tabela da tela já pinta o vazio como "—", sem
+// cor, e quem conta faz o mesmo.
+//
+// A comparação passa por normalizeStr() porque o valor vem de planilha: a
+// mesma coluna já chegou como "NÃO INICIADO", "NAO INICIADO" e "Não iniciado".
+function checklistFoiRealizado(valor) {
+  const v = normalizeStr(valor);
+  return v === 'INICIADO' || v === 'REALIZADO' || v === 'OK' || v === 'SIM';
+}
+
+function checklistNaoRealizado(valor) {
+  const v = normalizeStr(valor);
+  return v === 'NAO INICIADO' || v === 'NAO REALIZADO' || v === 'PENDENTE' || v === 'NAO';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PALETA ÚNICA DO STATUS DA VIAGEM — tela e papel (01/09/2026)
+// ─────────────────────────────────────────────────────────────────────────────
+// A cor do status existia só na tabela da tela, escrita como seis `if` soltos
+// dentro do map das linhas. O Relatório de Largada imprimia o status como texto
+// preto sobre branco: quem recebia o PDF perdia justamente a leitura que a tela
+// dá de relance — o que está em andamento, o que finalizou, o que foi adiado.
+//
+// A cor virou dado, num lugar só, com as duas formas de que o app precisa:
+//   cls — classes Tailwind, para a tabela da tela;
+//   css — o MESMO tom em hexadecimal, para os relatórios impressos, que abrem
+//         em janela nova sem o Tailwind carregado e por isso não podem usar cls.
+// Status novo entra aqui uma vez e aparece colorido nos dois lugares.
+const VG_STATUS_CORES = {
+  'EM ANDAMENTO':          { cls: 'bg-amber-300 text-slate-950',                                      css: 'background:#fcd34d;color:#020617;' },
+  'EM ANDAMENTO (PALMAS)': { cls: 'bg-amber-300 text-slate-950',                                      css: 'background:#fcd34d;color:#020617;' },
+  'EM RETORNO':            { cls: 'bg-blue-900 text-white',                                           css: 'background:#1e3a8a;color:#ffffff;' },
+  'FINALIZADO':            { cls: 'bg-emerald-700 text-white',                                        css: 'background:#047857;color:#ffffff;' },
+  'ADIADA':                { cls: 'bg-orange-800 text-orange-200 border border-orange-600',           css: 'background:#9a3412;color:#fed7aa;border:1px solid #ea580c;' },
+  'REENTREGA':             { cls: 'bg-purple-900 text-purple-200 border border-purple-600 font-black', css: 'background:#581c87;color:#e9d5ff;border:1px solid #9333ea;font-weight:900;' }
+};
+
+// Status fora da lista (importado de planilha com grafia diferente, por
+// exemplo) cai no âmbar de "em andamento", que é como a tela já se comportava.
+const VG_STATUS_COR_PADRAO = { cls: 'bg-amber-300 text-slate-950', css: 'background:#fcd34d;color:#020617;' };
+
+function corStatusViagem(status) {
+  return VG_STATUS_CORES[String(status || '').trim().toUpperCase()] || VG_STATUS_COR_PADRAO;
+}
+
 const VG_FILTROS_MULTI = {
   status: {
     win: '_vgFiltroStatus', icone: '🚦', titulo: 'Status Viagem', rotulo: 'STATUS', busca: false,
@@ -11368,12 +11440,7 @@ function renderViagensLargadaSubTab() {
                 });
 
                 return viagens.map(v => {
-                  let statusBg = 'bg-amber-300 text-slate-950';
-                  if (v.status_viagem === 'EM ANDAMENTO' || v.status_viagem === 'EM ANDAMENTO (PALMAS)') statusBg = 'bg-amber-300 text-slate-950';
-                  if (v.status_viagem === 'EM RETORNO') statusBg = 'bg-blue-900 text-white';
-                  if (v.status_viagem === 'FINALIZADO') statusBg = 'bg-emerald-700 text-white';
-                  if (v.status_viagem === 'ADIADA') statusBg = 'bg-orange-800 text-orange-200 border border-orange-600';
-                  if (v.status_viagem === 'REENTREGA') statusBg = 'bg-purple-900 text-purple-200 border border-purple-600 font-black';
+                  const statusBg = corStatusViagem(v.status_viagem).cls;
 
                   const cKey = String(v.carga || '').trim().toUpperCase();
                   const isCargaDuplicada = cKey && (cargaCounts[cKey] > 1);
@@ -15381,9 +15448,17 @@ function gerarRelatorioLargadaOperacaoModal() {
 
   const totViagens = filtradas.length;
   const totFusionOk = filtradas.filter(v => v.fusion === 'INICIADO').length;
-  const totChkOk = filtradas.filter(v => v.checklist_saida === 'INICIADO').length;
-  const totChkChegadaOk = filtradas.filter(v => v.checklist_chegada === 'INICIADO').length;
+  // Mesma régua do Dashboard (checklistFoiRealizado): a coluna vem de
+  // planilha e já chegou com e sem acento, em maiúscula e em caixa mista.
+  const totChkOk = filtradas.filter(v => checklistFoiRealizado(v.checklist_saida)).length;
+  const totChkChegadaOk = filtradas.filter(v => checklistFoiRealizado(v.checklist_chegada)).length;
   const totObs = filtradas.filter(v => v.observacao && v.observacao.trim() !== '').length;
+
+  // Status que de fato aparecem no recorte impresso, na ordem canônica do
+  // filtro da tela — alimenta a legenda de cores logo abaixo dos KPIs.
+  const statusPresentes = VG_STATUS_OPCOES
+    .map(o => o.val)
+    .filter(st => filtradas.some(v => String(v.status_viagem || '').trim().toUpperCase() === st));
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -15412,6 +15487,9 @@ function gerarRelatorioLargadaOperacaoModal() {
     tr:nth-child(even) { background: #f8fafc; }
     .badge-ok { background: #dcfce7; color: #14532d; font-weight: bold; padding: 2px 4px; border-radius: 3px; }
     .badge-nok { background: #fee2e2; color: #7f1d1d; font-weight: bold; padding: 2px 4px; border-radius: 3px; }
+    /* A cor de fundo vem inline, de corStatusViagem() — a mesma tabela que
+       pinta o status na tela do Controle de Viagens. Aqui fica só a forma. */
+    .badge-status { display: inline-block; font-weight: 900; padding: 2px 6px; border-radius: 3px; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -15443,6 +15521,15 @@ function gerarRelatorioLargadaOperacaoModal() {
     <div class="kpi-box"><div class="kpi-num" style="color: #0891b2;">${totChkChegadaOk}</div><div class="kpi-label">Checklist Chegada OK</div></div>
     <div class="kpi-box"><div class="kpi-num" style="color: #b45309;">${totObs}</div><div class="kpi-label">Ocorrências Largada</div></div>
   </div>
+
+  <!-- Legenda das cores de status. No papel não há tooltip nem filtro: se a
+       cor não vier explicada, quem lê o PDF só vê retângulos coloridos.
+       Lista apenas os status presentes NESTE recorte. -->
+  ${statusPresentes.length ? `
+  <div style="font-size:9px;color:#475569;margin-bottom:4px;">
+    <strong style="text-transform:uppercase;color:#064e3b;">Status:</strong>
+    ${statusPresentes.map(st => `<span class="badge-status" style="${corStatusViagem(st).css}margin-left:4px;">${st}</span>`).join('')}
+  </div>` : ''}
 
   <table>
     <thead>
@@ -15483,7 +15570,7 @@ function gerarRelatorioLargadaOperacaoModal() {
               <td>${v.ajudante}</td>
               <td>${v.setor||'FRIO'}</td>
               <td>${(v.data_saida || v.hora_saida) ? `${formatarData(v.data_saida)} ${v.hora_saida||'—'}` : '—'}</td>
-              <td>${v.status_viagem || '—'}</td>
+              <td>${v.status_viagem ? `<span class="badge-status" style="${corStatusViagem(v.status_viagem).css}">${v.status_viagem}</span>` : '—'}</td>
               <td>${v.fusion ? `<span class="${v.fusion==='INICIADO'?'badge-ok':'badge-nok'}">${v.fusion}</span>` : '—'}</td>
               <td>${v.checklist_saida ? `<span class="${v.checklist_saida==='INICIADO'?'badge-ok':'badge-nok'}">${v.checklist_saida}</span>` : '—'}</td>
               <td>${v.checklist_chegada ? `<span class="${v.checklist_chegada==='INICIADO'?'badge-ok':'badge-nok'}">${v.checklist_chegada}</span>` : '—'}</td>
@@ -22465,6 +22552,101 @@ function getRotuloAmigavelColuna(campoId, modulo) {
   return formatarRotuloCampoFallback(campoId);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// SANEAMENTO DE VALORES PARA PLANILHA (CSV / EXCEL)  — 01/09/2026
+// ═══════════════════════════════════════════════════════════════════
+// O CSV do "Banco de Dados" saía inutilizável (arquivo
+// JR_SAC_Banco_Dados_devolucao_abertura_2026-09-01.csv). Quatro causas,
+// todas tratadas aqui:
+//
+// 1) FOTO DENTRO DA CÉLULA. getColunasDisponiveisParaModulo() varre TODAS
+//    as chaves do registro. Em Devolução isso traz foto_url / assinatura,
+//    que guardam a imagem inteira em "data:image/jpeg;base64,...". São
+//    centenas de KB numa célula só — acima do limite do Excel (32.767
+//    caracteres) — e o blob arrasta o resto da linha para as linhas de
+//    baixo. Era o "espaguete" das linhas 3 a 17 do arquivo.
+// 2) [object Object]. Arrays e objetos (itens da devolução) caíam em
+//    String(obj) sem tratamento.
+// 3) NOTAÇÃO CIENTÍFICA. id, carga_id e numero_protocolo são carimbos de
+//    tempo de 13 a 15 dígitos. O Excel os lê como número e reescreve como
+//    1,79E+12 — o ID original não volta mais, e sem ele não dá para cruzar
+//    a planilha com o sistema.
+// 4) QUEBRA DE LINHA NO TEXTO. Detalhamento e observações têm \n, que
+//    parte a linha em leitores de CSV menos tolerantes.
+//
+// A régua: o que vai para planilha tem que ser TEXTO CURTO OU NÚMERO.
+// Qualquer outra coisa é reduzida a uma dessas duas formas antes de sair.
+
+// Chaves cujo conteúdo é binário/imagem — não têm representação útil em
+// planilha e ficam fora do seletor de colunas.
+const CSV_CAMPO_BINARIO_RE = /(^|_)(foto|fotos|imagem|imagens|assinatura|anexo|anexos|video|videos|base64|thumb|croqui)s?(_|$)/i;
+
+// Detecta o conteúdo binário pelo VALOR, não só pelo nome do campo — campo
+// novo com nome diferente que guarde imagem também é barrado.
+function csvValorEhBinario(val) {
+  if (typeof val !== 'string') return false;
+  if (/^data:[^,]{0,120},/i.test(val)) return true;   // data URI (imagem embutida)
+  return val.length > 3000 && !/\s/.test(val);        // blob base64 solto
+}
+
+function csvColunaEhBinaria(campoId, rawData) {
+  if (CSV_CAMPO_BINARIO_RE.test(String(campoId))) return true;
+  if (!Array.isArray(rawData)) return false;
+  return rawData.slice(0, 80).some(r => r && csvValorEhBinario(r[campoId]));
+}
+
+// Converte QUALQUER valor do banco em string curta ou número.
+// Devolve número só quando o valor é de fato numérico e não é identificador
+// (ver regra dos 9 dígitos abaixo) — assim o Excel soma valor_reclamado mas
+// não estraga carga_id.
+function sanitizarValorPlanilha(val) {
+  if (val === undefined || val === null) return '';
+  if (typeof val === 'boolean') return val ? 'SIM' : 'NÃO';
+
+  if (typeof val === 'number') {
+    if (!isFinite(val)) return '';
+    // 9+ dígitos = identificador (timestamp, protocolo), nunca quantidade.
+    // Sai como texto para o Excel não virar notação científica.
+    if (Number.isInteger(val) && Math.abs(val) >= 1e9) return String(val);
+    return val;
+  }
+
+  if (Array.isArray(val)) {
+    const partes = val.map(item => {
+      if (item === null || item === undefined) return '';
+      if (typeof item === 'object') {
+        return Object.entries(item)
+          .filter(([, v]) => v !== null && v !== undefined && v !== '' &&
+                             typeof v !== 'object' && !csvValorEhBinario(v))
+          .map(([k, v]) => `${formatarRotuloCampoFallback(k)}: ${v}`)
+          .join(', ');
+      }
+      return String(item);
+    }).filter(p => p !== '');
+    return partes.join(' | ');
+  }
+
+  if (typeof val === 'object') return sanitizarValorPlanilha([val]);
+
+  let txt = String(val);
+  if (csvValorEhBinario(txt)) return '[ANEXO — ver no sistema]';
+  txt = txt.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (txt.length > 4000) txt = txt.slice(0, 3997) + '...';
+  return txt;
+}
+
+// Monta uma célula de CSV. Cadeias longas de dígitos e números com zero à
+// esquerda saem como ="..." — a única forma de o Excel aceitá-los como
+// texto e preservar o valor exato (NF 0012345 continua 0012345).
+function formatarCelulaCsv(val) {
+  if (typeof val === 'number') {
+    return `"${(Number.isInteger(val) ? String(val) : val.toFixed(2)).replace('.', ',')}"`;
+  }
+  const s = String(val);
+  if (/^\d{9,}$/.test(s) || /^0\d+$/.test(s)) return `="${s}"`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
 // Retorna apenas as colunas do módulo dinamicamente inspecionando chaves dos dados reais,
 // mantendo a ordem das colunas prioritárias e traduzindo chaves desconhecidas com fallback.
 function getColunasDisponiveisParaModulo(modulo) {
@@ -22473,12 +22655,17 @@ function getColunasDisponiveisParaModulo(modulo) {
 
   const colsMap = new Map();
 
-  // 1. Registra colunas pré-definidas para manter a ordem lógica recomendada
+  // 1. Registra colunas pré-definidas para manter a ordem lógica recomendada.
+  //    São as colunas de negócio do módulo — as únicas marcadas por padrão
+  //    (`principal`). Antes TUDO vinha marcado, então bastava clicar em
+  //    exportar para levar junto foto_url, assinatura e os IDs internos.
   predefined.forEach(c => {
-    colsMap.set(c.id, { id: c.id, label: c.label || getRotuloAmigavelColuna(c.id, modulo) });
+    colsMap.set(c.id, { id: c.id, label: c.label || getRotuloAmigavelColuna(c.id, modulo), principal: true });
   });
 
-  // 2. Inspeciona dinamicamente novas chaves presentes nos registros reais
+  // 2. Inspeciona dinamicamente novas chaves presentes nos registros reais.
+  //    Continuam disponíveis (campo novo no banco aparece sozinho no
+  //    seletor), mas entram desmarcadas — quem quiser, marca.
   if (Array.isArray(rawData) && rawData.length > 0) {
     rawData.forEach(row => {
       if (row && typeof row === 'object' && !Array.isArray(row)) {
@@ -22487,7 +22674,10 @@ function getColunasDisponiveisParaModulo(modulo) {
           if (!colsMap.has(key)) {
             colsMap.set(key, {
               id: key,
-              label: getRotuloAmigavelColuna(key, modulo)
+              label: getRotuloAmigavelColuna(key, modulo),
+              // Módulo sem lista pré-definida: não há como distinguir
+              // principal de acessória, então tudo entra marcado.
+              principal: predefined.length === 0
             });
           }
         });
@@ -22495,7 +22685,10 @@ function getColunasDisponiveisParaModulo(modulo) {
     });
   }
 
-  const allCols = Array.from(colsMap.values());
+  // 3. Descarta colunas de imagem/anexo. Uma foto em base64 não cabe numa
+  //    célula (limite de 32.767 caracteres no Excel) e corrompe o arquivo
+  //    inteiro — não é caso de deixar o usuário escolher.
+  const allCols = Array.from(colsMap.values()).filter(c => !csvColunaEhBinaria(c.id, rawData));
 
   // Sem registros ainda: mantém a lista pré-definida
   if (!rawData || rawData.length === 0) return allCols;
@@ -22510,8 +22703,8 @@ function updateCsvColumnsUI(moduloVal) {
   if (!container) return;
   const cols = getColunasDisponiveisParaModulo(moduloVal);
   container.innerHTML = cols.map(c => `
-    <label class="flex items-center gap-2 text-xs text-white cursor-pointer hover:text-emerald-300 transition">
-      <input type="checkbox" name="csv-col" value="${c.id}" checked class="text-emerald-500 rounded focus:ring-0">
+    <label class="flex items-center gap-2 text-xs cursor-pointer hover:text-emerald-300 transition ${c.principal ? 'text-white' : 'text-slate-400'}" title="${c.principal ? 'Coluna padrão do relatório' : 'Campo extra do banco — marque se precisar'}">
+      <input type="checkbox" name="csv-col" value="${c.id}" ${c.principal ? 'checked' : ''} class="text-emerald-500 rounded focus:ring-0">
       <span>${c.label}</span>
     </label>
   `).join('');
@@ -23089,18 +23282,33 @@ function renderBoletimGerencialView() {
                   <button type="button" onclick="toggleSelectAllCsvCols(false)" class="text-slate-400 hover:underline">Desmarcar Todas</button>
                 </div>
               </div>
+              <p class="text-[10px] text-slate-500 mb-2">Em <span class="text-white font-bold">branco</span>, as colunas padrão do módulo (já marcadas). Em <span class="text-slate-400 font-bold">cinza</span>, campos extras do banco — marque se precisar. Colunas de foto/assinatura não aparecem: são imagens e não cabem em planilha.</p>
               <div id="csv-columns-grid" class="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-950 p-4 rounded-xl border border-slate-800">
                 ${getColunasDisponiveisParaModulo(window._csvModuloSelecionado || 'devolucoes').map(c => `
-                  <label class="flex items-center gap-2 text-xs text-white cursor-pointer hover:text-emerald-300 transition">
-                    <input type="checkbox" name="csv-col" value="${c.id}" checked class="text-emerald-500 rounded focus:ring-0">
+                  <label class="flex items-center gap-2 text-xs cursor-pointer hover:text-emerald-300 transition ${c.principal ? 'text-white' : 'text-slate-400'}" title="${c.principal ? 'Coluna padrão do relatório' : 'Campo extra do banco — marque se precisar'}">
+                    <input type="checkbox" name="csv-col" value="${c.id}" ${c.principal ? 'checked' : ''} class="text-emerald-500 rounded focus:ring-0">
                     <span>${c.label}</span>
                   </label>
                 `).join('')}
               </div>
             </div>
 
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">Formato do arquivo</label>
+              <div class="flex flex-wrap gap-4 bg-slate-950 p-3 rounded-xl border border-slate-800">
+                <label class="flex items-center gap-2 text-xs text-white cursor-pointer">
+                  <input type="radio" name="csv-formato" value="xlsx" checked class="text-emerald-500 focus:ring-0">
+                  <span><b>Excel (.xlsx)</b> — recomendado: preserva IDs, protocolos e acentuação</span>
+                </label>
+                <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input type="radio" name="csv-formato" value="csv" class="text-emerald-500 focus:ring-0">
+                  <span>CSV (.csv) — texto puro, separado por ponto e vírgula</span>
+                </label>
+              </div>
+            </div>
+
             <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-3 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-sm">
-              <span>📥</span> Baixar Relatório Extraído do Banco em CSV (.csv)
+              <span>📥</span> Baixar Relatório Extraído do Banco
             </button>
           </form>
         </div>`
@@ -23467,6 +23675,7 @@ function handleExportCsvSubmit(e) {
   const modulo = document.getElementById('csv-modulo')?.value || 'devolucoes';
   const fDe = document.getElementById('csv-data-de')?.value || '';
   const fAte = document.getElementById('csv-data-ate')?.value || '';
+  const formato = document.querySelector('input[name="csv-formato"]:checked')?.value || 'xlsx';
 
   const checkboxes = document.querySelectorAll('input[name="csv-col"]:checked');
   const colsSelecionadas = Array.from(checkboxes).map(c => c.value);
@@ -23497,30 +23706,49 @@ function handleExportCsvSubmit(e) {
   const headerMap = {};
   colunasDisponiveis.forEach(c => { headerMap[c.id] = c.label; });
 
-  const csvRows = [];
-  csvRows.push(colsSelecionadas.map(c => `"${headerMap[c] || getRotuloAmigavelColuna(c, modulo) || c}"`).join(';'));
+  const cabecalho = colsSelecionadas.map(c => headerMap[c] || getRotuloAmigavelColuna(c, modulo) || c);
 
-  dadosFiltrados.forEach(row => {
-    const line = colsSelecionadas.map(c => {
-      let val = getValorCampoRelatorio(row, modulo, c);
+  // Matriz já saneada: cada célula é string curta ou número. Os dois
+  // formatos abaixo partem daqui — o que sai no Excel é o mesmo que sai
+  // no CSV. Ver sanitizarValorPlanilha().
+  const matriz = dadosFiltrados.map(row =>
+    colsSelecionadas.map(c => sanitizarValorPlanilha(getValorCampoRelatorio(row, modulo, c)))
+  );
 
-      if (val === undefined || val === null) val = '';
-      if (typeof val === 'number') val = val.toFixed(2).replace('.', ',');
-      if (typeof val === 'string') val = val.replace(/"/g, '""');
-      return `"${val}"`;
-    }).join(';');
-    csvRows.push(line);
-  });
+  const nomeBase = `JR_SAC_Banco_Dados_${modulo}_${agoraIsoBrasilia().slice(0,10)}`;
+
+  // ── EXCEL (.xlsx) ──────────────────────────────────────────────────
+  // Formato padrão. O Excel lê tipo por tipo do arquivo, então o que foi
+  // gravado como texto CONTINUA texto: protocolo de 15 dígitos não vira
+  // 1,79E+12 e NF com zero à esquerda não perde o zero. Também não existe
+  // questão de acento nem de separador — os dois calos crônicos do CSV.
+  if (formato === 'xlsx' && typeof XLSX !== 'undefined') {
+    const ws = XLSX.utils.aoa_to_sheet([cabecalho, ...matriz]);
+    ws['!cols'] = cabecalho.map((h, i) => {
+      const maior = matriz.reduce((max, linha) => Math.max(max, String(linha[i] ?? '').length), String(h).length);
+      return { wch: Math.min(Math.max(maior + 2, 10), 60) };
+    });
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: matriz.length, c: cabecalho.length - 1 } }) };
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Dados');
+    XLSX.writeFile(wb, `${nomeBase}.xlsx`);
+    return;
+  }
+
+  // ── CSV (.csv) ─────────────────────────────────────────────────────
+  const csvRows = [cabecalho.map(h => `"${String(h).replace(/"/g, '""')}"`).join(';')];
+  matriz.forEach(linha => csvRows.push(linha.map(formatarCelulaCsv).join(';')));
 
   const csvString = '\uFEFF' + csvRows.join('\r\n');
   const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `JR_SAC_Banco_Dados_${modulo}_${agoraIsoBrasilia().slice(0,10)}.csv`);
+  link.setAttribute('download', `${nomeBase}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 function promptEGerarValeMotorista() {

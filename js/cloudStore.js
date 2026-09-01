@@ -2642,7 +2642,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "filtros-fila-pendentes-cd-5.11.0";
+CloudStore.BUILD = "planilha-status-checklist-6.0.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
