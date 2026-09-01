@@ -2087,7 +2087,32 @@ function renderAparelhosContent() {
   } else if (cache.lista.length === 0) {
     corpo = '<div class="p-8 text-center text-slate-500">Nenhum aparelho registrado ainda. Abra o app em cada máquina e volte aqui.</div>';
   } else {
-    const desatualizados = cache.lista.filter(a => a.build !== buildAtual).length;
+    // "VERSÃO ANTIGA" SÓ CONTA APARELHO EM USO — 01/09/2026.
+    //
+    // A linha em `dispositivos` nunca é apagada: uma máquina que abriu o app
+    // uma vez em agosto fica ali para sempre carimbada com a build daquele
+    // dia. O alarme, que existe para dizer "há gente operando com código
+    // velho", passava a somar aparelho que ninguém liga há semanas — e era
+    // assim que ele marcava 26 de 33 e nunca descia. Não existe atualização
+    // automática que alcance um aparelho desligado; contá-lo aqui não avisa
+    // ninguém de nada, só ensina a operação a ignorar o alarme.
+    //
+    // A comparação também passa a ser por jrMesmaVersao() — o mesmo x.y.z
+    // que a auto-atualização usa para decidir se recarrega. Comparando a
+    // string inteira, um codinome diferente pintava de vermelho um aparelho
+    // que está na versão certa, e o painel passava a discordar do próprio
+    // mecanismo que ele existe para conferir (já aconteceu na 5.0.0 e na
+    // 5.2.0; ver o comentário de CloudStore.BUILD).
+    const JANELA_EM_USO_MS = 3 * 24 * 60 * 60 * 1000;
+    const mesmaVersao = (b) => (typeof jrMesmaVersao === 'function')
+      ? jrMesmaVersao(buildAtual, b) : (b === buildAtual);
+    const estaEmUso = (a) => {
+      const t = Date.parse(a && a.ultimo_acesso || '');
+      return !isNaN(t) && (Date.now() - t) <= JANELA_EM_USO_MS;
+    };
+    const emUso = cache.lista.filter(estaEmUso);
+    const desatualizados = emUso.filter(a => !mesmaVersao(a.build)).length;
+    const dormentes = cache.lista.length - emUso.length;
     const recusadosPorAparelho = cache.lista.map(a => a.registros_recusados || 0);
     const contaminados = recusadosPorAparelho.filter(n => n > 0).length;
     // Se TODOS marcam o mesmo número, não é um aparelho sujo — é a mesma
@@ -2100,12 +2125,11 @@ function renderAparelhosContent() {
     const todosIguais = contaminados === cache.lista.length && cache.lista.length > 1
       && recusadosPorAparelho.every(n => n === recusadosPorAparelho[0]);
     corpo = `
-      ${(desatualizados > 0 || contaminados > 0) ? `
+      ${(desatualizados > 0 || contaminados > 0 || dormentes > 0) ? `
       <div class="bg-amber-950/30 border border-amber-900/60 rounded-xl p-3 text-[11px] text-amber-200 space-y-1">
-        ${desatualizados > 0 ? `<div>⚠️ <b>${desatualizados}</b> aparelho(s) em versão antiga — peça para fechar e reabrir o app.</div>` : ''}
-        ${contaminados > 0 ? (todosIguais
-          ? `<div>⛔ Todos os aparelhos marcam <b>${recusadosPorAparelho[0]}</b> recusados — mesmo número em todos significa que os registros estão <b>no banco</b>, não neste ou naquele aparelho. Limpar cache não resolve: é a faxina da <b>ETAPA 1</b> (<code>migration_25</code>).</div>`
-          : `<div>⛔ <b>${contaminados}</b> de ${cache.lista.length} aparelho(s) com registros recusados no envio, e os números <b>não batem entre si</b> — o que destoa está reenviando cache antigo. Coloque-o na versão atual (ETAPA 3).</div>`) : ''}
+        ${desatualizados > 0 ? `<div>⚠️ <b>${desatualizados}</b> aparelho(s) <b>em uso</b> ainda na versão antiga — a atualização entra sozinha assim que a tela do app voltar a ficar à vista naquela máquina, sem ninguém precisar fechar e reabrir. Se um deles continuar aqui no dia seguinte, é cache preso num proxy: <b>Ctrl + Shift + R</b> naquele aparelho.</div>` : ''}
+        ${dormentes > 0 ? `<div class="text-slate-400">💤 <b>${dormentes}</b> aparelho(s) sem abrir o app há mais de 3 dias. A versão na linha deles é a do último acesso e <b>não é pendência</b>: nenhuma atualização alcança máquina desligada, e eles se acertam sozinhos na primeira abertura.</div>` : ''}
+        ${contaminados > 0 ? `<div>⛔ <b>${contaminados}</b> de ${cache.lista.length} aparelho(s) ainda marcam registro recusado no envio${todosIguais ? ` (todos com o mesmo número, ${recusadosPorAparelho[0]})` : ''}. <b>Não é para limpar cache à mão</b>: desde a 6.1.0 a faxina tira essas linhas do aparelho sozinha, a cada ciclo — o número cai para zero no primeiro ciclo depois que a máquina entrar nesta versão, e um aparelho que ainda esteja na versão antiga aparece na linha de cima. Se um deles continuar aqui <b>já na versão atual</b>, é caso novo: rode <code>jrDiagnosticoSync()</code> no console daquele aparelho e leve os exemplos para quem mantém o app.</div>` : ''}
       </div>` : ''}
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-xs border-collapse">
@@ -2121,14 +2145,18 @@ function renderAparelhosContent() {
           </thead>
           <tbody class="divide-y divide-slate-800 text-[11px]">
             ${cache.lista.map(a => {
-              const atual = a.build === buildAtual;
+              const atual = mesmaVersao(a.build);
+              // Vermelho é chamado para agir. Aparelho dormente fica cinza:
+              // a versão dele é um retrato do último acesso, e não há ação
+              // possível enquanto a máquina não for ligada.
+              const dormente = !estaEmUso(a);
               const recusados = a.registros_recusados || 0;
               const sou = meuId && a.id === meuId;
               return `
               <tr class="hover:bg-slate-800/40 ${recusados > 0 ? 'bg-red-950/20' : ''}">
                 <td class="p-3 font-bold text-white">${a.apelido || a.id}${sou ? ' <span class="text-[9px] text-emerald-400 font-black">(este)</span>' : ''}</td>
                 <td class="p-3 text-slate-400">${a.plataforma || '—'}</td>
-                <td class="p-3"><span class="${atual ? 'text-emerald-400' : 'text-red-400 font-black'}">${a.build || '—'}</span></td>
+                <td class="p-3"><span class="${atual ? 'text-emerald-400' : (dormente ? 'text-slate-500' : 'text-red-400 font-black')}">${a.build || '—'}</span></td>
                 <td class="p-3 text-slate-300">${a.ultimo_usuario || '—'}</td>
                 <td class="p-3 text-slate-400">${_tempoRelativo(a.ultimo_acesso)}</td>
                 <td class="p-3 text-right ${recusados > 0 ? 'text-red-400 font-black' : 'text-slate-500'}">${recusados}</td>

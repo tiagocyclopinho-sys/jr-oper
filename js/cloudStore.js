@@ -631,10 +631,30 @@ class CloudStore {
     if (tableName === 'usuarios') return this._guardaDeUsuarios(registros);
     if (tableName !== 'controle_viagens') return registros;
 
+    // is_deleted PASSA — correção de 01/09/2026, e ela conserta um defeito
+    // que estava aqui desde 22/08.
+    //
+    // A guarda existe para impedir que fantasma de build antiga ENTRE no
+    // banco. Um registro já marcado como excluído não entra em lugar nenhum:
+    // ele já ESTÁ no banco, e o que este POST carrega é a exclusão dele.
+    // Barrá-lo por causa do data_saida não impede fantasma nenhum — impede
+    // a EXCLUSÃO de viajar. Duas consequências, e as duas foram vistas:
+    //
+    //   1. Quem apagar aqui uma viagem cujo data_saida esteja ilegível vê a
+    //      linha sumir da própria tela e reaparecer nos outros aparelhos,
+    //      para sempre. A exclusão nunca sai desta máquina, e nada avisa.
+    //   2. Os 247 que a migration_25 marcou is_deleted descem no pull (o
+    //      getAll faz select=* sem filtrar a flag), viram "mudança" no mapa
+    //      de hashes e voltam a esta guarda no ciclo seguinte — acendendo o
+    //      contador "Recusados" logo depois de a faxina o ter zerado, que é
+    //      exatamente o ruído que a faxina existe para acabar.
+    //
+    // É a mesma regra que _auditarCacheLocal() e _faxinaDeFantasmas() já
+    // seguem: para a máquina de fantasma, registro excluído não existe.
     const aprovados = [];
     const recusados = [];
     for (const r of registros) {
-      if (r && !this._dataSaidaEhValida(r.data_saida)) recusados.push(r);
+      if (r && !r.is_deleted && !this._dataSaidaEhValida(r.data_saida)) recusados.push(r);
       else aprovados.push(r);
     }
 
@@ -1080,6 +1100,197 @@ class CloudStore {
   // para empurrar — e um aparelho contaminado que já tivesse sido marcado
   // como "em dia" mostraria `null`, escondendo justamente o que a ETAPA 3
   // precisa achar. Ver CONFERIR_APARELHO.md.
+  // =================================================================
+  // FAXINA DE FANTASMA NO CACHE DESTE APARELHO — 01/09/2026
+  //
+  // O QUE ISTO FECHA, e por que a guarda de escrita sozinha nunca fechou.
+  //
+  // _aplicarGuardaDeEscrita() impede o fantasma de SUBIR — é o que tornou
+  // definitiva a faxina do banco (migration_25). Só que ela nunca tirou
+  // nada do APARELHO: o registro recusado continua no localStorage, e as
+  // duas pontas do ciclo o seguram lá para sempre.
+  //
+  //   ENVIO    a guarda recusa, então a nuvem nunca confirma aquele id, e
+  //            ele nunca entra em `conhecidos` (_mapaSync).
+  //   LEITURA  _mesclarPorRegistro vê um id que a nuvem nunca confirmou e
+  //            o classifica como "nunca subiu: é trabalho local pendente".
+  //            Fica. E quando o id EXISTE na nuvem — os 247 que a
+  //            migration_25 marcou is_deleted — ele bate como "sujo", e o
+  //            desempate por atualizado_em não salva: o fantasma vem de uma
+  //            build que nem gravava essa coluna, então tLocal é null e a
+  //            nuvem nunca é "estritamente mais nova". O local ganha.
+  //
+  // Ou seja: os dois caminhos do merge preservam. O ciclo se fecha em si
+  // mesmo, e é por isso que UM aparelho da frota voltava a marcar os mesmos
+  // 247 recusados DEPOIS DE CADA atualização — atualizar troca o código, e
+  // quem segurava os 247 era o localStorage, que a atualização não toca.
+  //
+  // A REGRA AQUI, e ela é curta: registro que a guarda de escrita recusa
+  // não pode ser enviado nunca; logo não é trabalho de ninguém, é lixo de
+  // build antiga, e sai do aparelho. Duas saídas, conforme o que está
+  // guardado em data_saida:
+  //
+  //   FANTASMA  data_saida com vocabulário de CHECKLIST ("INICIADO",
+  //             "NÃO INICIADO"...). É a impressão digital medida na ETAPA 0
+  //             e expurgada pela migration_25: build antiga gravando com o
+  //             mapeamento de coluna trocado. Sai do cache.
+  //
+  //   ILEGÍVEL  data_saida com qualquer outra coisa que não seja data.
+  //             Aqui não dá para afirmar que a LINHA é lixo — só o campo é.
+  //             Zera o campo (vazio é viagem lançada que ainda não saiu, e
+  //             a guarda aceita) e a linha finalmente sobe, em vez de ficar
+  //             bloqueando o lote para sempre.
+  //
+  // IGNORA is_deleted, e isso não é detalhe: a migration_25 marcou os 247
+  // no banco mas NÃO mudou o data_saida deles, e getAll() faz select=* sem
+  // filtrar a flag — eles continuam descendo no pull. Se a faxina os
+  // varresse, ela os apagaria a cada 30 segundos e o pull os traria de
+  // volta a cada 30 segundos, reescrevendo o localStorage inteiro no meio.
+  // Um registro já marcado como excluído não aparece em tela nenhuma e a
+  // guarda o recusaria de qualquer forma: para esta faxina, ele não existe.
+  //
+  // NÃO É DESTRUTIVO NA PRÁTICA: o que sai daqui já está no banco marcado
+  // com is_deleted pela migration_25 (reversível com um UPDATE), e a ficha
+  // de cada linha removida — id, carga e o valor recusado — fica em
+  // localStorage['jr_faxina_fantasmas']. Guardamos a ficha, não a linha: o
+  // objetivo é liberar cota, não trocá-la de lugar.
+  // =================================================================
+
+  // O vocabulário de checklist/fusion que a build antiga gravava dentro de
+  // data_saida. Sem acento e em maiúsculas porque a mesma coluna já chegou
+  // como "NÃO INICIADO", "NAO INICIADO" e "Não iniciado" — a mesma
+  // normalização que checklistFoiRealizado() faz em app.js.
+  _ehVocabularioDeChecklist(valor) {
+    const v = String(valor === null || valor === undefined ? '' : valor)
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .toUpperCase().trim();
+    return v === 'INICIADO' || v === 'NAO INICIADO'
+        || v === 'REALIZADO' || v === 'NAO REALIZADO'
+        || v === 'FINALIZADO' || v === 'EM ANDAMENTO'
+        || v === 'PENDENTE' || v === 'OK' || v === 'SIM' || v === 'NAO';
+  }
+
+  _faxinaDeFantasmas() {
+    const decisao = new Map();   // id -> 'remover' | 'reparar'
+    const fichas = [];
+
+    // As TRÊS cópias que o aparelho mantém de controle_viagens, e a faxina
+    // precisa passar nas três: a memória é o que a tela desenha, jr_sac_db
+    // é o que sobrevive ao reload e é lido pelo envio, e o espelho é o que
+    // o diagnóstico compara. Limpar só uma faz o fantasma voltar pela outra
+    // no ciclo seguinte — a forma de falhar mais fácil deste app.
+    const memoria = (window.db && window.db.data && Array.isArray(window.db.data.controle_viagens))
+      ? window.db.data.controle_viagens : null;
+
+    let sacDb = null, fatia = null;
+    try {
+      sacDb = JSON.parse(localStorage.getItem('jr_sac_db') || 'null');
+      if (sacDb && Array.isArray(sacDb.controle_viagens)) fatia = sacDb.controle_viagens;
+    } catch (e) {}
+
+    let espelho = null;
+    try {
+      const bruto = localStorage.getItem('jr_controle_viagens');
+      if (bruto) {
+        const parsed = JSON.parse(bruto);
+        espelho = Array.isArray(parsed) ? parsed : Object.values(parsed);
+      }
+    } catch (e) {}
+
+    const examinar = (lista) => {
+      if (!Array.isArray(lista)) return;
+      for (const r of lista) {
+        if (!r || r.id === undefined || r.id === null) continue;
+        if (r.is_deleted) continue;                     // já morto: ver o comentário acima
+        if (this._dataSaidaEhValida(r.data_saida)) continue;
+        const id = String(r.id);
+        if (decisao.has(id)) continue;
+        const fantasma = this._ehVocabularioDeChecklist(r.data_saida);
+        decisao.set(id, fantasma ? 'remover' : 'reparar');
+        fichas.push({
+          id: r.id,
+          carga: r.carga || null,
+          data_saida: String(r.data_saida).slice(0, 40),
+          acao: fantasma ? 'removido' : 'data_saida zerada'
+        });
+      }
+    };
+
+    examinar(memoria);
+    examinar(fatia);
+    examinar(espelho);
+    if (decisao.size === 0) return 0;
+
+    const aplicar = (lista) => {
+      const saida = [];
+      for (const r of lista) {
+        const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+        const acao = (id !== null && !(r && r.is_deleted)) ? decisao.get(id) : undefined;
+        if (acao === 'remover') continue;
+        if (acao === 'reparar') { saida.push(Object.assign({}, r, { data_saida: null })); continue; }
+        saida.push(r);
+      }
+      return saida;
+    };
+
+    // MEMÓRIA PRIMEIRO, e NO MESMO ARRAY. Primeiro porque é de graça e não
+    // falha por cota (mesma razão do _pullDaNuvem). No mesmo array porque a
+    // tela desenha de window.db.data.controle_viagens: trocar a referência
+    // deixaria para trás qualquer lugar que já tenha guardado a lista.
+    if (memoria) {
+      const limpa = aplicar(memoria);
+      memoria.length = 0;
+      Array.prototype.push.apply(memoria, limpa);
+    }
+
+    if (sacDb && fatia) {
+      sacDb.controle_viagens = aplicar(fatia);
+      this._gravarCacheDoPull(sacDb);
+    }
+
+    if (espelho) {
+      this._gravarEspelho('jr_controle_viagens', JSON.stringify(aplicar(espelho)));
+    }
+
+    // Tira os ids expurgados do mapa de hashes. Sem isto, o id removido
+    // continuaria em `conhecidos` e o pull seguinte o contaria como "a
+    // nuvem já confirmou e agora sumiu" — ruído no contador de descartados,
+    // justamente na tabela que menos precisa de ruído.
+    try {
+      const mapa = this._lerMapaSync();
+      const conhecidos = mapa['controle_viagens'];
+      if (conhecidos) {
+        let mexeu = false;
+        for (const [id, acao] of decisao) {
+          if (acao === 'remover' && conhecidos[id] !== undefined) { delete conhecidos[id]; mexeu = true; }
+        }
+        if (mexeu) { this._mapaSync = mapa; this._gravarMapaSync(); }
+      }
+    } catch (e) {}
+
+    // Ficha do que saiu. Best-effort e limitada de propósito: esta faxina
+    // existe para LIBERAR cota, e não pode falhar por falta de cota.
+    try {
+      const anterior = JSON.parse(localStorage.getItem('jr_faxina_fantasmas') || 'null');
+      localStorage.setItem('jr_faxina_fantasmas', JSON.stringify({
+        quando: (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString(),
+        build: CloudStore.BUILD,
+        total: fichas.length,
+        total_acumulado: ((anterior && anterior.total_acumulado) || 0) + fichas.length,
+        amostra: fichas.slice(0, 50)
+      }));
+    } catch (e) {}
+
+    const removidos = fichas.filter(f => f.acao === 'removido').length;
+    console.warn(
+      `[CloudStore] FAXINA DE FANTASMA: ${removidos} registro(s) de controle_viagens removido(s) do cache deste ` +
+      `aparelho (data_saida guardava estado de checklist — assinatura de build antiga) e ${fichas.length - removidos} ` +
+      `com data_saida ilegível zerada para poder sincronizar. É definitivo: eles não voltam, e o contador "Recusados" ` +
+      `do painel Aparelhos vai a zero no próximo ciclo. Ficha do que saiu em localStorage['jr_faxina_fantasmas'].`
+    );
+    return fichas.length;
+  }
+
   _auditarCacheLocal() {
     // Lia 'jr_controle_viagens' — o espelho — e o espelho só é escrito pelo
     // pull. Entre um ciclo e outro ele não reflete o que o aparelho guarda,
@@ -1088,6 +1299,18 @@ class CloudStore {
     // a autoridade do pull). É este número que decide se uma máquina pode
     // operar antes do Reset Global — ele precisa contar o que ela realmente
     // tem, na mesma ordem de confiança usada no pull.
+
+    // TIRA O FANTASMA DO APARELHO ANTES DE CONTÁ-LO (01/09/2026).
+    //
+    // Até aqui este método só MEDIA. Medir sozinho nunca teve como zerar o
+    // contador: quem segurava as 247 linhas era o localStorage, e nem a
+    // guarda de escrita nem a atualização do app mexem nele. A faxina roda
+    // primeiro, no mesmo ponto do ciclo, para que a contagem abaixo já veja
+    // o cache limpo — e o número que sobe para o painel Aparelhos passe a
+    // significar "sobrou fantasma que a faxina não soube tratar", que é a
+    // única coisa que ainda vale um alarme.
+    this._faxinaDeFantasmas();
+
     let viagens = null;
     if (window.db && window.db.data && Array.isArray(window.db.data.controle_viagens)) {
       viagens = window.db.data.controle_viagens;
@@ -2642,7 +2865,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "planilha-status-checklist-6.0.0";
+CloudStore.BUILD = "atualizacao-automatica-faxina-6.1.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -2831,7 +3054,9 @@ window.jrDiagnosticoSync = function() {
     console.warn(
       `⚠️ Este aparelho tem cache de build antiga: ${d.bloqueadosNaEscrita.total} registro(s) de ` +
       `${d.bloqueadosNaEscrita.tabela} foram recusados no envio (data de saída com estado de checklist). ` +
-      `Limpe o cache deste aparelho — é a ETAPA 3 do roteiro.`,
+      `NÃO é mais para limpar cache à mão (a antiga ETAPA 3): desde a 6.1.0, _faxinaDeFantasmas() tira ` +
+      `essas linhas do aparelho sozinha, a cada ciclo. Se este número não zerar no próximo ciclo, é caso ` +
+      `NOVO — a faxina não reconheceu o valor. Veja os exemplos abaixo e leve-os para o _ehVocabularioDeChecklist().`,
       d.bloqueadosNaEscrita.exemplos
     );
   }
@@ -3124,6 +3349,35 @@ function jrMesmaVersao(publicada, local) {
   return publicada === local;
 }
 
+// A ATUALIZAÇÃO É AUTOMÁTICA, MAS NÃO NO MEIO DE UM FORMULÁRIO (01/09/2026).
+//
+// Ao passar a conferir a versão nos eventos de acordar (ver o rodapé deste
+// arquivo), a conferência deixou de acontecer só de 15 em 15 minutos e passou
+// a acontecer no exato momento em que a pessoa volta para a tela — e um
+// location.reload() disparado enquanto alguém digita um lançamento joga fora
+// o que ela escreveu, sem nada na tela explicando por quê. Uma atualização que
+// come trabalho é pior do que uma que atrasa.
+//
+// A regra é simples: com a aba ESCONDIDA, recarrega na hora — é a melhor
+// janela possível, ninguém está olhando. Com a aba à vista e o cursor dentro
+// de um campo, adia; o próprio ato de sair do campo ou de trocar de aba
+// dispara a conferência de novo, e aí ela passa. Na prática o adiamento dura
+// segundos, e nunca custa a atualização: os eventos que a reabrem são os
+// mesmos que a pessoa produz ao terminar o que estava fazendo.
+function jrPodeRecarregarAgora() {
+  try {
+    if (typeof document === 'undefined') return true;
+    if (document.visibilityState === 'hidden') return true;
+    const el = document.activeElement;
+    if (!el) return true;
+    if (el.isContentEditable) return false;
+    const tag = String(el.tagName || '').toUpperCase();
+    return !(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT');
+  } catch (e) {
+    return true;   // na dúvida, atualizar: código velho em produção é o risco maior
+  }
+}
+
 window.jrConferirVersaoPublicada = async function() {
   let publicada = null;
   try {
@@ -3144,6 +3398,18 @@ window.jrConferirVersaoPublicada = async function() {
     jrAvisarAtualizacaoManual(publicada);
     return publicada;
   }
+
+  // ADIAMENTO, e ele vem ANTES de carimbar jr_update_tentado de propósito:
+  // adiar não é tentar. Carimbar aqui gastaria a única tentativa que a trava
+  // contra laço concede, e o aparelho terminaria a sessão inteira na versão
+  // velha exibindo a tarja de "atualize à mão" sem nunca ter recarregado.
+  if (!jrPodeRecarregarAgora()) {
+    window._jrUpdatePendente = publicada;
+    console.info(`[CloudStore] Versão ${publicada} pronta para entrar, adiada: há um campo em edição nesta tela. Entra ao sair do campo ou ao trocar de aba.`);
+    return publicada;
+  }
+  window._jrUpdatePendente = null;
+
   try { sessionStorage.setItem('jr_update_tentado', publicada); } catch(e) {}
 
   // Rebaixa as cópias guardadas de cada arquivo do app. cache:'reload'
@@ -3189,10 +3455,79 @@ function jrAvisarAtualizacaoManual(versaoPublicada) {
   } catch(e) {}
 }
 
+// =================================================================
+// QUANDO A VERSÃO É CONFERIDA — 01/09/2026
+//
+// O DEFEITO QUE ISTO FECHA, e ele é o MESMO já documentado em
+// "SINCRONIZA AO VOLTAR PARA A TELA", só que na outra metade do app.
+//
+// A conferência de versão dependia de um único setInterval de 15 minutos —
+// e o navegador não deixa esse timer rodar quando a tela não está à vista:
+// aba de fundo cai para uma execução por minuto, aba parada ~5 min no Chrome
+// é CONGELADA (Page Lifecycle), e celular com a tela apagada é suspenso na
+// hora. O app deste prédio fica o dia inteiro atrás de uma planilha ou
+// minimizado como PWA: na prática o timer disparava a cada 15 minutos DE
+// TELA À VISTA, o que numa máquina de conferência pode ser uma vez por turno,
+// ou nenhuma.
+//
+// Só que o sintoma disso não se parece com "timer congelado" — se parece com
+// máquina teimosa. O aparelho fica online, sincroniza dado (o pull já acorda
+// nos eventos certos desde 28/08) e mesmo assim segue rodando o JavaScript da
+// semana passada. É a leitura de "26 aparelhos em versão antiga" no painel:
+// não é que a atualização automática não exista, é que ela quase nunca é
+// CHAMADA. Fechar e reabrir o app funcionava porque isso força um
+// DOMContentLoaded — ou seja, a instrução que a operação recebia era a de
+// executar à mão o único gatilho que ainda funcionava.
+//
+// Agora a conferência pega carona nos MESMOS quatro eventos que já acordam a
+// sincronização de dados, e por isso não precisa de nenhum acerto novo para
+// ser confiável — quem volta para a tela recebe o código novo antes de digitar
+// a primeira letra. O intervalo de fundo continua existindo como rede de
+// segurança e cai para 5 minutos: é um GET de version.json, alguns bytes.
+//
+// A JANELA DE 60s existe porque os três eventos de acordar disparam juntos no
+// mesmo gesto (destravar o celular dispara visibilitychange E focus). Sem ela
+// seriam três fetches por gesto, sem nenhum ganho.
+// =================================================================
 if (window.cloudStore.isConfigured()) {
+  let ultimaConferenciaMs = 0;
+
+  const conferirVersao = (motivo, janelaMs = 60000) => {
+    const agora = Date.now();
+    if (agora - ultimaConferenciaMs < janelaMs) return;
+    ultimaConferenciaMs = agora;
+    Promise.resolve(window.jrConferirVersaoPublicada()).catch(() => {});
+  };
+
   document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(() => window.jrConferirVersaoPublicada(), 3000);
-    setInterval(() => window.jrConferirVersaoPublicada(), 15 * 60 * 1000);
+    setTimeout(() => conferirVersao('abertura', 0), 3000);
+    setInterval(() => conferirVersao('rede de segurança', 0), 5 * 60 * 1000);
+  });
+
+  // A ABA ESCONDIDA É A MELHOR HORA PARA ATUALIZAR, e é por isso que este
+  // caso não tem janela de espera: ninguém está olhando, nenhum campo pode
+  // estar em edição para jrPodeRecarregarAgora() barrar, e a pessoa volta
+  // para a tela já na versão nova sem ter visto um recarregamento.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') conferirVersao('aba escondida', 0);
+    else conferirVersao('voltou para a tela');
+  });
+
+  window.addEventListener('pageshow', (ev) => {
+    if (ev.persisted) conferirVersao('página restaurada do cache do navegador');
+  });
+  window.addEventListener('focus', () => conferirVersao('janela recebeu foco'));
+  window.addEventListener('online', () => conferirVersao('rede voltou'));
+
+  // Sair de um campo é o fim natural do adiamento de jrPodeRecarregarAgora():
+  // quem terminou de digitar é exatamente quem pode receber a versão nova
+  // agora. Só faz alguma coisa se houver adiamento pendente, então não custa
+  // nada nos outros milhares de blur de um dia de uso.
+  document.addEventListener('focusout', () => {
+    if (!window._jrUpdatePendente) return;
+    setTimeout(() => {
+      if (window._jrUpdatePendente) conferirVersao('campo perdeu o foco', 0);
+    }, 250);   // deixa o foco assentar: trocar de campo dispara focusout antes do focusin
   });
 }
 
