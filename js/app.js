@@ -7502,8 +7502,13 @@ function renderSacInvestigacaoView() {
   const motivos = db.data.motivos_devolucao;
   const causasRaiz = (db.data.motivos_devolucao && db.data.motivos_devolucao.length > 0) ? db.data.motivos_devolucao : (db.data.causas_raiz || []);
   const usuariosAtivos = (db.getUsuarios && db.getUsuarios().length > 0) ? db.getUsuarios().filter(u => u.ativo !== false) : (db.data.usuarios || []);
-  const separadores = (typeof db !== 'undefined' && typeof db.getSeparadores === 'function') ? db.getSeparadores() : (db.data.separadores_conferentes || []);
-  const conferentes = (typeof db !== 'undefined' && typeof db.getConferentes === 'function') ? db.getConferentes() : (db.data.separadores_conferentes || []);
+  // Separador e Conferente usam a MESMA lista: todos os colaboradores do CD.
+  // A operação não é estanque — separador que sabe conferir assume a
+  // conferência para agilizar, e conferente/empilhador ajuda na separação
+  // quando precisa. Filtrar por função escondia gente que de fato atuou.
+  const equipeCd = (typeof db !== 'undefined' && typeof db.getColaboradoresCDNomes === 'function') ? db.getColaboradoresCDNomes() : (db.data.separadores_conferentes || []);
+  const separadores = equipeCd;
+  const conferentes = equipeCd;
 
   const fDataDe = window._invFiltroDataDe || '';
   const fDataAte = window._invFiltroDataAte || '';
@@ -7751,7 +7756,8 @@ function editarInvestigacaoModal(id) {
   if (!d) return;
 
   const causasRaiz = db.getMotivosDevolucao ? db.getMotivosDevolucao() : (db.data.motivos_devolucao || []);
-  const separadores = db.data.separadores_conferentes || [];
+  // Mesma lista única do CD usada na apuração: sem separar por função.
+  const separadores = (typeof db.getColaboradoresCDNomes === 'function') ? db.getColaboradoresCDNomes() : (db.data.separadores_conferentes || []);
 
   const modalContainer = document.getElementById('modal-container');
   if (!modalContainer) return;

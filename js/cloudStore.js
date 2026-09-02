@@ -3058,7 +3058,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "renumera-colisao-protocolo-6.2.0";
+CloudStore.BUILD = "equipe-cd-lista-unica-6.3.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS

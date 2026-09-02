@@ -182,7 +182,7 @@ class Store {
     let catalogoLegado = null;
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
-      const currentVersion = '6.2.0';
+      const currentVersion = '6.3.0';
       if (isFirstInstall) {
         // Primeira vez: grava só a fatia operacional. O catálogo NÃO é
         // gravado — ele vem de INITIAL_DATA a cada abertura.
@@ -2541,6 +2541,19 @@ class Store {
     if (!filtroFuncao) return list;
     const term = filtroFuncao.toUpperCase();
     return list.filter(c => String(c.funcao || '').toUpperCase().includes(term));
+  }
+
+  // Lista única de nomes do CD usada nas seleções de Separador/Conferente da
+  // apuração. Na prática a operação se mistura: separador que sabe conferir
+  // assume a conferência, e conferente/empilhador ajuda na separação quando
+  // aperta. Por isso aqui não se filtra por função — vem todo mundo do CD.
+  getColaboradoresCDNomes() {
+    const nomes = this.getColaboradoresCD()
+      .filter(c => c.ativo !== false)
+      .map(c => String(c.nome || '').trim())
+      .filter(n => n !== '');
+    const unicos = [...new Set(nomes)].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    return unicos.length > 0 ? unicos : (this.data.separadores_conferentes || []);
   }
 
   getSeparadores() {
