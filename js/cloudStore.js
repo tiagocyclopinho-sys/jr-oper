@@ -539,6 +539,13 @@ class CloudStore {
 
     let data = Array.isArray(records) ? records : [records];
 
+    // A lista COMO ELA VEIO de syncLocalToCloud. É esta que _confirmarEnvio()
+    // vai transformar em hash depois do POST — as etapas abaixo (projeção e
+    // igualador de chaves) criam objetos NOVOS, então uma correção feita só
+    // na cópia não chegaria ao mapa de sync e o registro voltaria "sujo" no
+    // ciclo seguinte. Quem precisa disso é _resolverColisaoDeSequencia().
+    const originais = data;
+
     // -------------------------------------------------------------
     // GUARDA NA ESCRITA (decisão 7 de 22/08/2026) — Onda 1, item 7
     //
@@ -589,34 +596,53 @@ class CloudStore {
       });
     }
 
-    try {
-      const response = await fetch(`${this.config.url}/rest/v1/${tableName}`, {
-        method: 'POST',
-        headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
-        body: JSON.stringify(data)
-      });
-      if (!response.ok) {
-        const errBody = await response.text();
-        this._registrarFalhaSync(tableName, response.status, errBody);
-        this._checkConflitoUnicidade(tableName, errBody, data).catch(() => {});
+    // DUAS TENTATIVAS, NÃO MAIS (02/09/2026). A segunda só acontece quando a
+    // primeira voltou 23505 e _resolverColisaoDeSequencia() conseguiu
+    // renumerar alguém — ou seja, quando o lote MUDOU e vale reenviar. Sem
+    // esse teto, um 23505 que a renumeração não resolve viraria laço infinito
+    // dentro de um ciclo de sync.
+    for (let tentativa = 1; tentativa <= 2; tentativa++) {
+      try {
+        const response = await fetch(`${this.config.url}/rest/v1/${tableName}`, {
+          method: 'POST',
+          headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+          body: JSON.stringify(data)
+        });
+        if (!response.ok) {
+          const errBody = await response.text();
+          if (tentativa === 1) {
+            let renumerados = 0;
+            try {
+              renumerados = await this._resolverColisaoDeSequencia(tableName, errBody, data, originais);
+            } catch(e) {
+              // Renumerar é conserto oportunista: se ele próprio falhar, o
+              // erro original é que tem de chegar ao operador, não este.
+              console.warn(`[CloudStore] Não foi possível renumerar ${tableName}:`, e.message);
+            }
+            if (renumerados > 0) continue;
+          }
+          this._registrarFalhaSync(tableName, response.status, errBody);
+          this._checkConflitoUnicidade(tableName, errBody, data).catch(() => {});
+          return false;
+        }
+        this._tabelasPendentesDeEnvio.delete(tableName);
+        // Marca que esta tabela JÁ conseguiu subir deste aparelho. É o que
+        // permite ao pull diferenciar "a nuvem está vazia porque o envio
+        // nunca funcionou" de "a nuvem está vazia porque alguém apagou".
+        try { localStorage.setItem('jr_sync_ok_' + tableName, String(Date.now())); } catch(e) {}
+        // Sincronizou com sucesso — se havia um conflito de unicidade pendente
+        // registrado para essa tabela (ver _checkConflitoUnicidade), foi
+        // corrigido: limpa da fila de revisão (Fase 4, 20/08/2026).
+        if (window.db && typeof window.db.limparConflitosDaTabela === 'function') {
+          window.db.limparConflitosDaTabela(tableName);
+        }
+        return true;
+      } catch(err) {
+        console.warn(`[CloudStore] Falha na rede ao salvar em ${tableName}:`, err.message);
         return false;
       }
-      this._tabelasPendentesDeEnvio.delete(tableName);
-      // Marca que esta tabela JÁ conseguiu subir deste aparelho. É o que
-      // permite ao pull diferenciar "a nuvem está vazia porque o envio
-      // nunca funcionou" de "a nuvem está vazia porque alguém apagou".
-      try { localStorage.setItem('jr_sync_ok_' + tableName, String(Date.now())); } catch(e) {}
-      // Sincronizou com sucesso — se havia um conflito de unicidade pendente
-      // registrado para essa tabela (ver _checkConflitoUnicidade), foi
-      // corrigido: limpa da fila de revisão (Fase 4, 20/08/2026).
-      if (window.db && typeof window.db.limparConflitosDaTabela === 'function') {
-        window.db.limparConflitosDaTabela(tableName);
-      }
-      return true;
-    } catch(err) {
-      console.warn(`[CloudStore] Falha na rede ao salvar em ${tableName}:`, err.message);
-      return false;
     }
+    return false;
   }
 
   // Guarda na escrita — decisão 7 de 22/08/2026 (Onda 1, item 7).
@@ -1793,6 +1819,173 @@ class CloudStore {
   }
 
   // ---------------------------------------------------------------
+  // COLISÃO DE NÚMERO SEQUENCIAL: RENUMERA E REENVIA (02/09/2026)
+  //
+  // O QUE ISTO CONSERTA. Em 31/08 dois aparelhos geraram DEV-2026-016 na
+  // mesma tarde: o do SAC às 15:33, o da bancada às 15:59. O segundo chegou
+  // primeiro, e a partir dali TODO envio de ocorrencias_devolucao daquele
+  // aparelho voltou 409/23505 em uq_devolucao_protocolo. Como o POST é um
+  // lote só, o registro colidido levou junto as seis devoluções abertas
+  // depois dele: DEV-017 a DEV-022 ficaram DOIS DIAS presas no PC do SAC,
+  // com o indicador da nuvem verde e ninguém sabendo. A unidade da falha é
+  // o lote, não o registro — é isso que transforma um número repetido numa
+  // fila inteira parada.
+  //
+  // POR QUE A COLISÃO EXISTE. getNextSequenceNumber() (store.js) gera o
+  // número olhando só o estado LOCAL. O syncCloudToLocal() que a abertura
+  // faz antes de gerar (app.js:7443) resolve metade do problema — o
+  // aparelho atrasado — mas não protege contra o número ser criado por
+  // OUTRO aparelho DEPOIS. Enquanto a numeração nascer no cliente contra
+  // uma coluna UNIQUE, a colisão volta; o que dá para garantir aqui é que
+  // ela pare de travar a fila.
+  //
+  // SÓ RENUMERA NÚMERO DE PROTOCOLO. motoristas.cnh, usuarios.email e
+  // controle_viagens.carga também são UNIQUE, e ali o valor é do mundo real:
+  // renumerar seria inventar dado. Esses continuam no caminho antigo —
+  // conflito registrado para a aba "⚠️ Conflitos" e envio recusado.
+  //
+  // SÓ MEXE EM QUEM COLIDE DE VERDADE. Consulta a nuvem e renumera apenas o
+  // registro cujo número já está lá sob OUTRO id. Se o 23505 vier de um
+  // índice diferente, nada colide, nada é renumerado, e a falha segue
+  // inteira para o caminho antigo. É a diferença entre consertar a colisão e
+  // trocá-la por um número inventado.
+  //
+  // O NÚMERO NOVO É REGISTRADO. Protocolo é documento: vai para audit_logs
+  // como RENUMERACAO_AUTOMATICA, que é o que o "📜 Ver histórico" do card lê.
+  // Trocar um protocolo em silêncio seria repetir o defeito que esta função
+  // existe para acabar.
+  // ---------------------------------------------------------------
+  async _resolverColisaoDeSequencia(tableName, errBody, payload, originais) {
+    const spec = CloudStore.SEQUENCIAS_RENUMERAVEIS[tableName];
+    if (!spec) return 0;
+
+    let code = null;
+    try { code = JSON.parse(errBody).code; } catch(e) {}
+    if (code !== '23505') return 0;
+
+    // Quem está na nuvem com cada número, e sob qual id. As quatro tabelas
+    // com número sequencial são pequenas (dezenas de linhas) e aqui descem
+    // só duas colunas — não é o select=* paginado do pull, cabe numa
+    // requisição. Se a leitura falhar, não há como saber quem colide: sai
+    // sem renumerar nada.
+    let naNuvem;
+    try {
+      const resp = await fetch(
+        `${this.config.url}/rest/v1/${tableName}?select=id,${spec.unico}&limit=10000`,
+        { headers: this._headers() }
+      );
+      if (!resp.ok) return 0;
+      naNuvem = await resp.json();
+    } catch(e) {
+      return 0;
+    }
+    if (!Array.isArray(naNuvem)) return 0;
+
+    const donoNaNuvem = new Map();
+    for (const r of naNuvem) {
+      const v = String(r[spec.unico] || '');
+      if (v) donoNaNuvem.set(v, String(r.id));
+    }
+
+    // Universo do que já está tomado: nuvem MAIS este aparelho. Sem a parte
+    // local, a renumeração poderia cair em cima de um número que só existe
+    // aqui e ainda não subiu — trocando uma colisão por outra, que é
+    // exatamente o que aconteceu em 31/08.
+    const locais = (window.db && window.db.data && Array.isArray(window.db.data[tableName]))
+      ? window.db.data[tableName]
+      : [];
+    const tomados = new Set(donoNaNuvem.keys());
+    for (const r of locais) {
+      const v = String(r[spec.unico] || '');
+      if (v) tomados.add(v);
+    }
+
+    const numeroDe = v => {
+      const m = String(v || '').match(/(\d+)$/);
+      return m ? parseInt(m[1], 10) : 0;
+    };
+    let maiorN = 0;
+    tomados.forEach(v => { const n = numeroDe(v); if (n > maiorN) maiorN = n; });
+
+    let renumerados = 0;
+    for (const rec of payload) {
+      const valor = String(rec[spec.unico] || '');
+      if (!valor) continue;
+      const dono = donoNaNuvem.get(valor);
+      if (!dono || dono === String(rec.id)) continue;   // não é colisão
+
+      let novoN = maiorN;
+      let novos = null;
+      do {
+        novoN++;
+        novos = this._renderizarSequencia(rec, spec, novoN);
+      } while (novos && tomados.has(novos[spec.unico]));
+      if (!novos) continue;   // formato que não termina em dígitos: não mexe
+      maiorN = novoN;
+
+      const antes = {};
+      Object.keys(novos).forEach(k => { antes[k] = rec[k]; });
+
+      // TRÊS cópias do mesmo registro precisam receber o número novo:
+      //   1. o objeto que vai no POST desta retentativa (payload);
+      //   2. o do array que syncLocalToCloud passou, porque é dele que
+      //      _confirmarEnvio() tira o hash — com o valor velho ali, o
+      //      registro voltaria "sujo" no ciclo seguinte, para sempre;
+      //   3. o registro vivo em db.data, senão a tela segue mostrando o
+      //      número antigo e o próximo save() regrava a colisão.
+      Object.assign(rec, novos);
+      const original = (originais || []).find(o => o && String(o.id) === String(rec.id));
+      if (original && original !== rec) Object.assign(original, novos);
+      const vivo = locais.find(o => o && String(o.id) === String(rec.id));
+      if (vivo && vivo !== rec) Object.assign(vivo, novos);
+
+      tomados.add(novos[spec.unico]);
+      renumerados++;
+
+      console.warn(
+        `[CloudStore] COLISÃO DE NÚMERO em ${tableName}: "${valor}" já estava na nuvem sob o id ${dono}. ` +
+        `Este registro (id ${rec.id}) passou a ser "${novos[spec.unico]}" e o lote será reenviado.`
+      );
+      if (window.db && typeof window.db.logAudit === 'function') {
+        window.db.logAudit({
+          acao: 'RENUMERACAO_AUTOMATICA',
+          modulo: tableName,
+          registro_id: rec.id,
+          diff: { antes, depois: novos, motivo: `Número já existia na nuvem sob o id ${dono}.` }
+        });
+      }
+    }
+
+    if (renumerados > 0 && window.db && typeof window.db.save === 'function') window.db.save();
+    return renumerados;
+  }
+
+  // Aplica o número `n` a todos os campos de sequência do registro,
+  // preservando o prefixo e a largura DE CADA UM. Em ocorrencias_devolucao,
+  // 'DEV-2026-016' e 'DEV-016' são o mesmo número em dois formatos: mexer só
+  // no que tem UNIQUE deixaria os dois se contradizendo na tela e no PDF.
+  //
+  // O prefixo sai do valor atual, e não de uma constante: 'DEV-2026-' vira
+  // 'DEV-2027-' na virada do ano sem ninguém tocar aqui. Devolve null quando
+  // o campo com UNIQUE não termina em dígitos — formato que esta função não
+  // entende ela não renumera.
+  _renderizarSequencia(rec, spec, n) {
+    const aplicar = valor => {
+      const m = String(valor || '').match(/^(.*?)(\d+)$/);
+      return m ? m[1] + String(n).padStart(m[2].length, '0') : null;
+    };
+    const principal = aplicar(rec[spec.unico]);
+    if (!principal) return null;
+    const saida = {};
+    saida[spec.unico] = principal;
+    for (const campo of (spec.espelhos || [])) {
+      const v = aplicar(rec[campo]);
+      if (v) saida[campo] = v;
+    }
+    return saida;
+  }
+
+  // ---------------------------------------------------------------
   // LIMPEZA DE DADOS DE TREINAMENTO NA NUVEM
   // Usado pelo "Reset Global de Treinamento" (store.js) para zerar na
   // nuvem as mesmas tabelas operacionais/transacionais que o reset já
@@ -2865,7 +3058,7 @@ class CloudStore {
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "atualizacao-automatica-faxina-6.1.0";
+CloudStore.BUILD = "renumera-colisao-protocolo-6.2.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -2947,6 +3140,25 @@ CloudStore.COLUNAS_POR_TABELA = {
     texto:        ['nome', 'email', 'senha_hash', 'role', 'cargo', 'departamento'],
     booleanoTrue: ['ativo']
   }
+};
+
+// NÚMEROS SEQUENCIAIS QUE PODEM SER RENUMERADOS SOZINHOS (02/09/2026).
+// Lidos por _resolverColisaoDeSequencia() — o comentário longo está lá.
+//
+//   unico    -> o campo que tem índice UNIQUE no banco e derruba o lote
+//   espelhos -> o mesmo número em outro formato, que tem de andar junto
+//
+// A lista é curta DE PROPÓSITO. Só entram campos cujo valor este app
+// inventa (um contador). motoristas.cnh, usuarios.email e
+// controle_viagens.carga também são UNIQUE e ficam de fora: ali o valor
+// vem do mundo real e renumerar seria falsificar o dado, não consertá-lo.
+// medidas_disciplinares.numero_medida também fica fora, por outro motivo:
+// não tem UNIQUE no banco, então nunca derruba envio nenhum.
+CloudStore.SEQUENCIAS_RENUMERAVEIS = {
+  ocorrencias_devolucao: { unico: 'numero_protocolo', espelhos: ['numero_devolucao'] },
+  ocorrencias_rota:      { unico: 'numero_protocolo', espelhos: [] },
+  retencoes_frota:       { unico: 'numero_retencao',  espelhos: [] },
+  sinistros:             { unico: 'numero_sinistro',  espelhos: [] }
 };
 
 // As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
