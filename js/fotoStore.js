@@ -546,7 +546,9 @@ class FotoStore {
     const etapas = ['recebimento', 'despacho'];
     let migrados = 0, registros = 0;
 
-    for (const r of window.db.data.reentregas) {
+    // Cópia da lista, pelo mesmo motivo da versão da devolução: updateReentrega
+    // chama save() -> sortAll(), que reordena data.reentregas embaixo do laço.
+    for (const r of window.db.data.reentregas.slice()) {
       if (r.is_deleted) continue;
       for (const etapa of etapas) {
         const campoLegado = (etapa === 'despacho') ? 'fotos_despacho' : 'fotos_recebimento';
@@ -654,7 +656,15 @@ FotoStore.prototype.migrarLegadoDevolucao = async function() {
   ];
   let migrados = 0, registros = 0;
 
-  for (const d of window.db.data.ocorrencias_devolucao) {
+  // ITERA UMA CÓPIA, e não o array vivo (04/09/2026).
+  //
+  // Dentro do laço isto chama window.db.save(), que chama sortAll(), que
+  // REORDENA data.ocorrencias_devolucao; e o pull de 30s pode, no meio,
+  // trocar a referência do array inteiro (Object.assign(window.db.data, ...)
+  // em _pullDaNuvem). Um for..of sobre o array vivo, nos dois casos, pula
+  // registro sem avisar. Os objetos são os mesmos - a cópia é só da LISTA -
+  // então as gravações continuam valendo.
+  for (const d of window.db.data.ocorrencias_devolucao.slice()) {
     if (d.is_deleted) continue;
 
     for (const E of ETAPAS) {

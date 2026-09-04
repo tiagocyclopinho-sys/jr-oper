@@ -3778,7 +3778,22 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
     });
   };
 
+  // O STORAGE VEM PRIMEIRO (04/09/2026, migration 38).
+  //
+  // Desde a mudança para o Supabase Storage, a foto da devolução NÃO está
+  // mais em fotos_abertura: está em fotos_abertura_paths, como caminho. Sem
+  // estas linhas este modal voltaria a mostrar ZERO foto justamente nas
+  // devoluções já migradas — que é, letra por letra, a falha de 26/08
+  // descrita no comentário acima: quem decide pela tela decidindo sem ver a
+  // prova. Vem antes dos arrays legados porque é onde a foto mora agora.
+  const _urlDaFoto = c => (window.fotoStore && typeof window.fotoStore.urlPublica === 'function')
+    ? window.fotoStore.urlPublica(c) : c;
+  empurrar(fotos, (registro.fotos_abertura_paths || []).map(_urlDaFoto));
+  empurrar(fotos, (registro.fotos_investigacao_paths || []).map(_urlDaFoto));
+
   // Campos reais da devolução, na ordem em que a ocorrência os produz.
+  // Continuam aqui para os registros ainda não migrados; empurrar() ignora
+  // repetido, então nada duplica quando as duas formas convivem.
   empurrar(fotos, registro.fotos_abertura);
   empurrar(fotos, registro.fotos_investigacao);
   empurrar(videos, registro.videos_abertura);

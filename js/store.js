@@ -182,7 +182,7 @@ class Store {
     let catalogoLegado = null;
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
-      const currentVersion = '6.4.2';
+      const currentVersion = '6.4.3';
       if (isFirstInstall) {
         // Primeira vez: grava só a fatia operacional. O catálogo NÃO é
         // gravado — ele vem de INITIAL_DATA a cada abertura.
