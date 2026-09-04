@@ -2248,11 +2248,32 @@ class CloudStore {
     // aparelho honesto para a ETAPA 3 (ver CONFERIR_APARELHO.md).
     this._auditarCacheLocal();
 
+    // ---------------------------------------------------------------
+    // A MEMÓRIA PRIMEIRO, O DISCO DEPOIS (04/09/2026)
+    //
+    // Isto lia SÓ o jr_sac_db. Num aparelho com a cota estourada, o
+    // registro que o save() acabou de não conseguir gravar existe em
+    // window.db.data e NÃO existe no disco — então o push relia o retrato
+    // velho, o lançamento não subia para lugar nenhum e se perdia de vez
+    // no primeiro F5. É exatamente o aparelho de 91% do relato de 04/09.
+    //
+    // Ler a memória é seguro porque ela nunca está atrás do disco: o pull
+    // atualiza window.db.data ANTES de tentar gravar o cache (ver
+    // _pullDaNuvem, "Memória primeiro, porque é de graça"), e o save()
+    // serializa a memória para gravar. É a mesma coisa, sem depender de
+    // uma gravação que pode ter falhado. Só as chaves deste mapeamento
+    // são lidas, então clientes/produtos (que existem em db.data e não no
+    // jr_sac_db) continuam de fora, como antes.
+    // ---------------------------------------------------------------
     let fullDb = null;
-    try {
-      const rawFull = localStorage.getItem('jr_sac_db');
-      if (rawFull) fullDb = JSON.parse(rawFull);
-    } catch(e) {}
+    if (window.db && window.db.data) {
+      fullDb = window.db.data;
+    } else {
+      try {
+        const rawFull = localStorage.getItem('jr_sac_db');
+        if (rawFull) fullDb = JSON.parse(rawFull);
+      } catch(e) {}
+    }
 
     for (const m of mappings) {
       try {

@@ -993,8 +993,76 @@ class Store {
     }
 
     const payload = JSON.stringify(this._getOperationalSlice());
+    if (this._gravarFatiaOperacional(payload)) return true;
+    console.error('[Store] Falha ao salvar dados operacionais no localStorage (tentativa 1):', this._ultimoErroDeGravacao);
+
+    // =================================================================
+    // ESCADA DE RECUPERAÇÃO DE COTA — reescrita em 04/09/2026
+    //
+    // O QUE ACONTECEU. Um aparelho abriu com 4.634 KB de ~5.120 (91%) e a
+    // tarja "o último registro NÃO foi salvo". Dos 4.634, só 3.666 eram o
+    // jr_sac_db: os ~970 KB restantes eram as 25 chaves-espelho da nuvem,
+    // que são CÓPIA do próprio jr_sac_db e se refazem sozinhas no pull
+    // seguinte. Havia espaço de sobra para o lançamento caber — só que
+    // ninguém foi buscar.
+    //
+    // POR QUE NINGUÉM FOI BUSCAR. A recuperação daqui sabia fazer uma
+    // coisa só: pruneOldAuditData(), que corta audit_logs acima de 300 e
+    // registro_versoes acima de 500. Naquele aparelho havia 84 e 6. Ela
+    // devolveu false — e o `if (liberou)` mandava direto para o alerta,
+    // SEM NENHUMA SEGUNDA TENTATIVA de gravação. O único degrau que
+    // existia era justamente o que não tinha o que cortar.
+    //
+    // Agora a ordem é a mesma que o caminho de LEITURA já usa desde
+    // 28/08/2026 (cloudStore._gravarCacheDoPull): joga fora CÓPIA antes de
+    // jogar fora ORIGINAL. Primeiro os espelhos, que são duplicata pura;
+    // só depois o histórico, que só existe uma vez. E cada degrau tenta
+    // gravar por conta própria, em vez de um `if` único que podia sair
+    // pela tangente sem tentar nada.
+    // =================================================================
+    let ultimoErro = this._ultimoErroDeGravacao;
+
+    // Degrau 1 — as 25 cópias. É o degrau que faltava, e é o que resolve o
+    // caso real: devolve de uma vez o espaço de um jr_sac_db inteiro.
+    if (this._purgarEspelhosDaNuvem() > 0) {
+      if (this._gravarFatiaOperacional(JSON.stringify(this._getOperationalSlice()))) {
+        console.info('[Store] Gravação bem-sucedida após liberar as cópias de diagnóstico da nuvem. '
+          + 'Nenhum dado de negócio foi descartado: os espelhos são cópia do jr_sac_db e voltam sozinhos quando houver folga.');
+        return true;
+      }
+      ultimoErro = this._ultimoErroDeGravacao;
+    }
+
+    // Degrau 2 — o histórico de auditoria/versões. Só chega aqui se
+    // sacrificar as cópias não tiver bastado.
+    if (this.pruneOldAuditData()) {
+      if (this._gravarFatiaOperacional(JSON.stringify(this._getOperationalSlice()))) {
+        console.info('[Store] Gravação bem-sucedida após reduzir o histórico de auditoria/versões.');
+        return true;
+      }
+      ultimoErro = this._ultimoErroDeGravacao;
+    }
+
+    console.error('[Store] Falha ao salvar mesmo após liberar espaço:', ultimoErro);
+    this._alertarFalhaDeGravacao(ultimoErro);
+
+    // ÚLTIMO RECURSO: o registro existe em this.data e não existe no
+    // disco. Se a nuvem estiver configurada, ela é a única cópia durável
+    // que sobrou — e o push lê a MEMÓRIA (ver cloudStore.syncLocalToCloud),
+    // justamente para não depender do jr_sac_db que acabou de não caber.
+    // Sem esta linha o lançamento morria aqui: não estava no disco, não
+    // subia para a nuvem, e sumia no primeiro F5.
+    this._scheduleCloudSync();
+    return false;
+  }
+
+  // Uma tentativa de gravação da fatia operacional. Devolve true/false e
+  // guarda o erro em _ultimoErroDeGravacao, para a escada acima poder
+  // repetir a tentativa a cada degrau sem repetir o bloco try/catch.
+  _gravarFatiaOperacional(payload) {
     try {
       localStorage.setItem('jr_sac_db', payload);
+      this._ultimoErroDeGravacao = null;
       // Gravou: se havia tarja de falha na tela, o problema passou.
       if (this.ultimaFalhaDeGravacao) {
         this.ultimaFalhaDeGravacao = null;
@@ -1006,22 +1074,30 @@ class Store {
       this._scheduleCloudSync();
       return true;
     } catch(e) {
-      console.error("[Store] Falha ao salvar dados operacionais no localStorage (tentativa 1):", e);
-      const liberou = this.pruneOldAuditData();
-      if (liberou) {
-        try {
-          localStorage.setItem('jr_sac_db', JSON.stringify(this._getOperationalSlice()));
-          console.info("[Store] Gravação bem-sucedida após liberar espaço automaticamente (histórico de auditoria/versões reduzido).");
-          this._scheduleCloudSync();
-          return true;
-        } catch(e2) {
-          console.error("[Store] Falha ao salvar mesmo após liberar espaço:", e2);
-          this._alertarFalhaDeGravacao(e2);
-          return false;
-        }
-      }
-      this._alertarFalhaDeGravacao(e);
+      this._ultimoErroDeGravacao = e;
       return false;
+    }
+  }
+
+  // Descarta as 25 chaves-espelho da nuvem (jr_ocorrencias, jr_reentregas,
+  // ...). Elas são cópia do que está no jr_sac_db, existem para
+  // diagnóstico e se refazem sozinhas no próximo pull que couber — por
+  // isso são a PRIMEIRA coisa a ser sacrificada quando falta cota, antes
+  // de qualquer dado que só exista uma vez.
+  //
+  // Também levanta a bandeira _espelhosSuspensos no cloudStore: sem ela o
+  // próximo pull reescreveria os mesmos ~970 KB e o aperto voltaria em
+  // seguida — trocar seis por meia dúzia.
+  _purgarEspelhosDaNuvem() {
+    try {
+      const cs = (typeof window !== 'undefined') ? window.cloudStore : null;
+      if (!cs || typeof cs._purgarEspelhos !== 'function') return 0;
+      const removidos = cs._purgarEspelhos();
+      if (removidos > 0) cs._espelhosSuspensos = true;
+      return removidos;
+    } catch(e) {
+      console.warn('[Store] Falha ao liberar as cópias de diagnóstico:', e);
+      return 0;
     }
   }
 
