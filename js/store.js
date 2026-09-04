@@ -182,7 +182,7 @@ class Store {
     let catalogoLegado = null;
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
-      const currentVersion = '6.4.0';
+      const currentVersion = '6.4.1';
       if (isFirstInstall) {
         // Primeira vez: grava só a fatia operacional. O catálogo NÃO é
         // gravado — ele vem de INITIAL_DATA a cada abertura.
@@ -4239,6 +4239,9 @@ class Store {
    * @param {string} caminho - ex: reentregas/123/recebimento/1756...-a1b2.jpg
    */
   registrarFotoEnviada(id, etapa, caminho, modulo) {
+    const updates_ = (c, paths, restantes) => {
+      const u = {}; u[c.paths] = paths; u[c.pendentes] = restantes; return u;
+    };
     const item = this._itemDeFoto(modulo, id);
     if (!item) return { success: false, message: `Registro ID ${id} nao encontrado.` };
     if (!caminho) return { success: false, message: 'Caminho vazio.' };
@@ -4263,16 +4266,51 @@ class Store {
     // gravacao que ja aconteceu. Por isso escreve direto, exatamente como
     // ajustarFotosPendentes() ja faz, e pelo mesmo motivo.
     if (Store._moduloFoto(modulo).colecao === 'reentregas') {
-      const updates = {};
-      updates[c.paths] = paths;
-      updates[c.pendentes] = restantes;
-      return this.updateReentrega(id, updates);
+      const r = this.updateReentrega(id, updates_(c, paths, restantes));
+      return this._confirmarGravacaoDaFoto(r, restantes);
     }
 
     item[c.paths] = paths;
     item[c.pendentes] = restantes;
     item.atualizado_em = agoraIsoBrasilia();
     this.save();
+    return this._confirmarGravacaoDaFoto({ success: true }, restantes);
+  }
+
+  /**
+   * O CONTRATO DA FILA DE FOTOS (ver js/fotoStore.js, processarFila).
+   *
+   *   success: false -> a foto CONTINUA no aparelho e a fila tenta de novo.
+   *                     O pior que acontece e um arquivo orfao no bucket.
+   *   success: true  -> a copia local e APAGADA. Nao ha volta.
+   *
+   * Por isso o retorno tem de refletir a gravacao EM DISCO, e nao so a
+   * memoria. Ate 04/09/2026 refletia so a memoria - tanto aqui quanto no
+   * caminho da reentrega, que devolve success:true sem olhar o save().
+   *
+   * ONDE ISSO MORDE: num aparelho com a cota estourada, que e exatamente
+   * onde a migracao do legado (jrMigrarFotosDevolucaoLegado) precisa rodar. A
+   * sequencia seria: a foto sobe para o Storage, o caminho e gravado so na
+   * memoria porque o save() nao coube, a fila recebe success:true e APAGA a
+   * copia local, e o primeiro F5 leva a memoria embora. O arquivo fica no
+   * bucket - que nega DELETE, entao ninguem limpa - e a devolucao fica sem
+   * prova, apontando para nada.
+   *
+   * save() ja anota a falha em ultimaFalhaDeGravacao e a limpa quando
+   * consegue gravar (ver _gravarFatiaOperacional), entao e ele que responde
+   * "isto chegou ao disco?" sem precisar de encanamento novo.
+   */
+  _confirmarGravacaoDaFoto(resultado, restantes) {
+    if (resultado && resultado.success === false) return resultado;
+    if (this.ultimaFalhaDeGravacao) {
+      return {
+        success: false,
+        message: 'O caminho da foto nao coube no armazenamento deste aparelho '
+               + '(' + (this.ultimaFalhaDeGravacao.percentual != null
+                        ? this.ultimaFalhaDeGravacao.percentual + '% de uso' : 'cota cheia')
+               + '). A foto continua guardada aqui e sobe de novo no proximo ciclo.'
+      };
+    }
     return { success: true, pendentes: restantes };
   }
 
@@ -4319,6 +4357,14 @@ class Store {
     item.atualizado_em = agoraIsoBrasilia();
     item.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
     this.save();
+    // Mesmo motivo do _confirmarGravacaoDaFoto: _reconciliar() larga a POSSE
+    // quando a fila zera E o registro concorda. Se o zero ficou so na memoria,
+    // largar a posse deixaria o pull de 30s ressuscitar o contador antigo, e a
+    // pendencia voltaria a piscar apontando foto que ja subiu.
+    if (this.ultimaFalhaDeGravacao) {
+      return { success: false, pendentes: alvo, mudou: true,
+               message: 'Contador ajustado so na memoria: a cota deste aparelho esta cheia.' };
+    }
     return { success: true, pendentes: alvo, mudou: true };
   }
 
