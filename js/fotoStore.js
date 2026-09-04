@@ -37,7 +37,46 @@
 const FOTO_DB_NOME    = 'jr_fotos';
 const FOTO_DB_VERSAO  = 1;
 const FOTO_STORE      = 'fila';
-const FOTO_BUCKET     = 'reentregas-fotos';
+// ---------------------------------------------------------------
+// UM BUCKET POR MODULO (04/09/2026)
+//
+// Era uma constante so, 'reentregas-fotos', porque so a reentrega usava esta
+// fila. A devolucao entrou na migration 38 pelo mesmo motivo que a reentrega
+// entrou na 34 - 98,7% do peso da tabela era foto em base64 - e traz consigo
+// a pergunta "de qual bucket e esta foto?".
+//
+// A resposta vem do PROPRIO CAMINHO, e nao de um parametro a mais espalhado
+// por dez assinaturas: _caminhoDe() ja carimba o modulo no primeiro segmento
+// ('reentregas/123/...'), entao o caminho gravado no registro se identifica
+// sozinho. E isso que mantem os caminhos ja gravados funcionando sem tocar em
+// nenhum deles - quem nao reconhece o prefixo cai no bucket da reentrega, que
+// era o unico que existia antes desta linha.
+// ---------------------------------------------------------------
+const FOTO_BUCKETS = {
+  reentregas: 'reentregas-fotos',
+  devolucoes: 'devolucoes-fotos'
+};
+const FOTO_MODULO_PADRAO = 'reentregas';
+const FOTO_BUCKET     = FOTO_BUCKETS[FOTO_MODULO_PADRAO];
+
+/** Nome da pasta-raiz no bucket, a partir do modulo do registro. */
+function _pastaDoModulo(modulo) {
+  return FOTO_BUCKETS[modulo] ? modulo : FOTO_MODULO_PADRAO;
+}
+
+/** Bucket a partir do modulo. */
+function _bucketDoModulo(modulo) {
+  return FOTO_BUCKETS[_pastaDoModulo(modulo)];
+}
+
+/**
+ * Bucket a partir de um caminho ja gravado. Caminho anterior a 04/09/2026 e
+ * sempre da reentrega e cai no padrao, sem precisar de migracao de dado.
+ */
+function _bucketDoCaminho(caminho) {
+  const raiz = String(caminho || '').replace(/^[/]+/, '').split('/')[0];
+  return FOTO_BUCKETS[raiz] || FOTO_BUCKETS[FOTO_MODULO_PADRAO];
+}
 
 // Chave onde o aparelho anota quais (registro, etapa) SAO DELE - isto e, para
 // quais ele tirou foto e ainda deve satisfacao. Ver _reconciliar().
@@ -132,7 +171,7 @@ class FotoStore {
     };
     const st = await this._tx('readwrite');
     const id = await this._pedido(st.add(reg));
-    this._marcarPosse(reg.registro_id, reg.etapa);
+    this._marcarPosse(reg.registro_id, reg.etapa, reg.modulo);
     return id;
   }
 
@@ -263,7 +302,7 @@ class FotoStore {
     if (!cfg.url || !caminho) return '';
     // Caminho ja completo (registro antigo gravado com URL inteira) passa reto.
     if (/^https?:\/\//i.test(caminho)) return caminho;
-    return cfg.url + '/storage/v1/object/public/' + FOTO_BUCKET + '/' + String(caminho).replace(/^\/+/, '');
+    return cfg.url + '/storage/v1/object/public/' + _bucketDoCaminho(caminho) + '/' + String(caminho).replace(/^\/+/, '');
   }
 
   // ---------------------------------------------------------------
@@ -280,13 +319,17 @@ class FotoStore {
     // Nome nao adivinhavel de proposito: o bucket e publico (leitura por URL),
     // entao o que protege a foto e o endereco nao ser deduzivel a partir do id
     // do registro.
-    return 'reentregas/' + reg.registro_id + '/' + reg.etapa + '/' + Date.now() + '-' + aleatorio + '.' + ext;
+    // O primeiro segmento e o modulo, e nao e enfeite: e por ele que
+    // _bucketDoCaminho() descobre de qual bucket a foto veio na hora de
+    // montar a URL publica.
+    return _pastaDoModulo(reg.modulo) + '/' + reg.registro_id + '/' + reg.etapa
+         + '/' + Date.now() + '-' + aleatorio + '.' + ext;
   }
 
   async _subir(reg) {
     const cfg = window.JR_CONFIG.supabase;
     const caminho = this._caminhoDe(reg);
-    const resp = await fetch(cfg.url + '/storage/v1/object/' + FOTO_BUCKET + '/' + caminho, {
+    const resp = await fetch(cfg.url + '/storage/v1/object/' + _bucketDoModulo(reg.modulo) + '/' + caminho, {
       method: 'POST',
       headers: {
         'apikey': cfg.anonKey,
@@ -338,10 +381,11 @@ class FotoStore {
           // teste e a rede de seguranca para os caminhos que sobrarem: um
           // aparelho que estava desligado durante o reset, um registro
           // apagado individualmente na Lixeira.
-          if (window.db && typeof window.db.existeReentrega === 'function'
-              && !window.db.existeReentrega(reg.registro_id)) {
-            console.warn('[FotoStore] Foto ' + reg.id + ' descartada: a reentrega '
-              + reg.registro_id + ' nao existe mais (reset global ou exclusao).');
+          if (window.db && typeof window.db.existeAlvoDeFoto === 'function'
+              && !window.db.existeAlvoDeFoto(reg.modulo, reg.registro_id)) {
+            console.warn('[FotoStore] Foto ' + reg.id + ' descartada: '
+              + _pastaDoModulo(reg.modulo) + ' ' + reg.registro_id
+              + ' nao existe mais (reset global ou exclusao).');
             await this.remover(reg.id);
             continue;
           }
@@ -350,7 +394,7 @@ class FotoStore {
 
           // 1) grava o caminho no registro (localStorage, via store.js)
           const ok = window.db && typeof window.db.registrarFotoEnviada === 'function'
-            ? window.db.registrarFotoEnviada(reg.registro_id, reg.etapa, caminho)
+            ? window.db.registrarFotoEnviada(reg.registro_id, reg.etapa, caminho, reg.modulo)
             : { success: false, message: 'store.js sem registrarFotoEnviada()' };
           if (!ok || !ok.success) {
             // O arquivo subiu mas o registro nao aceitou o caminho. Manter na
@@ -395,7 +439,8 @@ class FotoStore {
       reg.ultimo_erro = String(msg || '').slice(0, 300);
       await this._pedido(st.put(reg));
     } catch (e) {}
-    console.warn('[FotoStore] Foto ' + reg.id + ' (reentrega ' + reg.registro_id + '/' + reg.etapa + ') nao subiu: ' + msg);
+    console.warn('[FotoStore] Foto ' + reg.id + ' (' + _pastaDoModulo(reg.modulo) + ' '
+      + reg.registro_id + '/' + reg.etapa + ') nao subiu: ' + msg);
   }
 
   // ---------------------------------------------------------------
@@ -428,10 +473,24 @@ class FotoStore {
     try { localStorage.setItem(FOTO_CHAVE_POSSE, JSON.stringify(m)); } catch (e) {}
   }
 
-  _marcarPosse(registro_id, etapa) {
+  // A chave ganhou o modulo em 04/09/2026, quando a devolucao passou a usar
+  // esta fila: sem ele, a reentrega 123 e a devolucao 123 dividiriam a mesma
+  // posse e uma zeraria o contador da outra.
+  //
+  // Chave antiga tem 2 partes e continua sendo lida como reentrega (ver
+  // _partesDaPosse) - nao ha migracao de chave, so leitura tolerante.
+  _marcarPosse(registro_id, etapa, modulo) {
     const m = this._lerPosse();
-    m[registro_id + '|' + etapa] = Date.now();
+    m[_pastaDoModulo(modulo) + '|' + registro_id + '|' + etapa] = Date.now();
     this._gravarPosse(m);
+  }
+
+  /** Aceita 'modulo|id|etapa' (novo) e 'id|etapa' (anterior a 04/09/2026). */
+  _partesDaPosse(chave) {
+    const p = String(chave).split('|');
+    return (p.length >= 3)
+      ? { modulo: p[0], registro_id: p[1], etapa: p[2] }
+      : { modulo: FOTO_MODULO_PADRAO, registro_id: p[0], etapa: p[1] };
   }
 
   async _reconciliar() {
@@ -442,16 +501,14 @@ class FotoStore {
 
     let mudou = false;
     for (const k of chaves) {
-      const partes = k.split('|');
-      const registro_id = partes[0];
-      const etapa = partes[1];
+      const { modulo, registro_id, etapa } = this._partesDaPosse(k);
 
       if (Date.now() - (posse[k] || 0) > FOTO_POSSE_VALIDADE_MS) {
         delete posse[k]; mudou = true; continue;
       }
 
-      const naFila = await this.contarDoAlvo(registro_id, etapa);
-      const res = window.db.ajustarFotosPendentes(registro_id, etapa, naFila);
+      const naFila = await this.contarDoAlvo(registro_id, etapa, modulo);
+      const res = window.db.ajustarFotosPendentes(registro_id, etapa, naFila, modulo);
 
       // Larga a posse so quando nao ha mais nada na fila e o registro ja
       // reflete isso. Registro que sumiu (apagado) tambem libera.
@@ -546,9 +603,115 @@ window.jrFotosPendentes = () => window.fotoStore.diagnostico();
 
 // Mudanca do base64 legado para o Storage. Rodar UMA VEZ, do console de um
 // aparelho que ja tenha puxado a nuvem inteira:  jrMigrarFotosLegado()
+//
+// A versao da DEVOLUCAO e jrMigrarFotosDevolucaoLegado(), logo abaixo.
 window.jrMigrarFotosLegado = async function() {
   const r = await window.fotoStore.migrarLegado();
   console.log('[FotoStore] Resultado:', r);
+  if (typeof showToast === 'function') {
+    showToast(r.erro ? ('⚠️ ' + r.erro)
+      : ('✅ ' + r.migrados + ' foto(s) legada(s) na fila; ' + r.enviadas + ' ja subiram.'),
+      r.erro ? 'error' : 'success');
+  }
+  if (typeof renderApp === 'function') { try { renderApp(); } catch (e) {} }
+  return r;
+};
+
+// -----------------------------------------------------------------
+// MIGRACAO DO LEGADO DA DEVOLUCAO (04/09/2026, migration 38)
+//
+// Mesma mecanica de migrarLegado(), com tres diferencas que vem da tabela:
+//
+//   1. As etapas sao 'abertura' e 'investigacao', nao recebimento/despacho.
+//
+//   2. Existe uma TERCEIRA coluna com base64 na devolucao: foto_url, que
+//      guarda uma copia inteira da primeira foto (1.253 dos 3.975 KB medidos
+//      em 04/09/2026). Ela nao e um alias barato como o nome sugere - e
+//      duplicata pura de fotos_abertura[0]. Aqui ela e esvaziada junto, e so
+//      e enfileirada por conta propria se fotos_abertura estiver vazio (havia
+//      registro antigo em que so foto_url foi preenchida).
+//
+//   3. NAO passa por updateInvestigacao() nem por nenhuma rota de edicao:
+//      grava direto. updateInvestigacao carimba status_gestao =
+//      'PENDENTE_GESTOR' em toda edicao, e uma migracao de dado reabriria a
+//      tratativa de TODAS as devolucoes com foto de uma vez - inclusive as ja
+//      concluidas pelo gestor.
+//
+// A ORDEM DENTRO DO LACO IMPORTA e e a mesma da reentrega: a coluna legada so
+// e esvaziada DEPOIS de a foto estar na fila, e na MESMA gravacao em que o
+// contador de pendentes sobe. Assim nao existe instante em que a devolucao
+// esteja sem prova nenhuma.
+// -----------------------------------------------------------------
+FotoStore.prototype.migrarLegadoDevolucao = async function() {
+  if (!this.disponivel()) return { migrados: 0, erro: 'Sem IndexedDB neste navegador.' };
+  if (!window.db || !Array.isArray(window.db.data && window.db.data.ocorrencias_devolucao)) {
+    return { migrados: 0, erro: 'Base local indisponivel.' };
+  }
+
+  const ETAPAS = [
+    { etapa: 'abertura',     legado: 'fotos_abertura',     pend: 'fotos_abertura_pendentes' },
+    { etapa: 'investigacao', legado: 'fotos_investigacao', pend: 'fotos_investigacao_pendentes' }
+  ];
+  let migrados = 0, registros = 0;
+
+  for (const d of window.db.data.ocorrencias_devolucao) {
+    if (d.is_deleted) continue;
+
+    for (const E of ETAPAS) {
+      let legado = Array.isArray(d[E.legado]) ? d[E.legado].filter(Boolean) : [];
+
+      // foto_url so vira foto por si mesma quando fotos_abertura esta vazio;
+      // caso contrario ela e duplicata da primeira e sai sem ser enfileirada.
+      const soFotoUrl = (E.etapa === 'abertura' && !legado.length
+                         && typeof d.foto_url === 'string' && d.foto_url.startsWith('data:'));
+      if (soFotoUrl) legado = [d.foto_url];
+      if (!legado.length) {
+        // Nada a enfileirar, mas pode haver foto_url duplicada a descartar.
+        if (E.etapa === 'abertura' && typeof d.foto_url === 'string' && d.foto_url.startsWith('data:')) {
+          d.foto_url = '';
+          d.atualizado_em = (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString();
+          window.db.save();
+        }
+        continue;
+      }
+
+      const idsLocais = [];
+      try {
+        for (const b64 of legado) {
+          idsLocais.push(await this.enfileirar({
+            registro_id: d.id, etapa: E.etapa, dataUrl: b64, modulo: 'devolucoes'
+          }));
+        }
+      } catch (e) {
+        for (const x of idsLocais) { try { await this.remover(x); } catch (y) {} }
+        console.warn('[FotoStore] Devolucao ' + (d.numero_devolucao || d.id) + '/' + E.etapa
+                     + ' nao migrou: ' + e.message);
+        continue;
+      }
+
+      // Esvazia o base64 e assume a pendencia na MESMA gravacao.
+      d[E.legado] = [];
+      d[E.pend] = (parseInt(d[E.pend]) || 0) + idsLocais.length;
+      if (E.etapa === 'abertura') d.foto_url = '';
+      d.atualizado_em = (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString();
+      window.db.save();
+
+      migrados += idsLocais.length;
+      registros++;
+    }
+  }
+
+  console.log('[FotoStore] Legado da devolucao: ' + migrados + ' foto(s) de ' + registros
+              + ' etapa(s) entraram na fila.');
+  const res = await this.processarFila();
+  return { migrados, registros, enviadas: res.enviadas, falhas: res.falhas };
+};
+
+// Rodar UMA VEZ, do console de um aparelho que ja tenha puxado a nuvem
+// inteira:  jrMigrarFotosDevolucaoLegado()
+window.jrMigrarFotosDevolucaoLegado = async function() {
+  const r = await window.fotoStore.migrarLegadoDevolucao();
+  console.log('[FotoStore] Resultado (devolucao):', r);
   if (typeof showToast === 'function') {
     showToast(r.erro ? ('⚠️ ' + r.erro)
       : ('✅ ' + r.migrados + ' foto(s) legada(s) na fila; ' + r.enviadas + ' ja subiram.'),

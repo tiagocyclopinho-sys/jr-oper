@@ -1888,7 +1888,18 @@ class Store {
   // gestor a cada edicao, e isso faz sentido para a apuracao; apagar um anexo
   // duplicado nao e reapuracao e nao deve reabrir nada.
   excluirMidiaDevolucao(id, campo, indice) {
-    const CAMPOS_OK = ['fotos_abertura', 'videos_abertura', 'fotos_investigacao', 'videos_investigacao'];
+    // Os dois *_paths entraram em 04/09/2026: desde a migration 38 a foto da
+    // devolucao mora no Storage, e sem eles aqui a analista simplesmente nao
+    // conseguiria mais excluir uma foto anexada por engano.
+    //
+    // O ARQUIVO EM SI CONTINUA NO BUCKET, de proposito - o bucket nega DELETE
+    // (ver migration 38, secao 2), e prova operacional nao sai por um clique.
+    // O que a exclusao faz e desligar a foto da ocorrencia: ela some de toda
+    // tela e o endereco fica registrado na trilha, para quem precise recuperar.
+    const CAMPOS_OK = [
+      'fotos_abertura', 'videos_abertura', 'fotos_investigacao', 'videos_investigacao',
+      'fotos_abertura_paths', 'fotos_investigacao_paths'
+    ];
     if (!CAMPOS_OK.includes(campo)) {
       return { success: false, message: 'Campo de mídia inválido: ' + campo };
     }
@@ -1918,13 +1929,21 @@ class Store {
     // apontando para o que acabou de sair, a midia "excluida" reaparece em
     // qualquer tela que leia o alias - inclusive no modal de detalhes.
     if (campo === 'fotos_abertura')      dev.foto_url = dev.fotos_abertura[0] || '';
+    // Excluir a 1a foto do Storage tambem tem de limpar o alias, senao ela
+    // reaparece em qualquer tela que leia foto_url.
+    if (campo === 'fotos_abertura_paths' && !((dev.fotos_abertura || []).length)) dev.foto_url = '';
     if (campo === 'videos_abertura')     dev.video_url = dev.videos_abertura[0] || '';
     if (campo === 'videos_investigacao') dev.video_investigacao_url = dev.videos_investigacao[0] || '';
 
     dev.atualizado_em = agoraIsoBrasilia();
     dev.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
 
-    const ehArquivo = typeof removido === 'string' && /^https?:/i.test(removido);
+    // Caminho do Storage nao comeca com http (e relativo ao bucket:
+    // 'devolucoes/123/abertura/...'), entao a checagem por http sozinha o
+    // classificaria como base64 e a trilha registraria "base64 ~0 KB" no lugar
+    // do endereco - perdendo justamente o dado que permite recuperar a foto.
+    const ehArquivo = typeof removido === 'string'
+      && (/^https?:/i.test(removido) || (removido.length > 0 && !removido.startsWith('data:')));
     this.logAudit({
       acao: 'EXCLUSAO_MIDIA',
       modulo: 'ocorrencias_devolucao',
@@ -3082,9 +3101,18 @@ class Store {
     // A midia atual e preservada de proposito, e isso e o comportamento certo
     // independente da poda: voltar a causa raiz para o valor anterior nao deve
     // ressuscitar uma evidencia excluida nem apagar uma anexada depois.
+    // 04/09/2026 (migration 38): os quatro campos de Storage entraram nesta
+    // lista pelo mesmo motivo que os de base64 estavam nela, e com uma
+    // consequencia pior se ficassem de fora. Um snapshot gravado ANTES do
+    // deploy nao tem fotos_abertura_paths; restaura-lo apagaria os caminhos
+    // do registro atual - e a foto nao voltaria de lugar nenhum, porque o
+    // arquivo continua no bucket e o bucket NEGA DELETE. Ficaria orfa para
+    // sempre, e a devolucao, sem prova.
     const CAMPOS_MIDIA = [
       'fotos_abertura', 'videos_abertura', 'fotos_investigacao', 'videos_investigacao',
-      'foto_url', 'video_url', 'video_investigacao_url'
+      'foto_url', 'video_url', 'video_investigacao_url',
+      'fotos_abertura_paths', 'fotos_investigacao_paths',
+      'fotos_abertura_pendentes', 'fotos_investigacao_pendentes'
     ];
     const midiaAtual = {};
     CAMPOS_MIDIA.forEach(c => { if (c in list[idx]) midiaAtual[c] = list[idx][c]; });
@@ -4141,11 +4169,61 @@ class Store {
   // FOTOS EM STORAGE (v5.1.0) - ponte entre js/fotoStore.js e o registro
   // ---------------------------------------------------------------
 
-  /** Traduz 'recebimento'/'despacho' nos dois nomes de campo da etapa. */
-  static _camposFoto(etapa) {
-    return String(etapa) === 'despacho'
-      ? { paths: 'fotos_despacho_paths',    pendentes: 'fotos_despacho_pendentes',    legado: 'fotos_despacho' }
-      : { paths: 'fotos_recebimento_paths', pendentes: 'fotos_recebimento_pendentes', legado: 'fotos_recebimento' };
+  // =================================================================
+  // OS DOIS MODULOS QUE USAM A FILA DE FOTOS (04/09/2026)
+  //
+  // A reentrega chegou aqui pela migration 34; a devolucao, pela 38, medida
+  // assim: 30 devolucoes pesavam 4.029 KB, dos quais 3.975 KB eram foto em
+  // base64 dentro de coluna - 98,7% do peso da tabela. Uma so (a DEV-030)
+  // pesava 926 KB.
+  //
+  // Este mapa existe para que o resto do arquivo pergunte "qual e o campo de
+  // caminhos desta etapa?" sem saber de qual tabela se trata. Etapa
+  // desconhecida cai na etapa padrao do modulo, e nao em undefined: quem
+  // chama vem da fila do IndexedDB, e um valor estranho ali nao pode virar um
+  // TypeError no meio do envio.
+  // =================================================================
+  static _modulosFoto() {
+    return {
+      reentregas: {
+        colecao: 'reentregas',
+        etapaPadrao: 'recebimento',
+        etapas: {
+          recebimento: { paths: 'fotos_recebimento_paths', pendentes: 'fotos_recebimento_pendentes', legado: 'fotos_recebimento' },
+          despacho:    { paths: 'fotos_despacho_paths',    pendentes: 'fotos_despacho_pendentes',    legado: 'fotos_despacho' }
+        }
+      },
+      devolucoes: {
+        colecao: 'ocorrencias_devolucao',
+        etapaPadrao: 'abertura',
+        etapas: {
+          abertura:     { paths: 'fotos_abertura_paths',     pendentes: 'fotos_abertura_pendentes',     legado: 'fotos_abertura' },
+          investigacao: { paths: 'fotos_investigacao_paths', pendentes: 'fotos_investigacao_pendentes', legado: 'fotos_investigacao' }
+        }
+      }
+    };
+  }
+
+  /** Modulo valido, com 'reentregas' como padrao (era o unico ate 04/09/2026). */
+  static _moduloFoto(modulo) {
+    const M = Store._modulosFoto();
+    return M[modulo] ? M[modulo] : M.reentregas;
+  }
+
+  /**
+   * Traduz (etapa, modulo) nos tres nomes de campo daquela etapa.
+   * A assinatura de um argumento so continua valendo e continua significando
+   * reentrega - e o que mantem de pe as chamadas anteriores a 04/09/2026.
+   */
+  static _camposFoto(etapa, modulo) {
+    const m = Store._moduloFoto(modulo);
+    return m.etapas[String(etapa)] || m.etapas[m.etapaPadrao];
+  }
+
+  /** O registro-alvo de uma foto, na colecao do modulo dele. */
+  _itemDeFoto(modulo, id) {
+    const colecao = Store._moduloFoto(modulo).colecao;
+    return (this.data[colecao] || []).find(x => x.id == id && !x.is_deleted) || null;
   }
 
   /**
@@ -4160,22 +4238,42 @@ class Store {
    * @param {'recebimento'|'despacho'} etapa
    * @param {string} caminho - ex: reentregas/123/recebimento/1756...-a1b2.jpg
    */
-  registrarFotoEnviada(id, etapa, caminho) {
-    const item = (this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
-    if (!item) return { success: false, message: `Reentrega ID ${id} nao encontrada.` };
+  registrarFotoEnviada(id, etapa, caminho, modulo) {
+    const item = this._itemDeFoto(modulo, id);
+    if (!item) return { success: false, message: `Registro ID ${id} nao encontrado.` };
     if (!caminho) return { success: false, message: 'Caminho vazio.' };
 
-    const c = Store._camposFoto(etapa);
+    const c = Store._camposFoto(etapa, modulo);
     const paths = Array.isArray(item[c.paths]) ? item[c.paths].slice() : [];
     // Idempotente: subir a mesma foto duas vezes (app fechado no meio do
     // caminho) nao pode gerar dois caminhos iguais no registro.
     if (!paths.includes(caminho)) paths.push(caminho);
-
     const restantes = Math.max(0, (parseInt(item[c.pendentes]) || 0) - 1);
-    const updates = {};
-    updates[c.paths] = paths;
-    updates[c.pendentes] = restantes;
-    return this.updateReentrega(id, updates);
+
+    // A REENTREGA CONTINUA PASSANDO POR updateReentrega; A DEVOLUCAO, NAO.
+    //
+    // Nao e inconsistencia. updateInvestigacao() carimba
+    // status_gestao = 'PENDENTE_GESTOR' em TODA edicao, de proposito (ver o
+    // bloco "PRIORIDADE 1" la em cima). Se o caminho da foto entrasse por
+    // qualquer rota de edicao da devolucao, uma foto terminando o upload 30
+    // segundos depois REABRIRIA a tratativa do gestor sozinha - e ainda
+    // deixaria na trilha uma linha de EDICAO_INVESTIGACAO que ninguem fez.
+    //
+    // Guardar um caminho de arquivo nao e editar a devolucao: e concluir uma
+    // gravacao que ja aconteceu. Por isso escreve direto, exatamente como
+    // ajustarFotosPendentes() ja faz, e pelo mesmo motivo.
+    if (Store._moduloFoto(modulo).colecao === 'reentregas') {
+      const updates = {};
+      updates[c.paths] = paths;
+      updates[c.pendentes] = restantes;
+      return this.updateReentrega(id, updates);
+    }
+
+    item[c.paths] = paths;
+    item[c.pendentes] = restantes;
+    item.atualizado_em = agoraIsoBrasilia();
+    this.save();
+    return { success: true, pendentes: restantes };
   }
 
   /**
@@ -4191,6 +4289,15 @@ class Store {
   }
 
   /**
+   * Versao por modulo da pergunta acima. A fila de fotos entra por aqui desde
+   * que a devolucao passou a usa-la (04/09/2026); sem isto, uma foto de
+   * devolucao seria descartada por "a reentrega nao existe".
+   */
+  existeAlvoDeFoto(modulo, id) {
+    return !!this._itemDeFoto(modulo, id);
+  }
+
+  /**
    * Reescreve o contador de pendentes com o numero REAL de fotos que este
    * aparelho ainda tem na fila. E o antidoto para o pull de 30s ressuscitar
    * uma pendencia ja resolvida - ver o bloco POSSE em js/fotoStore.js.
@@ -4199,11 +4306,11 @@ class Store {
    * sincronizacao e encheria a trilha de auditoria de edicoes que nao sao
    * edicoes de ninguem. Grava direto e so quando o valor muda de fato.
    */
-  ajustarFotosPendentes(id, etapa, quantidade) {
-    const item = (this.data.reentregas || []).find(x => x.id == id && !x.is_deleted);
-    if (!item) return { success: false, message: `Reentrega ID ${id} nao encontrada.` };
+  ajustarFotosPendentes(id, etapa, quantidade, modulo) {
+    const item = this._itemDeFoto(modulo, id);
+    if (!item) return { success: false, message: `Registro ID ${id} nao encontrado.` };
 
-    const c = Store._camposFoto(etapa);
+    const c = Store._camposFoto(etapa, modulo);
     const alvo = Math.max(0, parseInt(quantidade) || 0);
     const atual = parseInt(item[c.pendentes]) || 0;
     if (atual === alvo) return { success: true, pendentes: alvo, mudou: false };
@@ -4221,7 +4328,12 @@ class Store {
    * caminho no Storage, base64 legado (registros ate a v5.0.0) e pendente.
    */
   estadoFotosReentrega(item, etapa) {
-    const c = Store._camposFoto(etapa);
+    return this.estadoFotos(item, etapa, 'reentregas');
+  }
+
+  /** Idem, para qualquer modulo. A tela da devolucao entra por aqui. */
+  estadoFotos(item, etapa, modulo) {
+    const c = Store._camposFoto(etapa, modulo);
     const paths = Array.isArray(item && item[c.paths]) ? item[c.paths].filter(Boolean) : [];
     const legado = Array.isArray(item && item[c.legado]) ? item[c.legado].filter(Boolean) : [];
     const pendentes = Math.max(0, parseInt(item && item[c.pendentes]) || 0);

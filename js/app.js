@@ -6260,9 +6260,40 @@ function renderGaleriaMidia(dev, opcoes = {}) {
     vazio = 'Nenhuma foto ou vídeo anexado nesta ocorrência.',
     permitirExcluir = true
   } = opcoes;
-  const fotosAbertura = Array.isArray(dev.fotos_abertura) ? dev.fotos_abertura : (dev.foto_url ? [dev.foto_url] : []);
+  // A galeria soma as DUAS formas que uma foto pode ter agora: caminho no
+  // Storage (a partir da migration 38) e base64 legado (registros anteriores
+  // ao deploy de 04/09/2026, e os 11 que ainda esperam a migração do passo 3).
+  // Enquanto os dois formatos coexistirem, quem olha a tela não precisa saber
+  // de qual deles a imagem veio.
+  const _urlFoto = c => (window.fotoStore && typeof window.fotoStore.urlPublica === 'function')
+    ? window.fotoStore.urlPublica(c) : c;
+  // Cada miniatura carrega o PRÓPRIO campo e o PRÓPRIO índice, em vez de
+  // depender da posição na lista montada.
+  //
+  // Sem isso a exclusão apagaria a foto errada: a lista agora mistura duas
+  // origens (caminhos do Storage + base64 legado), e o 🗑️ mandava um índice
+  // posicional junto de um nome de campo fixo. Clicar na 1ª miniatura, que é
+  // do Storage, faria splice em fotos_abertura[0] — outro array, outra foto.
+  const _fotosDe = (etapa, legadoDireto) => {
+    if (!db || typeof db.estadoFotos !== 'function') {
+      return legadoDireto.map((url, i) => ({ url, campo: 'fotos_' + etapa, indice: i }));
+    }
+    const est = db.estadoFotos(dev, etapa, 'devolucoes');
+    const doStorage = est.paths.map((p, i) => ({
+      url: _urlFoto(p), campo: 'fotos_' + etapa + '_paths', indice: i
+    }));
+    const base = est.legado.length ? est.legado : legadoDireto;
+    return doStorage.concat(base.map((url, i) => ({
+      url, campo: 'fotos_' + etapa, indice: i
+    })));
+  };
+
+  const fotosAbertura = _fotosDe('abertura',
+    Array.isArray(dev.fotos_abertura) && dev.fotos_abertura.length
+      ? dev.fotos_abertura : (dev.foto_url ? [dev.foto_url] : []));
   const videosAbertura = Array.isArray(dev.videos_abertura) ? dev.videos_abertura : (dev.video_url ? [dev.video_url] : []);
-  const fotosInvestigacao = Array.isArray(dev.fotos_investigacao) ? dev.fotos_investigacao : [];
+  const fotosInvestigacao = _fotosDe('investigacao',
+    Array.isArray(dev.fotos_investigacao) ? dev.fotos_investigacao : []);
   const videosInvestigacao = Array.isArray(dev.videos_investigacao) ? dev.videos_investigacao : (dev.video_investigacao_url ? [dev.video_investigacao_url] : []);
 
   const grupos = [
@@ -6313,7 +6344,7 @@ function renderGaleriaMidia(dev, opcoes = {}) {
         <div class="space-y-1">
           <div class="text-[9px] text-slate-500 font-bold uppercase">${g.label} (${g.fotos.length + g.videos.length})</div>
           <div class="flex flex-wrap gap-2.5">
-            ${g.fotos.map((f, i) => renderItemMidia(f, 'foto', g.campoFotos, i)).join('')}
+            ${g.fotos.map(f => renderItemMidia(f.url, 'foto', f.campo, f.indice)).join('')}
             ${g.videos.map((v, i) => renderItemMidia(v, 'video', g.campoVideos, i)).join('')}
           </div>
         </div>`).join('')}
@@ -7461,19 +7492,36 @@ async function handleSacAberturaSubmit(e) {
     motivo_reclamado: document.getElementById('sac-motivo-reclamado').value,
     valor_reclamado: document.getElementById('sac-valor-reclamado').value,
     detalhamento_texto: document.getElementById('sac-detalhamento').value,
-    // ADENDO: salva os ARRAYS completos de fotos/vídeos (antes só o
-    // primeiro item era persistido, e o vídeo era descartado por um bug
-    // em store.js). foto_url/video_url continuam sendo enviados como
-    // aliases do 1º item, por compatibilidade.
-    fotos_abertura: (typeof uploadedFotosBase64 !== 'undefined') ? uploadedFotosBase64 : [],
+    // A FOTO NÃO ENTRA MAIS AQUI (04/09/2026, migration 38).
+    //
+    // Estas três linhas gravavam a imagem inteira em base64 dentro do
+    // registro — e `foto_url` gravava a PRIMEIRA de novo, duplicada. Medido
+    // na nuvem antes da mudança: 3.975 dos 4.029 KB da tabela eram isso, e
+    // como o pull monta select=*, cada foto voltava para todo aparelho a
+    // cada 30 segundos. Onze devoluções com foto encheram os ~5 MB de
+    // localStorage e custaram a tratativa da DEV-024, que foi digitada e
+    // nunca existiu.
+    //
+    // Agora a foto vai para a fila do IndexedDB e de lá para o Storage, como
+    // a reentrega faz desde a migration 34. Isso acontece logo ABAIXO desta
+    // chamada, e não aqui, por um motivo simples: a fila precisa do id da
+    // devolução, e o id só existe depois de addDevolucao() retornar.
+    fotos_abertura: [],
     videos_abertura: (typeof uploadedVideosBase64 !== 'undefined') ? uploadedVideosBase64 : [],
-    foto_url: (typeof uploadedFotosBase64 !== 'undefined' && uploadedFotosBase64.length) ? uploadedFotosBase64[0] : (typeof uploadedFotoBase64 !== 'undefined' ? uploadedFotoBase64 : ''),
+    foto_url: '',
     video_url: (typeof uploadedVideosBase64 !== 'undefined' && uploadedVideosBase64.length) ? uploadedVideosBase64[0] : (typeof uploadedVideoBase64 !== 'undefined' ? uploadedVideoBase64 : ''),
     cliente_emite_nf: emiteNf,
     forma_acerto: document.getElementById('sac-forma-acerto').value,
     sem_itens: semItens,
     observacao_sem_itens: obsSemItens
   }, itens);
+
+  // A foto só pode ir para a fila agora: antes disto não havia id para ela
+  // apontar. Se falhar, a devolução JÁ ESTÁ GRAVADA — o aviso diz exatamente
+  // isso, para ninguém achar que perdeu a ocorrência inteira por causa da
+  // foto.
+  await _enfileirarFotosDevolucao(dev, 'abertura',
+    (typeof uploadedFotosBase64 !== 'undefined') ? uploadedFotosBase64 : []);
 
   uploadedFotosBase64 = [];
   uploadedVideosBase64 = [];
@@ -7842,7 +7890,7 @@ function editarInvestigacaoModal(id) {
   modalContainer.classList.remove('hidden');
 }
 
-function handleSalvarEdicaoInvestigacao(e, id) {
+async function handleSalvarEdicaoInvestigacao(e, id) {
   e.preventDefault();
 
   // O modal ganhou upload de evidencia em 26/08/2026, e o video sobe para o
@@ -7860,12 +7908,21 @@ function handleSalvarEdicaoInvestigacao(e, id) {
     separador_apurado: document.getElementById('ed-inv-sep').value,
     conferente_apurado: document.getElementById('ed-inv-conf').value,
     acao_tomada: document.getElementById('ed-inv-acao').value,
-    // Os inputs do modal usam handleFotoUpload/handleVideoUpload com o contexto
-    // 'inv', que enche estes mesmos globais - sem passa-los adiante, a evidencia
-    // anexada aqui aparecia no preview e nao era gravada em lugar nenhum.
-    fotos_investigacao_novas: (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : [],
+    // A foto sai daqui pelo mesmo motivo da abertura (migration 38): vai para
+    // a fila logo abaixo, em vez de virar base64 dentro do registro. O vídeo
+    // continua por este caminho — ele tem bucket próprio desde a migration 35
+    // e não é o que enche a cota (0,8 KB no total, medido em 04/09/2026).
+    fotos_investigacao_novas: [],
     videos_investigacao_novas: (typeof uploadedVideosBase64Inv !== 'undefined' && Array.isArray(uploadedVideosBase64Inv)) ? uploadedVideosBase64Inv : []
   });
+
+  // DEPOIS do update, e nunca antes: se a apuração não gravar, não há por que
+  // guardar foto para ela.
+  const devAlvo = (db.data.ocorrencias_devolucao || []).find(x => x.id == id);
+  if (devAlvo) {
+    await _enfileirarFotosDevolucao(devAlvo, 'investigacao',
+      (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : []);
+  }
 
   if (typeof uploadedFotosBase64Inv !== 'undefined') uploadedFotosBase64Inv = [];
   if (typeof uploadedVideosBase64Inv !== 'undefined') uploadedVideosBase64Inv = [];
@@ -12780,6 +12837,59 @@ async function handleSalvarDespachoReentrega(e, id) {
 // O conferente pode fechar o app, ficar sem sinal a tarde inteira e ainda
 // assim ter a prova — ela está no aparelho, visível na tela, e sobe quando der.
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// FOTOS DA DEVOLUÇÃO → FILA (04/09/2026, migration 38)
+//
+// O irmão logo abaixo (_salvarEtapaComFotos) é da reentrega, onde a foto é
+// OBRIGATÓRIA e a etapa não existe sem ela. Na devolução a foto sempre foi
+// opcional — 19 das 30 devoluções de 04/09/2026 não têm nenhuma — e por isso
+// aqui não há recusa por falta de foto: sem foto, a função sai calada.
+//
+// A diferença que importa é a outra ponta: quando HÁ foto e não há onde
+// guardá-la, isto avisa e desiste em vez de cair no base64 às escondidas. Foi
+// exatamente o base64 "às escondidas" que encheu a cota e custou a tratativa
+// da DEV-024.
+//
+// Chamado sempre DEPOIS de o registro estar gravado, porque a fila precisa de
+// um id para apontar.
+// -----------------------------------------------------------------------------
+async function _enfileirarFotosDevolucao(dev, etapa, fotos) {
+  const lista = (fotos || []).filter(Boolean);
+  if (!dev || !dev.id || lista.length === 0) return 0;
+
+  if (!window.fotoStore || !window.fotoStore.disponivel()) {
+    alert('⚠️ A ocorrência foi gravada, mas a(s) ' + lista.length + ' foto(s) NÃO puderam ser guardadas: '
+        + 'este navegador não permite armazenamento local (IndexedDB). '
+        + 'Se estiver em aba anônima, saia dela e anexe a foto de novo pela edição.');
+    return 0;
+  }
+
+  let enfileiradas = [];
+  try {
+    for (const dataUrl of lista) {
+      enfileiradas.push(await window.fotoStore.enfileirar({
+        registro_id: dev.id, etapa, dataUrl, modulo: 'devolucoes'
+      }));
+    }
+  } catch (err) {
+    for (const x of enfileiradas) { try { await window.fotoStore.remover(x); } catch (e) {} }
+    alert('⚠️ A ocorrência foi gravada, mas não consegui guardar a(s) foto(s) neste aparelho: ' + err.message);
+    return 0;
+  }
+
+  // O contador é o que faz a pendência VIAJAR: sobe para a nuvem e aparece
+  // para quem não tirou a foto. Sem ele, uma foto ainda na fila deste
+  // aparelho seria invisível para todo mundo — inclusive para quem cobra.
+  if (typeof db.ajustarFotosPendentes === 'function') {
+    db.ajustarFotosPendentes(dev.id, etapa, enfileiradas.length, 'devolucoes');
+  }
+  if (typeof window.atualizarTarjaFotosPendentes === 'function') window.atualizarTarjaFotosPendentes();
+
+  // Sem await: a tela não espera a rede.
+  window.fotoStore.processarFila().catch(() => {});
+  return enfileiradas.length;
+}
+
 async function _salvarEtapaComFotos({ id, etapa, dados, gravar, sucesso }) {
   const fotos = (window._fotosReentrega || []).filter(Boolean);
   if (fotos.length === 0) {
