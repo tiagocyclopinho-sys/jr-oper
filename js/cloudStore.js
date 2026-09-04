@@ -3074,12 +3074,26 @@ class CloudStore {
 // sync-5.0.0", para sempre. O aviso que existe para detectar cache velho
 // vira ruido permanente, e ai ninguem olha mais para ele.
 //
-// Sao QUATRO marcadores de versao, e os quatro andam juntos:
+// Sao CINCO marcadores de versao, e os cinco andam juntos:
 //   js/cloudStore.js  CloudStore.BUILD   <- este
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "equipe-cd-lista-unica-6.3.0";
+//   js/store.js       currentVersion
+//
+// ERAM QUATRO ate a 6.2.0, e esta lista dizia quatro. O quinto entrou na
+// 6.3.0 (esta anotado na observacao_deploy dela) e a lista aqui nao
+// acompanhou - foi assim que a 6.4.0 saiu com dois marcadores parados: quem
+// leu daqui bumpou os que estavam escritos.
+//
+// O CUSTO DE ESQUECER UM NAO E COSMETICO, e depende de qual:
+//   CloudStore.BUILD  -> jrDiagnosticoSync() reporta a versao errada, e a
+//                        conferencia de cache velho compara contra ela.
+//   version.json      -> jrConferirVersaoPublicada() nao ve versao nova e
+//                        nenhum aparelho e mandado atualizar.
+//   store.js          -> todo aparelho loga migracao de versao a cada
+//                        abertura, para sempre.
+CloudStore.BUILD = "fotos-devolucao-storage-6.4.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
