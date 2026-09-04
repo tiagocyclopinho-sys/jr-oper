@@ -187,6 +187,88 @@ class CloudStore {
     }
   }
 
+  // ---------------------------------------------------------------
+  // CHAVES ORFAS: O TERCEIRO OCUPANTE DA COTA (04/09/2026)
+  //
+  // Medido num aparelho de producao que estava perdendo lancamento:
+  //
+  //   jr_sac_db .......... 3.666 KB   o dado real
+  //   jr_produtos ........... 874 KB   <- ninguem escreve, ninguem le
+  //   jr_sync_hashes ......... 82 KB   o mapa de sincronia (util)
+  //   jr_rotas ................ 6 KB   <- idem
+  //   jr_departamentos ........ 3 KB   <- idem
+  //   ... 45 chaves no total
+  //
+  // As tres marcadas sao restos de builds anteriores a 31/08/2026, quando o
+  // catalogo saiu do localStorage e foi para o IndexedDB. Nenhuma linha do
+  // codigo atual as escreve ou le, e nenhuma delas esta no MAPA_TABELAS - ou
+  // seja, _purgarEspelhos() nunca as tocou. Ficaram 883 KB parados, quase
+  // exatamente o que os 25 espelhos valiam, e a escada de cota do save()
+  // sacrificava as COPIAS UTEIS enquanto isso continuava intocado.
+  //
+  // Por que uma LISTA DO QUE E CONHECIDO em vez de uma lista do que e lixo:
+  // lista de lixo so pega o lixo que ja conhecemos hoje, e a proxima chave
+  // abandonada voltaria a passar despercebida por meses. Toda chave que o app
+  // usa de verdade esta escrita aqui; o que nao estiver e, por definicao,
+  // resto - e aparece em jrChavesOrfas() para conferencia antes de sumir.
+  //
+  // NAO limpa sozinha na abertura, de proposito: rodar so quando falta espaco
+  // (degrau da escada em store.js:save) mantem o efeito colateral perto do
+  // problema que ele resolve, e deixa a conferencia possivel enquanto nao ha
+  // aperto nenhum.
+  // ---------------------------------------------------------------
+  static chavesConhecidas() {
+    const exatas = new Set([
+      // o dado e a identidade
+      'jr_sac_db', 'jr_sac_version', 'jr_sac_user', 'jr_sac_theme',
+      // catalogo: espelho sincrono do IndexedDB, e o formato legado que a
+      // migracao de 31/08 esvazia sozinha
+      'jr_sac_static_delta', 'jr_sac_static', 'jr_catalogo_cursor',
+      // sincronia
+      'jr_cloud_config', 'jr_reset_epoch', 'jr_sync_hashes', 'jr_faxina_fantasmas',
+      // aparelho
+      'jr_device_id', 'jr_device_apelido', 'jr_visto_em',
+      // fila de fotos (a posse; as fotos moram no IndexedDB)
+      'jr_fotos_posse',
+      // semente de cadastro, roda uma vez por aparelho
+      'jr_seed_cadastros_v1',
+      // sonda do medidor de espaco; some sozinha, mas pode sobrar se o
+      // navegador matar a aba no meio
+      '__jr_prova_espaco__'
+    ]);
+    for (const m of CloudStore.MAPA_TABELAS) exatas.add(m.localKey);
+    return { exatas, prefixos: ['jr_sync_ok_'] };
+  }
+
+  /** Chaves que ocupam cota e nao pertencem a nenhum caminho vivo do app. */
+  static listarChavesOrfas() {
+    const { exatas, prefixos } = CloudStore.chavesConhecidas();
+    const orfas = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        if (exatas.has(k)) continue;
+        if (prefixos.some(p => k.startsWith(p))) continue;
+        orfas.push({ chave: k, KB: Math.round(((localStorage.getItem(k) || '').length + k.length) / 1024) });
+      }
+    } catch (e) { return []; }
+    return orfas.sort((a, b) => b.KB - a.KB);
+  }
+
+  /** Remove as orfas. Devolve quantos KB foram devolvidos a cota. */
+  _purgarChavesOrfas() {
+    const orfas = CloudStore.listarChavesOrfas();
+    if (!orfas.length) return 0;
+    let kb = 0;
+    for (const o of orfas) {
+      try { localStorage.removeItem(o.chave); kb += o.KB; } catch (e) {}
+    }
+    console.info('[CloudStore] Faxina: ' + orfas.length + ' chave(s) sem dono removida(s), '
+      + kb + ' KB devolvidos. ' + orfas.map(o => o.chave + ' (' + o.KB + ' KB)').join(', '));
+    return kb;
+  }
+
   _purgarEspelhos() {
     let removidos = 0;
     try {
@@ -246,6 +328,10 @@ class CloudStore {
       // dado real caber nos ~5 MB de localStorage. Não é perda de dado;
       // é o sinal de que a cota está no limite neste aparelho.
       espelhosSuspensos: !!this._espelhosSuspensos,
+      // 04/09/2026 - chaves que ocupam cota e nao pertencem a nenhum caminho
+      // vivo. Enquanto vier vazio, os ~5 MB estao todos com quem devia. Se
+      // vier com item, e espaco parado: jrFaxinarChaves() devolve.
+      chavesOrfas: CloudStore.listarChavesOrfas(),
       // 31/08/2026 — cadastro de cliente/produto. Se `indisponivel` vier
       // preenchido, a migration_36 não está aplicada NESTE banco e nenhum
       // cadastro novo viaja entre aparelhos. `cursor` é até onde este
@@ -3093,7 +3179,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "fotos-devolucao-storage-6.4.1";
+CloudStore.BUILD = "fotos-devolucao-storage-6.4.2";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3321,6 +3407,45 @@ window.jrDiagnosticoSync = function() {
 // hoje: "as cópias que este aparelho guarda do mesmo registro concordam
 // entre si?". Um aparelho pode passar no primeiro e falhar no segundo — foi
 // exatamente o caso do lançamento de 23/08/2026.
+// ---------------------------------------------------------------
+// FAXINA MANUAL DAS CHAVES SEM DONO
+//
+//   jrFaxinarChaves()       -> so LISTA o que seria removido (nao apaga nada)
+//   jrFaxinarChaves(true)   -> remove
+//
+// A escada de cota do save() ja faz isto sozinha quando falta espaco (degrau
+// 2). Este comando existe para o caso em que se quer devolver o espaco AGORA,
+// sem esperar a proxima gravacao falhar - por exemplo num aparelho que ja
+// esta com a tarja vermelha na tela.
+//
+// O que conta como "sem dono": qualquer chave do localStorage que nao esteja
+// em CloudStore.chavesConhecidas(), que lista o que o app de fato usa. Ver o
+// comentario la para o porque de a lista ser essa e nao uma lista de lixo.
+// ---------------------------------------------------------------
+window.jrFaxinarChaves = function(aplicar) {
+  const orfas = CloudStore.listarChavesOrfas();
+  if (!orfas.length) {
+    console.log('%cNenhuma chave sem dono - os ~5 MB estao todos com quem devia.', 'color:#10b981;font-weight:bold');
+    return { orfas: [], KB: 0 };
+  }
+  const kb = orfas.reduce((a, o) => a + o.KB, 0);
+  console.table(orfas);
+  if (!aplicar) {
+    console.log('%c' + orfas.length + ' chave(s) sem dono ocupando ' + kb + ' KB. '
+      + 'Nada foi removido - rode jrFaxinarChaves(true) para devolver esse espaco.',
+      'color:#f59e0b;font-weight:bold');
+    return { orfas, KB: kb, removido: false };
+  }
+  const devolvido = window.cloudStore._purgarChavesOrfas();
+  const depois = window.db && typeof window.db.getStorageUsageInfo === 'function'
+    ? window.db.getStorageUsageInfo() : null;
+  console.log('%c' + devolvido + ' KB devolvidos.'
+    + (depois ? ' Uso agora: ' + depois.totalKB + ' KB (' + depois.percentual + '%), cabeMais: ' + depois.cabeMais : ''),
+    'color:#10b981;font-weight:bold');
+  if (typeof renderApp === 'function') { try { renderApp(); } catch (e) {} }
+  return { orfas, KB: devolvido, removido: true };
+};
+
 window.jrConferirCamadas = function() {
   const r = window.cloudStore.conferirCamadas();
   window.jrUltimaConferenciaCamadas = r;

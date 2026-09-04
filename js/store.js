@@ -182,7 +182,7 @@ class Store {
     let catalogoLegado = null;
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
-      const currentVersion = '6.4.1';
+      const currentVersion = '6.4.2';
       if (isFirstInstall) {
         // Primeira vez: grava só a fatia operacional. O catálogo NÃO é
         // gravado — ele vem de INITIAL_DATA a cada abertura.
@@ -1033,8 +1033,20 @@ class Store {
       ultimoErro = this._ultimoErroDeGravacao;
     }
 
-    // Degrau 2 — o histórico de auditoria/versões. Só chega aqui se
-    // sacrificar as cópias não tiver bastado.
+    // Degrau 2 — as chaves sem dono. Vêm ANTES do histórico porque não são
+    // nem cópia: são resto de build antiga que ninguém lê. Num aparelho de
+    // produção, em 04/09/2026, isto valia 883 KB (jr_produtos, jr_rotas,
+    // jr_departamentos) — mais do que os 25 espelhos do degrau 1.
+    if (this._purgarChavesOrfasDaNuvem() > 0) {
+      if (this._gravarFatiaOperacional(JSON.stringify(this._getOperationalSlice()))) {
+        console.info('[Store] Gravação bem-sucedida após a faxina de chaves sem dono.');
+        return true;
+      }
+      ultimoErro = this._ultimoErroDeGravacao;
+    }
+
+    // Degrau 3 — o histórico de auditoria/versões. Só chega aqui se
+    // sacrificar as cópias e o resto não tiver bastado.
     if (this.pruneOldAuditData()) {
       if (this._gravarFatiaOperacional(JSON.stringify(this._getOperationalSlice()))) {
         console.info('[Store] Gravação bem-sucedida após reduzir o histórico de auditoria/versões.');
@@ -1088,6 +1100,22 @@ class Store {
   // Também levanta a bandeira _espelhosSuspensos no cloudStore: sem ela o
   // próximo pull reescreveria os mesmos ~970 KB e o aperto voltaria em
   // seguida — trocar seis por meia dúzia.
+  /**
+   * Descarta chaves de localStorage que nenhum caminho vivo do app escreve ou
+   * le - resto de build antiga. Ver CloudStore.chavesConhecidas() para o
+   * inventario e o porque de a lista ser do que EXISTE, e nao do que e lixo.
+   */
+  _purgarChavesOrfasDaNuvem() {
+    try {
+      const cs = (typeof window !== 'undefined') ? window.cloudStore : null;
+      if (!cs || typeof cs._purgarChavesOrfas !== 'function') return 0;
+      return cs._purgarChavesOrfas();
+    } catch(e) {
+      console.warn('[Store] Falha na faxina de chaves sem dono:', e);
+      return 0;
+    }
+  }
+
   _purgarEspelhosDaNuvem() {
     try {
       const cs = (typeof window !== 'undefined') ? window.cloudStore : null;
