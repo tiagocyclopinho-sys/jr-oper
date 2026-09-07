@@ -182,7 +182,7 @@ class Store {
     let catalogoLegado = null;
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
-      const currentVersion = '6.4.3';
+      const currentVersion = '6.5.0';
       if (isFirstInstall) {
         // Primeira vez: grava só a fatia operacional. O catálogo NÃO é
         // gravado — ele vem de INITIAL_DATA a cada abertura.
@@ -1926,7 +1926,7 @@ class Store {
     // tela e o endereco fica registrado na trilha, para quem precise recuperar.
     const CAMPOS_OK = [
       'fotos_abertura', 'videos_abertura', 'fotos_investigacao', 'videos_investigacao',
-      'fotos_abertura_paths', 'fotos_investigacao_paths'
+      'fotos_abertura_paths', 'fotos_investigacao_paths', 'nf_paths'
     ];
     if (!CAMPOS_OK.includes(campo)) {
       return { success: false, message: 'Campo de mídia inválido: ' + campo };
@@ -3140,7 +3140,8 @@ class Store {
       'fotos_abertura', 'videos_abertura', 'fotos_investigacao', 'videos_investigacao',
       'foto_url', 'video_url', 'video_investigacao_url',
       'fotos_abertura_paths', 'fotos_investigacao_paths',
-      'fotos_abertura_pendentes', 'fotos_investigacao_pendentes'
+      'fotos_abertura_pendentes', 'fotos_investigacao_pendentes',
+      'nf_paths', 'nf_pendentes'
     ];
     const midiaAtual = {};
     CAMPOS_MIDIA.forEach(c => { if (c in list[idx]) midiaAtual[c] = list[idx][c]; });
@@ -4226,7 +4227,14 @@ class Store {
         etapaPadrao: 'abertura',
         etapas: {
           abertura:     { paths: 'fotos_abertura_paths',     pendentes: 'fotos_abertura_pendentes',     legado: 'fotos_abertura' },
-          investigacao: { paths: 'fotos_investigacao_paths', pendentes: 'fotos_investigacao_pendentes', legado: 'fotos_investigacao' }
+          investigacao: { paths: 'fotos_investigacao_paths', pendentes: 'fotos_investigacao_pendentes', legado: 'fotos_investigacao' },
+          // A NF EM PDF entra como mais uma etapa do mesmo modulo, e nao como
+          // store novo: ela anda na fila que ja existe desde a migration 38.
+          // A coluna nf_legado NAO existe e nao deve ser criada - nao ha
+          // legado, a funcao nasce agora. estadoFotos() faz
+          // Array.isArray(item[c.legado]) ? ... : [], entao a chave declarada
+          // sem coluna no banco devolve lista vazia sem quebrar nada.
+          nf:           { paths: 'nf_paths',                 pendentes: 'nf_pendentes',                 legado: 'nf_legado' }
         }
       }
     };

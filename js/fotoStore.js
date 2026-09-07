@@ -314,7 +314,9 @@ class FotoStore {
   }
 
   _caminhoDe(reg) {
-    const ext = (reg.mime === 'image/png') ? 'png' : (reg.mime === 'image/webp' ? 'webp' : 'jpg');
+    const ext = (reg.mime === 'application/pdf') ? 'pdf'
+              : (reg.mime === 'image/png')  ? 'png'
+              : (reg.mime === 'image/webp') ? 'webp' : 'jpg';
     const aleatorio = Math.random().toString(36).slice(2, 10);
     // Nome nao adivinhavel de proposito: o bucket e publico (leitura por URL),
     // entao o que protege a foto e o endereco nao ser deduzivel a partir do id

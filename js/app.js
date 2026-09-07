@@ -375,6 +375,23 @@ function formatarDuracaoHHMMSS(valor, unidade = 'ms') {
 }
 
 // ===== CÁLCULO DE SLA DE MANUTENÇÃO & RETENÇÃO DE FROTA =====
+
+// OS LIMITES DO SLA DE RETENCAO, num lugar so - antes estavam escritos a mao
+// em cinco pontos diferentes do arquivo, inclusive dentro do NOME das
+// variaveis (retidosCriticos), o que fazia o rotulo mentir na primeira vez
+// que alguem mudasse o numero.
+//
+// MUDARAM EM 05/09/2026: eram 4h e 8h, herdados do socorro em rota, onde
+// caminhao parado na estrada e emergencia. Oficina nao e estrada - uma
+// preventiva de 80 mil km passa de 8h por projeto, e o vermelho acendia todo
+// dia por trabalho que estava indo bem. Alerta que acende sempre para de ser
+// alerta, e ai ninguem olha mais nenhum deles.
+//
+// O SOCORRO EM ROTA CONTINUA EM 4h/8h de proposito (ver maisAntigaVeicParadoRota
+// em renderDashboardView) - la o caminhao esta na estrada, e la 4h e muito.
+const SLA_RETENCAO_ATENCAO_H = 24;   // ate aqui, e trabalho normal de oficina
+const SLA_RETENCAO_CRITICO_H = 72;   // tres dias parado e outra conversa
+
 function calcularSlaManutencao(retencao) {
   if (!retencao) return { diffMs: 0, diffHoras: 0, hhmmss: '00:00:00', nivel: 'NORMAL', badgeHtml: '' };
 
@@ -404,15 +421,15 @@ function calcularSlaManutencao(retencao) {
   const diffHoras = diffMs / (1000 * 60 * 60);
   const hhmmss = formatarDuracaoHHMMSS(diffMs, 'ms');
 
-  let nivel = 'NORMAL'; // < 4h
-  let badgeHtml = `<span class="bg-emerald-950/80 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟢 ${hhmmss} (&lt;4h)</span>`;
+  let nivel = 'NORMAL';
+  let badgeHtml = `<span class="bg-emerald-950/80 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟢 ${hhmmss} (&lt;${SLA_RETENCAO_ATENCAO_H}h)</span>`;
 
-  if (diffHoras >= 8) {
-    nivel = 'CRITICO_8H';
-    badgeHtml = `<span class="bg-red-950 text-red-300 border border-red-600 px-2 py-0.5 rounded text-[10px] font-black inline-flex items-center gap-1 animate-pulse shadow">🔴 SLA &gt;8h (${hhmmss})</span>`;
-  } else if (diffHoras >= 4) {
-    nivel = 'ALERTA_4H';
-    badgeHtml = `<span class="bg-amber-950 text-amber-300 border border-amber-600 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟡 SLA &gt;4h (${hhmmss})</span>`;
+  if (diffHoras >= SLA_RETENCAO_CRITICO_H) {
+    nivel = 'CRITICO';
+    badgeHtml = `<span class="bg-red-950 text-red-300 border border-red-600 px-2 py-0.5 rounded text-[10px] font-black inline-flex items-center gap-1 animate-pulse shadow">🔴 SLA &gt;${SLA_RETENCAO_CRITICO_H}h (${hhmmss})</span>`;
+  } else if (diffHoras >= SLA_RETENCAO_ATENCAO_H) {
+    nivel = 'ATENCAO';
+    badgeHtml = `<span class="bg-amber-950 text-amber-300 border border-amber-600 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟡 SLA &gt;${SLA_RETENCAO_ATENCAO_H}h (${hhmmss})</span>`;
   }
 
   return { diffMs, diffHoras, hhmmss, nivel, badgeHtml };
@@ -3335,6 +3352,22 @@ function closeModal() {
   if (modal) {
     modal.innerHTML = '';
     modal.classList.add('hidden');
+    // O ONCLICK TEM DE SAIR JUNTO. Dois lugares atribuem
+    // modal.onclick = closeModal (o visualizador de midia e o modal de
+    // detalhes da ocorrencia) e ninguem limpava: depois de abrir UM deles, o
+    // #modal-container ficava com "fechar ao clicar em qualquer lugar" para o
+    // resto da sessao. A partir dali, marcar um radio da Conferencia fechava
+    // a Conferencia. E a metade do "ele simplesmente fecha" que nao tinha
+    // nada a ver com versao - e a que sobrevivia ao F5 so porque o F5
+    // recria a pagina.
+    modal.onclick = null;
+  }
+  // Fechar o modal e o fim natural do adiamento da atualizacao, do mesmo jeito
+  // que sair de um campo e (ver o focusout em cloudStore.js). Sem isto, quem
+  // passa a manha abrindo e fechando modais so receberia a versao nova ao
+  // trocar de aba. So faz alguma coisa se houver adiamento pendente.
+  if (window._jrUpdatePendente && typeof window.jrConferirVersaoPublicada === 'function') {
+    setTimeout(() => { window.jrConferirVersaoPublicada().catch(() => {}); }, 250);
   }
 }
 
@@ -4916,7 +4949,11 @@ function renderDashboardView() {
   const maisAntigaTratativaGestor = getMaisAntigaPendente(tratativasGestorAlerta, CAMPOS_SLA_TRATATIVA_GESTOR, { atencao: 24, estourado: 48 });
   const slaTratativaGestor = getSlaBreakdown(tratativasGestorAlerta, CAMPOS_SLA_TRATATIVA_GESTOR);
   const maisAntigaVeicParadoRota = getMaisAntigaPendente(veicParadosAlerta, ['criado_em', 'data_chamado', 'data'], { atencao: 4, estourado: 8 });
-  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
+  // A retencao de oficina passa a usar 24h/72h. A linha ACIMA - socorro em
+  // rota - continua em 4h/8h de proposito: caminhao parado na estrada e outra
+  // coisa.
+  const LIM_RETENCAO = { atencao: SLA_RETENCAO_ATENCAO_H, estourado: SLA_RETENCAO_CRITICO_H };
+  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['data_parada', 'criado_em', 'data'], LIM_RETENCAO);
   const sinistrosPendentesDash = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
   const maisAntigoSinistroDash = getMaisAntigaPendente(sinistrosPendentesDash, ['data_acidente', 'criado_em', 'data'], { atencao: 24, estourado: 48 });
   const totDescontosGestor = devs.filter(d => d.desconto_produtividade_gestor).length;
@@ -4964,10 +5001,10 @@ function renderDashboardView() {
   const totFaltasColab = faltasColabList.length;
 
   // ===== SLA CRÍTICO DE MANUTENÇÃO (4H / 8H) =====
-  const retidosCriticos8h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO_8H');
-  const retidosAlerta4h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'ALERTA_4H');
-  const maisAntigaCritico8h = getMaisAntigaPendente(retidosCriticos8h, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
-  const maisAntigaAlerta4h = getMaisAntigaPendente(retidosAlerta4h, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
+  const retidosCriticos = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO');
+  const retidosAtencao = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'ATENCAO');
+  const maisAntigaCritico = getMaisAntigaPendente(retidosCriticos, ['data_parada', 'criado_em', 'data'], LIM_RETENCAO);
+  const maisAntigaAtencao = getMaisAntigaPendente(retidosAtencao, ['data_parada', 'criado_em', 'data'], LIM_RETENCAO);
 
   // ===== CÁLCULOS DOS NOVOS KPIS =====
   // 1. Lead Time de Abertura (Formato hh:mm:ss — Tempo médio entre criação da ocorrência e parecer/ação do gestor)
@@ -5170,7 +5207,7 @@ function renderDashboardView() {
   // completas, nao pelas filtradas. Antes, escolher um periodo sem
   // pendencia fazia o painel inteiro sumir, escondendo o que ainda estava
   // em aberto (23/08/2026).
-  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || tratativasGestorAlerta.length > 0 || sinistrosPendentesDash.length > 0);
+  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos.length > 0 || retidosAtencao.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || tratativasGestorAlerta.length > 0 || sinistrosPendentesDash.length > 0);
 
   return `
     <div class="space-y-6">
@@ -5212,28 +5249,28 @@ function renderDashboardView() {
               </div>` : ''}
 
             <!-- ALERTA DE SLA CRÍTICO >8H -->
-            ${retidosCriticos8h.length > 0 ? `
+            ${retidosCriticos.length > 0 ? `
               <div class="bg-slate-950 border border-red-700 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md animate-pulse">
                 <div class="flex items-center gap-3 overflow-hidden">
                   <div class="w-9 h-9 rounded-lg bg-red-950 border border-red-600 text-red-400 flex items-center justify-center shrink-0 text-base font-bold">🔴</div>
                   <div class="truncate">
-                    <div class="text-xs font-black text-red-300 truncate">${retidosCriticos8h.length} Veículo(s) SLA &gt;8h</div>
+                    <div class="text-xs font-black text-red-300 truncate">${retidosCriticos.length} Veículo(s) SLA &gt;8h</div>
                     <div class="text-[10px] text-red-400 font-bold truncate">Imobilização crítica estourada</div>
-                    ${_linhaSla(maisAntigaCritico8h, 'Parado há')}
+                    ${_linhaSla(maisAntigaCritico, 'Parado há')}
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-red-900/60 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
               </div>` : ''}
 
             <!-- ALERTA DE SLA EM ATENÇÃO >4H -->
-            ${retidosAlerta4h.length > 0 ? `
+            ${retidosAtencao.length > 0 ? `
               <div class="bg-slate-950 border border-amber-600/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
                 <div class="flex items-center gap-3 overflow-hidden">
                   <div class="w-9 h-9 rounded-lg bg-amber-950 border border-amber-600 text-amber-300 flex items-center justify-center shrink-0 text-base font-bold">🟡</div>
                   <div class="truncate">
-                    <div class="text-xs font-black text-amber-300 truncate">${retidosAlerta4h.length} Veículo(s) SLA &gt;4h</div>
+                    <div class="text-xs font-black text-amber-300 truncate">${retidosAtencao.length} Veículo(s) SLA &gt;4h</div>
                     <div class="text-[10px] text-slate-400 truncate">Atenção tempo na oficina</div>
-                    ${_linhaSla(maisAntigaAlerta4h, 'Parado há')}
+                    ${_linhaSla(maisAntigaAtencao, 'Parado há')}
                   </div>
                 </div>
                 <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
@@ -5254,13 +5291,16 @@ function renderDashboardView() {
               </div>` : ''}
 
             <!-- ALERTA VEÍCULOS RETIDOS MANUTENÇÃO -->
-            ${veicRetidos > 0 && retidosCriticos8h.length === 0 && retidosAlerta4h.length === 0 ? `
+            <!-- CONTA SEMPRE. Ate 05/09/2026 este card so aparecia se NENHUM veiculo
+                 tivesse SLA - ou seja, sumia justamente quando havia veiculo estourado.
+                 Com 2 retidos e 1 critico, a tela mostrava "1" e escondia o total. -->
+            ${veicRetidos > 0 ? `
               <div class="bg-slate-950 border border-amber-600/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
                   <div class="w-9 h-9 rounded-lg bg-amber-950/80 border border-amber-600/70 text-amber-400 flex items-center justify-center shrink-0 text-base font-bold">🔧</div>
                   <div class="truncate">
                     <div class="text-xs font-black text-amber-300 truncate">${veicRetidos} Veículo(s) Retido(s)</div>
-                    <div class="text-[10px] text-slate-400 truncate">Oficina / Manutenção</div>
+                    <div class="text-[10px] text-slate-400 truncate">Oficina · ${retidosCriticos.length} crítico(s), ${retidosAtencao.length} em atenção</div>
                     ${_linhaSla(maisAntigaVeicRetido, 'Retido há')}
                   </div>
                 </div>
@@ -5936,6 +5976,9 @@ function renderSacAberturaView() {
             <div>
               <label class="block text-xs font-semibold text-slate-300 mb-1">Nota Fiscal (NF)</label>
               <input type="text" id="sac-nf" placeholder="Ex: NF-99412 (opcional)" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs" oninput="forcarMaiuscula(this)">
+              <input type="file" id="sac-nf-pdf" accept="application/pdf" multiple onchange="handleNfPdfUpload(this)"
+                class="mt-1.5 w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-1.5 text-xs file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-600 file:text-white hover:file:bg-slate-500">
+              <div id="sac-nf-pdf-preview" class="hidden mt-1 flex flex-wrap gap-1.5"></div>
             </div>
           </div>
 
@@ -6251,24 +6294,94 @@ function getDadosProduto(item) {
 // app (no modal-container já existente), o que funciona em qualquer
 // navegador/celular.
 function abrirMidiaLightbox(url, tipo) {
-  const modalContainer = document.getElementById('modal-container');
-  if (!modalContainer || !url) return;
-  modalContainer.innerHTML = `
+  if (!url) return;
+  // PROPRIO CONTAINER, e nao o #modal-container. Ate 05/09/2026 este
+  // visualizador escrevia no MESMO no onde vive a Conferencia & Entrada, a
+  // tratativa, a reentrega e a edicao de viagem. Clicar numa foto de dentro
+  // da Conferencia apagava o formulario inteiro, e fechar a foto deixava a
+  // tela vazia: "abri a foto e a janela sumiu com tudo que eu ja tinha
+  // conferido". O z-index e maior que o do #modal-container (z-50) de
+  // proposito - a foto abre POR CIMA do formulario, que continua ali.
+  let box = document.getElementById('lightbox-container');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'lightbox-container';
+    box.className = 'hidden fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm '
+                  + 'flex items-center justify-center p-3 sm:p-4';
+    document.body.appendChild(box);
+  }
+  box.innerHTML = `
     <div class="max-w-3xl w-full" onclick="event.stopPropagation()">
       <div class="flex justify-end mb-2">
-        <button onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-white font-bold w-9 h-9 rounded-full shadow-lg">✕</button>
+        <button onclick="fecharMidiaLightbox()"
+          class="bg-slate-800 hover:bg-slate-700 text-white font-bold w-9 h-9 rounded-full shadow-lg">✕</button>
       </div>
       ${tipo === 'video'
         ? `<video src="${url}" controls autoplay class="w-full max-h-[80vh] rounded-lg shadow-2xl bg-black"></video>`
         : `<img src="${url}" class="w-full max-h-[80vh] object-contain rounded-lg shadow-2xl bg-slate-950" alt="Mídia da ocorrência">`}
     </div>`;
-  modalContainer.classList.remove('hidden');
-  modalContainer.onclick = closeModal;
+  box.classList.remove('hidden');
+  box.onclick = fecharMidiaLightbox;
 }
+
+// Fecha SO o visualizador. O modal que estava por baixo continua aberto e
+// com tudo preenchido - e a diferenca entre olhar uma foto e perder a
+// conferencia inteira por ter olhado uma foto.
+function fecharMidiaLightbox() {
+  const box = document.getElementById('lightbox-container');
+  if (!box) return;
+  // Sem o pause, fechar um video deixa o audio tocando atras da tela.
+  const v = box.querySelector('video');
+  if (v) { try { v.pause(); } catch (e) {} }
+  box.innerHTML = '';
+  box.classList.add('hidden');
+}
+window.fecharMidiaLightbox = fecharMidiaLightbox;
 
 // Monta a galeria de mídia de uma devolução, separando por etapa
 // (Abertura no SAC / Análise e Investigação), para dar o "histórico
 // completo da ocorrência" nas telas de Gestão de Tratativas e Recepção CD.
+// O QUE O CLIENTE RECLAMOU, na abertura. Existe como funcao separada porque
+// duas telas precisam da MESMA coisa e ja houve triplicacao neste arquivo
+// (ver o comentario em app.js:4500): a Analise mostrava isso desde sempre, a
+// Tratativa do Gestor nunca mostrou - e e o gestor quem decide desconto.
+//
+// colapsar: na tela do gestor os cards vem em lista, e um relato inteiro em
+// cada um torna a rolagem impraticavel. <details> resolve sem esconder nada.
+function renderRelatoAbertura(d, opcoes = {}) {
+  const { titulo = 'Relato da Abertura', colapsar = false } = opcoes;
+  const texto    = String(d.detalhamento_texto || '').trim();
+  const itens    = Array.isArray(d.itens) ? d.itens : [];
+  const abertoEm = d.criado_em ? new Date(d.criado_em).toLocaleString('pt-BR') : '';
+  const miolo = `
+    <div class="text-slate-400 italic">"${d.motivo_reclamado || '—'}"</div>
+    ${texto ? `<div class="text-slate-300 whitespace-pre-line">${texto}</div>`
+            : '<div class="text-slate-500 italic text-[11px]">Sem detalhamento na abertura.</div>'}
+    ${itens.length === 0 ? (d.sem_itens
+      ? `<div class="text-amber-300/80 text-[11px] pt-1">⚠️ Sem itens: ${d.observacao_sem_itens || '—'}</div>` : '')
+      : `<div class="pt-2 border-t border-slate-800">
+           <div class="font-bold text-slate-400 mb-1 text-[10px] uppercase">Itens reclamados</div>
+           <div class="space-y-1">
+             ${itens.map(i => `<div class="flex justify-between gap-3 text-[11px] text-slate-300">
+                 <span>${i.produto_codigo} — ${i.produto_descricao} (x${i.quantidade})</span>
+                 <span class="text-emerald-400 font-semibold shrink-0">R$ ${(i.valor_total || 0).toFixed(2)}</span>
+               </div>`).join('')}
+           </div>
+         </div>`}
+    ${abertoEm ? `<div class="text-[10px] text-slate-500 pt-1">🕒 Aberto em ${abertoEm}</div>` : ''}`;
+  if (!colapsar) {
+    return `<div class="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2 text-xs">
+      <div class="font-bold text-slate-300">${titulo}:</div>${miolo}</div>`;
+  }
+  const curto = texto.length <= 180 && itens.length <= 3;
+  return `<details class="bg-slate-950 rounded-lg border border-slate-800 text-xs" ${curto ? 'open' : ''}>
+    <summary class="cursor-pointer select-none p-3 font-bold text-slate-300 hover:text-white">
+      📋 ${titulo}${curto ? '' : ` <span class="text-slate-500 font-normal">(clique para abrir)</span>`}
+    </summary>
+    <div class="px-3 pb-3 space-y-2">${miolo}</div>
+  </details>`;
+}
+
 function renderGaleriaMidia(dev, opcoes = {}) {
   const {
     titulo = null,
@@ -6311,6 +6424,20 @@ function renderGaleriaMidia(dev, opcoes = {}) {
     Array.isArray(dev.fotos_investigacao) ? dev.fotos_investigacao : []);
   const videosInvestigacao = Array.isArray(dev.videos_investigacao) ? dev.videos_investigacao : (dev.video_investigacao_url ? [dev.video_investigacao_url] : []);
 
+  // A NF nao vira miniatura: PDF nao renderiza em <img>. Vira link.
+  const nfDocs = (db && typeof db.estadoFotos === 'function')
+    ? db.estadoFotos(dev, 'nf', 'devolucoes').paths : [];
+  const nfHtml = nfDocs.length === 0 ? '' : `
+    <div class="space-y-1">
+      <div class="text-[9px] text-slate-500 font-bold uppercase">🧾 Nota Fiscal em PDF (${nfDocs.length})</div>
+      <div class="flex flex-wrap gap-2">
+        ${nfDocs.map((p, i) => `
+          <a href="${_urlFoto(p)}" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-1.5 bg-slate-950 border border-emerald-800/60 hover:border-emerald-500 text-emerald-300 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition"
+             title="Abrir a nota fiscal numa aba nova">📄 ${dev.nota_fiscal || 'NF'}${nfDocs.length > 1 ? ` (${i + 1})` : ''}</a>`).join('')}
+      </div>
+    </div>`;
+
   const grupos = [
     { label: '📋 Abertura (SAC)', campoFotos: 'fotos_abertura', campoVideos: 'videos_abertura', fotos: fotosAbertura, videos: videosAbertura },
     { label: '🔎 Análise / Investigação', campoFotos: 'fotos_investigacao', campoVideos: 'videos_investigacao', fotos: fotosInvestigacao, videos: videosInvestigacao }
@@ -6345,11 +6472,16 @@ function renderGaleriaMidia(dev, opcoes = {}) {
       </div>`;
   };
 
-  if (grupos.length === 0) {
+  // AS DUAS SAIDAS. Uma devolucao com NF e SEM foto - o caso mais comum - caia
+  // no retorno de "nenhuma foto anexada" e a NF nunca aparecia.
+  if (grupos.length === 0 && !nfHtml) {
     // O marcador vai TAMBÉM no estado vazio: sem ele, apagar o último item
     // arrancaria o próprio nó que a atualização usa para se achar, e a galeria
     // pararia de responder até um reload.
     return `<div ${marcadores} class="text-[10px] text-slate-500 italic">${vazio}</div>`;
+  }
+  if (grupos.length === 0) {
+    return `<div ${marcadores} class="space-y-2.5">${titulo ? `<div class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">${titulo}</div>` : ''}${nfHtml}</div>`;
   }
 
   return `
@@ -6363,6 +6495,7 @@ function renderGaleriaMidia(dev, opcoes = {}) {
             ${g.videos.map((v, i) => renderItemMidia(v, 'video', g.campoVideos, i)).join('')}
           </div>
         </div>`).join('')}
+      ${nfHtml}
       ${podeExcluir ? `<div class="text-[9px] text-slate-600 italic">🗑️ exclui o item da ocorrência. A exclusão é definitiva e fica registrada no histórico com o seu nome.</div>` : ''}
     </div>`;
 }
@@ -6471,6 +6604,41 @@ function comprimirImagem(file, maxDimensao = 1280, qualidade = 0.75) {
       img.src = e.target.result;
     };
     reader.readAsDataURL(file);
+  });
+}
+
+let uploadedNfDocsBase64 = [];
+// A NF NAO PASSA POR comprimirImagem(). Aquela funcao desenha o arquivo num
+// <canvas> e reexporta como JPEG - com um PDF na entrada ela devolveria lixo,
+// ou nada. Aqui e leitura crua e so.
+function handleNfPdfUpload(inputEl) {
+  const files = Array.from(inputEl.files || []);
+  uploadedNfDocsBase64 = [];
+  const box = document.getElementById('sac-nf-pdf-preview');
+  if (box) { box.innerHTML = ''; box.classList.add('hidden'); }
+  if (!files.length) return;
+  files.forEach(file => {
+    if (file.type !== 'application/pdf') {
+      showToast('O anexo da NF aceita só PDF. Ignorado: ' + file.name, 'error');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('A NF ' + file.name + ' tem mais de 10 MB e o servidor recusa nesse tamanho.', 'error');
+      return;
+    }
+    const fr = new FileReader();
+    fr.onload = () => {
+      uploadedNfDocsBase64.push(fr.result);
+      if (box) {
+        box.classList.remove('hidden');
+        const chip = document.createElement('div');
+        chip.className = 'bg-slate-950 border border-emerald-800/60 text-emerald-300 rounded px-2 py-1 text-[10px] font-semibold';
+        chip.textContent = '📄 ' + file.name;
+        box.appendChild(chip);
+      }
+    };
+    fr.onerror = () => showToast('Não consegui ler o PDF ' + file.name + '.', 'error');
+    fr.readAsDataURL(file);
   });
 }
 
@@ -7537,9 +7705,11 @@ async function handleSacAberturaSubmit(e) {
   // foto.
   await _enfileirarFotosDevolucao(dev, 'abertura',
     (typeof uploadedFotosBase64 !== 'undefined') ? uploadedFotosBase64 : []);
+  await _enfileirarFotosDevolucao(dev, 'nf', uploadedNfDocsBase64);
 
   uploadedFotosBase64 = [];
   uploadedVideosBase64 = [];
+  uploadedNfDocsBase64 = [];
 
   // Mesmo problema do cadastro de usuário e do import de escala (achados de
   // 20/08/2026): o alert() logo abaixo bloqueia a aba até o usuário tocar
@@ -7716,17 +7886,8 @@ function renderSacInvestigacaoView() {
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
             <!-- Relato -->
             <div class="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2">
-              <div class="font-bold text-slate-300">Reclamação:</div>
-              <div class="text-slate-400 italic">"${d.motivo_reclamado}"</div>
-              <div class="text-slate-300">${d.detalhamento_texto}</div>
+              ${renderRelatoAbertura(d, { titulo: 'Reclamação' })}
               <div class="pt-1">${renderGaleriaMidia(d, { titulo: '📎 Mídia Anexada' })}</div>
-              ${d.itens?.length > 0 ? `
-                <div class="pt-2 border-t border-slate-800">
-                  <div class="font-bold text-slate-400 mb-1">Itens Reclamados:</div>
-                  <div class="space-y-1">
-                    ${d.itens.map(i => `<div class="flex justify-between text-[11px] text-slate-300"><span>${i.produto_codigo} — ${i.produto_descricao} (x${i.quantidade})</span><span class="text-emerald-400 font-semibold">R$ ${i.valor_total.toFixed(2)}</span></div>`).join('')}
-                  </div>
-                </div>` : ''}
             </div>
 
             <!-- Formulário de Apuração -->
@@ -7952,6 +8113,38 @@ function toggleOutroErro(devId, valor) {
   if (outro) outro.classList.toggle('hidden', valor !== 'OUTRO');
 }
 
+// QUEM DIVIDE A CONTA DO ADIANTAMENTO. Uma definicao so, porque ate 04/09/2026
+// existiam duas e elas discordavam: gerarAdiantamentoPdf() aceitava 'N/A' como
+// ajudante de verdade e rateava 50/50 com uma via para ninguem, enquanto o
+// ranking de produtividade (app.js:5148) filtrava 'N/A' corretamente.
+//
+// Devolve NOMES, nao ids, de proposito: o id do ajudante e justamente o elo
+// que esta quebrado. O nome e o que a escala tem, o que o recibo imprime e o
+// que a pessoa assina.
+const JR_NAO_E_PESSOA = ['', 'N/A', 'NA', '—', '-', 'AJUDANTE', 'NÃO INFORMADO',
+                         'NAO INFORMADO', 'SEM AJUDANTE', 'A CADASTRAR'];
+function equipeDaDevolucao(dev) {
+  const nomes = [];
+  const push = (n) => {
+    const v = String(n || '').trim().toUpperCase();
+    if (JR_NAO_E_PESSOA.includes(v)) return;
+    if (!nomes.includes(v)) nomes.push(v);   // mesma pessoa nao paga duas vezes
+  };
+  push(dev.motorista_nome);
+  (Array.isArray(dev.ajudantes) ? dev.ajudantes : []).forEach(push);
+  push(dev.ajudante_nome);
+  return nomes;
+}
+// Rateio em CENTAVOS. R$ 100,00 / 3 = 33,33 e 33,33 x 3 = 99,99: some um
+// centavo, e a soma dos recibos deixa de fechar com o valor cobrado. A sobra
+// vai para a primeira via (o motorista).
+function ratearValor(total, n) {
+  const cent = Math.round((parseFloat(total) || 0) * 100);
+  if (!n) return [];
+  const base = Math.floor(cent / n), sobra = cent - base * n;
+  return Array.from({ length: n }, (_, i) => (base + (i < sobra ? 1 : 0)) / 100);
+}
+
 function gerarAdiantamentoPdf(devId) {
   const devs = db.getDevolucoes();
   const dev = devs.find(x => x.id == devId);
@@ -7965,10 +8158,11 @@ function gerarAdiantamentoPdf(devId) {
   const dtCriacao = dev.criado_em ? new Date(dev.criado_em).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
 
   // REGRA DE DIVISÃO: Rateio 50/50 quando existe ajudante de fato vinculado. Sem ajudante, valor integral 100% no motorista.
-  const ajudanteNomeBruto = String(dev.ajudante_nome || '').trim();
-  const temAjudante = !!(ajudanteNomeBruto && ajudanteNomeBruto.toUpperCase() !== 'AJUDANTE' && ajudanteNomeBruto.toUpperCase() !== 'NÃO INFORMADO');
-  const valorPorPessoa = (temAjudante ? (totalValor / 2) : totalValor).toFixed(2);
-  const percentualLabel = temAjudante ? '50%' : '100%';
+  const equipe = equipeDaDevolucao(dev);
+  const cotas  = ratearValor(totalValor, equipe.length || 1);
+  const temAjudante = equipe.length > 1;
+  const valorPorPessoa = (cotas[0] || 0).toFixed(2);
+  const percentualLabel = Math.round(100 / (equipe.length || 1)) + '%';
 
   const itensTableHtml = itens.length === 0 ? `
     <div style="padding: 10px; text-align: center; color: #64748b; font-style: italic; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc;">
@@ -8452,6 +8646,10 @@ function renderGestaoGestorView() {
               <div class="text-slate-400 text-[10px]">${d.conferente_apurado||d.conferente_nome||'—'}</div>
             </div>
           </div>
+          <!-- O que o cliente reclamou: o gestor decide desconto sobre isto.
+               Fica FORA do <form> de propósito - é leitura, não campo, e assim
+               não interfere no que o gestor está digitando. -->
+          <div class="px-4 pb-3">${renderRelatoAbertura(d, { colapsar: true })}</div>
           <!-- ADENDO: histórico completo de mídia (Abertura + Investigação) -->
           <div class="px-4 pb-3">${renderGaleriaMidia(d, { titulo: '📎 Histórico de Mídia da Ocorrência' })}</div>
           ${d.atualizado_em ? `<div class="px-4 pb-2 text-[10px] text-purple-300">🕒 Última atualização da Análise em ${new Date(d.atualizado_em).toLocaleString('pt-BR')} por <b>${d.atualizado_por || '—'}</b> • <button type="button" onclick="abrirHistoricoRegistro('ocorrencias_devolucao', '${d.id}', '${(d.numero_devolucao||d.numero_protocolo||'').replace(/'/g, "\\'")}')" class="text-blue-400 hover:text-blue-300 hover:underline">📜 Ver histórico</button></div>` : ''}
@@ -9899,7 +10097,7 @@ function openCdModal(devId) {
     </div>` : (dev.sem_itens ? `<div class="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 text-xs text-amber-300">⚠️ Sem itens: ${dev.observacao_sem_itens}</div>` : '<div class="text-slate-500 text-xs">Nenhum item para validar.</div>');
 
   modalContainer.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-2xl w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+    <div onclick="event.stopPropagation()" class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-2xl w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
       <div class="flex justify-between items-center border-b border-slate-800 pb-3">
         <h3 class="font-bold text-white text-base">Recepção no CD • Conferência Item a Item — ${dev.numero_devolucao||dev.numero_protocolo}</h3>
         <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-xl leading-none">✕</button>
@@ -10161,10 +10359,11 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
   const dtEntradaCd = dev.data_entrada_cd ? new Date(dev.data_entrada_cd).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
 
   // Rateio 50/50 quando existe ajudante vinculado
-  const ajudanteNomeBruto = String(dev.ajudante_nome || '').trim();
-  const temAjudante = !!(ajudanteNomeBruto && ajudanteNomeBruto.toUpperCase() !== 'AJUDANTE' && ajudanteNomeBruto.toUpperCase() !== 'NÃO INFORMADO' && ajudanteNomeBruto.toUpperCase() !== 'SEM AJUDANTE');
-  const valorPorPessoa = (temAjudante ? (totalValor / 2) : totalValor).toFixed(2);
-  const percentualLabel = temAjudante ? '50%' : '100%';
+  const equipe = equipeDaDevolucao(dev);
+  const cotas  = ratearValor(totalValor, equipe.length || 1);
+  const temAjudante = equipe.length > 1;
+  const valorPorPessoa = (cotas[0] || 0).toFixed(2);
+  const percentualLabel = Math.round(100 / (equipe.length || 1)) + '%';
 
   const itensTableHtml = divItens.length === 0 ? `
     <div style="padding: 10px; text-align: center; color: #64748b; font-style: italic; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc;">
@@ -11126,6 +11325,7 @@ function limparFiltrosViagens() {
   window._vgFiltroSaidaAte = '';
   window._vgFiltroRetornoDe = '';
   window._vgFiltroRetornoAte = '';
+  window._vgFiltroIncluirSemRetorno = false;
   window._vgFiltroStatus = [];
   window._vgFiltroRota = [];
   window._vgFiltroSetor = [];
@@ -11193,6 +11393,7 @@ function vgFiltrarViagens(lista) {
   const fSaidaAte   = window._vgFiltroSaidaAte   || '';
   const fRetornoDe  = window._vgFiltroRetornoDe  || '';
   const fRetornoAte = window._vgFiltroRetornoAte || '';
+  const fSemRetorno = !!window._vgFiltroIncluirSemRetorno;
   const fStatusList    = vgListaFiltro('status');
   const fRotaList      = vgListaFiltro('rota');
   const fSetorList     = vgListaFiltro('setor');
@@ -11203,7 +11404,13 @@ function vgFiltrarViagens(lista) {
 
   return (lista || []).filter(v => {
     const dSaida = v.data_saida || '';
-    const dRetorno = v.data_retorno || v.data_entrega || v.data_saida || '';
+    // SO a data de retorno de verdade. Ate 05/09/2026 esta linha caia para
+    // data_entrega e depois para data_saida quando o retorno estava em
+    // branco - ou seja, INVENTAVA um retorno para viagem que ainda nao
+    // voltou. Com "Retorno de/ate = hoje" o filtro entao mostrava caminhao
+    // que SAIU hoje e continua na rua, e escondia o que FINALIZOU hoje sem
+    // ninguem ter digitado a data. As duas metades do mesmo defeito.
+    const dRetorno = v.data_retorno || '';
 
     if (fCarga) {
       const fcRaw = fCarga.toLowerCase().trim().replace(/^#/, '');
@@ -11220,8 +11427,19 @@ function vgFiltrarViagens(lista) {
     }
     if (fSaidaDe && dSaida < fSaidaDe) return false;
     if (fSaidaAte && dSaida > fSaidaAte) return false;
-    if (fRetornoDe && dRetorno < fRetornoDe) return false;
-    if (fRetornoAte && dRetorno > fRetornoAte) return false;
+    // Viagem SEM data de retorno nao tem como estar dentro de um periodo de
+    // retorno - mas tambem nao pode sumir calada, que era o comportamento
+    // ate 05/09/2026. Agora ela e uma escolha visivel: marcado, aparece
+    // junto, e e assim que "os finalizados" e "os que finalizaram hoje"
+    // cabem na mesma tela.
+    if (fRetornoDe || fRetornoAte) {
+      if (!dRetorno) {
+        if (!fSemRetorno) return false;
+      } else {
+        if (fRetornoDe  && dRetorno < fRetornoDe)  return false;
+        if (fRetornoAte && dRetorno > fRetornoAte) return false;
+      }
+    }
 
     if (fStatusList.length > 0 && !fStatusList.includes(v.status_viagem)) return false;
 
@@ -11251,6 +11469,7 @@ function vgResumoDosFiltros() {
   add('Saída até', window._vgFiltroSaidaAte);
   add('Retorno de', window._vgFiltroRetornoDe);
   add('Retorno até', window._vgFiltroRetornoAte);
+  if (window._vgFiltroIncluirSemRetorno) partes.push('Incluindo viagens sem data de retorno');
   lista('Status', vgListaFiltro('status'));
   lista('Rota', vgListaFiltro('rota'));
   lista('Setor', vgListaFiltro('setor'));
@@ -11302,6 +11521,11 @@ function renderViagensLargadaSubTab() {
   // acima: enquanto isto aqui era uma cópia à mão da regra, o relatório
   // ficou para trás e saía com a operação inteira.
   let viagens = vgFiltrarViagens(todasViagens);
+  // O NUMERO NA CAIXA e o que impede o filtro de esconder em silencio: ele
+  // diz, antes de qualquer coisa, quantas viagens NAO tem data de retorno.
+  // Sem ele a pessoa nao tem como saber que existe uma segunda metade.
+  const fSemRetorno   = !!window._vgFiltroIncluirSemRetorno;
+  const semRetornoQtd = todasViagens.filter(v => !v.data_retorno).length;
 
   const temFiltroAtivo = vgResumoDosFiltros().length > 0;
 
@@ -11379,6 +11603,15 @@ function renderViagensLargadaSubTab() {
                 <input type="date" id="vg-filtro-retorno-ate" value="${fRetornoAte}" onchange="window._vgFiltroRetornoAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
               </div>
             </div>
+            <label class="flex items-start gap-1.5 pt-1 cursor-pointer select-none"
+                   title="Viagem que ainda não voltou, ou que voltou e ninguém digitou a data">
+              <input type="checkbox" ${fSemRetorno ? 'checked' : ''}
+                onchange="window._vgFiltroIncluirSemRetorno=this.checked; renderApp()"
+                class="mt-0.5 rounded border-slate-700 bg-slate-900 text-blue-500 w-3.5 h-3.5 cursor-pointer shrink-0">
+              <span class="text-[9px] text-slate-400 leading-tight">
+                Incluir as ${semRetornoQtd} viagem(ns) <b class="text-slate-300">sem data de retorno</b>
+              </span>
+            </label>
           </div>
 
           <!-- Filtros de multisseleção suspensos (Status, Rota, Setor, Motorista) -->
@@ -11835,8 +12068,25 @@ function handleSalvarEdicaoViagem(e, id) {
   const setor = document.getElementById('ed-vg-setor').value;
   const data_entrega = document.getElementById('ed-vg-data-ent').value;
   const hora_entrega = document.getElementById('ed-vg-hora-ent').value;
-  const data_retorno = document.getElementById('ed-vg-data-ret').value;
-  const hora_retorno = document.getElementById('ed-vg-hora-ret').value;
+  let data_retorno = document.getElementById('ed-vg-data-ret').value;
+  let hora_retorno = document.getElementById('ed-vg-hora-ret').value;
+
+  // FINALIZADO SEM DATA DE RETORNO era o buraco do filtro (ver B.1): a viagem
+  // terminava, o status virava FINALIZADO e o campo ficava em branco, porque
+  // ninguem digita o que o sistema ja sabe. Depois "Retorno = hoje" nao
+  // achava essa viagem, e a pessoa concluia que o filtro estava quebrado.
+  // Agora o proprio ato de finalizar carimba a data de hoje e a hora.
+  //
+  // SO QUANDO ESTAO VAZIAS. Data digitada a mao - uma viagem que voltou
+  // sabado e so foi baixada na segunda - nunca e sobrescrita.
+  if (status_viagem === 'FINALIZADO' && !data_retorno) {
+    data_retorno = hojeIsoBrasilia();
+    if (!hora_retorno) {
+      hora_retorno = new Date().toLocaleTimeString('pt-BR', {
+        hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
+      });
+    }
+  }
   const fusion = document.getElementById('ed-vg-fusion').value;
   const checklist_saida = document.getElementById('ed-vg-chk-saida').value;
   const checklist_chegada = document.getElementById('ed-vg-chk-chegada').value;
@@ -15275,9 +15525,29 @@ function emitirRelatorioReentregasA4(filtro = null) {
       margin: 8mm 10mm 8mm 10mm;
     }
     @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      /* O padding do body sobrevivia a impressao e valia ~10,6mm - o suficiente
+         para estourar os 190mm uteis de um A4 deitado e criar uma folha 2 com
+         o rodape sozinho. */
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact;
+             background: #fff !important; padding: 0 !important; }
       .no-print { display: none !important; }
-      .page-container { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+      /* min-height zerada: a folha passa a ter a altura do conteudo, e nao
+         190mm fixos. display:block desliga o flex + space-between, que
+         empurrava o rodape para a borda de baixo mesmo com a tabela curta -
+         agora o rodape vem logo depois da tabela, onde ela terminar. */
+      .page-container { box-shadow: none !important; border: none !important;
+                        margin: 0 !important; padding: 0 !important;
+                        width: 100% !important; max-width: 100% !important;
+                        min-height: 0 !important; display: block !important; }
+
+      /* E QUANDO A LISTA FOR GRANDE DE VERDADE e a folha 2 for necessaria: o
+         cabecalho verde da tabela se repete no alto dela, e nenhuma linha e
+         cortada no meio. */
+      thead { display: table-header-group; }
+      tr, .kpi-strip, .header-box, .report-banner, .footer-box {
+        page-break-inside: avoid; break-inside: avoid;
+      }
+      .footer-box { margin-top: 10px !important; }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -18131,8 +18401,8 @@ function renderDisponibilidadeFrotaView() {
   const nRetidos   = retencoes.filter(r => r.status === 'RETIDO').length;
   const nLiberados = retencoes.filter(r => r.status === 'LIBERADO').length;
 
-  const retidosCriticos8h = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'CRITICO_8H');
-  const retidosAlerta4h = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'ALERTA_4H');
+  const retidosCriticos = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'CRITICO');
+  const retidosAtencao = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'ATENCAO');
 
   // Cálculo do MTTR Operacional da Frota (em hh:mm:ss)
   let totalMttrMs = 0;
@@ -18203,19 +18473,19 @@ function renderDisponibilidadeFrotaView() {
           <div class="text-2xl font-black text-white mt-1">${nRetidos}</div>
           <div class="text-[10px] text-slate-500 mt-0.5">Atualmente na oficina</div>
         </div>
-        <div class="bg-slate-900 border border-red-900/70 p-3.5 rounded-xl shadow ${retidosCriticos8h.length > 0 ? 'animate-pulse' : ''}">
+        <div class="bg-slate-900 border border-red-900/70 p-3.5 rounded-xl shadow ${retidosCriticos.length > 0 ? 'animate-pulse' : ''}">
           <div class="text-[10px] text-red-400 font-bold uppercase flex items-center gap-1">
-            <span>🔴</span> SLA Crítico &gt;8h
+            <span>🔴</span> SLA Crítico &gt;72h
           </div>
-          <div class="text-2xl font-black text-red-300 mt-1">${retidosCriticos8h.length}</div>
-          <div class="text-[10px] text-red-400/80 mt-0.5">Parados há mais de 8h</div>
+          <div class="text-2xl font-black text-red-300 mt-1">${retidosCriticos.length}</div>
+          <div class="text-[10px] text-red-400/80 mt-0.5">Parados há mais de 3 dias</div>
         </div>
         <div class="bg-slate-900 border border-amber-900/70 p-3.5 rounded-xl shadow">
           <div class="text-[10px] text-amber-400 font-bold uppercase flex items-center gap-1">
-            <span>🟡</span> SLA Atenção &gt;4h
+            <span>🟡</span> SLA Atenção &gt;24h
           </div>
-          <div class="text-2xl font-black text-amber-300 mt-1">${retidosAlerta4h.length}</div>
-          <div class="text-[10px] text-amber-400/80 mt-0.5">Parados entre 4h e 8h</div>
+          <div class="text-2xl font-black text-amber-300 mt-1">${retidosAtencao.length}</div>
+          <div class="text-[10px] text-amber-400/80 mt-0.5">Parados entre 1 e 3 dias</div>
         </div>
         <div class="bg-slate-900 border border-emerald-900/70 p-3.5 rounded-xl shadow">
           <div class="text-[10px] text-emerald-400 font-bold uppercase flex items-center gap-1">
@@ -19079,6 +19349,22 @@ function emitirRelatorioFrota(tipo) {
         }
       }).join('');
 
+  // ATE 18 LINHAS CABEM NUM A4 DEITADO com o corpo atual. Acima disso, em vez
+  // de estourar para a folha 2, o relatorio aperta: fonte e altura de linha
+  // menores, e os KPIs de apoio encolhem. E o que uma planilha impressa faz -
+  // ninguem quer duas folhas para 20 veiculos.
+  const denso = lista.length > 18;
+  const cssDenso = !denso ? '' : `
+    table { font-size: 8.4px; }
+    th, td { padding: 2.6px 4px; }
+    th { font-size: 8px; }
+    .kpi-card-val { font-size: 12px; }
+    .kpi-card { padding: 2px 6px; }
+    .kpi-strip { margin-bottom: 5px; }
+    .header-box { padding-bottom: 5px; margin-bottom: 5px; }
+    .logo-img { height: 40px; }
+    .report-banner { padding: 4px 10px; margin-bottom: 5px; }`;
+
   const htmlContent = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -19091,9 +19377,29 @@ function emitirRelatorioFrota(tipo) {
       margin: 10mm 12mm 10mm 12mm;
     }
     @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      /* O padding do body sobrevivia a impressao e valia ~10,6mm - o suficiente
+         para estourar os 190mm uteis de um A4 deitado e criar uma folha 2 com
+         o rodape sozinho. */
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact;
+             background: #fff !important; padding: 0 !important; }
       .no-print { display: none !important; }
-      .page-container { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+      /* min-height zerada: a folha passa a ter a altura do conteudo, e nao
+         190mm fixos. display:block desliga o flex + space-between, que
+         empurrava o rodape para a borda de baixo mesmo com a tabela curta -
+         agora o rodape vem logo depois da tabela, onde ela terminar. */
+      .page-container { box-shadow: none !important; border: none !important;
+                        margin: 0 !important; padding: 0 !important;
+                        width: 100% !important; max-width: 100% !important;
+                        min-height: 0 !important; display: block !important; }
+
+      /* E QUANDO A LISTA FOR GRANDE DE VERDADE e a folha 2 for necessaria: o
+         cabecalho verde da tabela se repete no alto dela, e nenhuma linha e
+         cortada no meio. */
+      thead { display: table-header-group; }
+      tr, .kpi-strip, .header-box, .report-banner, .footer-box {
+        page-break-inside: avoid; break-inside: avoid;
+      }
+      .footer-box { margin-top: 10px !important; }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -19301,6 +19607,7 @@ function emitirRelatorioFrota(tipo) {
     .footer-box strong {
       color: #000000;
     }
+    ${cssDenso}
   </style>
 </head>
 <body>
@@ -19924,7 +20231,23 @@ function emitirRelatorioChamadosRotaA4(filtro = null) {
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #fff !important; padding: 0 !important; }
       .no-print { display: none !important; }
-      .page-container { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+      /* min-height zerada: a folha passa a ter a altura do conteudo, e nao
+         190mm fixos. display:block desliga o flex + space-between, que
+         empurrava o rodape para a borda de baixo mesmo com a tabela curta -
+         agora o rodape vem logo depois da tabela, onde ela terminar. */
+      .page-container { box-shadow: none !important; border: none !important;
+                        margin: 0 !important; padding: 0 !important;
+                        width: 100% !important; max-width: 100% !important;
+                        min-height: 0 !important; display: block !important; }
+
+      /* E QUANDO A LISTA FOR GRANDE DE VERDADE e a folha 2 for necessaria: o
+         cabecalho verde da tabela se repete no alto dela, e nenhuma linha e
+         cortada no meio. */
+      thead { display: table-header-group; }
+      tr, .kpi-strip, .header-box, .report-banner, .footer-box {
+        page-break-inside: avoid; break-inside: avoid;
+      }
+      .footer-box { margin-top: 10px !important; }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -22075,7 +22398,8 @@ const MODULE_COLUMNS_MAP = {
     { id: 'separador_apurado', label: 'Separador Apurado' },
     { id: 'conferente_apurado', label: 'Conferente Apurado' },
     { id: 'acao_tomada', label: 'Ação Tomada / Orientação' },
-    { id: 'descricao_monitoramento', label: 'Descrição Monitoramento' }
+    { id: 'descricao_monitoramento', label: 'Descrição Monitoramento' },
+    { id: 'nf_paths', label: 'NF em PDF (caminho)' }
   ],
   devolucao_tratativa: [
     { id: 'numero_protocolo', label: 'Protocolo Chamado' },
@@ -22088,7 +22412,8 @@ const MODULE_COLUMNS_MAP = {
     { id: 'desconto_produtividade_gestor', label: 'Desconto Aplicado?' },
     { id: 'data_acao_gestor', label: 'Data Ação Gestor' },
     { id: 'separador_apurado', label: 'Separador' },
-    { id: 'conferente_apurado', label: 'Conferente' }
+    { id: 'conferente_apurado', label: 'Conferente' },
+    { id: 'nf_paths', label: 'NF em PDF (caminho)' }
   ],
   devolucao_retorno: [
     { id: 'numero_protocolo', label: 'Protocolo Chamado' },

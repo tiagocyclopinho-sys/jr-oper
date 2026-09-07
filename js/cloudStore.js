@@ -3179,7 +3179,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "fotos-devolucao-storage-6.4.3";
+CloudStore.BUILD = "janela-feriado-6.5.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3740,6 +3740,12 @@ function jrPodeRecarregarAgora() {
   try {
     if (typeof document === 'undefined') return true;
     if (document.visibilityState === 'hidden') return true;
+    // UM MODAL ABERTO E UM FORMULARIO EM EDICAO, mesmo com o cursor fora de
+    // qualquer campo. Sem esta checagem o reload derruba a Conferencia &
+    // Entrada no meio da conferencia e leva junto o que ja foi digitado - o
+    // modal vive no #modal-container e nao sobrevive a um location.reload().
+    const modal = document.getElementById('modal-container');
+    if (modal && !modal.classList.contains('hidden') && modal.innerHTML.trim() !== '') return false;
     const el = document.activeElement;
     if (!el) return true;
     if (el.isContentEditable) return false;
