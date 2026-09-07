@@ -4953,7 +4953,14 @@ function renderDashboardView() {
   // rota - continua em 4h/8h de proposito: caminhao parado na estrada e outra
   // coisa.
   const LIM_RETENCAO = { atencao: SLA_RETENCAO_ATENCAO_H, estourado: SLA_RETENCAO_CRITICO_H };
-  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['data_parada', 'criado_em', 'data'], LIM_RETENCAO);
+  // criado_em PRIMEIRO, e nao data_parada. Ate 07/09/2026 esta linha lia
+  // data_parada na frente enquanto calcularSlaManutencao() lia criado_em - dois
+  // relogios para o mesmo veiculo. O RET-2026-001 aparecia como "em atencao"
+  // (71,5h por criado_em) e "prazo estourado" (80,1h por data_parada) no MESMO
+  // card. Como o registro nao guarda a hora em que o veiculo entrou na oficina,
+  // so a data, o instante confiavel e o do lancamento - e e o mesmo que
+  // classifica o nivel. Um relogio so.
+  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['criado_em', 'data_parada', 'data'], LIM_RETENCAO);
   const sinistrosPendentesDash = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
   const maisAntigoSinistroDash = getMaisAntigaPendente(sinistrosPendentesDash, ['data_acidente', 'criado_em', 'data'], { atencao: 24, estourado: 48 });
   const totDescontosGestor = devs.filter(d => d.desconto_produtividade_gestor).length;
@@ -5003,8 +5010,10 @@ function renderDashboardView() {
   // ===== SLA CRÍTICO DE MANUTENÇÃO (4H / 8H) =====
   const retidosCriticos = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO');
   const retidosAtencao = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'ATENCAO');
-  const maisAntigaCritico = getMaisAntigaPendente(retidosCriticos, ['data_parada', 'criado_em', 'data'], LIM_RETENCAO);
-  const maisAntigaAtencao = getMaisAntigaPendente(retidosAtencao, ['data_parada', 'criado_em', 'data'], LIM_RETENCAO);
+  // maisAntigaCritico e maisAntigaAtencao existiam SO para os dois cards de SLA
+  // do Dashboard, removidos em 07/09/2026. retidosCriticos e retidosAtencao
+  // continuam, porque o card de Veiculos Retidos usa os dois na composicao
+  // ("N critico(s), N em atencao").
 
   // ===== CÁLCULOS DOS NOVOS KPIS =====
   // 1. Lead Time de Abertura (Formato hh:mm:ss — Tempo médio entre criação da ocorrência e parecer/ação do gestor)
@@ -5207,7 +5216,10 @@ function renderDashboardView() {
   // completas, nao pelas filtradas. Antes, escolher um periodo sem
   // pendencia fazia o painel inteiro sumir, escondendo o que ainda estava
   // em aberto (23/08/2026).
-  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos.length > 0 || retidosAtencao.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || tratativasGestorAlerta.length > 0 || sinistrosPendentesDash.length > 0);
+  // retidosCriticos/retidosAtencao sairam desta condicao junto com os dois
+  // cards de SLA: veicRetidos > 0 ja cobre os mesmos veiculos, e mante-los
+  // aqui so mantinha a secao acesa por um alerta que nao existe mais.
+  const temAlertasCriticos = (reentregasPendentes.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || tratativasGestorAlerta.length > 0 || sinistrosPendentesDash.length > 0);
 
   return `
     <div class="space-y-6">
@@ -5248,33 +5260,15 @@ function renderDashboardView() {
                 <button onclick="switchTab('controle_viagens'); switchViagensSubTab('reentregas');" class="bg-purple-900/50 hover:bg-purple-800 border border-purple-600 text-purple-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver</button>
               </div>` : ''}
 
-            <!-- ALERTA DE SLA CRÍTICO >8H -->
-            ${retidosCriticos.length > 0 ? `
-              <div class="bg-slate-950 border border-red-700 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md animate-pulse">
-                <div class="flex items-center gap-3 overflow-hidden">
-                  <div class="w-9 h-9 rounded-lg bg-red-950 border border-red-600 text-red-400 flex items-center justify-center shrink-0 text-base font-bold">🔴</div>
-                  <div class="truncate">
-                    <div class="text-xs font-black text-red-300 truncate">${retidosCriticos.length} Veículo(s) SLA &gt;8h</div>
-                    <div class="text-[10px] text-red-400 font-bold truncate">Imobilização crítica estourada</div>
-                    ${_linhaSla(maisAntigaCritico, 'Parado há')}
-                  </div>
-                </div>
-                <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-red-900/60 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
-              </div>` : ''}
-
-            <!-- ALERTA DE SLA EM ATENÇÃO >4H -->
-            ${retidosAtencao.length > 0 ? `
-              <div class="bg-slate-950 border border-amber-600/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
-                <div class="flex items-center gap-3 overflow-hidden">
-                  <div class="w-9 h-9 rounded-lg bg-amber-950 border border-amber-600 text-amber-300 flex items-center justify-center shrink-0 text-base font-bold">🟡</div>
-                  <div class="truncate">
-                    <div class="text-xs font-black text-amber-300 truncate">${retidosAtencao.length} Veículo(s) SLA &gt;4h</div>
-                    <div class="text-[10px] text-slate-400 truncate">Atenção tempo na oficina</div>
-                    ${_linhaSla(maisAntigaAtencao, 'Parado há')}
-                  </div>
-                </div>
-                <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
-              </div>` : ''}
+            <!-- OS DOIS CARDS DE SLA SAIRAM DAQUI EM 07/09/2026.
+                 Eles contavam os MESMOS veiculos que o card de Veiculos
+                 Retidos logo abaixo: com 2 retidos, ambos em atencao, a tela
+                 dizia "2 Veiculo(s) SLA >24h" e "2 Veiculo(s) Retido(s) - 0
+                 critico(s), 2 em atencao" - a mesma frase duas vezes. O
+                 Dashboard passa a ter UM alerta por assunto: retencao em
+                 oficina aqui embaixo, veiculo parado em rota logo adiante.
+                 A leitura por faixa de SLA continua existindo, na tela de
+                 Disponibilidade da Frota, que e onde se age sobre ela. -->
 
             <!-- ALERTA VEÍCULOS PARADOS EM ROTA -->
             ${veicParadosAlerta.length > 0 ? `
