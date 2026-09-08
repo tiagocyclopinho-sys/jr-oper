@@ -10980,6 +10980,21 @@ const VG_STATUS_OPCOES = [
   { val: 'REENTREGA',             cls: 'text-purple-400'  }
 ];
 
+// VIAGEM EM ABERTO — o caminhão que ainda está na rua. 08/09/2026.
+//
+// Estes três status são um fato do PRESENTE, não do passado: a viagem não
+// acabou, logo ela NÃO TEM data de retorno e nunca vai ter enquanto estiver
+// assim. Filtrar essas viagens por "Data de Retorno entre X e Y" é perguntar
+// por uma data que ainda não existe — e a resposta certa não é "some da
+// tela", é "aparece, porque ela É a operação de agora".
+//
+// É isso que faz "o que finalizou hoje" e "o que ainda está rodando" caberem
+// na mesma tela sem um filtro anular o outro. Ver vgFiltrarViagens().
+const VG_STATUS_EM_ABERTO = ['EM ANDAMENTO', 'EM ANDAMENTO (PALMAS)', 'EM RETORNO'];
+function vgViagemEmAberto(v) {
+  return VG_STATUS_EM_ABERTO.includes(String(v?.status_viagem || '').trim().toUpperCase());
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // LEITURA DOS CHECKLISTS DE LARGADA (SAÍDA E CHEGADA) — 01/09/2026
 // ─────────────────────────────────────────────────────────────────────────────
@@ -11391,12 +11406,25 @@ function vgFiltrarViagens(lista) {
     }
     if (fSaidaDe && dSaida < fSaidaDe) return false;
     if (fSaidaAte && dSaida > fSaidaAte) return false;
-    // Viagem SEM data de retorno nao tem como estar dentro de um periodo de
-    // retorno - mas tambem nao pode sumir calada, que era o comportamento
-    // ate 05/09/2026. Agora ela e uma escolha visivel: marcado, aparece
-    // junto, e e assim que "os finalizados" e "os que finalizaram hoje"
-    // cabem na mesma tela.
-    if (fRetornoDe || fRetornoAte) {
+    // O PERIODO DE RETORNO NAO PODE MATAR O "EM ANDAMENTO" - 08/09/2026.
+    //
+    // Sao DUAS perguntas diferentes numa tela so, e a de cima estava comendo
+    // a de baixo: "quem finalizou hoje?" (data de retorno) e "quem ainda
+    // esta na rua?" (status). Um caminhao EM ANDAMENTO nao tem data de
+    // retorno - nao e dado faltando, e a viagem que nao acabou. Compara-lo
+    // com um intervalo de retorno so podia dar falso, e ele sumia. Resultado:
+    // marcar "Retorno = hoje" com EM ANDAMENTO + FINALIZADO selecionados
+    // devolvia so os finalizados, e a operacao do dia aparecia pela metade.
+    //
+    // Agora o periodo de retorno vale SO para quem ja voltou. Quem esta em
+    // aberto passa direto e quem decide se ele aparece e o filtro de STATUS,
+    // que e onde essa escolha sempre morou. Marcou EM ANDAMENTO, ve os que
+    // estao rodando; nao marcou, nao ve. Um filtro nao anula mais o outro.
+    //
+    // Sobra o terceiro caso, que o checkbox resolve: viagem FINALIZADA (ou
+    // ADIADA/REENTREGA) sem data digitada. Essa nao esta em aberto e nao tem
+    // retorno - continua sendo uma escolha visivel, nunca um sumico calado.
+    if ((fRetornoDe || fRetornoAte) && !vgViagemEmAberto(v)) {
       if (!dRetorno) {
         if (!fSemRetorno) return false;
       } else {
@@ -11437,7 +11465,12 @@ function vgResumoDosFiltros() {
   add('Saída até', window._vgFiltroSaidaAte);
   add('Retorno de', window._vgFiltroRetornoDe);
   add('Retorno até', window._vgFiltroRetornoAte);
-  if (window._vgFiltroIncluirSemRetorno) partes.push('Incluindo viagens sem data de retorno');
+  // O PDF precisa dizer isso na primeira folha: quem le o Boletim tem de
+  // saber que o periodo recortou os RETORNOS e nao os caminhoes na rua.
+  if (window._vgFiltroRetornoDe || window._vgFiltroRetornoAte) {
+    partes.push('Período de retorno vale só para viagens já encerradas (as em aberto seguem pelo Status)');
+  }
+  if (window._vgFiltroIncluirSemRetorno) partes.push('Incluindo viagens encerradas sem data de retorno');
   if (window._vgFiltroForaCadastro) partes.push('Só viagens com gente fora do cadastro');
   lista('Status', vgListaFiltro('status'));
   lista('Rota', vgListaFiltro('rota'));
@@ -11494,7 +11527,14 @@ function renderViagensLargadaSubTab() {
   // diz, antes de qualquer coisa, quantas viagens NAO tem data de retorno.
   // Sem ele a pessoa nao tem como saber que existe uma segunda metade.
   const fSemRetorno   = !!window._vgFiltroIncluirSemRetorno;
-  const semRetornoQtd = todasViagens.filter(v => !v.data_retorno).length;
+  // Duas contas diferentes, porque sao dois casos diferentes (ver o bloco do
+  // periodo de retorno em vgFiltrarViagens): a viagem EM ABERTO nao tem
+  // retorno porque nao acabou - e o filtro de status que manda nela. A conta
+  // do checkbox e so a do terceiro caso, a viagem que ACABOU e ficou sem a
+  // data digitada. Somar as duas era o que fazia o checkbox parecer a unica
+  // saida para ver os caminhoes na rua.
+  const emAbertoQtd   = todasViagens.filter(v => vgViagemEmAberto(v)).length;
+  const semRetornoQtd = todasViagens.filter(v => !v.data_retorno && !vgViagemEmAberto(v)).length;
 
   // GENTE FORA DO CADASTRO (v6.6.0 — Bloco C). O contador existe porque um
   // aviso espalhado pelas linhas some no meio das viagens e ninguem age: e
@@ -11590,15 +11630,22 @@ function renderViagensLargadaSubTab() {
                 <input type="date" id="vg-filtro-retorno-ate" value="${fRetornoAte}" onchange="window._vgFiltroRetornoAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
               </div>
             </div>
+            ${(fRetornoDe || fRetornoAte) ? `
+            <p class="text-[9px] text-amber-400/90 leading-tight pt-1"
+               title="Viagem que não acabou não tem data de retorno para comparar. Quem decide se ela aparece é o filtro de Status.">
+              ⓘ As <b>${emAbertoQtd} viagem(ns) em aberto</b> (em andamento / em retorno) não são
+              cortadas por este período — quem manda nelas é o filtro <b>Status</b>.
+            </p>` : ''}
+            ${semRetornoQtd > 0 ? `
             <label class="flex items-start gap-1.5 pt-1 cursor-pointer select-none"
-                   title="Viagem que ainda não voltou, ou que voltou e ninguém digitou a data">
+                   title="Viagem que já acabou, mas ninguém digitou a data de retorno">
               <input type="checkbox" ${fSemRetorno ? 'checked' : ''}
                 onchange="window._vgFiltroIncluirSemRetorno=this.checked; renderApp()"
                 class="mt-0.5 rounded border-slate-700 bg-slate-900 text-blue-500 w-3.5 h-3.5 cursor-pointer shrink-0">
               <span class="text-[9px] text-slate-400 leading-tight">
-                Incluir as ${semRetornoQtd} viagem(ns) <b class="text-slate-300">sem data de retorno</b>
+                Incluir as ${semRetornoQtd} viagem(ns) <b class="text-slate-300">encerradas sem data de retorno</b>
               </span>
-            </label>
+            </label>` : ''}
           </div>
 
           <!-- Filtros de multisseleção suspensos (Status, Rota, Setor, Motorista) -->
