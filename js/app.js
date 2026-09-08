@@ -9159,6 +9159,7 @@ function renderCdRecepcaoView() {
               <option value="AVARIA_DESCARTE" ${fCdDestinoTipo==='AVARIA_DESCARTE'?'selected':''}>🔴 Avaria / Descarte</option>
               <option value="PRODUTOS_NEGOCIACAO" ${fCdDestinoTipo==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟡 Produtos para Negociação</option>
               <option value="VENDIDO" ${fCdDestinoTipo==='VENDIDO'?'selected':''}>💰 Vendido</option>
+              <option value="FALTA_SEM_RETORNO" ${fCdDestinoTipo==='FALTA_SEM_RETORNO'?'selected':''}>📭 Falta — Não Retorna Produto</option>
             </select>
           </div>
 
@@ -9243,6 +9244,14 @@ function formatarDestinoLabel(val) {
     case 'PRODUTOS_NEGOCIACAO': return '🟡 Produtos para Negociação';
     case 'VENDIDO': return '💰 Vendido';
     case 'RENEGOCIADO_ROTA': return '🚚 Renegociado em Rota (Não retorna ao CD)';
+    // FALTA SEM RETORNO (08/09/2026). Produto lançado como falta nunca chega
+    // ao CD: não existe caixa para conferir, destinar ou dar validade. Antes
+    // deste destino a ocorrência só saía de PENDENTE_FISICO se o conferente
+    // inventasse um destino e uma data de validade — como ninguém inventa,
+    // ela ficava pendente para sempre, envenenando o contador do CD, o selo
+    // da Largada e o sininho. Agora o supervisor carimba o que de fato
+    // aconteceu, com nome e data, e a fila fica limpa.
+    case 'FALTA_SEM_RETORNO': return '📭 Falta — Não Retorna Produto';
     default: return val || '—';
   }
 }
@@ -9251,16 +9260,16 @@ function atualizarStatusNegociacaoItem(itemId, devId, novoStatus) {
   const ref = resolverItemDestino(itemId, devId);
   if (!ref) { alert('Item não encontrado.'); return; }
 
-  ref.item.status_negociacao = novoStatus;
-  ref.item.data_negociacao = agoraIsoBrasilia();
+  ref.raw.status_negociacao = novoStatus;
+  ref.raw.data_negociacao = agoraIsoBrasilia();
 
   // Mesma "graduação" de destino aplicada na tela de Editar: Vendido gera
   // seu próprio destino "Vendido"; Descartado entra na lista de Avaria/
   // Descarte — para o select rápido da tabela se comportar igual ao modal.
   if (novoStatus === 'VENDA_NEGOCIADA') {
-    ref.item.destino_item = 'VENDIDO';
+    ref.raw.destino_item = 'VENDIDO';
   } else if (novoStatus === 'DESCARTADO') {
-    ref.item.destino_item = 'AVARIA_DESCARTE';
+    ref.raw.destino_item = 'AVARIA_DESCARTE';
   }
 
   const salvou = db.save();
@@ -9280,14 +9289,27 @@ function resolverItemDestino(itemId, devId) {
   if (String(devId) === '__AVULSO__') {
     const item = (db.data.itens_avulsos_destinacao || []).find(i => String(i.id) === String(itemId) && !i.is_deleted);
     if (!item) return null;
-    return { item, isAvulso: true, dev: null };
+    // No avulso a lista JÁ é o registro real, então ler e escrever são o
+    // mesmo objeto — por isso o avulso sempre salvou e a devolução não.
+    return { item, raw: item, isAvulso: true, dev: null };
   }
   const devs = db.getDevolucoes();
   const dev = devs.find(d => String(d.id) === String(devId));
   if (!dev || !Array.isArray(dev.itens)) return null;
   const item = dev.itens.find(i => String(i.id) === String(itemId));
   if (!item) return null;
-  return { item, isAvulso: false, dev };
+
+  // O DEFEITO DE "EDITAR DESTINO NÃO SALVA" (08/09/2026).
+  // getDevolucoes() não devolve os registros: ele MONTA cópias na hora
+  // (`{...i}` em store.js:1537) para juntar código/descrição do produto.
+  // Escrever em `item` mudava essa cópia, o db.save() gravava db.data
+  // intacto e o renderApp() logo em seguida remontava tudo do zero — a
+  // tela voltava ao valor antigo e parecia que o botão não fazia nada.
+  // `raw` é o registro de verdade, em db.data.itens_devolucao: toda
+  // ESCRITA vai nele; `item` continua servindo só para EXIBIR.
+  const raw = (db.data.itens_devolucao || []).find(i => String(i.id) === String(itemId) && !i.is_deleted);
+  if (!raw) return null;
+  return { item, raw, isAvulso: false, dev };
 }
 
 function openEditarItemDestinoModal(itemId, devId) {
@@ -9335,7 +9357,10 @@ function openEditarItemDestinoModal(itemId, devId) {
               <option value="RETRABALHO_REEMBALAGEM" ${item.destino_item==='RETRABALHO_REEMBALAGEM'?'selected':''}>🟠 Retrabalho / Reembalagem</option>
               <option value="DEVOLUCAO_FORNECEDOR" ${item.destino_item==='DEVOLUCAO_FORNECEDOR'?'selected':''}>🔵 Devolução ao Fornecedor</option>
               <option value="AVARIA_DESCARTE" ${item.destino_item==='AVARIA_DESCARTE'?'selected':''}>🔴 Descarte / Avaria</option>
-              <option value="PRODUTOS_NEGOCIACAO" ${item.destino_item==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟣 Produtos para Negociação em Rota</option>
+              <option value="PRODUTOS_NEGOCIACAO" ${item.destino_item==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟡 Produtos para Negociação</option>
+              <option value="RENEGOCIADO_ROTA" ${item.destino_item==='RENEGOCIADO_ROTA'?'selected':''}>🚚 Renegociado em Rota (Não retorna ao CD)</option>
+              <option value="VENDIDO" ${item.destino_item==='VENDIDO'?'selected':''}>💰 Vendido</option>
+              <option value="FALTA_SEM_RETORNO" ${item.destino_item==='FALTA_SEM_RETORNO'?'selected':''}>📭 Falta — Não Retorna Produto</option>
             </select>
           </div>
 
@@ -9367,8 +9392,8 @@ function openEditarItemDestinoModal(itemId, devId) {
 function handleSalvarEdicaoItemDestino(e, itemId, devId) {
   e.preventDefault();
   const ref = resolverItemDestino(itemId, devId);
-  if (!ref) return;
-  const item = ref.item;
+  if (!ref) { alert('Item não encontrado para salvar.'); return; }
+  const item = ref.raw;
   item.quantidade = parseFloat(document.getElementById('edit-item-qtd')?.value || '1') || 1;
   item.data_validade = document.getElementById('edit-item-validade')?.value || '';
   item.observacao = document.getElementById('edit-item-obs')?.value || '';
@@ -9390,8 +9415,15 @@ function handleSalvarEdicaoItemDestino(e, itemId, devId) {
 
   item.destino_item = destinoSelecionado;
   item.status_negociacao = statusNegociacao;
-  db.save();
+  item.atualizado_em = agoraIsoBrasilia();
+
+  const salvou = db.save();
   closeModal();
+  if (salvou) {
+    showToast('✅ Item do retorno físico atualizado!');
+  } else {
+    showToast('Não foi possível salvar a alteração neste dispositivo.', 'error');
+  }
   renderApp();
 }
 
@@ -9402,13 +9434,16 @@ function excluirItemDestino(itemId, devId) {
     renderApp();
     return;
   }
-  const devs = db.getDevolucoes();
-  const dev = devs.find(d => String(d.id) === String(devId));
-  if (dev && Array.isArray(dev.itens)) {
-    dev.itens = dev.itens.filter(i => String(i.id) !== String(itemId));
-    db.save();
-    renderApp();
-  }
+  // Mesmo motivo do resolverItemDestino: dev.itens de getDevolucoes() é uma
+  // lista montada na hora — filtrar ela não apagava nada. A exclusão é uma
+  // lápide (is_deleted) no registro real, igual ao resto do sistema.
+  const raw = (db.data.itens_devolucao || []).find(i => String(i.id) === String(itemId));
+  if (!raw) { alert('Item não encontrado.'); return; }
+  raw.is_deleted = true;
+  raw.deleted_at = agoraIsoBrasilia();
+  const salvou = db.save();
+  showToast(salvou ? '🗑️ Item removido do retorno físico.' : 'Não foi possível salvar a exclusão.', salvou ? 'success' : 'error');
+  renderApp();
 }
 
 // ===== DIVISÃO DE DESTINO POR ITEM (item 2.1 da auditoria de 17/08/2026) =====
@@ -9419,10 +9454,11 @@ function excluirItemDestino(itemId, devId) {
 function abrirModalDivisaoDestino(itemId, devId) {
   const ref = resolverItemDestino(itemId, devId);
   if (!ref) { alert('Item não encontrado.'); return; }
-  const item = ref.item;
+  const item = ref.item;      // só para exibir código/descrição do produto
+  const dados = ref.raw;      // fonte de verdade das quantidades e divisões
 
-  const divisoes = Array.isArray(item.divisoes_destino) ? item.divisoes_destino : [];
-  const qtdTotal = parseFloat(item.quantidade) || 0;
+  const divisoes = Array.isArray(dados.divisoes_destino) ? dados.divisoes_destino : [];
+  const qtdTotal = parseFloat(dados.quantidade) || 0;
   const qtdJaDividida = divisoes.reduce((s, d) => s + (parseFloat(d.quantidade) || 0), 0);
   const qtdRestante = qtdTotal - qtdJaDividida;
 
@@ -9475,7 +9511,8 @@ function abrirModalDivisaoDestino(itemId, devId) {
                   <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
                   <option value="DEVOLUCAO_FORNECEDOR">🔵 Devolução ao Fornecedor</option>
                   <option value="AVARIA_DESCARTE">🔴 Descarte / Avaria</option>
-                  <option value="PRODUTOS_NEGOCIACAO">🟣 Produtos para Negociação</option>
+                  <option value="PRODUTOS_NEGOCIACAO">🟡 Produtos para Negociação</option>
+                  <option value="FALTA_SEM_RETORNO">📭 Falta — Não Retorna Produto</option>
                 </select>
               </div>
             </div>
@@ -9516,8 +9553,8 @@ function formatarStatusNegociacaoLabel(val) {
 function handleAdicionarDivisaoDestino(e, itemId, devId) {
   e.preventDefault();
   const ref = resolverItemDestino(itemId, devId);
-  if (!ref) return;
-  const item = ref.item;
+  if (!ref) { alert('Item não encontrado para dividir.'); return; }
+  const item = ref.raw;
 
   const qtd = parseFloat(document.getElementById('div-dest-qtd')?.value || '0');
   const destino = document.getElementById('div-dest-destino')?.value || 'ESTOQUE_REUTILIZACAO';
@@ -9554,9 +9591,9 @@ function handleAdicionarDivisaoDestino(e, itemId, devId) {
 function removerDivisaoDestino(itemId, devId, divisaoId) {
   if (!confirm('Deseja remover esta divisão? A quantidade voltará a ficar disponível para redividir.')) return;
   const ref = resolverItemDestino(itemId, devId);
-  if (!ref || !Array.isArray(ref.item.divisoes_destino)) return;
+  if (!ref || !Array.isArray(ref.raw.divisoes_destino)) return;
 
-  ref.item.divisoes_destino = ref.item.divisoes_destino.filter(dv => String(dv.id) !== String(divisaoId));
+  ref.raw.divisoes_destino = ref.raw.divisoes_destino.filter(dv => String(dv.id) !== String(divisaoId));
   db.save();
   abrirModalDivisaoDestino(itemId, devId);
   renderApp();
@@ -9615,7 +9652,7 @@ function abrirModalItemAvulso() {
               <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
               <option value="DEVOLUCAO_FORNECEDOR">🔵 Devolução ao Fornecedor</option>
               <option value="AVARIA_DESCARTE">🔴 Descarte / Avaria</option>
-              <option value="PRODUTOS_NEGOCIACAO">🟣 Produtos para Negociação em Rota</option>
+              <option value="PRODUTOS_NEGOCIACAO">🟡 Produtos para Negociação</option>
             </select>
           </div>
 
@@ -10079,6 +10116,7 @@ function openCdModal(devId) {
                 <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
                 <option value="PRODUTOS_NEGOCIACAO">🟡 Produtos para Negociação</option>
                 <option value="RENEGOCIADO_ROTA">🚚 Renegociado em Rota (Não retorna CD)</option>
+                <option value="FALTA_SEM_RETORNO">📭 Falta — Não Retorna Produto</option>
               </select>
             </div>
 
@@ -10147,7 +10185,7 @@ function toggleValidadeExigencia(idx) {
   const valBox = document.getElementById(`validade-box-${idx}`);
   const valInput = document.getElementById(`item-validade-${idx}`);
   if (valBox && valInput) {
-    if (dest === 'AVARIA_DESCARTE' || dest === 'RENEGOCIADO_ROTA') {
+    if (dest === 'AVARIA_DESCARTE' || dest === 'RENEGOCIADO_ROTA' || dest === 'FALTA_SEM_RETORNO') {
       valBox.classList.add('opacity-50');
       valInput.required = false;
       valInput.value = '';
@@ -10235,8 +10273,10 @@ function handleCdModalSubmit(e, devId) {
 
       if (idx === 0) destinoPrincipal = dest;
 
-      // Validação de data de validade condicional (exceto Descarte e Renegociado em Rota)
-      if (dest !== 'AVARIA_DESCARTE' && dest !== 'RENEGOCIADO_ROTA' && !validade) {
+      // Validação de data de validade condicional. Fora Descarte e
+      // Renegociado em Rota, agora também Falta — Não Retorna Produto:
+      // não existe embalagem na mão do conferente para ler a data.
+      if (dest !== 'AVARIA_DESCARTE' && dest !== 'RENEGOCIADO_ROTA' && dest !== 'FALTA_SEM_RETORNO' && !validade) {
         alert(`Por favor, preencha a Data de Validade para o item: ${item.produto_descricao || 'Produto'}`);
         return;
       }
@@ -11336,6 +11376,17 @@ function renderRetornoFisicoBadge(v) {
   if (dev.status_fechamento === 'PENDENTE_FISICO') {
     return `<button onclick="event.stopPropagation(); window._cdDestinoFiltroProduto=''; window._cdDestinoFiltroTipo=''; switchTab('cd_recepcao'); switchCdSubTab('recepcao')" class="mt-1 inline-block bg-amber-950 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded text-[9px] font-bold hover:bg-amber-900 transition" title="Clique para abrir o Retorno Físico CD desta carga">⏳ Retorno Pendente CD</button>`;
   }
+  // "✅ Retorno Conferido" numa carga em que TODO item foi carimbado como
+  // Falta — Não Retorna Produto seria mentira: nada voltou, não houve o que
+  // conferir. A baixa é legítima e a fila sai limpa, mas o selo precisa dizer
+  // a verdade para quem lê a Largada.
+  const itensDev = (db.data.itens_devolucao || [])
+    .filter(i => i.ocorrencia_devolucao_id == dev.id && !i.is_deleted);
+  const soFalta = itensDev.length > 0 && itensDev.every(i => i.destino_item === 'FALTA_SEM_RETORNO');
+  if (soFalta) {
+    return `<span class="mt-1 inline-block bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Baixado no CD como falta: nenhum produto retornou fisicamente">📭 Sem Retorno (Falta)</span>`;
+  }
+
   return `<span class="mt-1 inline-block bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Retorno físico já conferido no CD">✅ Retorno Conferido</span>`;
 }
 
