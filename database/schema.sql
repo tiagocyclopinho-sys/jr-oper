@@ -212,8 +212,18 @@ CREATE TABLE IF NOT EXISTS ocorrencias_rota (
     tipo_ocorrencia VARCHAR(50) NOT NULL CHECK (tipo_ocorrencia IN ('MECANICA', 'OPERACIONAL', 'CONDUTA_INADEQUADA', 'ACIDENTE')),
     localizacao TEXT,
     descricao TEXT NOT NULL,
+    -- midia_fotos guarda o array de fotos JA SERIALIZADO (uma string que
+    -- comeca com '[' e so depois traz o data:...;base64). Foi esse formato que
+    -- burlou a poda de midia do historico ate 07/09/2026 — ver
+    -- _podarMidiaDaVersao() em js/store.js. Fica para os registros anteriores
+    -- a migration 41; o app grava em midia_fotos_paths a partir da v6.6.1.
     midia_fotos TEXT,
+    -- midia_videos ja guarda URL do Storage desde a v5.1.0, nao base64.
     midia_videos TEXT,
+    -- migration 41 (v6.6.1): a foto sai do Postgres e vai para o bucket
+    -- rota-fotos. midia_fotos continua sendo lida como reserva.
+    midia_fotos_paths JSONB DEFAULT '[]'::jsonb,
+    midia_fotos_pendentes INTEGER DEFAULT 0,
     status VARCHAR(30) NOT NULL DEFAULT 'ABERTO' CHECK (status IN ('ABERTO', 'EM_ATENDIMENTO', 'RESOLVIDO')),
     status_chamado VARCHAR(30) NOT NULL DEFAULT 'pendente' CHECK (status_chamado IN ('pendente', 'finalizado')),
     veiculo_parado BOOLEAN DEFAULT TRUE,
@@ -982,6 +992,16 @@ CREATE TABLE IF NOT EXISTS sinistros (
     motorista_assinatura_data DATE,
     fotos_danos_jr_motorista JSONB,
     fotos_danos_terceiro_motorista JSONB,
+
+    -- migration 42 (v6.6.1): as fotos do sinistro saem do Postgres e vao para
+    -- o bucket sinistros-fotos. DUAS colunas para SEIS grupos, e nao doze: a
+    -- chave de midias_paths e o grupo (danos_jr_motorista,
+    -- danos_terceiro_motorista, danos_jr_manutencao, danos_terceiro_manutencao,
+    -- orcamentos, fotos_acidente_bo). Grupo novo vira chave, nao migration.
+    -- A regra e a do PLANO_DE_ACAO.md da 6.6.0: passou de dois, vira lista.
+    -- As seis colunas JSONB de base64 continuam existindo como reserva.
+    midias_paths JSONB DEFAULT '{}'::jsonb,
+    midias_pendentes INTEGER DEFAULT 0,
 
     -- Etapa 2: Manutenção
     relato_manutencao TEXT,

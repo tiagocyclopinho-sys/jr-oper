@@ -1768,11 +1768,30 @@ class Store {
   // detalhamento e midia, e quem ja recebeu o protocolo antigo precisa ser
   // avisado da troca.
   //
-  // SO ANTES DO CD RECEBER. Depois de updateDestinoCd o item carrega
-  // destino_item, data_validade e status_negociacao - decisao tomada com a
-  // mercadoria na mao. Reescrever o item ali apagaria isso, entao a porta
-  // fecha em status_fechamento != 'PENDENTE_FISICO' e a correcao passa a ser
-  // a do proprio CD (openEditarItemDestinoModal).
+  // SEMPRE ABERTA, EM QUALQUER STATUS - 08/09/2026. Ate aqui esta porta
+  // fechava em status_fechamento != 'PENDENTE_FISICO': recebido o retorno
+  // fisico, a devolucao virava so-leitura. A trava partia de uma premissa
+  // errada, a de que corrigir a devolucao e corrigir a mercadoria. Nao e. A
+  // devolucao responde QUEM responde pelo erro - cliente, NF, motivo, item
+  // reclamado, valor. O retorno fisico responde O QUE FAZER com o que voltou
+  // - destino, validade, negociacao. Sao dois eixos independentes: o CD
+  // conferir a carga nao torna verdadeiro o cliente errado que o SAC digitou
+  // na abertura, e nesses casos a trava obrigava a conviver com o erro ou a
+  // recriar a devolucao com numero novo.
+  //
+  // O QUE A TRAVA PROTEGIA DE VERDADE, E COMO ISSO CONTINUA PROTEGIDO. O medo
+  // era apagar destino_item/data_validade/status_negociacao/observacao, que
+  // sao decisao tomada com a mercadoria na mao. Mas `campos`, abaixo, escreve
+  // exatamente quatro chaves - produto_id, quantidade, valor_unitario,
+  // motivo_item - e o Object.assign nunca encostou nas do CD. Corrigir
+  // quantidade ou valor de um item ja conferido sempre foi inofensivo.
+  //
+  // Sobra UM caso em que a conferencia realmente deixa de valer: a linha
+  // TROCAR DE PRODUTO. O destino era do peito de frango; se a linha virou
+  // toucinho, manter destino e validade carimbaria no produto novo uma
+  // conferencia que ninguem fez. So nesse caso os quatro campos do CD caem e
+  // o item volta para a fila de Destinacao - e o retorno se avisa a quem
+  // salvou, em vez de barrar a correcao inteira por causa dele.
   //
   // ITEM REMOVIDO VIRA LAPIDE, NUNCA splice. _mesclarPorRegistro (cloudStore)
   // deduz exclusao de "id que eu conheco e nao veio da nuvem", o que so vale
@@ -1790,13 +1809,10 @@ class Store {
     if (!dev) return { success: false, message: 'Devolução não encontrada neste aparelho.' };
     if (dev.is_deleted) return { success: false, message: 'Esta devolução está na Lixeira. Restaure-a em Governança & Lixeira antes de corrigir.' };
 
+    // Nao barra mais nada - so classifica, para o aviso do fim saber se a
+    // correcao mexeu em algo que o CD ja tinha conferido.
     const statusAtual = dev.status_fechamento || 'PENDENTE_FISICO';
-    if (statusAtual !== 'PENDENTE_FISICO') {
-      return {
-        success: false,
-        message: 'O CD já recebeu o retorno físico desta devolução. A partir daqui a correção do item é feita na tela Retorno Físico CD, no ✏️ do próprio item.'
-      };
-    }
+    const cdJaRecebeu = statusAtual !== 'PENDENTE_FISICO';
 
     const entrada = dados || {};
     const agora = agoraIsoBrasilia();
@@ -1852,6 +1868,26 @@ class Store {
     const idsMantidos = new Set();
     let criados = 0, atualizados = 0, removidos = 0;
 
+    // Rastros da conferencia do CD que esta correcao desfaz. Nao impedem o
+    // salvamento; viram aviso na tela e linha no audit_logs.
+    const conferenciaCaiu = [];   // item trocou de produto: destino do CD caiu
+    const criadosSemConferencia = []; // item novo em devolucao ja recebida
+    const removidosConferidos = [];   // item com destino do CD foi retirado
+
+    // Um item so "tem conferencia" se o CD escreveu nele. E o mesmo conjunto
+    // de campos que updateDestinoCd grava, e a razao de so limpar quando ha o
+    // que limpar: atribuir null num campo que nunca existiu no registro cria
+    // chave nova no objeto, e chave sem coluna derruba o lote inteiro do
+    // envio com PGRST204.
+    const temConferenciaCd = i => !!(i.destino_item || i.data_validade || i.status_negociacao);
+    // Mesmos campos que getDevolucoes usa para montar produto_codigo/
+    // produto_descricao, para o aviso falar o nome que a tela mostra.
+    const rotuloItem = pid => {
+      const p = (this.data.produtos || []).find(x => x.id == pid);
+      if (!p) return `Produto #${pid || '?'}`;
+      return `${p.codigo_produto || p.id} — ${p.descricao || 'Produto'}`;
+    };
+
     enviados.forEach(f => {
       // A busca ignora de proposito o que ja esta com lapide: id reaproveitado
       // de item excluido entraria como linha nova, nunca como ressurreicao.
@@ -1882,8 +1918,30 @@ class Store {
       };
 
       if (existente) {
+        // `campos` nao tem destino_item, data_validade, status_negociacao nem
+        // observacao: quantidade, valor e motivo podem ser corrigidos a
+        // qualquer momento sem tocar na conferencia do CD.
+        const trocouProduto = String(existente.produto_id || '') !== String(campos.produto_id || '');
+        const conferido = temConferenciaCd(existente);
+        const produtoAntes = existente.produto_id;
+
         Object.assign(existente, campos);
         existente.atualizado_em = agora;
+
+        if (trocouProduto && conferido) {
+          // A conferencia era do produto ANTIGO. Zera e devolve o item para a
+          // fila de Destinacao, onde o CD decide de novo com o produto certo.
+          existente.destino_item = null;
+          existente.data_validade = null;
+          existente.status_negociacao = null;
+          existente.observacao = '';
+          conferenciaCaiu.push({
+            item_id: existente.id,
+            de: rotuloItem(produtoAntes),
+            para: rotuloItem(campos.produto_id)
+          });
+        }
+
         idsMantidos.add(String(existente.id));
         atualizados++;
       } else {
@@ -1892,11 +1950,22 @@ class Store {
         this.data.itens_devolucao.push(novo);
         idsMantidos.add(String(novo.id));
         criados++;
+        // Item novo em devolucao ja recebida nasce sem destino proprio.
+        // getItensDestinadosFiltrados o lista mesmo assim, porque cai no
+        // fallback `item.destino_item || d.destino_cd` - ou seja, ele aparece
+        // na Destinacao herdando o destino geral da devolucao, que ninguem
+        // conferiu para ELE. Por isso vira aviso.
+        if (cdJaRecebeu) criadosSemConferencia.push(rotuloItem(campos.produto_id));
       }
     });
 
     this.data.itens_devolucao.forEach(i => {
       if (i.ocorrencia_devolucao_id == id && !i.is_deleted && !idsMantidos.has(String(i.id))) {
+        // Retirar um item que o CD ja destinou nao e proibido - o item pode
+        // ter sido lancado na devolucao errada. Mas a lapide o tira da
+        // Destinacao junto, entao o CD precisa saber que aquele destino
+        // sumiu da lista dele.
+        if (temConferenciaCd(i)) removidosConferidos.push(rotuloItem(i.produto_id));
         i.is_deleted = true;
         i.deleted_at = agora;
         i.deleted_by_usuario_id = usuarioId;
@@ -1926,6 +1995,18 @@ class Store {
       registro_id: id,
       diff: {
         motivo_correcao: String(entrada.motivo_correcao || '').toUpperCase().trim(),
+        // Corrigir depois do CD receber passou a ser permitido em 08/09/2026.
+        // O status no momento da edicao e o rastro da conferencia desfeita
+        // ficam gravados aqui - e o unico lugar onde se consegue reconstruir
+        // por que um item perdeu o destino que tinha.
+        status_fechamento_na_edicao: statusAtual,
+        conferencia_cd_afetada: (conferenciaCaiu.length || criadosSemConferencia.length || removidosConferidos.length)
+          ? {
+              itens_que_trocaram_de_produto: conferenciaCaiu,
+              itens_novos_sem_conferencia: criadosSemConferencia,
+              itens_conferidos_retirados: removidosConferidos
+            }
+          : null,
         antes: Object.assign({}, cabecalhoAntes, { itens: itensAntes }),
         depois: {
           cliente_nome: dev.cliente_nome,
@@ -1946,7 +2027,12 @@ class Store {
       criados,
       atualizados,
       removidos,
-      reabriuGestor: !!dev.motivo_real_causa_raiz
+      reabriuGestor: !!dev.motivo_real_causa_raiz,
+      cdJaRecebeu,
+      statusFechamento: statusAtual,
+      conferenciaCaiu,
+      criadosSemConferencia,
+      removidosConferidos
     };
   }
 
@@ -3115,6 +3201,22 @@ class Store {
     return (this.data.conflitos_pendentes || []).filter(c => !c.resolvido);
   }
 
+  // A TRILHA DE AUDITORIA GUARDAVA A FOTO INTEIRA, DUAS VEZES (07/09/2026).
+  //
+  // O diff e { antes, depois } — o registro COMPLETO dos dois lados. Quando o
+  // registro carrega base64, cada evento de auditoria virava duas copias da
+  // foto. Medido na nuvem: 5 linhas de audit_logs, de 92, respondiam por 2,2
+  // MB dos 2,26 MB da tabela; uma delas, sozinha, tinha 672 KB.
+  //
+  // E ninguem via nada disso: renderAuditLogsContent() desenha data, usuario,
+  // modulo, acao e navegador — o `diff` NAO e exibido em tela nenhuma. Eram
+  // megabytes viajando da nuvem a cada pull, ocupando a cota de 5 MB do
+  // localStorage em todo aparelho, para nao serem lidos por ninguem.
+  //
+  // saveVersion() ja podava a midia desde 26/08/2026 pelo mesmo motivo; a
+  // auditoria simplesmente ficou de fora daquela correcao. Agora usa a MESMA
+  // poda: o log continua provando QUE havia midia e quanta, que e o que uma
+  // trilha precisa dizer, sem carregar o pixel.
   logAudit({ acao, modulo, registro_id, diff }) {
     if (!this.data.audit_logs) this.data.audit_logs = [];
     const entry = {
@@ -3125,7 +3227,7 @@ class Store {
       acao,
       modulo,
       registro_id,
-      diff: diff || null,
+      diff: diff ? this._podarMidiaDaVersao(diff) : null,
       user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Node/Browser'
     };
     this.data.audit_logs.unshift(entry);
@@ -3146,9 +3248,28 @@ class Store {
   // O que a versao precisa provar e QUE HAVIA midia e quanta, nao o pixel. O
   // marcador guarda o tamanho; o endereco de arquivos no Storage (http) fica
   // inteiro, porque ali sao ~120 bytes e continuam servindo de rastro.
+  //
+  // 07/09/2026 — A PODA EXISTIA E ERA BURLADA PELO FORMATO. O teste era
+  // `valor.startsWith('data:')`, e ocorrencias_rota.midia_fotos nao guarda um
+  // array de fotos: guarda o array JA SERIALIZADO, uma string que comeca com
+  // '[' e so DEPOIS traz o "data:image/jpeg;base64,...". A poda olhava o
+  // primeiro caractere, via '[', e deixava passar inteiro.
+  //
+  // O tamanho do estrago, medido na nuvem em 07/09/2026: UMA ocorrencia de
+  // rota com foto gerou 3 versoes de 334 KB cada. Somadas as copias que o
+  // audit_logs guardava do mesmo registro, aquele UNICO chamado respondia por
+  // ~3 MB dos 3,8 MB do localStorage de todo aparelho — enquanto as 198
+  // viagens da operacao inteira ocupavam 111 KB.
+  //
+  // Agora a poda olha o CONTEUDO, e nao so o comeco: string grande que carrega
+  // "data:" com base64 dentro vira marcador, seja ela a foto ou a lista
+  // inteira serializada. Endereco do Storage (http) continua passando inteiro
+  // — sao ~120 bytes e servem de rastro.
   _podarMidiaDaVersao(valor) {
     if (typeof valor === 'string') {
-      return (valor.startsWith('data:') && valor.length > 500)
+      const grande = valor.length > 500;
+      const temBase64 = valor.startsWith('data:') || /data:[^;]+;base64,/.test(valor);
+      return (grande && temBase64)
         ? '[mídia não versionada — ~' + Math.round(valor.length / 1024) + ' KB no registro original]'
         : valor;
     }

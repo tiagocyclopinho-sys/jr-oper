@@ -7901,10 +7901,13 @@ function renderSacInvestigacaoView() {
                 <div class="text-base font-black text-emerald-400">R$ ${d.valor_reclamado.toFixed(2)}</div>
                 <div class="text-[10px] text-slate-400">${d.forma_acerto}</div>
               </div>
-              ${(d.status_fechamento || 'PENDENTE_FISICO') === 'PENDENTE_FISICO' ? `
-                <button onclick="editarDevolucaoSacModal('${d.id}')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-800/70 shadow-sm transition flex items-center gap-1" title="Corrigir cliente, NF e itens sem perder o número do protocolo">
-                  ✏️ Corrigir Devolução
-                </button>` : ''}
+              <!-- Sem trava de status desde 08/09/2026: a devolução responde
+                   quem responde pelo erro, e isso não deixa de ser corrigível
+                   porque o CD conferiu a mercadoria. O que a conferência
+                   protege é tratado item a item em updateDevolucaoSac. -->
+              <button onclick="editarDevolucaoSacModal('${d.id}')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-800/70 shadow-sm transition flex items-center gap-1" title="Corrigir cliente, NF, motivo e itens sem perder o número do protocolo">
+                ✏️ Corrigir Devolução
+              </button>
               ${d.motivo_real_causa_raiz ? `
                 <button onclick="editarInvestigacaoModal('${d.id}')" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1">
                   ✏️ Editar Análise
@@ -16822,12 +16825,12 @@ function editarDevolucaoSacModal(id) {
   const dev = (db.getDevolucoes ? db.getDevolucoes() : []).find(d => d.id == id);
   if (!dev) { alert('Devolução não localizada.'); return; }
 
-  // A mesma porta que updateDevolucaoSac() fecha no store. Aqui é só para o
-  // usuário ler o motivo antes de digitar tudo; a trava que vale é a de lá.
-  if ((dev.status_fechamento || 'PENDENTE_FISICO') !== 'PENDENTE_FISICO') {
-    alert('⚠️ O CD já recebeu o retorno físico desta devolução.\n\nOs itens têm destino, validade e negociação registrados com a mercadoria na mão — reescrevê-los aqui apagaria essa conferência.\n\nA correção agora é feita na tela "Retorno Físico CD", no ✏️ do próprio item.');
-    return;
-  }
+  // Já foi um `return` com alert: recebido o retorno físico, a devolução
+  // virava só-leitura. Agora abre sempre e só avisa, porque a única coisa que
+  // a conferência do CD perde aqui é o destino de uma linha que trocar de
+  // produto — e updateDevolucaoSac trata isso linha a linha, sem barrar a
+  // correção do cliente, da NF ou do motivo por causa disso.
+  const cdJaRecebeu = (dev.status_fechamento || 'PENDENTE_FISICO') !== 'PENDENTE_FISICO';
 
   const container = document.getElementById('modal-container');
   if (!container) return;
@@ -16863,6 +16866,16 @@ function editarDevolucaoSacModal(id) {
       ${temAnalise ? `
       <div class="bg-amber-950/40 border border-amber-700/60 rounded-lg p-3 text-[11px] text-amber-200 font-semibold">
         ⚠️ Esta devolução já tem causa raiz apurada (<b>${dev.motivo_real_causa_raiz}</b>). A apuração foi feita sobre os itens atuais, então salvar a correção devolve o chamado para as <b>Tratativas do Gestor</b>.
+      </div>` : ''}
+
+      ${cdJaRecebeu ? `
+      <div class="bg-blue-950/40 border border-blue-700/60 rounded-lg p-3 text-[11px] text-blue-200 space-y-1">
+        <div class="font-bold">📦 O CD já conferiu o retorno físico desta devolução (<b>${dev.status_fechamento}</b>).</div>
+        <div class="text-blue-300/90 font-normal">
+          Cliente, NF, motivo, valor, quantidade e detalhamento podem ser corrigidos normalmente — nada disso mexe na conferência.
+          A conferência de um item (destino, validade, negociação) só cai se você <b>trocar o produto daquela linha</b>: aí o destino era do produto antigo,
+          e o item volta para a fila de <b>Destinação de Itens</b> para o CD decidir de novo.
+        </div>
       </div>` : ''}
 
       <form onsubmit="handleSalvarEdicaoDevolucaoSac(event, '${dev.id}')" class="space-y-5 text-xs">
@@ -17070,6 +17083,26 @@ function handleSalvarEdicaoDevolucaoSac(e, id) {
   }
 
   closeModal();
+
+  // Correção depois do CD receber é permitida, mas quando ela desfaz alguma
+  // decisão tomada com a mercadoria na mão o aviso é um alert, não um toast:
+  // isso é trabalho que voltou para a fila de outro setor, e toast some.
+  const impacto = [];
+  (res.conferenciaCaiu || []).forEach(c =>
+    impacto.push(`• ${c.de}\n  virou ${c.para} — destino, validade e negociação deste item foram zerados.`));
+  (res.criadosSemConferencia || []).forEach(p =>
+    impacto.push(`• ${p} entrou agora e o CD nunca o conferiu — aparece na Destinação herdando o destino geral da devolução.`));
+  (res.removidosConferidos || []).forEach(p =>
+    impacto.push(`• ${p} foi retirado da devolução e saiu junto da lista de Destinação, com o destino que tinha.`));
+
+  if (impacto.length) {
+    alert(
+      `✏️ ${res.protocolo} corrigida.\n\n`
+      + `⚠️ Esta devolução já estava ${res.statusFechamento}, e a correção mexeu na conferência do CD:\n\n`
+      + impacto.join('\n')
+      + `\n\nAvise o CD para revisar em "Retorno Físico CD → Destinação de Itens".`
+    );
+  }
 
   const partes = [];
   if (res.atualizados) partes.push(`${res.atualizados} item(ns) alterado(s)`);

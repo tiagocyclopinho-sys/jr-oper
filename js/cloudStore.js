@@ -3179,7 +3179,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "segundo-ajudante-6.6.0";
+CloudStore.BUILD = "correcao-devolução-6.6.1";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
