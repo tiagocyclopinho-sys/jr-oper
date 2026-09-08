@@ -7,6 +7,14 @@ e o motivo de cada uma ter ficado de fora está escrito junto.
 Nenhuma delas bloqueia a operação. Todas somem da memória se não estiverem
 escritas — é para isso que este arquivo existe.
 
+> **Atualização de 07/09/2026, mais tarde no mesmo dia.** Os itens 1 e 2 viraram
+> um plano: **`PLANO_DE_ACAO.md`**, a sair como v6.6.0. Lá foi decidido que o
+> recibo do adiantamento passa a ler a equipe **pelo nome, direto do Controle de
+> Viagens**, em vez de pelo id do cadastro — e com isso o **item 1 deixa de ser
+> pré-requisito do item 2**. As 12 cargas voltam a mostrar o ajudante e a dividir
+> o valor sem que se altere dado antigo; o que sobra do item 1 é higiene de
+> cadastro. **O item 3 continua exatamente como está descrito abaixo.**
+
 ---
 
 ## 1. O elo quebrado entre a escala e o cadastro de ajudantes

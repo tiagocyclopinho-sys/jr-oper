@@ -652,6 +652,13 @@ CREATE TABLE IF NOT EXISTS reentregas_rota (
     carga_numero VARCHAR(50) NOT NULL,
     rota_nome VARCHAR(100) NOT NULL,
     motorista_nome VARCHAR(120) NOT NULL,
+    -- ajudante e ajudante_2 entraram pela migration 40 (v6.6.0). A PRIMEIRA
+    -- faltava desde sempre: a tela de reentrega ja tinha um campo Ajudante, a
+    -- pessoa escolhia o nome e o sistema o descartava em silencio, por nao
+    -- existir coluna aqui nem gravacao no store. NULLABLE de proposito — nao ha
+    -- como recuperar o nome das reentregas antigas, que nunca foi gravado.
+    ajudante VARCHAR(120),
+    ajudante_2 VARCHAR(120),
     entregas_saiu INT DEFAULT 0,
     entregas_feitas INT DEFAULT 0,
     entregas_reentrega INT DEFAULT 0,
@@ -746,6 +753,11 @@ CREATE TABLE IF NOT EXISTS controle_viagens (
     placa VARCHAR(10),
     motorista VARCHAR(120),
     ajudante VARCHAR(120),
+    -- ajudante_2 entrou pela migration 40 (v6.6.0). Algumas rotas saem com DOIS
+    -- ajudantes e a dupla muda por dia — e informacao de cada viagem, nao
+    -- configuracao de rota. Guarda NOME, nao id, pelo mesmo motivo de
+    -- "ajudante": o id era justamente o elo que vivia quebrado.
+    ajudante_2 VARCHAR(120),
     setor VARCHAR(30) DEFAULT 'FRIO',
     data_saida VARCHAR(20),
     hora_saida VARCHAR(10),

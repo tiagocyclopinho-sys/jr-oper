@@ -77,6 +77,20 @@ function sha256Sync(ascii) {
   return result;
 }
 
+// QUEM E GENTE, E QUEM E BURACO NO CADASTRO. 'N/A' nunca foi uma pessoa: ate
+// 04/09/2026 o recibo do adiantamento aceitava esse texto como ajudante de
+// verdade e rateava 50/50, com uma via impressa para ninguem.
+//
+// Mora aqui, e nao no app.js, desde a v6.6.0: com a equipe passando a vir do
+// Controle de Viagens, quem MONTA a lista e o store e quem IMPRIME o recibo e
+// o app — as duas camadas precisam da mesma regra, e store.js carrega primeiro
+// (index.html). O app.js le esta constante pelo nome.
+const JR_NAO_E_PESSOA = ['', 'N/A', 'NA', '—', '-', 'AJUDANTE', 'NÃO INFORMADO',
+                         'NAO INFORMADO', 'SEM AJUDANTE', 'A CADASTRAR'];
+function jrEhPessoa(nome) {
+  return !JR_NAO_E_PESSOA.includes(String(nome || '').trim().toUpperCase());
+}
+
 class Store {
   constructor() {
     // Semente aleatória por instância (recarrega a cada abertura do app) —
@@ -182,7 +196,11 @@ class Store {
     let catalogoLegado = null;
     try {
       const storedVersion = localStorage.getItem('jr_sac_version');
-      const currentVersion = '6.5.1';
+      // Era '6.5.1' escrito a mao — um QUINTO lugar para lembrar de trocar a
+      // cada versao, alem de config.js, sw.js, CloudStore.BUILD e version.json.
+      // Ficou esquecido no ritual da 6.6.0 e so apareceu na conferencia final.
+      // Agora segue o config.js, que ja e a fonte da versao do app.
+      const currentVersion = (window.JR_CONFIG && window.JR_CONFIG.appVersion) || '6.6.0';
       if (isFirstInstall) {
         // Primeira vez: grava só a fatia operacional. O catálogo NÃO é
         // gravado — ele vem de INITIAL_DATA a cada abertura.
@@ -1468,6 +1486,13 @@ class Store {
 
   // SAC Devoluções Methods
   getDevolucoes() {
+    // O DINHEIRO SEGUE O NOME (decisao de 07/09/2026, v6.6.0). Ate aqui a
+    // devolucao perguntava pelo NUMERO do ajudante no cadastro
+    // (cargas.ajudante_id) — e em 07/09/2026 esse numero faltava em 12 das 29
+    // cargas, entao a pessoa sumia do recibo e o motorista pagava sozinho.
+    // Agora pergunta ao Controle de Viagens "quem estava nessa viagem?", que e
+    // onde o NOME esta escrito, e onde cabem os DOIS ajudantes.
+    const viagemPorCarga = this._indiceViagemPorCarga();
     return (this.data.ocorrencias_devolucao || []).filter(d => !d.is_deleted).map(d => {
       // this.data.X podia ficar undefined depois de um pull da nuvem (o
       // syncCloudToLocal só reatribui a chave quando detecta mudança —
@@ -1523,12 +1548,40 @@ class Store {
       const conferente = usuariosArr.find(u => u.id == d.conferente_id) || {};
       const setor = setoresArr.find(s => s.id == d.setor_encaminhado_id) || {};
 
+      // A EQUIPE DESSA CARGA, em ordem: viagem primeiro, cadastro depois. E a
+      // mesma precedencia que buscarCargaInfo() (app.js) ja usa para rota,
+      // placa e motorista. Onde nao houver viagem lancada, o caminho antigo
+      // pelo numero continua respondendo — ninguem fica sem resposta.
+      //
+      // Esta lista era o fio solto: equipeDaDevolucao() (app.js) ja percorria
+      // dev.ajudantes como lista, e nenhum ponto do store escrevia nela.
+      const viagemDaCarga = viagemPorCarga.get(
+        String(carga.numero_carga || d.carga_numero || '').trim().toUpperCase()
+      );
+      const ajudantesLista = [];
+      const pushAjudante = (n) => {
+        const nome = String(n || '').trim();
+        if (!jrEhPessoa(nome)) return;
+        if (ajudantesLista.some(x => x.toUpperCase() === nome.toUpperCase())) return;
+        ajudantesLista.push(nome);
+      };
+      if (viagemDaCarga) {
+        pushAjudante(viagemDaCarga.ajudante);
+        pushAjudante(viagemDaCarga.ajudante_2);
+      }
+      if (!ajudantesLista.length) pushAjudante(ajudante.nome);
+
       return {
         ...d,
         carga_numero: carga.numero_carga || d.carga_numero || 'N/A',
         carga_rota: carga.rota || carga.rota_nome || d.rota_nome || 'N/A',
         motorista_nome: motorista.nome || 'N/A',
-        ajudante_nome: ajudante.nome || 'N/A',
+        // ajudante_nome continua existindo e continua sendo UM nome: e o que
+        // relatorios, exportacoes e Power BI leem hoje, e nada disso muda de
+        // formato. O segundo ajudante vive em "ajudantes", ao lado.
+        ajudante_nome: ajudantesLista[0] || 'N/A',
+        ajudante_2_nome: ajudantesLista[1] || '',
+        ajudantes: ajudantesLista,
         veiculo_placa: veiculo.placa || d.veiculo_placa || 'N/A',
         veiculo_modelo: veiculo.tipo || veiculo.modelo || '',
         cliente_codigo: cliente.codigo_cliente || 'N/A',
@@ -2398,6 +2451,20 @@ class Store {
       .sort((a, b) => new Date(b.data_saida || b.data_viagem || b.data || b.criado_em || 0) - new Date(a.data_saida || a.data_viagem || a.data || a.criado_em || 0));
   }
 
+  // Uma carga -> a viagem dela. Montado UMA vez por chamada de getDevolucoes():
+  // procurar dentro do map() varreria controle_viagens inteiro para cada
+  // devolucao da lista. Havendo mais de uma viagem viva para a mesma carga,
+  // fica a mais recente — getControleViagens() ja devolve ordenado por data de
+  // saida (desc) e ja filtra as excluidas.
+  _indiceViagemPorCarga() {
+    const idx = new Map();
+    (this.getControleViagens() || []).forEach(v => {
+      const k = String(v.carga || '').trim().toUpperCase();
+      if (k && !idx.has(k)) idx.set(k, v);
+    });
+    return idx;
+  }
+
   addViagem(viagemData) {
     if (!this.data.controle_viagens) this.data.controle_viagens = [];
     // Date.now() sozinho colide quando várias viagens são importadas em
@@ -2416,6 +2483,10 @@ class Store {
       placa: String(viagemData.placa || '').toUpperCase().trim(),
       motorista: String(viagemData.motorista || '').toUpperCase().trim(),
       ajudante: String(viagemData.ajudante || '').toUpperCase().trim(),
+      // SEGUNDO AJUDANTE (v6.6.0). Opcional, e o normal e vir vazio: nao vem da
+      // planilha da escala, que tem uma vaga so. E acrescentado na tela de
+      // editar a viagem, junto com o resto do preenchimento.
+      ajudante_2: String(viagemData.ajudante_2 || '').toUpperCase().trim(),
       setor: String(viagemData.setor || 'FRIO').toUpperCase().trim(),
       data_saida: viagemData.data_saida || '',
       hora_saida: viagemData.hora_saida || '',
@@ -3353,7 +3424,7 @@ class Store {
       sql += `-- 5. REENTREGAS DE ROTA\n`;
       reentregasList.forEach(re => {
         sql += `INSERT INTO reentregas_rota (\n`;
-        sql += `  id, data, carga_numero, rota_nome, motorista_nome, entregas_saiu, entregas_feitas, entregas_reentrega, motivo, placa, novo_motorista, status, criado_por, criado_em,\n`;
+        sql += `  id, data, carga_numero, rota_nome, motorista_nome, ajudante, ajudante_2, entregas_saiu, entregas_feitas, entregas_reentrega, motivo, placa, novo_motorista, status, criado_por, criado_em,\n`;
         sql += `  recebido_cd_em, recebido_cd_por, qtd_recebida_cd, condicao_recebimento, observacao_recebimento, local_armazenagem,\n`;
         sql += `  despachado_em, despachado_por, despacho_placa, despacho_carga_numero, qtd_despachada, realizada_em,\n`;
         sql += `  cancelada_em, cancelada_por, motivo_cancelamento, devolucao_gerada_id\n`;
@@ -3361,11 +3432,12 @@ class Store {
         // As fotos (base64, centenas de KB cada) ficam DE FORA de proposito:
         // este .sql alimenta o Power BI, que nao consome imagem, e inclui-las
         // tornaria o arquivo grande demais para abrir.
-        sql += `  ${re.id}, ${esc(re.data)}, ${esc(re.carga_numero)}, ${esc(re.rota_nome)}, ${esc(re.motorista_nome)}, ${re.entregas_saiu || 0}, ${re.entregas_feitas || 0}, ${re.entregas_reentrega || 0}, ${esc(re.motivo)}, ${esc(re.placa)}, ${esc(re.novo_motorista)}, ${esc(re.status || 'PENDENTE')}, ${esc(re.criado_por || 'SISTEMA')}, ${esc(re.criado_em)},\n`;
+        sql += `  ${re.id}, ${esc(re.data)}, ${esc(re.carga_numero)}, ${esc(re.rota_nome)}, ${esc(re.motorista_nome)}, ${esc(re.ajudante || null)}, ${esc(re.ajudante_2 || null)}, ${re.entregas_saiu || 0}, ${re.entregas_feitas || 0}, ${re.entregas_reentrega || 0}, ${esc(re.motivo)}, ${esc(re.placa)}, ${esc(re.novo_motorista)}, ${esc(re.status || 'PENDENTE')}, ${esc(re.criado_por || 'SISTEMA')}, ${esc(re.criado_em)},\n`;
         sql += `  ${esc(re.recebido_cd_em)}, ${esc(re.recebido_cd_por)}, ${re.qtd_recebida_cd === null || re.qtd_recebida_cd === undefined ? 'NULL' : re.qtd_recebida_cd}, ${esc(re.condicao_recebimento)}, ${esc(re.observacao_recebimento)}, ${esc(re.local_armazenagem)},\n`;
         sql += `  ${esc(re.despachado_em)}, ${esc(re.despachado_por)}, ${esc(re.despacho_placa)}, ${esc(re.despacho_carga_numero)}, ${re.qtd_despachada === null || re.qtd_despachada === undefined ? 'NULL' : re.qtd_despachada}, ${esc(re.realizada_em)},\n`;
         sql += `  ${esc(re.cancelada_em)}, ${esc(re.cancelada_por)}, ${esc(re.motivo_cancelamento)}, ${re.devolucao_gerada_id || 'NULL'}\n`;
         sql += `) ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, entregas_feitas = EXCLUDED.entregas_feitas, entregas_reentrega = EXCLUDED.entregas_reentrega,\n`;
+        sql += `  ajudante = EXCLUDED.ajudante, ajudante_2 = EXCLUDED.ajudante_2,\n`;
         sql += `  recebido_cd_em = EXCLUDED.recebido_cd_em, qtd_recebida_cd = EXCLUDED.qtd_recebida_cd, condicao_recebimento = EXCLUDED.condicao_recebimento,\n`;
         sql += `  despachado_em = EXCLUDED.despachado_em, despacho_placa = EXCLUDED.despacho_placa, qtd_despachada = EXCLUDED.qtd_despachada,\n`;
         sql += `  realizada_em = EXCLUDED.realizada_em, cancelada_em = EXCLUDED.cancelada_em;\n\n`;
@@ -3950,6 +4022,19 @@ class Store {
       carga_numero: String(item.carga_numero || '').trim().toUpperCase(),
       rota_nome: String(item.rota_nome || '').trim().toUpperCase(),
       motorista_nome: String(item.motorista_nome || '').trim().toUpperCase(),
+      // AJUDANTE (v6.6.0). Estas duas linhas consertam um defeito calado que
+      // existia desde sempre: a tela TEM um campo Ajudante, a pessoa escolhia o
+      // nome, salvava — e o nome era jogado fora aqui, porque este objeto era
+      // montado campo a campo e o ajudante nunca esteve entre eles. Nao dava
+      // erro, nao avisava nada: simplesmente nao gravava, nem na memoria nem no
+      // banco. Quem preencheu aquele campo alguma vez preencheu para nada.
+      //
+      // Os nomes sao 'ajudante' e 'ajudante_2' porque sao ESSES os nomes das
+      // colunas (migration 40), e reentregas_rota nao tem lista branca em
+      // CloudStore.COLUNAS_POR_TABELA — o objeto sobe inteiro, entao qualquer
+      // chave que nao seja coluna derruba o lote com PGRST204.
+      ajudante: item.ajudante ? String(item.ajudante).trim().toUpperCase() : null,
+      ajudante_2: item.ajudante_2 ? String(item.ajudante_2).trim().toUpperCase() : null,
       entregas_saiu: parseInt(item.entregas_saiu) || 0,
       entregas_feitas: parseInt(item.entregas_feitas) || 0,
       entregas_reentrega: parseInt(item.entregas_reentrega) || 0,
@@ -4041,6 +4126,10 @@ class Store {
     // campos de custodia precisaram entrar um a um.
     const camposPermitidos = [
       'data', 'carga_numero', 'rota_nome', 'motorista_nome',
+      // 'ajudante' e 'ajudante_2' (v6.6.0): sem os dois nomes AQUI, o ajudante
+      // escolhido na edicao volta a ser descartado em silencio por esta mesma
+      // whitelist — que foi exatamente o que aconteceu ate a v6.5.1.
+      'ajudante', 'ajudante_2',
       'entregas_saiu', 'entregas_feitas', 'entregas_reentrega',
       'motivo', 'placa', 'novo_motorista', 'status',
       // Custodia (v5.0.0)
@@ -4059,7 +4148,7 @@ class Store {
     ];
     camposPermitidos.forEach(campo => {
       if (Object.prototype.hasOwnProperty.call(updates, campo)) {
-        if (typeof updates[campo] === 'string' && ['carga_numero', 'rota_nome', 'motorista_nome', 'placa', 'novo_motorista'].includes(campo)) {
+        if (typeof updates[campo] === 'string' && ['carga_numero', 'rota_nome', 'motorista_nome', 'ajudante', 'ajudante_2', 'placa', 'novo_motorista'].includes(campo)) {
           item[campo] = updates[campo].trim().toUpperCase();
         } else if (['entregas_saiu', 'entregas_feitas', 'entregas_reentrega'].includes(campo)) {
           item[campo] = parseInt(updates[campo]) || 0;

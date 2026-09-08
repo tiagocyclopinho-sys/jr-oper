@@ -3908,7 +3908,7 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
             <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
               <div class="text-[10px] text-slate-400 uppercase font-semibold">Equipe de Rota</div>
               <div class="font-bold text-white text-xs">Mot: ${registro.motorista_nome || registro.motorista || 'N/A'}</div>
-              <div class="text-[10px] text-slate-400">Ajud: ${registro.ajudante_nome || registro.ajudante || 'N/A'}</div>
+              <div class="text-[10px] text-slate-400">Ajud: ${(Array.isArray(registro.ajudantes) && registro.ajudantes.length) ? registro.ajudantes.join(' + ') : (registro.ajudante_nome || registro.ajudante || 'N/A')}</div>
             </div>
             <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
               <div class="text-[10px] text-slate-400 uppercase font-semibold">Situação do Registro</div>
@@ -5155,7 +5155,9 @@ function renderDashboardView() {
       rota: itemRaw.carga_rota || itemRaw.rota_nome || itemRaw.rota || '—',
       veiculo: itemRaw.veiculo_placa || itemRaw.placa || '—',
       motorista: itemRaw.motorista_nome || itemRaw.motorista || itemRaw.motorista_original || '—',
-      ajudante: itemRaw.ajudante_nome || itemRaw.ajudante || '—',
+      ajudante: (Array.isArray(itemRaw.ajudantes) && itemRaw.ajudantes.length)
+        ? itemRaw.ajudantes.join(' + ')
+        : (itemRaw.ajudante_nome || itemRaw.ajudante || '—'),
       motivo: itemRaw.motivo_reclamado || itemRaw.motivo || itemRaw.problema || itemRaw.descricao || '—',
       causaRaiz: itemRaw.motivo_real_causa_raiz || itemRaw.causa_raiz || itemRaw.tipo_problema || '—',
       tipoErro: itemRaw.tipo_erro || 'NÃO CLASSIFICADO',
@@ -5191,9 +5193,15 @@ function renderDashboardView() {
   } else if (activeRecTab === 'prestador') {
     devs.forEach(d => {
       const mot = (d.motorista_nome || '').toUpperCase().trim();
-      const aju = (d.ajudante_nome || '').toUpperCase().trim();
       if (mot && mot !== 'N/A' && mot !== '—') pushItemRec(`${mot} (Motorista)`, 'Prestador / Equipe Rota', 'DEV_SAC', d, d.valor_reclamado);
-      if (aju && aju !== 'N/A' && aju !== '—') pushItemRec(`${aju} (Ajudante)`, 'Prestador / Equipe Rota', 'DEV_SAC', d, d.valor_reclamado);
+      // Podem ser DOIS ajudantes desde a v6.6.0. d.ajudantes ja vem do store
+      // filtrado (sem 'N/A', sem repetido); ajudante_nome fica de reserva para
+      // registro montado fora de getDevolucoes().
+      const ajusRec = (Array.isArray(d.ajudantes) && d.ajudantes.length) ? d.ajudantes : [d.ajudante_nome];
+      ajusRec.forEach(a => {
+        const aju = String(a || '').toUpperCase().trim();
+        if (aju && aju !== 'N/A' && aju !== '—') pushItemRec(`${aju} (Ajudante)`, 'Prestador / Equipe Rota', 'DEV_SAC', d, d.valor_reclamado);
+      });
     });
     rotas.forEach(r => {
       const mot = (r.motorista_nome || '').toUpperCase().trim();
@@ -7230,6 +7238,9 @@ function buscarCargaInfo(cargaNum) {
   const placa = (v ? v.placa : '') || cPlaca || (itemOp ? (itemOp.veiculo_placa || itemOp.placa) : '') || '';
   const motoristaName = (v ? (v.motorista || v.motorista_nome) : '') || cMotoristaNome || (itemOp ? (itemOp.motorista_nome || itemOp.motorista) : '') || '';
   const ajudanteName = (v ? (v.ajudante || v.ajudante_nome) : '') || cAjudanteNome || (itemOp ? (itemOp.ajudante_nome || itemOp.ajudante) : '') || '';
+  // O segundo ajudante so existe na viagem (v6.6.0) — nao ha equivalente em
+  // cargas nem nas tabelas operacionais, entao aqui nao ha caminho de reserva.
+  const ajudante2Name = (v ? (v.ajudante_2 || '') : '') || '';
   const dataVal = (v ? (v.data_saida || v.data) : '') || cData || (itemOp ? (itemOp.data_saida || itemOp.data || itemOp.data_ocorrencia) : '') || '';
 
   const found = !!(v || c || itemOp || rotaName || placa || motoristaName);
@@ -7240,6 +7251,7 @@ function buscarCargaInfo(cargaNum) {
     placa: placa,
     motoristaName: motoristaName,
     ajudanteName: ajudanteName,
+    ajudante2Name: ajudante2Name,
     data: dataVal,
     motoristaId: c ? c.motorista_id : null,
     ajudanteId: c ? c.ajudante_id : null,
@@ -7402,7 +7414,10 @@ function onSacCargaSelect(cargaNum) {
   const avisoHint = document.getElementById('sac-carga-nao-encontrada');
   if (avisoHint) avisoHint.classList.toggle('hidden', info.found);
 
-  const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+  // Era uma normalizacao propria, quase igual a normalizeStr mas sem colapsar
+  // espaco repetido — e "EDSON  DOS  SANTOS", que esta gravado assim no
+  // banco, nunca casava com o cadastro. Uma regra so (v6.6.0).
+  const norm = normalizeStr;
 
   // Auto-selecionar Rota
   const rotaSel = document.getElementById('sac-rota-nome');
@@ -7429,43 +7444,63 @@ function onSacCargaSelect(cargaNum) {
     }
   }
 
+  // Amarra um <select> de CADASTRO (cujo value e o ID) ao nome que veio da
+  // carga. Motorista e ajudante dividem esta funcao porque dividiam o defeito.
+  //
+  // O QUE ESTAVA ERRADO: nao achando o nome, o codigo fabricava uma <option>
+  // com o NOME dentro do value — num select em que value e o id. O formulario
+  // mandava entao ajudante_id="MARIA SOUZA", que virava NaN e depois null, e a
+  // pessoa aparecia como "N/A" no fim da linha sem ninguem dizer por que. Era
+  // um dos produtores dos 12 casos medidos em 07/09/2026.
+  //
+  // AGORA: acha por comparacao tolerante (acento, caixa, espaco sobrando) e
+  // amarra o ID DE VERDADE. Nao achando, a <option> nasce com value VAZIO e
+  // diz na cara que a pessoa esta fora do cadastro — o campo fica honestamente
+  // em branco em vez de guardar lixo que so seria descoberto no recibo.
+  //
+  // E o sistema NUNCA amarra um "parece ser" sozinho. Ele mostra o palpite e
+  // para por ai; quem confirma e gente, na tela de editar a viagem.
+  const amarrarPessoa = (sel, nomeAlvo, listaCadastro) => {
+    if (!sel || !nomeAlvo) return false;
+    const r = jrConferirCadastro(nomeAlvo, listaCadastro);
+    if (r.status === 'ok') {
+      const alvo = norm(r.sugestao);
+      const opt = Array.from(sel.options).find(o => norm(o.textContent) === alvo);
+      if (opt) { sel.value = opt.value; return true; }
+    }
+    const marca = r.status === 'quase'
+      ? ` (fora do cadastro — parece ser ${r.sugestao})`
+      : ' (fora do cadastro)';
+    const nova = document.createElement('option');
+    nova.value = '';                     // o nome NUNCA vai no lugar do id
+    nova.textContent = nomeAlvo + marca;
+    nova.selected = true;
+    sel.appendChild(nova);
+    return false;
+  };
+
   // Auto-selecionar Motorista
   const motSel = document.getElementById('sac-motorista-id');
   if (motSel) {
     const targetMot = motoristaName || (c ? c.motorista_nome || c.motorista : '');
     if (targetMot) {
-      const nTarget = norm(targetMot);
-      let opt = Array.from(motSel.options).find(o => norm(o.textContent).includes(nTarget) || nTarget.includes(norm(o.textContent)));
-      if (opt) {
-        motSel.value = opt.value;
-      } else {
-        const newOpt = document.createElement('option');
-        newOpt.value = targetMot;
-        newOpt.textContent = targetMot;
-        newOpt.selected = true;
-        motSel.appendChild(newOpt);
-      }
+      amarrarPessoa(motSel, targetMot, (db.data && db.data.motoristas) || []);
     } else if (c && c.motorista_id) {
       motSel.value = c.motorista_id;
     }
   }
 
-  // Auto-selecionar Ajudante
+  // Auto-selecionar Ajudante.
+  //
+  // Aqui cabe UM so, e continua cabendo: o segundo ajudante nao passa por este
+  // campo. Desde a v6.6.0 o recibo pergunta ao Controle de Viagens quem estava
+  // na viagem, entao a equipe inteira chega por la — este campo virou registro
+  // de apoio, e nao mais o fio de onde o dinheiro pendia.
   const ajuSel = document.getElementById('sac-ajudante-id');
   if (ajuSel) {
     const targetAju = ajudanteName || (c ? c.ajudante_nome || c.ajudante : '');
     if (targetAju) {
-      const nTarget = norm(targetAju);
-      let opt = Array.from(ajuSel.options).find(o => norm(o.textContent).includes(nTarget) || nTarget.includes(norm(o.textContent)));
-      if (opt) {
-        ajuSel.value = opt.value;
-      } else {
-        const newOpt = document.createElement('option');
-        newOpt.value = targetAju;
-        newOpt.textContent = targetAju;
-        newOpt.selected = true;
-        ajuSel.appendChild(newOpt);
-      }
+      amarrarPessoa(ajuSel, targetAju, (db.data && db.data.ajudantes) || []);
     } else if (c && c.ajudante_id) {
       ajuSel.value = c.ajudante_id;
     }
@@ -7745,7 +7780,10 @@ function renderSacInvestigacaoView() {
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   devsFiltrados = devsFiltrados.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDataDe, fDataAte));
   if (fTexto) {
-    const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
+    // Era uma normalizacao propria, quase igual a normalizeStr mas sem colapsar
+    // espaco repetido — e "EDSON  DOS  SANTOS", que esta gravado assim no
+    // banco, nunca casava com o cadastro. Uma regra so (v6.6.0).
+    const norm = normalizeStr;
     const q = norm(fTexto);
     devsFiltrados = devsFiltrados.filter(d =>
       norm(d.numero_devolucao || d.numero_protocolo).includes(q) ||
@@ -8115,8 +8153,10 @@ function toggleOutroErro(devId, valor) {
 // Devolve NOMES, nao ids, de proposito: o id do ajudante e justamente o elo
 // que esta quebrado. O nome e o que a escala tem, o que o recibo imprime e o
 // que a pessoa assina.
-const JR_NAO_E_PESSOA = ['', 'N/A', 'NA', '—', '-', 'AJUDANTE', 'NÃO INFORMADO',
-                         'NAO INFORMADO', 'SEM AJUDANTE', 'A CADASTRAR'];
+//
+// JR_NAO_E_PESSOA mudou de casa na v6.6.0: vive no store.js, que carrega antes
+// deste arquivo, porque agora quem monta dev.ajudantes e o store (a partir do
+// Controle de Viagens) e quem imprime e daqui. Mesma regra dos dois lados.
 function equipeDaDevolucao(dev) {
   const nomes = [];
   const push = (n) => {
@@ -8128,6 +8168,25 @@ function equipeDaDevolucao(dev) {
   (Array.isArray(dev.ajudantes) ? dev.ajudantes : []).forEach(push);
   push(dev.ajudante_nome);
   return nomes;
+}
+
+// A MESMA EQUIPE, com o papel de cada um — o recibo precisa saber o que
+// escrever em cada folha. O motorista e reconhecido pelo nome, e nao pela
+// posicao na lista: numa devolucao sem motorista informado, o primeiro da lista
+// e um ajudante, e a folha nao pode sair dizendo "MOTORISTA / PRESTADOR".
+//
+// Devolve SEMPRE ao menos uma folha. Devolucao sem ninguem identificado
+// continua imprimindo uma via de motorista com 100% do valor, como hoje.
+function equipeComPapel(dev) {
+  const motorista = String(dev.motorista_nome || '').trim().toUpperCase();
+  const folhas = equipeDaDevolucao(dev).map(nome => ({
+    nome,
+    papel: nome === motorista ? 'MOTORISTA' : 'AJUDANTE'
+  }));
+  if (!folhas.length) {
+    folhas.push({ nome: dev.motorista_nome || 'NÃO INFORMADO', papel: 'MOTORISTA' });
+  }
+  return folhas;
 }
 // Rateio em CENTAVOS. R$ 100,00 / 3 = 33,33 e 33,33 x 3 = 99,99: some um
 // centavo, e a soma dos recibos deixa de fechar com o valor cobrado. A sobra
@@ -8151,12 +8210,16 @@ function gerarAdiantamentoPdf(devId) {
   const totalValor = parseFloat(dev.valor_reclamado) || 0;
   const dtCriacao = dev.criado_em ? new Date(dev.criado_em).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
 
-  // REGRA DE DIVISÃO: Rateio 50/50 quando existe ajudante de fato vinculado. Sem ajudante, valor integral 100% no motorista.
-  const equipe = equipeDaDevolucao(dev);
-  const cotas  = ratearValor(totalValor, equipe.length || 1);
-  const temAjudante = equipe.length > 1;
-  const valorPorPessoa = (cotas[0] || 0).toFixed(2);
-  const percentualLabel = Math.round(100 / (equipe.length || 1)) + '%';
+  // REGRA DE DIVISÃO: uma folha por pessoa que estava na viagem, cada uma com A
+  // SUA cota. Sem ninguem alem do motorista, uma folha so, com 100% do valor.
+  //
+  // Ate a v6.5.1 eram duas folhas escritas a mao, e AS DUAS imprimiam cotas[0]
+  // — a cota do motorista. Com centavo quebrado, as duas somavam um centavo a
+  // mais que o valor cobrado; cotas[1] nunca chegou a ser lido.
+  const folhas = equipeComPapel(dev);
+  const cotas  = ratearValor(totalValor, folhas.length);
+  const rateado = folhas.length > 1;
+  const percentualLabel = Math.round(100 / folhas.length) + '%';
 
   const itensTableHtml = itens.length === 0 ? `
     <div style="padding: 10px; text-align: center; color: #64748b; font-style: italic; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc;">
@@ -8190,9 +8253,19 @@ function gerarAdiantamentoPdf(devId) {
       </tbody>
     </table>`;
 
-  const via2AjudanteHtml = !temAjudante ? '' : `
-  <!-- PÁGINA 2: VIA DO AJUDANTE -->
-  <div class="page-container page-break">
+  // UMA FOLHA POR PESSOA. Era este laço que faltava: as duas folhas estavam
+  // escritas à mão, uma "VIA DO MOTORISTA" e outra "VIA DO AJUDANTE", e por
+  // isso não havia lugar para um terceiro. O percentual também estava escrito à
+  // mão ("50%") — com três pessoas a folha do ajudante sairia dizendo 50%
+  // enquanto a do motorista dizia 33%, no mesmo PDF.
+  const paginasHtml = folhas.map((pessoa, idx) => {
+    const cotaFmt = (cotas[idx] || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2});
+    const papelTitulo = pessoa.papel === 'MOTORISTA' ? 'Motorista' : 'Ajudante';
+    const papelAssin  = pessoa.papel === 'MOTORISTA' ? 'MOTORISTA / PRESTADOR' : 'AJUDANTE / COLABORADOR';
+    const outros = folhas.filter((_, i) => i !== idx).map(p => p.nome).join('  •  ');
+    return `
+  <!-- PÁGINA ${idx + 1}: VIA DE ${pessoa.nome} -->
+  <div class="page-container${idx > 0 ? ' page-break' : ''}">
     <div>
       <div class="header">
         <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
@@ -8202,16 +8275,17 @@ function gerarAdiantamentoPdf(devId) {
         </div>
       </div>
 
-      <div class="badge-via">RECIBO DE ADIANTAMENTO — VIA DO AJUDANTE (PÁGINA 2 - 50%)</div>
+      <div class="badge-via">RECIBO DE ADIANTAMENTO — VIA DO ${pessoa.papel} (PÁGINA ${idx + 1} DE ${folhas.length} — ${percentualLabel})</div>
 
       <div class="section-title">📋 DADOS DA OCORRÊNCIA & TRANSPORTE</div>
       <div class="grid">
-        <div class="field"><div class="field-lbl">Colaborador / Ajudante</div><div class="field-val">${dev.ajudante_nome}</div></div>
+        <div class="field"><div class="field-lbl">Colaborador / ${papelTitulo}</div><div class="field-val">${pessoa.nome || 'NÃO INFORMADO'}</div></div>
         <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Data: ${dtCriacao})</div></div>
         <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
         <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
         <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
         <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
+        ${outros ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Demais integrantes da equipe (Rateio ${percentualLabel} cada)</div><div class="field-val">${outros}</div></div>` : ''}
       </div>
 
       <div class="motivo-box">
@@ -8227,20 +8301,20 @@ function gerarAdiantamentoPdf(devId) {
 
     <div>
       <div class="val-highlight">
-        <div class="val-lbl">VALOR DO ADIANTAMENTO DO AJUDANTE (50% do total R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
-        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
+        <div class="val-lbl">VALOR DO ADIANTAMENTO DO ${pessoa.papel} (${percentualLabel} do total R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
+        <div class="val-amt">R$ ${cotaFmt}</div>
       </div>
 
       <div class="termo">
         <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> (correspondente a 50% do total da ocorrência) referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${cotaFmt}</b> ${rateado ? `(correspondente a ${percentualLabel} do total da ocorrência, rateado entre os ${folhas.length} integrantes da equipe)` : '(100% integral)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
       </div>
 
       <div class="sigs">
         <div>
           <div class="sig-space"></div>
           <div class="sig-line"></div>
-          <div class="sig-lbl">${dev.ajudante_nome}<br>(AJUDANTE / COLABORADOR)</div>
+          <div class="sig-lbl">${pessoa.nome || 'ASSINATURA'}<br>(${papelAssin})</div>
         </div>
         <div>
           <div class="sig-space"></div>
@@ -8250,6 +8324,7 @@ function gerarAdiantamentoPdf(devId) {
       </div>
     </div>
   </div>`;
+  }).join('');
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -8292,68 +8367,7 @@ function gerarAdiantamentoPdf(devId) {
   </style>
 </head>
 <body>
-  <!-- PÁGINA 1: VIA DO MOTORISTA -->
-  <div class="page-container">
-    <div>
-      <div class="header">
-        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
-        <div class="header-title">
-          <h2>JR DISTRIBUIDORA</h2>
-          <p>Logística Corporativa • Gestão de Frotas & Operações Logísticas</p>
-        </div>
-      </div>
-
-      <div class="badge-via">RECIBO DE ADIANTAMENTO — VIA DO MOTORISTA (PÁGINA 1 - ${percentualLabel})</div>
-
-      <div class="section-title">📋 DADOS DA OCORRÊNCIA & TRANSPORTE</div>
-      <div class="grid">
-        <div class="field"><div class="field-lbl">Colaborador / Motorista</div><div class="field-val">${dev.motorista_nome || 'NÃO INFORMADO'}</div></div>
-        <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Data: ${dtCriacao})</div></div>
-        <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
-        ${temAjudante ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Ajudante Vinculado (Rateio 50%)</div><div class="field-val">${dev.ajudante_nome}</div></div>` : ''}
-      </div>
-
-      <div class="motivo-box">
-        <div class="motivo-lbl">MOTIVO RECLAMADO DA OCORRÊNCIA</div>
-        <div class="motivo-txt">${dev.motivo_reclamado || 'NÃO ESPECIFICADO'}${dev.motivo_real_causa_raiz ? ` — Causa Raiz: ${dev.motivo_real_causa_raiz}` : ''}</div>
-      </div>
-
-      <div class="products-section">
-        <div class="section-title">📦 PRODUTOS / ITENS QUE GERARAM A OCORRÊNCIA (${itens.length})</div>
-        ${itensTableHtml}
-      </div>
-    </div>
-
-    <div>
-      <div class="val-highlight">
-        <div class="val-lbl">VALOR DO ADIANTAMENTO DO MOTORISTA (${percentualLabel} do total R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
-        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
-      </div>
-
-      <div class="termo">
-        <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> ${temAjudante ? '(correspondente a 50% do total da ocorrência)' : '(100% integral)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
-      </div>
-
-      <div class="sigs">
-        <div>
-          <div class="sig-space"></div>
-          <div class="sig-line"></div>
-          <div class="sig-lbl">${dev.motorista_nome || 'ASSINATURA MOTORISTA'}<br>(MOTORISTA / PRESTADOR)</div>
-        </div>
-        <div>
-          <div class="sig-space"></div>
-          <div class="sig-line"></div>
-          <div class="sig-lbl">SUPERVISOR LOGÍSTICO / JR<br>(JR DISTRIBUIDORA)</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  ${via2AjudanteHtml}
+  ${paginasHtml}
 
   <script>
     window.onload = function() {
@@ -10268,7 +10282,13 @@ function handleCdModalSubmit(e, devId) {
 
     const tipoErroUpper = String(dev?.tipo_erro || '').toUpperCase();
     if (tipoErroUpper.includes('MOTORISTA')) {
-      alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA em ocorrência de ERRO MOTORISTA!\nValor total apurado da falta: R$ ${valorTotalDivergencia.toLocaleString('pt-BR', {minimumFractionDigits: 2})}.\n\nGerando Recibo de Adiantamento Operacional (Rateio 50% Motorista / 50% Ajudante)...`);
+      // O aviso dizia "Rateio 50% Motorista / 50% Ajudante" sempre — mesmo sem
+      // ajudante nenhum, e mesmo com dois. Agora diz quantas folhas vão sair.
+      const equipeAviso = equipeComPapel(dev);
+      const rateioAviso = equipeAviso.length > 1
+        ? `Rateio de ${Math.round(100 / equipeAviso.length)}% entre ${equipeAviso.length} integrantes: ${equipeAviso.map(p => p.nome).join(', ')}`
+        : `100% do valor no motorista (nenhum ajudante vinculado a esta carga)`;
+      alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA em ocorrência de ERRO MOTORISTA!\nValor total apurado da falta: R$ ${valorTotalDivergencia.toLocaleString('pt-BR', {minimumFractionDigits: 2})}.\n\nGerando Recibo de Adiantamento Operacional (${rateioAviso})...`);
       gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes, valorTotalDivergencia);
     } else {
       alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA!\nRelatório de quantidades faltantes gerado para o Financeiro.\n\nEntrada confirmada no CD.`);
@@ -10352,12 +10372,13 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
   const dtCriacao = dev.criado_em ? new Date(dev.criado_em).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
   const dtEntradaCd = dev.data_entrada_cd ? new Date(dev.data_entrada_cd).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
 
-  // Rateio 50/50 quando existe ajudante vinculado
-  const equipe = equipeDaDevolucao(dev);
-  const cotas  = ratearValor(totalValor, equipe.length || 1);
-  const temAjudante = equipe.length > 1;
-  const valorPorPessoa = (cotas[0] || 0).toFixed(2);
-  const percentualLabel = Math.round(100 / (equipe.length || 1)) + '%';
+  // Uma folha por pessoa da equipe, cada uma com a sua cota. Mesmas correções
+  // do recibo de adiantamento (gerarAdiantamentoPdf): eram duas folhas fixas,
+  // as duas imprimindo a cota do motorista, e o percentual escrito à mão.
+  const folhas = equipeComPapel(dev);
+  const cotas  = ratearValor(totalValor, folhas.length);
+  const rateado = folhas.length > 1;
+  const percentualLabel = Math.round(100 / folhas.length) + '%';
 
   const itensTableHtml = divItens.length === 0 ? `
     <div style="padding: 10px; text-align: center; color: #64748b; font-style: italic; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc;">
@@ -10397,9 +10418,14 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
       </tbody>
     </table>`;
 
-  const via2AjudanteHtml = !temAjudante ? '' : `
-  <!-- PÁGINA 2: VIA DO AJUDANTE -->
-  <div class="page-container page-break">
+  const paginasHtml = folhas.map((pessoa, idx) => {
+    const cotaFmt = (cotas[idx] || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2});
+    const papelTitulo = pessoa.papel === 'MOTORISTA' ? 'Motorista' : 'Ajudante';
+    const papelAssin  = pessoa.papel === 'MOTORISTA' ? 'MOTORISTA / PRESTADOR' : 'AJUDANTE / COLABORADOR';
+    const outros = folhas.filter((_, i) => i !== idx).map(p => p.nome).join('  •  ');
+    return `
+  <!-- PÁGINA ${idx + 1}: VIA DE ${pessoa.nome} -->
+  <div class="page-container${idx > 0 ? ' page-break' : ''}">
     <div>
       <div class="header">
         <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
@@ -10409,17 +10435,17 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
         </div>
       </div>
 
-      <div class="badge-via">RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — VIA DO AJUDANTE (PÁGINA 2 - 50%)</div>
+      <div class="badge-via">RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — VIA DO ${pessoa.papel} (PÁGINA ${idx + 1} DE ${folhas.length} — ${percentualLabel})</div>
 
       <div class="section-title">📋 DADOS DA OCORRÊNCIA & CONFERÊNCIA FÍSICA NO CD</div>
       <div class="grid">
-        <div class="field"><div class="field-lbl">Colaborador / Ajudante</div><div class="field-val">${dev.ajudante_nome}</div></div>
+        <div class="field"><div class="field-lbl">Colaborador / ${papelTitulo}</div><div class="field-val">${pessoa.nome || 'NÃO INFORMADO'}</div></div>
         <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Conferência: ${dtEntradaCd})</div></div>
         <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
         <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
         <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
         <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
-        <div class="field" style="grid-column: span 2;"><div class="field-lbl">Motorista Vinculado (Rateio 50%)</div><div class="field-val">${dev.motorista_nome}</div></div>
+        ${outros ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Demais integrantes da equipe (Rateio ${percentualLabel} cada)</div><div class="field-val">${outros}</div></div>` : ''}
       </div>
 
       <div class="motivo-box">
@@ -10435,20 +10461,20 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
 
     <div>
       <div class="val-highlight">
-        <div class="val-lbl">VALOR DO ADIANTAMENTO DO AJUDANTE (50% do total da divergência R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
-        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
+        <div class="val-lbl">VALOR DO ADIANTAMENTO DO ${pessoa.papel} (${percentualLabel} do total da divergência R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
+        <div class="val-amt">R$ ${cotaFmt}</div>
       </div>
 
       <div class="termo">
         <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO OPERACIONAL:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> (correspondente a 50% da divergência física de produtos apurada no retorno ao CD) referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Rota: <b>${dev.carga_rota || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${cotaFmt}</b> ${rateado ? `(correspondente a ${percentualLabel} da divergência física de produtos apurada no retorno ao CD, rateada entre os ${folhas.length} integrantes da equipe)` : '(100% integral da divergência física de produtos apurada no retorno ao CD)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Rota: <b>${dev.carga_rota || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
       </div>
 
       <div class="sigs">
         <div>
           <div class="sig-space"></div>
           <div class="sig-line"></div>
-          <div class="sig-lbl">${dev.ajudante_nome}<br>(AJUDANTE / COLABORADOR)</div>
+          <div class="sig-lbl">${pessoa.nome || 'ASSINATURA'}<br>(${papelAssin})</div>
         </div>
         <div>
           <div class="sig-space"></div>
@@ -10458,6 +10484,7 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
       </div>
     </div>
   </div>`;
+  }).join('');
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -10500,68 +10527,7 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
   </style>
 </head>
 <body>
-  <!-- PÁGINA 1: VIA DO MOTORISTA -->
-  <div class="page-container">
-    <div>
-      <div class="header">
-        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
-        <div class="header-title">
-          <h2>JR DISTRIBUIDORA</h2>
-          <p>Logística Corporativa • Retorno Físico CD & Conferência</p>
-        </div>
-      </div>
-
-      <div class="badge-via">RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — VIA DO MOTORISTA (PÁGINA 1 - ${percentualLabel})</div>
-
-      <div class="section-title">📋 DADOS DA OCORRÊNCIA & CONFERÊNCIA FÍSICA NO CD</div>
-      <div class="grid">
-        <div class="field"><div class="field-lbl">Colaborador / Motorista</div><div class="field-val">${dev.motorista_nome || 'NÃO INFORMADO'}</div></div>
-        <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Conferência: ${dtEntradaCd})</div></div>
-        <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
-        ${temAjudante ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Ajudante Vinculado (Rateio 50%)</div><div class="field-val">${dev.ajudante_nome}</div></div>` : ''}
-      </div>
-
-      <div class="motivo-box">
-        <div class="motivo-lbl">MOTIVO & APURAÇÃO DA DIVERGÊNCIA NO CD</div>
-        <div class="motivo-txt">ERRO MOTORISTA — Divergência física/falta de produtos apurada na conferência de retorno ao CD</div>
-      </div>
-
-      <div class="products-section">
-        <div class="section-title">📦 ITENS COM DIVERGÊNCIA / FALTA APURADA NO RECEBIMENTO (${divItens.length})</div>
-        ${itensTableHtml}
-      </div>
-    </div>
-
-    <div>
-      <div class="val-highlight">
-        <div class="val-lbl">VALOR DO ADIANTAMENTO DO MOTORISTA (${percentualLabel} do total da divergência R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
-        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
-      </div>
-
-      <div class="termo">
-        <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO OPERACIONAL:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> ${temAjudante ? '(correspondente a 50% da divergência física de produtos apurada no retorno ao CD)' : '(100% integral)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Rota: <b>${dev.carga_rota || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
-      </div>
-
-      <div class="sigs">
-        <div>
-          <div class="sig-space"></div>
-          <div class="sig-line"></div>
-          <div class="sig-lbl">${dev.motorista_nome || 'ASSINATURA MOTORISTA'}<br>(MOTORISTA / PRESTADOR)</div>
-        </div>
-        <div>
-          <div class="sig-space"></div>
-          <div class="sig-line"></div>
-          <div class="sig-lbl">SUPERVISOR CD / LOGÍSTICA<br>(JR DISTRIBUIDORA)</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  ${via2AjudanteHtml}
+  ${paginasHtml}
 
   <script>
     window.onload = function() {
@@ -11320,6 +11286,7 @@ function limparFiltrosViagens() {
   window._vgFiltroRetornoDe = '';
   window._vgFiltroRetornoAte = '';
   window._vgFiltroIncluirSemRetorno = false;
+  window._vgFiltroForaCadastro = false;
   window._vgFiltroStatus = [];
   window._vgFiltroRota = [];
   window._vgFiltroSetor = [];
@@ -11447,6 +11414,10 @@ function vgFiltrarViagens(lista) {
     if (fChkChegada && v.checklist_chegada !== fChkChegada) return false;
     if (fFusion && v.fusion !== fFusion) return false;
 
+    // O contador de "gente fora do cadastro" e um filtro como os outros: e
+    // clicando nele que a lista vira a lista de trabalho.
+    if (window._vgFiltroForaCadastro && jrPendenciasDaViagem(v).length === 0) return false;
+
     return true;
   });
 }
@@ -11464,6 +11435,7 @@ function vgResumoDosFiltros() {
   add('Retorno de', window._vgFiltroRetornoDe);
   add('Retorno até', window._vgFiltroRetornoAte);
   if (window._vgFiltroIncluirSemRetorno) partes.push('Incluindo viagens sem data de retorno');
+  if (window._vgFiltroForaCadastro) partes.push('Só viagens com gente fora do cadastro');
   lista('Status', vgListaFiltro('status'));
   lista('Rota', vgListaFiltro('rota'));
   lista('Setor', vgListaFiltro('setor'));
@@ -11521,6 +11493,12 @@ function renderViagensLargadaSubTab() {
   const fSemRetorno   = !!window._vgFiltroIncluirSemRetorno;
   const semRetornoQtd = todasViagens.filter(v => !v.data_retorno).length;
 
+  // GENTE FORA DO CADASTRO (v6.6.0 — Bloco C). O contador existe porque um
+  // aviso espalhado pelas linhas some no meio das viagens e ninguem age: e
+  // ele que junta as viagens num lugar so e abre a lista delas.
+  const foraCadastroQtd = jrViagensComPendencia(todasViagens).length;
+  const fForaCadastro   = !!window._vgFiltroForaCadastro;
+
   const temFiltroAtivo = vgResumoDosFiltros().length > 0;
 
   return `
@@ -11558,6 +11536,18 @@ function renderViagensLargadaSubTab() {
         </div>
 
         ${renderChipsFiltrosViagem()}
+
+        ${foraCadastroQtd === 0 ? '' : `
+        <button type="button"
+                onclick="window._vgFiltroForaCadastro = !window._vgFiltroForaCadastro; renderApp()"
+                class="w-full flex items-center gap-2 border rounded-lg px-3 py-2 text-left transition ${fForaCadastro ? 'bg-amber-950/70 border-amber-500' : 'bg-slate-950 border-amber-800/60 hover:border-amber-600'}">
+          <span class="text-sm">⚠️</span>
+          <span class="flex-1 text-[11px] leading-tight">
+            <b class="text-amber-300">${foraCadastroQtd} viagem(ns) com gente fora do cadastro.</b>
+            <span class="text-slate-400">${fForaCadastro ? 'Mostrando só elas — clique para ver todas de novo.' : 'Clique para ver só elas.'}</span>
+          </span>
+          <span class="text-[10px] font-bold ${fForaCadastro ? 'text-amber-300' : 'text-slate-500'}">${fForaCadastro ? 'FILTRADO' : 'VER'}</span>
+        </button>`}
 
         <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-xs">
           <!-- Filtro Número da Carga -->
@@ -11788,8 +11778,11 @@ function renderViagensLargadaSubTab() {
                       </td>
                       <td class="p-2 border-r border-slate-800 font-semibold text-slate-200">${v.rota}</td>
                     <td class="p-2 border-r border-slate-800 font-bold text-white">${v.placa}</td>
-                    <td class="p-2 border-r border-slate-800 text-slate-300">${v.motorista}</td>
-                    <td class="p-2 border-r border-slate-800 text-slate-300">${v.ajudante}</td>
+                    <td class="p-2 border-r border-slate-800 text-slate-300">${v.motorista}${jrSeloPendencia(jrPendenciaDoCampo(v, 'ed-vg-motorista'))}</td>
+                    <td class="p-2 border-r border-slate-800 text-slate-300">
+                      ${v.ajudante}${jrSeloPendencia(jrPendenciaDoCampo(v, 'ed-vg-ajudante'))}
+                      ${v.ajudante_2 ? `<div class="text-[10px] text-emerald-400 font-semibold" title="2º ajudante">+ ${v.ajudante_2}</div>${jrSeloPendencia(jrPendenciaDoCampo(v, 'ed-vg-ajudante-2'))}` : ''}
+                    </td>
                     <td class="p-2 border-r border-slate-800 font-bold text-slate-400 text-[10px]">${v.setor||'FRIO'}</td>
                     
                     <td class="p-2 border-r border-slate-800 text-center text-[10px]">
@@ -11886,7 +11879,10 @@ function handleNovaViagemSubmit(e) {
   renderApp();
 
   if (status_viagem === 'REENTREGA') {
-    abrirModalNovaReentrega({ carga, rota, motorista, placa, data: data_saida });
+    // O ajudante vai junto: a viagem acabou de dizer quem estava nela. Aqui e
+    // so um, porque a tela de cadastro nao tem o segundo campo — ele e coisa
+    // da edicao, como decidido no plano da v6.6.0.
+    abrirModalNovaReentrega({ carga, rota, motorista, ajudante, placa, data: data_saida });
   }
 }
 
@@ -11896,6 +11892,24 @@ function deleteViagem(id) {
     renderApp();
   }
 }
+
+// O SEGUNDO AJUDANTE E OPCIONAL, e o normal e nao ter. Enquanto ninguem clicar
+// no botao, o campo nem existe na tela. "Remover" LIMPA o campo antes de
+// esconde-lo: sem isso, um clique por engano deixaria gravado um nome que
+// ninguem quis, e escondido justamente onde ninguem olharia.
+//
+// prefix serve as tres telas que ganham o botao: 'ed-vg' (editar viagem),
+// 'md-re' e 'ed-re' (reentrega).
+function toggleSegundoAjudante(prefix, mostrar) {
+  const wrap = document.getElementById(`${prefix}-aju2-wrap`);
+  const btn  = document.getElementById(`${prefix}-aju2-btn`);
+  const sel  = document.getElementById(`${prefix}-ajudante-2`);
+  if (!wrap || !btn) return;
+  wrap.classList.toggle('hidden', !mostrar);
+  btn.classList.toggle('hidden', mostrar);
+  if (!mostrar && sel) sel.value = '';
+}
+window.toggleSegundoAjudante = toggleSegundoAjudante;
 
 function editarViagemModal(id) {
   const v = db.getControleViagens().find(x => x.id == id);
@@ -11916,6 +11930,9 @@ function editarViagemModal(id) {
 
   const ajudantesOpts = ajudantes.map(a => a.nome);
   if (v.ajudante && !ajudantesOpts.includes(v.ajudante)) ajudantesOpts.push(v.ajudante);
+  // Quem ja esta gravado na viagem aparece na lista mesmo sem estar no
+  // cadastro — senao reabrir a viagem apagaria o nome em silencio.
+  if (v.ajudante_2 && !ajudantesOpts.includes(v.ajudante_2)) ajudantesOpts.push(v.ajudante_2);
 
   modalContainer.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl space-y-4">
@@ -11925,6 +11942,7 @@ function editarViagemModal(id) {
       </div>
 
       <form onsubmit="handleSalvarEdicaoViagem(event, '${v.id}')" class="space-y-3 text-xs">
+        ${jrAvisoPendenciasHtml(v)}
         <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="block text-[10px] text-emerald-400 font-bold mb-1">Data de Saída *</label>
@@ -11964,6 +11982,21 @@ function editarViagemModal(id) {
             </select>
           </div>
         </div>
+
+        <!-- SEGUNDO AJUDANTE (v6.6.0). Algumas rotas saem com dois, e a dupla
+             muda por dia. Fica SO na edicao, e escondido ate alguem pedir: quem
+             faz viagem de um ajudante so nao ve diferenca nenhuma. -->
+        <div id="ed-vg-aju2-wrap" class="${v.ajudante_2 ? '' : 'hidden'}">
+          <label class="block text-[10px] text-emerald-400 font-bold mb-1">2º Ajudante</label>
+          <div class="flex gap-2">
+            <select id="ed-vg-ajudante-2" class="flex-1 bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
+              <option value="">-- Selecione o 2º Ajudante --</option>
+              ${ajudantesOpts.map(a => `<option value="${a}" ${a === v.ajudante_2 ? 'selected' : ''}>${a}</option>`).join('')}
+            </select>
+            <button type="button" onclick="toggleSegundoAjudante('ed-vg', false)" class="bg-slate-800 border border-slate-700 text-slate-300 hover:text-red-300 font-bold px-3 rounded shrink-0">Remover</button>
+          </div>
+        </div>
+        <button type="button" id="ed-vg-aju2-btn" onclick="toggleSegundoAjudante('ed-vg', true)" class="${v.ajudante_2 ? 'hidden' : ''} text-[11px] text-emerald-400 hover:text-emerald-300 font-bold">+ Adicionar 2º ajudante</button>
 
         <div class="grid grid-cols-2 gap-2">
           <div>
@@ -12058,6 +12091,8 @@ function handleSalvarEdicaoViagem(e, id) {
   const placa = document.getElementById('ed-vg-placa').value;
   const motorista = document.getElementById('ed-vg-motorista').value;
   const ajudante = document.getElementById('ed-vg-ajudante').value;
+  // Vazio quando ninguem abriu o campo, e vazio tambem depois do "Remover".
+  const ajudante_2 = document.getElementById('ed-vg-ajudante-2')?.value || '';
   const status_viagem = document.getElementById('ed-vg-status').value;
   const setor = document.getElementById('ed-vg-setor').value;
   const data_entrega = document.getElementById('ed-vg-data-ent').value;
@@ -12094,6 +12129,7 @@ function handleSalvarEdicaoViagem(e, id) {
     placa,
     motorista,
     ajudante,
+    ajudante_2,
     status_viagem,
     setor,
     data_entrega,
@@ -12110,7 +12146,9 @@ function handleSalvarEdicaoViagem(e, id) {
   renderApp();
 
   if (status_viagem === 'REENTREGA') {
-    abrirModalNovaReentrega({ carga, rota, motorista, placa, data: data_saida });
+    // A equipe inteira vai junto — a reentrega e a mesma carga. Sem isto, quem
+    // abre a reentrega por este caminho teria de escolher os nomes de novo.
+    abrirModalNovaReentrega({ carga, rota, motorista, ajudante, ajudante_2, placa, data: data_saida });
   }
 }
 
@@ -12219,6 +12257,23 @@ function autoPreencherDadosCargaReentrega(cargaNum, prefix = 'md-re') {
       }
     }
 
+    // O SEGUNDO AJUDANTE DA VIAGEM, quando houver (v6.6.0). Alem de preencher,
+    // precisa ABRIR o campo: ele nasce escondido, e um valor selecionado dentro
+    // de uma <div class="hidden"> seria gravado sem ninguem nunca ter visto.
+    const aju2Sel = document.getElementById(`${prefix}-ajudante-2`);
+    if (aju2Sel && info.ajudante2Name) {
+      const nAju2 = norm(info.ajudante2Name);
+      let opt2 = Array.from(aju2Sel.options).find(o => norm(o.value) === nAju2 || norm(o.textContent) === nAju2);
+      if (!opt2) {
+        opt2 = document.createElement('option');
+        opt2.value = info.ajudante2Name;
+        opt2.textContent = info.ajudante2Name;
+        aju2Sel.appendChild(opt2);
+      }
+      aju2Sel.value = opt2.value;
+      if (typeof toggleSegundoAjudante === 'function') toggleSegundoAjudante(prefix, true);
+    }
+
     // Auto-preencher Data (se campo estiver vazio)
     const dataEl = document.getElementById(`${prefix}-data`);
     if (dataEl && info.data && !dataEl.value) {
@@ -12272,6 +12327,7 @@ function abrirModalNovaReentrega(dados = {}) {
   const defaultRota = dados.rota || dados.rota_nome || '';
   const defaultMotorista = dados.motorista || dados.motorista_nome || '';
   const defaultAjudante = dados.ajudante || dados.ajudante_nome || '';
+  const defaultAjudante2 = dados.ajudante_2 || '';
   const defaultPlaca = dados.placa || '';
   const defaultSaiu = parseInt(dados.entregas_saiu) || 0;
   const defaultFeitas = parseInt(dados.entregas_feitas) || 0;
@@ -12285,6 +12341,7 @@ function abrirModalNovaReentrega(dados = {}) {
 
   const ajudantesOpts = ajudantes.map(a => a.nome || a);
   if (defaultAjudante && !ajudantesOpts.includes(defaultAjudante)) ajudantesOpts.push(defaultAjudante);
+  if (defaultAjudante2 && !ajudantesOpts.includes(defaultAjudante2)) ajudantesOpts.push(defaultAjudante2);
 
   const veiculosOpts = veiculos.map(v => v.placa || v);
   if (defaultPlaca && !veiculosOpts.includes(defaultPlaca)) veiculosOpts.push(defaultPlaca);
@@ -12347,6 +12404,18 @@ function abrirModalNovaReentrega(dados = {}) {
             </select>
           </div>
         </div>
+
+        <div id="md-re-aju2-wrap" class="${defaultAjudante2 ? '' : 'hidden'}">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">2º Ajudante</label>
+          <div class="flex gap-2">
+            <select id="md-re-ajudante-2" class="flex-1 bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+              <option value="">-- Selecione o 2º Ajudante --</option>
+              ${ajudantesOpts.map(a => `<option value="${a}" ${a === defaultAjudante2 ? 'selected' : ''}>${a}</option>`).join('')}
+            </select>
+            <button type="button" onclick="toggleSegundoAjudante('md-re', false)" class="bg-slate-800 border border-slate-700 text-slate-300 hover:text-red-300 font-bold px-3 rounded shrink-0 text-xs">Remover</button>
+          </div>
+        </div>
+        <button type="button" id="md-re-aju2-btn" onclick="toggleSegundoAjudante('md-re', true)" class="${defaultAjudante2 ? 'hidden' : ''} text-[11px] text-emerald-400 hover:text-emerald-300 font-bold">+ Adicionar 2º ajudante</button>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Novo Motorista (Opcional)</label>
@@ -12412,7 +12481,11 @@ function handleSalvarNovaReentregaModal(e) {
     rota_nome: document.getElementById('md-re-rota').value,
     placa: document.getElementById('md-re-placa').value,
     motorista_nome: document.getElementById('md-re-motorista').value,
-    ajudante_nome: document.getElementById('md-re-ajudante')?.value || null,
+    // 'ajudante' / 'ajudante_2', e nao 'ajudante_nome': sao os nomes das
+    // colunas. Ate a v6.5.1 este campo era coletado aqui e descartado no
+    // store, que montava o registro sem ele.
+    ajudante: document.getElementById('md-re-ajudante')?.value || null,
+    ajudante_2: document.getElementById('md-re-ajudante-2')?.value || null,
     novo_motorista: document.getElementById('md-re-novo-motorista').value || null,
     entregas_saiu: parseInt(document.getElementById('md-re-ent-saiu').value) || 0,
     entregas_feitas: parseInt(document.getElementById('md-re-ent-feitas').value) || 0,
@@ -12456,7 +12529,8 @@ function abrirModalEditarReentrega(id) {
     "OUTROS"
   ];
 
-  const defaultAjudante = item.ajudante_nome || item.ajudante || '';
+  const defaultAjudante = item.ajudante || item.ajudante_nome || '';
+  const defaultAjudante2 = item.ajudante_2 || '';
 
   const rotasOpts = [...rotas];
   if (item.rota_nome && !rotasOpts.includes(item.rota_nome)) rotasOpts.push(item.rota_nome);
@@ -12466,6 +12540,7 @@ function abrirModalEditarReentrega(id) {
 
   const ajudantesOpts = ajudantes.map(a => a.nome || a);
   if (defaultAjudante && !ajudantesOpts.includes(defaultAjudante)) ajudantesOpts.push(defaultAjudante);
+  if (defaultAjudante2 && !ajudantesOpts.includes(defaultAjudante2)) ajudantesOpts.push(defaultAjudante2);
 
   const veiculosOpts = veiculos.map(v => v.placa || v);
   if (item.placa && !veiculosOpts.includes(item.placa)) veiculosOpts.push(item.placa);
@@ -12529,6 +12604,18 @@ function abrirModalEditarReentrega(id) {
           </div>
         </div>
 
+        <div id="ed-re-aju2-wrap" class="${defaultAjudante2 ? '' : 'hidden'}">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">2º Ajudante</label>
+          <div class="flex gap-2">
+            <select id="ed-re-ajudante-2" class="flex-1 bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+              <option value="">-- Selecione o 2º Ajudante --</option>
+              ${ajudantesOpts.map(a => `<option value="${a}" ${a === defaultAjudante2 ? 'selected' : ''}>${a}</option>`).join('')}
+            </select>
+            <button type="button" onclick="toggleSegundoAjudante('ed-re', false)" class="bg-slate-800 border border-slate-700 text-slate-300 hover:text-red-300 font-bold px-3 rounded shrink-0 text-xs">Remover</button>
+          </div>
+        </div>
+        <button type="button" id="ed-re-aju2-btn" onclick="toggleSegundoAjudante('ed-re', true)" class="${defaultAjudante2 ? 'hidden' : ''} text-[11px] text-emerald-400 hover:text-emerald-300 font-bold">+ Adicionar 2º ajudante</button>
+
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Novo Motorista (Opcional)</label>
           <select id="ed-re-novo-motorista" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
@@ -12589,7 +12676,8 @@ function handleSalvarEdicaoReentrega(e, id) {
     rota_nome: document.getElementById('ed-re-rota').value,
     placa: document.getElementById('ed-re-placa').value,
     motorista_nome: document.getElementById('ed-re-motorista').value,
-    ajudante_nome: document.getElementById('ed-re-ajudante')?.value || null,
+    ajudante: document.getElementById('ed-re-ajudante')?.value || null,
+    ajudante_2: document.getElementById('ed-re-ajudante-2')?.value || null,
     novo_motorista: document.getElementById('ed-re-novo-motorista').value || null,
     entregas_saiu: parseInt(document.getElementById('ed-re-ent-saiu').value) || 0,
     entregas_feitas: parseInt(document.getElementById('ed-re-ent-feitas').value) || 0,
@@ -15384,8 +15472,9 @@ function renderViagensReentregasSubTab() {
                 return `
                   <tr class="hover:bg-slate-800/60 transition">
                     <td class="p-2.5 border-r border-slate-800 text-center font-medium text-slate-300 whitespace-nowrap">${fmtData(r.data)}</td>
-                    <td class="p-2.5 border-r border-slate-800 font-bold text-white flex items-center gap-1.5">
-                      <span>👤</span> ${r.motorista_nome || '—'}
+                    <td class="p-2.5 border-r border-slate-800 font-bold text-white">
+                      <div class="flex items-center gap-1.5"><span>👤</span> ${r.motorista_nome || '—'}</div>
+                      ${(r.ajudante || r.ajudante_2) ? `<div class="text-[10px] font-semibold text-slate-400 pl-5 mt-0.5" title="Ajudantes da reentrega">🙋 ${[r.ajudante, r.ajudante_2].filter(Boolean).join(' + ')}</div>` : ''}
                     </td>
                     <td class="p-2.5 border-r border-slate-800 text-center font-mono font-bold text-purple-400 bg-slate-950/40">${r.carga_numero || '—'}</td>
                     <td class="p-2.5 border-r border-slate-800 font-semibold text-slate-200">${r.rota_nome || '—'}</td>
@@ -15990,7 +16079,7 @@ function gerarRelatorioLargadaOperacaoModal() {
               <td>${v.rota}</td>
               <td><b>${v.placa}</b></td>
               <td>${v.motorista}</td>
-              <td>${v.ajudante}</td>
+              <td>${v.ajudante}${v.ajudante_2 ? `<br><span style="font-size:9.5px;color:#047857;font-weight:bold;">+ ${v.ajudante_2}</span>` : ''}</td>
               <td>${v.setor||'FRIO'}</td>
               <td>${(v.data_saida || v.hora_saida) ? `${formatarData(v.data_saida)} ${v.hora_saida||'—'}` : '—'}</td>
               <td>${v.status_viagem ? `<span class="badge-status" style="${corStatusViagem(v.status_viagem).css}">${v.status_viagem}</span>` : '—'}</td>
@@ -22372,6 +22461,7 @@ const MODULE_COLUMNS_MAP = {
     { id: 'veiculo_placa', label: 'Placa Veículo' },
     { id: 'motorista_nome', label: 'Motorista' },
     { id: 'ajudante_nome', label: 'Ajudante' },
+    { id: 'ajudante_2_nome', label: '2º Ajudante' },
     { id: 'cliente_codigo', label: 'Cód Cliente' },
     { id: 'cliente_nome', label: 'Nome Cliente' },
     { id: 'nota_fiscal', label: 'Nota Fiscal (NF)' },
@@ -22445,6 +22535,7 @@ const MODULE_COLUMNS_MAP = {
     { id: 'placa', label: 'Placa do Veículo' },
     { id: 'motorista', label: 'Motorista Principal' },
     { id: 'ajudante', label: 'Ajudante' },
+    { id: 'ajudante_2', label: '2º Ajudante' },
     { id: 'setor', label: 'Setor / Operação' },
     { id: 'data_saida', label: 'Data de Saída' },
     { id: 'hora_saida', label: 'Hora de Saída' },
@@ -22519,6 +22610,8 @@ const MODULE_COLUMNS_MAP = {
   transporte_reentregas: [
     { id: 'data', label: 'Data da Operação' },
     { id: 'motorista_nome', label: 'Motorista Original' },
+    { id: 'ajudante', label: 'Ajudante' },
+    { id: 'ajudante_2', label: '2º Ajudante' },
     { id: 'carga_numero', label: 'Nº Carga' },
     { id: 'rota_nome', label: 'Nome da Rota' },
     { id: 'placa', label: 'Placa' },
@@ -22537,6 +22630,7 @@ const MODULE_COLUMNS_MAP = {
     { id: 'placa', label: 'Placa do Veículo' },
     { id: 'motorista', label: 'Motorista Principal' },
     { id: 'ajudante', label: 'Ajudante' },
+    { id: 'ajudante_2', label: '2º Ajudante' },
     { id: 'data_saida', label: 'Data de Saída' },
     { id: 'hora_saida', label: 'Hora de Saída' },
     { id: 'status_viagem', label: 'Status da Viagem' },
@@ -25357,8 +25451,269 @@ function normalizeStr(str) {
   return String(str || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    // Colapsa espaco repetido (v6.6.0). Sem isto, "EDSON  DOS  SANTOS" — que
+    // esta gravado assim mesmo, com espaco duplo — nunca casava com
+    // "EDSON DOS SANTOS" do cadastro, e a pessoa aparecia como se nao
+    // existisse. Espaco a mais nao faz de alguem outra pessoa.
+    .replace(/\s+/g, ' ')
     .trim()
     .toUpperCase();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GENTE FORA DO CADASTRO (v6.6.0 — Bloco C)
+//
+// O sistema comparava o nome vindo da planilha com os do cadastro LETRA POR
+// LETRA. `JOSE` e `JOSÉ` eram pessoas diferentes para ele; sobrenome a mais,
+// abreviacao ou um espaco sobrando viravam "nao achei". E nao reclamava:
+// so aparecia "N/A" no fim da linha, sem dizer por que.
+//
+// A comparacao aqui e TOLERANTE de proposito. Se fosse letra por letra, o
+// aviso gritaria em cima de `JOSÉ` vs `JOSE`, que e a mesma pessoa, e em uma
+// semana ninguem olharia mais para ele.
+//
+// E o sistema NUNCA amarra sozinho: quando acha parecido, ele PERGUNTA.
+// Quem confirma e gente.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Distancia de edicao (Levenshtein). Nomes sao curtos; nao vale nada mais
+// esperto que isto aqui.
+function jrDistanciaNome(a, b) {
+  a = String(a || ''); b = String(b || '');
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+  const linha = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let anterior = linha[0];
+    linha[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const guardado = linha[j];
+      linha[j] = Math.min(
+        linha[j] + 1,                                 // remocao
+        linha[j - 1] + 1,                             // insercao
+        anterior + (a[i - 1] === b[j - 1] ? 0 : 1)    // troca
+      );
+      anterior = guardado;
+    }
+  }
+  return linha[b.length];
+}
+
+// Confere UM nome contra a lista do cadastro.
+//
+// Devolve { status, sugestao }:
+//   'ok'         achou (ignorando acento, caixa e espaco sobrando)
+//   'dois_nomes' ha DOIS nomes enfiados neste campo, separados por barra — o
+//                contorno que o pessoal inventou enquanto so havia uma vaga de
+//                ajudante. O conserto nao e cadastrar ninguem: e separar, no
+//                campo do 2o ajudante. Por isso e um caso a parte, com outro
+//                texto e sem sugestao de nome.
+//   'quase'      nao achou igual, mas achou parecido -> sugestao
+//   'fora'       nao achou nada parecido
+//   'vazio'      campo em branco: nao e defeito, e ausencia
+// MEMORIA DO QUE JA FOI CONFERIDO. Sem isto, desenhar a tela de viagens custa
+// caro: 197 viagens x 3 campos x ~40 nomes de cadastro, cada par passando por
+// uma distancia de edicao — e a conta roda DUAS vezes, uma para o contador e
+// outra para as linhas. Os nomes se repetem muito ("ALISON CARMO LEITE"
+// aparece 7 vezes), entao guardar o veredito por nome resolve quase tudo.
+//
+// A chave e a PROPRIA LISTA (WeakMap): trocou o array — que e o que o
+// syncCloudToLocal faz quando o cadastro muda na nuvem — o cache vai junto,
+// sozinho. O tamanho guardado cobre cadastrar e excluir gente. Renomear
+// alguem sem mudar a quantidade e o unico caso que sobrevive ao cache, e ele
+// se resolve no proximo pull ou ao recarregar o app.
+const JR_CACHE_CADASTRO = new WeakMap();
+
+function jrConferirCadastro(nome, listaNomes) {
+  const bruto = String(nome || '').trim();
+  if (!bruto) return { status: 'vazio', sugestao: '' };
+  if (bruto.includes('/')) return { status: 'dois_nomes', sugestao: '' };
+
+  const alvo = normalizeStr(bruto);
+  if (!alvo) return { status: 'vazio', sugestao: '' };
+
+  let cache = null;
+  if (listaNomes && typeof listaNomes === 'object') {
+    cache = JR_CACHE_CADASTRO.get(listaNomes);
+    if (!cache || cache.tamanho !== listaNomes.length) {
+      cache = { tamanho: listaNomes.length, mapa: new Map() };
+      JR_CACHE_CADASTRO.set(listaNomes, cache);
+    }
+    if (cache.mapa.has(alvo)) return cache.mapa.get(alvo);
+  }
+  const guardar = (r) => { if (cache) cache.mapa.set(alvo, r); return r; };
+
+  const nomes = (listaNomes || [])
+    .map(n => (n && typeof n === 'object') ? (n.nome || '') : n)
+    .filter(Boolean);
+
+  for (const n of nomes) {
+    if (normalizeStr(n) === alvo) return guardar({ status: 'ok', sugestao: n });
+  }
+
+  // Nao achou igual. Ha alguem parecido o bastante para valer a pergunta?
+  //
+  // TRES regras, e todas as tres vieram de nome que esta gravado no banco
+  // hoje — nenhuma foi inventada:
+  //
+  //   contido   -> "DOUGLAS" dentro de "DOUGLAS DA COSTA LIMA", "MARCOS ROB"
+  //                dentro de "MARCOS ROBERTO" (nome truncado no meio)
+  //   distancia -> "JOSE LEANDO" x "JOSE LEANDRO", "LUKAS CARLOS" x "LUCAS
+  //                CARLOS", "MARCOS ROBBERTO" x "MARCOS ROBERTO" (erro de digito)
+  //   pedacos   -> "ALISON CARMO LEITE" x "ALISON DO CARMO LEITE" (faltou o
+  //                "DO"), "ANOEL FILHO T. DOS SANTOS" x "ANOEL FILHO TEIXEIRA
+  //                DOS SANTOS" (nome do meio abreviado). Estes dois nao cabem
+  //                em distancia de letra nenhuma — a diferenca e de PALAVRA —
+  //                e sem esta regra apareciam como gente que nao existe.
+  //
+  // Os pisos existem para nao sugerir besteira: em nome curto, duas letras de
+  // diferenca ja e outra pessoa.
+  let melhor = '', melhorPeso = Infinity;
+  const pedacosAlvo = jrPedacosDoNome(alvo);
+  for (const n of nomes) {
+    const cand = normalizeStr(n);
+    if (!cand) continue;
+    const menor = Math.min(cand.length, alvo.length);
+    const contido = menor >= 5 && (cand.includes(alvo) || alvo.includes(cand));
+    const dist = jrDistanciaNome(alvo, cand);
+    const proximo = menor >= 6 && dist <= 2;
+    const porPedacos = jrParecemMesmoNome(pedacosAlvo, jrPedacosDoNome(cand));
+    if (!contido && !proximo && !porPedacos) continue;
+    // Peso menor = palpite melhor. A distancia de letras serve de desempate
+    // mesmo quando quem aprovou foi outra regra.
+    const peso = contido ? Math.abs(cand.length - alvo.length) : dist;
+    if (peso < melhorPeso) { melhorPeso = peso; melhor = n; }
+  }
+
+  return guardar(melhor ? { status: 'quase', sugestao: melhor } : { status: 'fora', sugestao: '' });
+}
+
+// O nome quebrado em palavras que importam. "DE", "DA", "DOS" e afins saem:
+// e justamente a palavrinha que some quando alguem digita com pressa, e a
+// presenca dela nunca distingue duas pessoas.
+function jrPedacosDoNome(nomeNormalizado) {
+  const LIGACOES = ['DE', 'DA', 'DO', 'DAS', 'DOS', 'E'];
+  return String(nomeNormalizado || '')
+    .split(' ')
+    .map(p => p.replace(/\.$/, ''))          // "T." -> "T"
+    .filter(p => p && !LIGACOES.includes(p));
+}
+
+// Duas listas de pedacos sao provavelmente a mesma pessoa?
+//
+// Exige que o PRIMEIRO NOME bata — e o pedaco que ninguem erra — e que a
+// maioria do resto tambem bata, aceitando inicial no lugar do nome inteiro
+// ("T" por "TEIXEIRA"). Nao decide nada sozinho: so autoriza a PERGUNTA.
+function jrParecemMesmoNome(a, b) {
+  if (a.length < 2 || b.length < 2) return false;
+  if (a[0] !== b[0]) return false;
+  const curto = a.length <= b.length ? a : b;
+  const longo = a.length <= b.length ? b : a;
+  const disponiveis = longo.slice();
+  let casaram = 0;
+  curto.forEach(p => {
+    const i = disponiveis.findIndex(q =>
+      q === p || (p.length === 1 && q.startsWith(p)) || (q.length === 1 && p.startsWith(q))
+    );
+    if (i >= 0) { casaram++; disponiveis.splice(i, 1); }
+  });
+  return (casaram / curto.length) >= 0.6;
+}
+
+// As pendencias de cadastro de UMA viagem — motorista e os dois ajudantes.
+// Vazio quando esta tudo certo, que e o caso normal.
+function jrPendenciasDaViagem(v) {
+  if (!v) return [];
+  const motoristas = (db.data && db.data.motoristas) || [];
+  const ajudantes  = (db.data && db.data.ajudantes)  || [];
+  const campos = [
+    { rotulo: 'Motorista',   valor: v.motorista,  lista: motoristas, campoId: 'ed-vg-motorista' },
+    { rotulo: 'Ajudante',    valor: v.ajudante,   lista: ajudantes,  campoId: 'ed-vg-ajudante' },
+    { rotulo: '2º Ajudante', valor: v.ajudante_2, lista: ajudantes,  campoId: 'ed-vg-ajudante-2' }
+  ];
+  const pendencias = [];
+  campos.forEach(c => {
+    const r = jrConferirCadastro(c.valor, c.lista);
+    // 'vazio' fica de fora: ajudante em branco e o caso normal de quem faz
+    // viagem sem ajudante, e o motorista em branco o formulario ja barra.
+    if (r.status === 'ok' || r.status === 'vazio') return;
+    pendencias.push({ rotulo: c.rotulo, valor: String(c.valor || '').trim(), campoId: c.campoId, status: r.status, sugestao: r.sugestao });
+  });
+  return pendencias;
+}
+
+// Quantas viagens da lista tem gente fora do cadastro. Sem este contador o
+// aviso vira enfeite: some no meio das viagens e ninguem age.
+function jrViagensComPendencia(lista) {
+  return (lista || []).filter(v => jrPendenciasDaViagem(v).length > 0);
+}
+
+// O selo que aparece na lista, embaixo do nome. Curto de proposito: a coluna
+// e estreita, e o texto inteiro fica no title.
+function jrSeloPendencia(p) {
+  if (!p) return '';
+  const rotulo = { dois_nomes: 'dois nomes', quase: 'conferir', fora: 'fora do cadastro' }[p.status];
+  if (!rotulo) return '';
+  const dica = p.status === 'dois_nomes'
+      ? 'Há dois nomes neste campo. Abra a viagem e separe usando o 2º ajudante.'
+      : p.status === 'quase'
+        ? `Não está no cadastro. Parece ser ${p.sugestao} — abra a viagem para confirmar.`
+        : 'Esta pessoa não está no cadastro.';
+  return `<div class="text-[9px] font-bold text-amber-400 mt-0.5 leading-tight" title="${vgEscAttr(dica)}">⚠️ ${rotulo}</div>`;
+}
+
+// A pendencia de UM campo da viagem, ou null. Usada pela lista, que precisa
+// marcar a celula certa.
+function jrPendenciaDoCampo(v, campoId) {
+  return jrPendenciasDaViagem(v).find(p => p.campoId === campoId) || null;
+}
+
+// O clique do "é ele?". NAO SALVA — so preenche o campo e diz que falta
+// salvar. Quem confirma e gente, e confirmar e apertar Salvar.
+function jrAplicarSugestao(campoId, nome, avisoId) {
+  const sel = document.getElementById(campoId);
+  if (!sel) return;
+  let opt = Array.from(sel.options).find(o => o.value === nome);
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.value = nome;
+    opt.textContent = nome;
+    sel.appendChild(opt);
+  }
+  sel.value = nome;
+  // Se a sugestao for para o 2o ajudante, o campo pode estar escondido —
+  // preencher sem abrir gravaria um nome que ninguem viu.
+  if (campoId.endsWith('-ajudante-2')) toggleSegundoAjudante(campoId.slice(0, -('-ajudante-2'.length)), true);
+  const linha = document.getElementById(avisoId);
+  if (linha) linha.innerHTML = `<span class="text-emerald-400 font-bold">✔ ${nome} — falta apertar “Salvar Atualização”.</span>`;
+}
+window.jrAplicarSugestao = jrAplicarSugestao;
+
+// O bloco de aviso da tela de edicao. Vazio quando esta tudo certo — que e o
+// caso normal, e por isso a tela nao muda para quem nao tem pendencia.
+function jrAvisoPendenciasHtml(v) {
+  const pend = jrPendenciasDaViagem(v);
+  if (!pend.length) return '';
+  const linhas = pend.map((p, i) => {
+    const id = `ed-vg-aviso-${i}`;
+    if (p.status === 'dois_nomes') {
+      return `<li id="${id}">Há <b>dois nomes</b> no campo ${p.rotulo}: <b class="text-white">${p.valor}</b>.
+              Deixe só um aqui e ponha o outro no <b>2º ajudante</b>.</li>`;
+    }
+    if (p.status === 'quase') {
+      return `<li id="${id}">${p.rotulo} <b class="text-white">${p.valor}</b> não está no cadastro.
+              Parece ser <b class="text-amber-200">${p.sugestao}</b> — é ele?
+              <button type="button" onclick="jrAplicarSugestao('${p.campoId}','${vgEscAttr(p.sugestao)}','${id}')"
+                class="ml-1 bg-amber-900/70 hover:bg-amber-800 border border-amber-600 text-amber-100 font-bold px-2 py-0.5 rounded text-[10px]">Sim, é ele</button></li>`;
+    }
+    return `<li id="${id}">${p.rotulo} <b class="text-white">${p.valor}</b> não está no cadastro.
+            Enquanto não for cadastrado, não aparece na lista para ser escolhido.</li>`;
+  }).join('');
+  return `
+    <div class="bg-amber-950/40 border border-amber-700/70 rounded-lg p-2.5">
+      <div class="text-[10px] font-bold text-amber-300 uppercase mb-1">⚠️ Gente fora do cadastro</div>
+      <ul class="text-[11px] text-amber-100/90 space-y-1 list-disc list-inside leading-snug">${linhas}</ul>
+    </div>`;
 }
 
 function getDadosColaboradorMestre(nomeOuChapa) {

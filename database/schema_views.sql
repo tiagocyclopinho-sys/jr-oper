@@ -216,6 +216,19 @@ SELECT
     r.criado_por,
     r.recebido_cd_por,
     r.despachado_por,
-    r.cancelada_por
+    r.cancelada_por,
+
+    -- A EQUIPE DA REENTREGA (v6.6.0 / migration 40). Ate a v6.5.1 o BI nao
+    -- tinha como saber quem foi na reentrega: o campo existia na tela e o nome
+    -- era descartado antes de chegar ao banco. Reentrega anterior a 07/09/2026
+    -- vem com os dois nulos, e nao ha de onde recuperar.
+    --
+    -- FICAM NO FIM DA LISTA DE PROPOSITO, e nao ao lado do motorista, onde
+    -- seriam mais faceis de ler: CREATE OR REPLACE VIEW so aceita coluna nova
+    -- ACRESCENTADA NO FIM. No meio, recriar esta view sobre a que ja existe
+    -- falha com "cannot change name of view column", e ai seria preciso um
+    -- DROP — que derruba a conexao do Power BI junto.
+    r.ajudante                     AS ajudante,
+    r.ajudante_2                   AS ajudante_2
 FROM reentregas_rota r
 WHERE COALESCE(r.is_deleted, FALSE) = FALSE;
