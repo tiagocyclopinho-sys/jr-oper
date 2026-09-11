@@ -1452,6 +1452,11 @@ class Store {
   updateAcaoGestor(id, dados) {
     const dev = this.data.ocorrencias_devolucao.find(d => d.id == id);
     if (!dev) return;
+    const antes = {
+      acao_gestor: dev.acao_gestor,
+      desconto_produtividade_gestor: dev.desconto_produtividade_gestor,
+      status_gestao: dev.status_gestao
+    };
     dev.acao_gestor = dados.acao_gestor;
     dev.desconto_produtividade_gestor = dados.desconto_produtividade_gestor;
     dev.separador_apurado = dados.separador_apurado;
@@ -1459,6 +1464,22 @@ class Store {
     dev.status_gestao = dados.status_gestao;
     dev.data_acao_gestor = agoraIsoBrasilia();
     dev.gestor_id = this.currentUser ? this.currentUser.id : null;
+    // A ação do gestor era a ÚNICA edição de devolução que não carimbava
+    // atualizado_em — só data_acao_gestor. A mesclagem do pull
+    // (cloudStore.js, "DESEMPATE POR atualizado_em") decide pelo carimbo
+    // quando local e nuvem divergem; sem ele, a ação ficava com a data da
+    // última análise e perdia para QUALQUER outra edição do mesmo registro
+    // feita em outro aparelho — descartada em silêncio antes de subir. Foi o
+    // que apagou a ação da DEV-004 em 11/09/2026 (edição SAC às 09:25 em
+    // outro aparelho venceu a ação do gestor). Também não havia logAudit,
+    // então o sumiço não deixava rastro nenhum.
+    this.carimbarEdicao('ocorrencias_devolucao', dev);
+    this.logAudit({
+      acao: 'ACAO_GESTOR',
+      modulo: 'ocorrencias_devolucao',
+      registro_id: id,
+      diff: { antes, depois: { acao_gestor: dev.acao_gestor, desconto_produtividade_gestor: dev.desconto_produtividade_gestor, status_gestao: dev.status_gestao } }
+    });
 
     if (dados.desconto_produtividade_gestor) {
       if (!this.data.auditoria_produtividade) this.data.auditoria_produtividade = [];
@@ -2204,6 +2225,9 @@ class Store {
       dev.destino_cd = destino_cd;
       dev.status_fechamento = status_fechamento;
       dev.data_entrada_cd = agoraIsoBrasilia();
+      // Mesma classe do bug da ação do gestor (11/09/2026): sem carimbo, a
+      // recepção no CD perdia para qualquer edição concorrente da devolução.
+      this.carimbarEdicao('ocorrencias_devolucao', dev);
 
       if (Array.isArray(itensDestinos) && itensDestinos.length > 0) {
         itensDestinos.forEach(idst => {
@@ -2220,6 +2244,7 @@ class Store {
             if (idst.destino === 'PRODUTOS_NEGOCIACAO') {
               item.status_negociacao = item.status_negociacao || 'EM_NEGOCIACAO';
             }
+            this.carimbarEdicao('itens_devolucao', item);
           }
         });
       }
@@ -2232,6 +2257,7 @@ class Store {
     if (item) {
       item.status_negociacao = statusNegociacao;
       item.data_negociacao = agoraIsoBrasilia();
+      this.carimbarEdicao('itens_devolucao', item);
       this.save();
       return true;
     }
@@ -2596,6 +2622,7 @@ class Store {
     const v = this.data.controle_viagens.find(x => x.id == id);
     if (v) {
       Object.assign(v, updateData);
+      this.carimbarEdicao('controle_viagens', v);
       this.save();
     }
   }
@@ -2612,6 +2639,7 @@ class Store {
         item.is_deleted = true;
         item.deleted_at = agoraIsoBrasilia();
         item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+        this.carimbarEdicao('controle_viagens', item);
         this.save();
       }
     }
@@ -2649,6 +2677,7 @@ class Store {
     const item = this.data.ocorrencias_viagens.find(x => x.id == id);
     if (item) {
       Object.assign(item, updateData);
+      this.carimbarEdicao('ocorrencias_viagens', item);
       this.save();
     }
   }
@@ -2662,6 +2691,7 @@ class Store {
         item.is_deleted = true;
         item.deleted_at = agoraIsoBrasilia();
         item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+        this.carimbarEdicao('ocorrencias_viagens', item);
         this.save();
       }
     }
@@ -2797,6 +2827,7 @@ class Store {
     const item = this.data.trocas_veiculos.find(x => x.id == id);
     if (item) {
       Object.assign(item, updateData);
+      this.carimbarEdicao('trocas_veiculos', item);
       this.save();
     }
   }
@@ -2810,6 +2841,7 @@ class Store {
         item.is_deleted = true;
         item.deleted_at = agoraIsoBrasilia();
         item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+        this.carimbarEdicao('trocas_veiculos', item);
         this.save();
       }
     }
@@ -2983,6 +3015,9 @@ class Store {
     // colaboradores_cd, ocorrencias_rota — nunca chegava na nuvem.
     item.deleted_by_usuario_id = this.currentUser ? this.currentUser.id : null;
     item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    // Exclusão é edição: sem carimbo, a mesclagem do pull podia desfazer a
+    // exclusão em silêncio (ver carimbarEdicao, 11/09/2026).
+    this.carimbarEdicao(collection, item);
 
     // Cliente e produto não moram no 'jr_sac_db' que o save() abaixo grava —
     // moram no delta do catálogo (js/catalogoStore.js). Sem esta marca, a
@@ -3004,6 +3039,7 @@ class Store {
     const item = this.data[collection].find(x => x.id == id);
     if (!item) return false;
     item.is_deleted = false;
+    this.carimbarEdicao(collection, item);
     if (collection === 'clientes' || collection === 'produtos') this.marcarCatalogoSujo();
 
     // SIMETRIA COM deleteDevolucao(): ela marca os itens filhos junto, então
@@ -3217,6 +3253,28 @@ class Store {
   // auditoria simplesmente ficou de fora daquela correcao. Agora usa a MESMA
   // poda: o log continua provando QUE havia midia e quanta, que e o que uma
   // trilha precisa dizer, sem carregar o pixel.
+  // CARIMBO DE EDIÇÃO (11/09/2026) — o pull da nuvem (cloudStore.js,
+  // "DESEMPATE POR atualizado_em") decide entre a cópia local e a da nuvem
+  // pelo carimbo: quando divergem, ganha a mais nova. Toda edição de verdade
+  // precisa carimbar, senão perde para qualquer outra edição do mesmo
+  // registro feita em outro aparelho — e perde em silêncio, antes de subir.
+  // Foi o que apagou a ação do gestor na DEV-004.
+  //
+  // Só carimba nas coleções cuja TABELA tem a coluna: para as demais, a
+  // chave inexistente derrubaria o lote inteiro no POST (PGRST204).
+  // atualizado_por idem, em lista ainda menor. A chave é a coleção LOCAL
+  // (db.data.X); 'reentregas' é a tabela reentregas_rota.
+  // As listas vivem em Store.COLECOES_COM_ATUALIZADO_EM / _POR, logo após
+  // a classe (mesmo padrão de CloudStore.COLUNAS_POR_TABELA).
+  carimbarEdicao(collection, rec) {
+    if (!rec || !Store.COLECOES_COM_ATUALIZADO_EM.has(collection)) return rec;
+    rec.atualizado_em = agoraIsoBrasilia();
+    if (Store.COLECOES_COM_ATUALIZADO_POR.has(collection)) {
+      rec.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    }
+    return rec;
+  }
+
   logAudit({ acao, modulo, registro_id, diff }) {
     if (!this.data.audit_logs) this.data.audit_logs = [];
     const entry = {
@@ -3338,6 +3396,9 @@ class Store {
     const midiaAtual = {};
     CAMPOS_MIDIA.forEach(c => { if (c in list[idx]) midiaAtual[c] = list[idx][c]; });
     list[idx] = Object.assign(JSON.parse(JSON.stringify(versionObj.dados_json)), midiaAtual);
+    // A versão restaurada traz o atualizado_em ANTIGO. Sem recarimbar, a
+    // nuvem (mais nova) venceria no próximo pull e desfaria o rollback.
+    this.carimbarEdicao(collection, list[idx]);
     this.logAudit({ acao: 'ROLLBACK_VERSAO', modulo: collection, registro_id: recordId, diff: { versao_restaurada: versionObj.versao } });
     this.save();
     return { success: true };
@@ -3734,6 +3795,14 @@ class Store {
     if (descricaoAcao !== undefined) {
       retencao.descricao_acao_liberacao = descricaoAcao;
     }
+    // Carimbo de alteracao (10/09/2026). Sem ele, a liberacao era a UNICA
+    // operacao de retencao que nao gravava atualizado_em — updateRetencaoFrota()
+    // ja gravava. O desempate do pull (cloudStore._mesclarPorRegistro) usa esse
+    // carimbo para decidir entre a versao local e a da nuvem quando os dois
+    // lados mexeram; sem ele, a liberacao caia sempre no desempate cego
+    // "o local vence", que e o que manteve a manutencao e o CCO vendo telas
+    // diferentes do mesmo veiculo por dias.
+    retencao.atualizado_em = agoraIsoBrasilia();
     this.save();
     return { success: true, retencao };
   }
@@ -4060,6 +4129,7 @@ class Store {
     if (!s) return { success: false, message: 'Sinistro não encontrado.' };
     s.is_deleted = true;
     s.deleted_at = agoraIsoBrasilia();
+    this.carimbarEdicao('sinistros', s);
     return { success: this.save() };
   }
 
@@ -4088,6 +4158,7 @@ class Store {
     retencao.is_deleted = true;
     retencao.deleted_at = agoraIsoBrasilia();
     retencao.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    this.carimbarEdicao('retencoes_frota', retencao);
     this.save();
     return { success: true };
   }
@@ -4718,6 +4789,7 @@ class Store {
     item.is_deleted = true;
     item.deleted_at = agoraIsoBrasilia();
     item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    this.carimbarEdicao('reentregas', item);
     // (achado em 20/08/2026) não existe coluna deleted_by em reentregas_rota
     // — só deleted_by_nome, já preenchida acima. Ver mesmo achado em softDelete().
 
@@ -4731,6 +4803,18 @@ class Store {
     return { success: true };
   }
 }
+
+// Listas usadas por Store#carimbarEdicao() — fora do corpo da classe, como
+// CloudStore.COLUNAS_POR_TABELA, para não depender de campo estático de
+// classe em navegador antigo de celular. Chave = coleção LOCAL (db.data.X).
+// clientes/produtos ficam de fora de propósito: lá quem carimba é o trigger
+// do banco (migration 36) e a projeção do push nem envia a coluna.
+Store.COLECOES_COM_ATUALIZADO_EM = new Set([
+  'ocorrencias_devolucao', 'itens_devolucao', 'ocorrencias_rota', 'ocorrencias_viagens',
+  'controle_viagens', 'reentregas', 'resumo_diario_cd', 'retencoes_frota', 'sinistros',
+  'trocas_veiculos'
+]);
+Store.COLECOES_COM_ATUALIZADO_POR = new Set(['ocorrencias_devolucao', 'ocorrencias_rota', 'reentregas']);
 
 var db;
 try {

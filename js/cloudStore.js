@@ -3179,7 +3179,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "filtro-retorno-em-andamento-6.6.2";
+CloudStore.BUILD = "carimbo-acao-gestor-6.6.3";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3231,6 +3231,31 @@ CloudStore.COLUNAS_POR_TABELA = {
     numero:   ['valor_unitario_padrao', 'deleted_by_usuario_id'],
     booleano: ['is_deleted'],
     data:     ['deleted_at']
+  },
+  // retencoes_frota (10/09/2026) — o motivo 1 acima pela terceira vez.
+  //
+  // A liberacao de veiculo grava "descricao_acao_liberacao" (a Acao de
+  // Manutencao Realizada, obrigatoria desde 17/08/2026). A coluna nunca
+  // existiu no banco ate a migration 43: todo lote que carregasse uma
+  // liberacao voltava PGRST204 e era recusado INTEIRO — e como o igualador
+  // de chaves de upsert() copia a chave nova para todos os objetos do lote,
+  // UMA liberacao segurava todas as retencoes do aparelho. Ficavam sujas
+  // para sempre, retentando a cada 30s, caladas.
+  //
+  // Em 10/09/2026 isso deixou o PC da manutencao mostrando 2 veiculos
+  // LIBERADOS e o do analista mostrando os mesmos 2 RETIDOS, indefinidamente.
+  //
+  // A migration 43 conserta ESTE campo. A lista branca conserta a CLASSE:
+  // daqui em diante, campo que o JS invente e que nao seja coluna e' podado
+  // antes do POST, em vez de derrubar o lote.
+  retencoes_frota: {
+    texto:    ['numero_retencao', 'placa', 'tipo_veiculo', 'motivo', 'tipo_os',
+               'local', 'status', 'criado_por', 'deleted_by_nome', 'numero_os',
+               'link_os', 'descricao_acao_liberacao'],
+    numero:   ['veiculo_id'],
+    booleano: ['is_deleted'],
+    data:     ['data_parada', 'data_previsao', 'data_liberacao', 'criado_em',
+               'deleted_at', 'atualizado_em']
   },
   // usuarios (31/08/2026) — o motivo 1 acima, de novo, e caro.
   //
@@ -3739,6 +3764,15 @@ function jrMesmaVersao(publicada, local) {
 function jrPodeRecarregarAgora() {
   try {
     if (typeof document === 'undefined') return true;
+    // 11/09/2026: texto digitado num card SEM foco também é trabalho não
+    // salvo — a Tratativas do Gestor tem um formulário por card, e a pessoa
+    // digita, clica fora e vai olhar outro. Foco e modal não enxergam isso;
+    // a marca de digitação (acesa pelo listener 'input' do app.js, apagada em
+    // todo renderApp()) enxerga. Vem ANTES do teste de aba escondida de
+    // propósito: aba de fundo com formulário pela metade é o caso do gestor
+    // que deixa a tela aberta o dia inteiro. O renderApp() que apaga a marca
+    // é quem retoma a atualização adiada (ver app.js).
+    if (window._jrTelaComDigitacao) return false;
     if (document.visibilityState === 'hidden') return true;
     // UM MODAL ABERTO E UM FORMULARIO EM EDICAO, mesmo com o cursor fora de
     // qualquer campo. Sem esta checagem o reload derruba a Conferencia &

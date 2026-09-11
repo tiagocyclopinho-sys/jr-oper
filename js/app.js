@@ -1778,6 +1778,7 @@ function handleToggleJuridicoNecessario(id, checked) {
   if (!s) return;
   s.juridico_necessario = checked;
   db._recalcularStatusSinistro(s);
+  db.carimbarEdicao('sinistros', s);
   db.save();
   renderApp();
 }
@@ -3037,6 +3038,14 @@ function renderApp() {
   // deste arquivo) de ficar acesa para sempre depois de um formulário
   // abandonado, bloqueando as atualizações vindas da nuvem.
   window._jrTelaComDigitacao = false;
+  // A marca apagada é o fim natural do adiamento de jrPodeRecarregarAgora()
+  // (11/09/2026): quem acabou de salvar ou trocou de tela pode receber a
+  // versão nova. 2,5s e não 250ms como no closeModal: o save() que costuma
+  // vir logo antes deste render agenda o envio para a nuvem com debounce de
+  // 1,5s, e o reload tem de esperar essa requisição sair.
+  if (window._jrUpdatePendente && typeof window.jrConferirVersaoPublicada === 'function') {
+    setTimeout(() => { window.jrConferirVersaoPublicada().catch(() => {}); }, 2500);
+  }
   updateUserHeader();
   renderNavMenu();
   decorarTabelasOrdenaveis();
@@ -8732,8 +8741,31 @@ function limparFiltroGestor() {
   renderApp();
 }
 
+// Cada card da tela é um <form> próprio, e o renderApp() no fim desta função
+// redesenha a tela INTEIRA — o que estava digitado em OUTRO card e ainda não
+// salvo some sem aviso. Antes de redesenhar, procura texto pendente nos
+// demais cards e pergunta; se a pessoa cancelar, nada é gravado e ela pode
+// salvar o outro card primeiro (achado de 11/09/2026, DEV-004).
+function _cardsGestorComTextoNaoSalvo(devIdAtual) {
+  const pendentes = [];
+  document.querySelectorAll('textarea[id^="gestor-acao-"]').forEach(ta => {
+    const id = ta.id.replace('gestor-acao-', '');
+    if (String(id) === String(devIdAtual)) return;
+    const dev = db.data.ocorrencias_devolucao.find(x => x.id == id);
+    if (!dev) return;
+    if ((ta.value || '').trim() !== (dev.acao_gestor || '').trim()) {
+      pendentes.push(dev.numero_devolucao || dev.numero_protocolo || id);
+    }
+  });
+  return pendentes;
+}
 function handleAcaoGestorSubmit(e, devId) {
   e.preventDefault();
+  const naoSalvos = _cardsGestorComTextoNaoSalvo(devId);
+  if (naoSalvos.length > 0) {
+    const ok = confirm(`⚠️ Há texto digitado e NÃO salvo em: ${naoSalvos.join(', ')}.\n\nAo salvar este card a tela é redesenhada e esse texto se perde.\n\nOK = salvar mesmo assim (perde o outro texto)\nCancelar = voltar e salvar o outro card primeiro`);
+    if (!ok) return;
+  }
   const dev = db.data.ocorrencias_devolucao.find(x => x.id == devId);
   db.updateAcaoGestor(devId, {
     acao_gestor: document.getElementById(`gestor-acao-${devId}`).value,
@@ -9262,6 +9294,7 @@ function atualizarStatusNegociacaoItem(itemId, devId, novoStatus) {
 
   ref.raw.status_negociacao = novoStatus;
   ref.raw.data_negociacao = agoraIsoBrasilia();
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
 
   // Mesma "graduação" de destino aplicada na tela de Editar: Vendido gera
   // seu próprio destino "Vendido"; Descartado entra na lista de Avaria/
@@ -9415,7 +9448,10 @@ function handleSalvarEdicaoItemDestino(e, itemId, devId) {
 
   item.destino_item = destinoSelecionado;
   item.status_negociacao = statusNegociacao;
-  item.atualizado_em = agoraIsoBrasilia();
+  // carimbarEdicao() em vez de escrever atualizado_em direto: o item AVULSO
+  // vai para itens_avulsos_destinacao, que NÃO tem essa coluna — a chave a
+  // mais derrubaria o lote inteiro da tabela no POST (PGRST204).
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', item);
 
   const salvou = db.save();
   closeModal();
@@ -9441,6 +9477,7 @@ function excluirItemDestino(itemId, devId) {
   if (!raw) { alert('Item não encontrado.'); return; }
   raw.is_deleted = true;
   raw.deleted_at = agoraIsoBrasilia();
+  db.carimbarEdicao('itens_devolucao', raw);
   const salvou = db.save();
   showToast(salvou ? '🗑️ Item removido do retorno físico.' : 'Não foi possível salvar a exclusão.', salvou ? 'success' : 'error');
   renderApp();
@@ -9582,6 +9619,7 @@ function handleAdicionarDivisaoDestino(e, itemId, devId) {
     criado_em: agoraIsoBrasilia(),
     criado_por: db.currentUser ? db.currentUser.nome : 'SISTEMA'
   });
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', item);
 
   db.save();
   abrirModalDivisaoDestino(itemId, devId);
@@ -9594,6 +9632,7 @@ function removerDivisaoDestino(itemId, devId, divisaoId) {
   if (!ref || !Array.isArray(ref.raw.divisoes_destino)) return;
 
   ref.raw.divisoes_destino = ref.raw.divisoes_destino.filter(dv => String(dv.id) !== String(divisaoId));
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
   db.save();
   abrirModalDivisaoDestino(itemId, devId);
   renderApp();
