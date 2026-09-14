@@ -413,6 +413,7 @@ class CloudStore {
       'controle_viagens',
       'ocorrencias_viagens',
       'resumo_diario_cd',
+      'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd',   // 6.7.0 — filhos do Resumo Diário
       'trocas_veiculos',
       'retencoes_frota',
       'reentregas',
@@ -972,6 +973,13 @@ class CloudStore {
     // Sem mapa ainda (primeira execução desta build, ou cota estourada):
     // manda tudo, como antes. A partir do primeiro ciclo o mapa existe.
     if (!conhecidos) return registros.slice();
+    // Lista branca mudou nesta build: os hashes guardados não servem para
+    // dizer o que mudou. Não manda nada até o pull rebasear a tabela (ver
+    // _assinaturaProjecao) — mandar seria repetir o 11/09.
+    if (this._projecaoMudou(tableName, mapa)) {
+      console.log(`[CloudStore] ${tableName}: lista branca mudou nesta build; envio adiado até o próximo pull rebasear os hashes.`);
+      return [];
+    }
 
     const mudados = [];
     for (const r of registros) {
@@ -989,6 +997,7 @@ class CloudStore {
       const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
       if (id !== null) mapa[tableName][id] = this._hashParaSync(tableName, r);
     }
+    this._anotarProjecao(tableName, mapa);
     this._mapaSync = mapa;
     this._gravarMapaSync();
   }
@@ -1008,6 +1017,10 @@ class CloudStore {
     const mapa = this._lerMapaSync();
     const conhecidos = mapa[tableName];
     const primeiraVez = !conhecidos;
+    // Lista branca mudou nesta build (ver _assinaturaProjecao): todo hash
+    // local vai divergir de `conhecidos`, e isso NÃO significa edição.
+    const rebaseando = !primeiraVez && this._projecaoMudou(tableName, mapa);
+    if (rebaseando) console.log(`[CloudStore] ${tableName}: lista branca mudou nesta build; rebaseando pelos dados da nuvem.`);
 
     const porId = new Map();
     for (const r of locais) {
@@ -1085,12 +1098,30 @@ class CloudStore {
       // (motoristas, veículos, cargas, usuários...) nada muda, continua a
       // regra antiga. Editar offline continua protegido: quem editou de
       // verdade tem o carimbo mais novo.
+      //
+      // CARIMBO AUSENTE DE UM LADO SÓ (14/09/2026). "Só quando os DOIS lados
+      // têm data legível" deixava passar o caso de 11/09: local RETIDO sem
+      // carimbo nenhum (nunca editado aqui) contra nuvem com carimbo (editada
+      // de verdade em outro aparelho) — empatava, e o local ganhava. Agora um
+      // local SEM carimbo perde para uma nuvem COM carimbo: desde a 6.6.3
+      // toda edição de verdade carimba, então local sem carimbo é, no
+      // máximo, mutação incidental (caso 2). O inverso (local carimbado,
+      // nuvem sem) continua com o local, como antes. Tabelas sem a coluna
+      // seguem intocadas: nulo dos dois lados cai na regra antiga.
+      //
+      // REBASEAMENTO (lista branca mudou de build): não dá para saber se o
+      // registro é sujo, então o ônus inverte — o local só fica se estiver
+      // carimbado e for ESTRITAMENTE mais novo que a nuvem.
       // =============================================================
       let nuvemMaisNova = false;
       if (sujo) {
         const tLocal = this._instanteDeAtualizacao(local);
         const tNuvem = this._instanteDeAtualizacao(nuvem);
-        nuvemMaisNova = (tLocal !== null && tNuvem !== null && tNuvem > tLocal);
+        if (rebaseando) {
+          nuvemMaisNova = !(tLocal !== null && (tNuvem === null || tLocal > tNuvem));
+        } else {
+          nuvemMaisNova = (tNuvem !== null) && (tLocal === null || tNuvem > tLocal);
+        }
       }
 
       if (sujo && !nuvemMaisNova) {
@@ -1134,6 +1165,7 @@ class CloudStore {
     const final = this._aplicarJanelaOperacional(tableName, resultado, novosHashes, idsSeguros);
 
     mapa[tableName] = novosHashes;   // ids que sumiram dos dois lados saem do mapa
+    this._anotarProjecao(tableName, mapa);   // hashes acima já são da lista branca atual
     this._mapaSync = mapa;
     this._gravarMapaSync();
     return final;
@@ -2190,7 +2222,8 @@ class CloudStore {
       'ocorrencias_viagens', 'ocorrencias_rota', 'resumo_diario_cd',
       'relatorios_divergencia', 'auditoria_produtividade', 'trocas_veiculos',
       'retencoes_frota', 'reentregas_rota', 'audit_logs', 'registro_versoes',
-      'sinistros', 'itens_avulsos_destinacao'
+      'sinistros', 'itens_avulsos_destinacao',
+      'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd'   // 6.7.0
     ];
     let ok = true;
     for (const t of tabelas) {
@@ -2314,6 +2347,12 @@ class CloudStore {
       { dbKey: 'controle_viagens',      localKey: 'jr_controle_viagens',  tableName: 'controle_viagens' },
       { dbKey: 'ocorrencias_viagens',   localKey: 'jr_ocorrencias_viagens', tableName: 'ocorrencias_viagens' },
       { dbKey: 'resumo_diario_cd',      localKey: 'jr_resumo_diario_cd',  tableName: 'resumo_diario_cd' },
+      // 6.7.0 (Plano de Reorganização do CD, Bloco A): os três filhos do
+      // Resumo Diário ganharam tabela própria (migration 44). Não dependem
+      // de ninguém: os nomes de funcionário e produto são texto, não FK.
+      { dbKey: 'ocorrencias_cd',        localKey: 'jr_ocorrencias_cd',    tableName: 'ocorrencias_cd' },
+      { dbKey: 'ocorrencias_colaborador', localKey: 'jr_ocorrencias_colaborador', tableName: 'ocorrencias_colaborador' },
+      { dbKey: 'cortes_cd',             localKey: 'jr_cortes_cd',         tableName: 'cortes_cd' },
       { dbKey: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', tableName: 'medidas_disciplinares' },
       { dbKey: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', tableName: 'orientacoes_feedback' },
       { dbKey: 'atestados_medicos',     localKey: 'jr_atestados_medicos', tableName: 'atestados_medicos' },
@@ -2773,6 +2812,15 @@ class CloudStore {
       window.dispatchEvent(new CustomEvent('jr-cloud-sync', { detail: { updated: true } }));
     }
 
+    // 6.7.0: "um pull terminou", tenha mudado algo ou não. Diferente do
+    // jr-cloud-sync acima, que só dispara com mudança. Quem escuta é a
+    // migração dos filhos do Resumo Diário (app.js): ela só pode rodar
+    // DEPOIS de este aparelho ter visto o que a nuvem já tem nas tabelas
+    // novas — senão um aparelho que abre a 6.7.0 dias depois dos outros
+    // recriaria, a partir do envelope antigo, registros que já foram
+    // editados na nuvem, e o upsert os devolveria ao conteúdo velho.
+    try { window.dispatchEvent(new CustomEvent('jr-cloud-pull-ok', { detail: { updated: !!(anyChange || veioCatalogo) } })); } catch(e) {}
+
     return anyChange || veioCatalogo;
   }
 
@@ -3020,6 +3068,45 @@ class CloudStore {
     return this._hashRegistro(this._projetarParaTabela(tableName, r));
   }
 
+  // ASSINATURA DA PROJEÇÃO (14/09/2026) — o que fecha a janela da migration 43.
+  //
+  // O hash de sincronia depende da lista branca da tabela. Quando uma build
+  // nova cria ou altera a lista (6.6.3 fez isso com retencoes_frota), TODO
+  // registro daquela tabela passa a ter hash diferente do que está em
+  // `conhecidos` — e o resto do código lê isso como "TUDO foi editado aqui
+  // e ainda não subiu". Em 11/09/2026 foi exatamente o que aconteceu: no
+  // primeiro ciclo da 6.6.3, cada aparelho reenviou todas as retenções e
+  // preservou a própria cópia no pull; o aparelho que ainda tinha RETIDO em
+  // cache empurrou RETIDO por cima do LIBERADO que outro tinha acabado de
+  // enviar. A migration 43 previu a janela por escrito; aqui ela deixa de
+  // existir.
+  //
+  // Guardamos, ao lado dos hashes, uma assinatura da lista branca com que
+  // eles foram calculados (`jr_sync_hashes.__projecao[tabela]`). Quando a
+  // assinatura muda de uma build para outra:
+  //   - o push segura a tabela (nada sobe) até o pull rebasear;
+  //   - o pull rebaseia: como não há como saber o que é edição local de
+  //     verdade, a cópia local só fica se estiver carimbada e for
+  //     ESTRITAMENTE mais nova que a da nuvem; do contrário a nuvem manda,
+  //     e os hashes são regravados já com a assinatura nova.
+  // Assinatura ausente (mapa gravado por build anterior a esta regra) conta
+  // como igual: é registrada e nada é rebaseado — senão a primeira abertura
+  // desta build rebasearia todas as tabelas de todos os aparelhos.
+  _assinaturaProjecao(tableName) {
+    const spec = CloudStore.COLUNAS_POR_TABELA[tableName];
+    return spec ? this._hashRegistro(spec) : 'bruto';
+  }
+
+  _projecaoMudou(tableName, mapa) {
+    const guardada = mapa && mapa.__projecao && mapa.__projecao[tableName];
+    return !!guardada && guardada !== this._assinaturaProjecao(tableName);
+  }
+
+  _anotarProjecao(tableName, mapa) {
+    if (!mapa.__projecao) mapa.__projecao = {};
+    mapa.__projecao[tableName] = this._assinaturaProjecao(tableName);
+  }
+
   _catalogoDisponivel() {
     return !!(typeof window !== 'undefined' && window.db
       && typeof window.db.getCatalogoParaSync === 'function'
@@ -3179,7 +3266,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "carimbo-acao-gestor-6.6.3";
+CloudStore.BUILD = "reorganizacao-cd-6.7.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3257,6 +3344,28 @@ CloudStore.COLUNAS_POR_TABELA = {
     data:     ['data_parada', 'data_previsao', 'data_liberacao', 'criado_em',
                'deleted_at', 'atualizado_em']
   },
+  // As três tabelas da reorganização do CD (11/09/2026, migration 44) já
+  // nascem com lista branca — a lição do Bloco 0 do plano: campo que o JS
+  // invente e não seja coluna é podado antes do POST em vez de derrubar o
+  // lote. As listas espelham a migration coluna a coluna.
+  ocorrencias_cd: {
+    texto:    ['turno', 'ocorrencia', 'causa', 'acao', 'gestor', 'criado_por', 'deleted_by_nome'],
+    booleano: ['is_deleted'],
+    data:     ['data', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
+  ocorrencias_colaborador: {
+    texto:    ['turno', 'funcionario', 'requisito', 'carga', 'detalhamento', 'acao', 'status',
+               'medida_disciplinar', 'alinea_clt', 'gestor', 'criado_por', 'deleted_by_nome'],
+    numero:   ['peso', 'dias_suspensao'],
+    booleano: ['is_deleted'],
+    data:     ['data', 'disciplinar_gerada_em', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
+  cortes_cd: {
+    texto:    ['turno', 'codigo_item', 'descricao', 'quantidade', 'gestor', 'criado_por', 'deleted_by_nome'],
+    numero:   ['valor'],
+    booleano: ['is_deleted'],
+    data:     ['data', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
   // usuarios (31/08/2026) — o motivo 1 acima, de novo, e caro.
   //
   // Em 31/08/2026, CINCO pessoas (Lucas, Melquiades, Victor Hugo, Itajaci e
@@ -3307,7 +3416,7 @@ CloudStore.SEQUENCIAS_RENUMERAVEIS = {
   sinistros:             { unico: 'numero_sinistro',  espelhos: [] }
 };
 
-// As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
+// As 28 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
 //   localKey  -> a chave ESPELHO no localStorage ('jr_ocorrencias' etc.)
 //   dbKey     -> a colecao dentro de jr_sac_db e de window.db.data
@@ -3327,6 +3436,9 @@ CloudStore.MAPA_TABELAS = [
   { tableName: 'controle_viagens',      localKey: 'jr_controle_viagens',  dbKey: 'controle_viagens' },
   { tableName: 'ocorrencias_viagens',   localKey: 'jr_ocorrencias_viagens', dbKey: 'ocorrencias_viagens' },
   { tableName: 'resumo_diario_cd',      localKey: 'jr_resumo_diario_cd',  dbKey: 'resumo_diario_cd' },
+  { tableName: 'ocorrencias_cd',        localKey: 'jr_ocorrencias_cd',    dbKey: 'ocorrencias_cd' },
+  { tableName: 'ocorrencias_colaborador', localKey: 'jr_ocorrencias_colaborador', dbKey: 'ocorrencias_colaborador' },
+  { tableName: 'cortes_cd',             localKey: 'jr_cortes_cd',         dbKey: 'cortes_cd' },
   { tableName: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', dbKey: 'medidas_disciplinares' },
   { tableName: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', dbKey: 'orientacoes_feedback' },
   { tableName: 'atestados_medicos',     localKey: 'jr_atestados_medicos', dbKey: 'atestados_medicos' },

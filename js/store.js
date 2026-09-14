@@ -344,6 +344,10 @@ class Store {
     ensureArray('ausencias_registros');
     ensureArray('sinistros');
     ensureArray('conflitos_pendentes');
+    // 6.7.0 — os três filhos do Resumo Diário em coleção própria (migration 44).
+    ensureArray('ocorrencias_cd');
+    ensureArray('ocorrencias_colaborador');
+    ensureArray('cortes_cd');
 
     // Migração leve, roda uma única vez por dispositivo (idempotente):
     // 1) garante um 'id' único em cada item de devolução — sem isso, o
@@ -2757,9 +2761,7 @@ class Store {
       return item;
     }
 
-    let gestorPadrao = 'GUSTAVO CAMARA';
-    if (turno === 'SECO') gestorPadrao = 'MARCOS ADRIANO';
-    else if (turno === '1º TURNO - FRIO') gestorPadrao = 'MELQUIADES NETO';
+    const gestorPadrao = this.gestorPadraoDoTurno(turno);
 
     return {
       id: this.gerarIdUnico(),
@@ -2795,6 +2797,219 @@ class Store {
       ? this.data.resumo_diario_cd
       : Object.values(this.data.resumo_diario_cd || this.data.resumos_cd || {});
     return list.filter(r => r && !r.is_deleted).sort((a, b) => new Date(b.data || b.criado_em || 0) - new Date(a.data || a.criado_em || 0));
+  }
+
+  // O mapa turno -> gestor padrão vivia duplicado aqui e em app.js
+  // (renderResumoDiarioCdView), com risco de divergirem. Um lugar só.
+  gestorPadraoDoTurno(turno) {
+    return Store.GESTOR_PADRAO_POR_TURNO[turno] || Store.GESTOR_PADRAO_POR_TURNO['2º TURNO - FRIO'];
+  }
+
+  // ===== FILHOS DO RESUMO DIÁRIO EM COLEÇÃO PRÓPRIA (6.7.0, migration 44) =====
+  //
+  // Até a 6.6.x, ocorrência do CD, ocorrência por colaborador e corte viviam
+  // como arrays dentro do envelope data+turno do resumo_diario_cd. Registro
+  // aninhado não tem data própria, não tem identidade endereçável (todo botão
+  // carregava data+turno+tipo+índice) e não sincroniza sozinho. Agora cada um
+  // é linha própria: ocorrencias_cd, ocorrencias_colaborador e cortes_cd.
+  //
+  // O envelope CONTINUA guardando os arrays antigos, intocados — é a rede de
+  // segurança até a migração ser conferida em produção. Quem lê os filhos
+  // passa a ler daqui; quem precisa do envelope "como antes" (dashboard,
+  // exportações, PDFs) usa getResumosDiariosCDHidratados().
+
+  _colecaoFilho(tipo) {
+    if (tipo === 'ocorrencia') return 'ocorrencias_cd';
+    if (tipo === 'colaborador') return 'ocorrencias_colaborador';
+    if (tipo === 'corte') return 'cortes_cd';
+    throw new Error('tipo de filho do Resumo Diário desconhecido: ' + tipo);
+  }
+
+  _filtrarFilhos(colecao, { data, dataDe, dataAte, turno, incluirExcluidos } = {}) {
+    let lista = this.data[colecao] || [];
+    if (!incluirExcluidos) lista = lista.filter(r => r && !r.is_deleted);
+    if (data) lista = lista.filter(r => r.data === data);
+    if (dataDe) lista = lista.filter(r => (r.data || '') >= dataDe);
+    if (dataAte) lista = lista.filter(r => (r.data || '') <= dataAte);
+    if (turno && turno !== 'TODOS') lista = lista.filter(r => r.turno === turno);
+    return lista.slice().sort((a, b) => {
+      const d = String(b.data || '').localeCompare(String(a.data || ''));
+      return d !== 0 ? d : String(b.criado_em || '').localeCompare(String(a.criado_em || ''));
+    });
+  }
+
+  getOcorrenciasCD(filtro)          { return this._filtrarFilhos('ocorrencias_cd', filtro); }
+  getOcorrenciasColaborador(filtro) { return this._filtrarFilhos('ocorrencias_colaborador', filtro); }
+  getCortesCD(filtro)               { return this._filtrarFilhos('cortes_cd', filtro); }
+
+  getFilhoResumoPorId(tipo, id) {
+    return (this.data[this._colecaoFilho(tipo)] || []).find(r => r && String(r.id) === String(id)) || null;
+  }
+
+  // Campos que cada tipo aceita. O que não está aqui não entra — é o que
+  // impede chave inventada de viajar até o POST (e a lista branca do
+  // cloudStore poda de novo, por garantia).
+  static get CAMPOS_FILHO_RESUMO() {
+    return {
+      ocorrencia:  ['ocorrencia', 'causa', 'acao'],
+      colaborador: ['funcionario', 'requisito', 'carga', 'peso', 'detalhamento', 'acao', 'status',
+                    'medida_disciplinar', 'alinea_clt', 'dias_suspensao', 'disciplinar_gerada_em'],
+      corte:       ['codigo_item', 'descricao', 'quantidade', 'valor']
+    };
+  }
+
+  _normalizarCamposFilho(tipo, dados, alvo) {
+    const campos = Store.CAMPOS_FILHO_RESUMO[tipo];
+    campos.forEach(c => {
+      if (dados[c] === undefined) return;
+      let v = dados[c];
+      if (c === 'valor') v = parseFloat(v) || 0;
+      else if (c === 'peso') v = (v === '' || v === null || v === undefined) ? null : (parseFloat(v) || null);
+      else if (c === 'dias_suspensao') v = (v === '' || v === null || v === undefined) ? null : (parseInt(v, 10) || null);
+      else if (typeof v === 'string') v = v.trim();
+      alvo[c] = v;
+    });
+    if (tipo === 'ocorrencia' && alvo.ocorrencia) alvo.ocorrencia = String(alvo.ocorrencia).toUpperCase();
+    if (tipo === 'colaborador') {
+      if (alvo.funcionario) alvo.funcionario = String(alvo.funcionario).toUpperCase();
+      if (alvo.requisito) alvo.requisito = String(alvo.requisito).toUpperCase();
+      if (!alvo.status) alvo.status = 'PENDENTE';
+    }
+    if (tipo === 'corte' && alvo.descricao) alvo.descricao = String(alvo.descricao).toUpperCase();
+    return alvo;
+  }
+
+  addFilhoResumo(tipo, dados) {
+    const colecao = this._colecaoFilho(tipo);
+    if (!Array.isArray(this.data[colecao])) this.data[colecao] = [];
+    const data = dados.data || hojeIsoBrasilia();
+    const turno = dados.turno;
+    if (!turno) return { success: false, message: 'Informe o turno.' };
+    const envelope = (this.data.resumo_diario_cd || []).find(r => r.data === data && r.turno === turno);
+    const item = {
+      id: this.gerarIdUnico(),
+      data,
+      turno,
+      gestor: dados.gestor || (envelope && envelope.gestor) || this.gestorPadraoDoTurno(turno),
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: agoraIsoBrasilia(),
+      is_deleted: false
+    };
+    this._normalizarCamposFilho(tipo, dados, item);
+    this.carimbarEdicao(colecao, item);
+    this.data[colecao].unshift(item);
+    this.save();
+    return { success: true, item };
+  }
+
+  updateFilhoResumo(tipo, id, dados) {
+    const colecao = this._colecaoFilho(tipo);
+    const item = this.getFilhoResumoPorId(tipo, id);
+    if (!item) return { success: false, message: 'Registro não encontrado.' };
+    if (dados.data) item.data = dados.data;
+    if (dados.turno) item.turno = dados.turno;
+    this._normalizarCamposFilho(tipo, dados, item);
+    this.carimbarEdicao(colecao, item);
+    this.save();
+    return { success: true, item };
+  }
+
+  deleteFilhoResumo(tipo, id) {
+    const colecao = this._colecaoFilho(tipo);
+    const item = this.getFilhoResumoPorId(tipo, id);
+    if (!item) return { success: false, message: 'Registro não encontrado.' };
+    item.is_deleted = true;
+    item.deleted_at = agoraIsoBrasilia();
+    item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    this.carimbarEdicao(colecao, item);
+    this.logAudit({ acao: 'EXCLUSAO_LOGICA', modulo: colecao, registro_id: id, diff: { antes: item } });
+    this.save();
+    return { success: true };
+  }
+
+  // Atalhos com o nome que o plano usa.
+  addOcorrenciaCD(d)               { return this.addFilhoResumo('ocorrencia', d); }
+  updateOcorrenciaCD(id, d)        { return this.updateFilhoResumo('ocorrencia', id, d); }
+  deleteOcorrenciaCD(id)           { return this.deleteFilhoResumo('ocorrencia', id); }
+  addOcorrenciaColaborador(d)      { return this.addFilhoResumo('colaborador', d); }
+  updateOcorrenciaColaborador(id, d) { return this.updateFilhoResumo('colaborador', id, d); }
+  deleteOcorrenciaColaborador(id)  { return this.deleteFilhoResumo('colaborador', id); }
+  addCorteCD(d)                    { return this.addFilhoResumo('corte', d); }
+  updateCorteCD(id, d)             { return this.updateFilhoResumo('corte', id, d); }
+  deleteCorteCD(id)                { return this.deleteFilhoResumo('corte', id); }
+
+  // O envelope como o resto do app sempre o leu — com ocorrencias,
+  // ocorrencias_colaboradores e cortes dentro — só que montado a partir das
+  // coleções novas. São CÓPIAS: mexer no resultado não grava nada.
+  getResumosDiariosCDHidratados() {
+    const oc = {}, col = {}, cor = {};
+    const chave = r => `${r.data}|${r.turno}`;
+    const agrupar = (lista, alvo) => lista.forEach(r => { (alvo[chave(r)] = alvo[chave(r)] || []).push(r); });
+    agrupar(this.getOcorrenciasCD(), oc);
+    agrupar(this.getOcorrenciasColaborador(), col);
+    agrupar(this.getCortesCD(), cor);
+    return this.getResumosDiariosCD().map(r => {
+      const k = chave(r);
+      return {
+        ...r,
+        ocorrencias: (oc[k] || []).slice().reverse(),
+        ocorrencias_colaboradores: (col[k] || []).slice().reverse(),
+        cortes: (cor[k] || []).slice().reverse()
+      };
+    });
+  }
+
+  // MIGRAÇÃO DE DADOS, roda em todo init() e é idempotente POR ID: copia para
+  // as coleções novas cada filho do envelope que ainda não exista lá,
+  // herdando data e turno do envelope e preservando o id (todos os filhos
+  // já gravados têm id numérico único — conferido no banco em 11/09/2026).
+  //
+  // NÃO marca nada no envelope de propósito: resumo_diario_cd não tem lista
+  // branca no push, e uma chave nova (filhos_migrados_em) derrubaria o lote
+  // inteiro com PGRST204. Também não há marca em localStorage: a varredura
+  // por id É a idempotência, custa ~30 envelopes, e precisa rodar de novo
+  // depois de cada pull da nuvem (app.js, evento jr-cloud-sync) — um
+  // aparelho recém-instalado faz o init() com o cache vazio e só recebe os
+  // envelopes no primeiro pull.
+  //
+  // Dois aparelhos rodando isto ao mesmo tempo criam registros com o MESMO
+  // id e o MESMO conteúdo; o upsert da nuvem os funde. Registro que alguém
+  // já excluiu (is_deleted) continua existindo na coleção e por isso não é
+  // recriado.
+  migrarFilhosDoResumoDiario() {
+    const idsDe = colecao => new Set((this.data[colecao] || []).map(r => String(r && r.id)));
+    const jaTem = { ocorrencias_cd: idsDe('ocorrencias_cd'), ocorrencias_colaborador: idsDe('ocorrencias_colaborador'), cortes_cd: idsDe('cortes_cd') };
+    let criados = 0;
+    const criar = (tipo, r, filho, campos) => {
+      const colecao = this._colecaoFilho(tipo);
+      const id = (filho && filho.id !== undefined && filho.id !== null && String(filho.id) !== '') ? filho.id : this.gerarIdUnico();
+      if (jaTem[colecao].has(String(id))) return;
+      const item = {
+        id,
+        data: (tipo === 'colaborador' && filho.data) ? filho.data : r.data,
+        turno: r.turno,
+        gestor: r.gestor || this.gestorPadraoDoTurno(r.turno),
+        criado_por: 'MIGRACAO 6.7.0',
+        criado_em: r.atualizado_em || agoraIsoBrasilia(),
+        atualizado_em: r.atualizado_em || agoraIsoBrasilia(),
+        is_deleted: false
+      };
+      this._normalizarCamposFilho(tipo, filho, item);
+      this.data[colecao].push(item);
+      jaTem[colecao].add(String(id));
+      criados++;
+    };
+    (this.data.resumo_diario_cd || []).forEach(r => {
+      if (!r || r.is_deleted || !r.data || !r.turno) return;
+      (Array.isArray(r.ocorrencias) ? r.ocorrencias : []).forEach(f => criar('ocorrencia', r, f));
+      (Array.isArray(r.ocorrencias_colaboradores) ? r.ocorrencias_colaboradores : []).forEach(f => criar('colaborador', r, f));
+      (Array.isArray(r.cortes) ? r.cortes : []).forEach(f => criar('corte', r, f));
+    });
+    if (criados > 0) {
+      console.info(`[Store] Migração 6.7.0: ${criados} filho(s) do Resumo Diário copiados para coleção própria.`);
+      this.save();
+    }
+    return criados;
   }
 
   // ===== CRUD TROCAS DE VEÍCULOS =====
@@ -3462,6 +3677,9 @@ class Store {
     this.data.ocorrencias_viagens = [];
     this.data.ocorrencias_rota = [];
     this.data.resumo_diario_cd = [];
+    this.data.ocorrencias_cd = [];
+    this.data.ocorrencias_colaborador = [];
+    this.data.cortes_cd = [];
     this.data.relatorios_divergencia = [];
     this.data.auditoria_produtividade = [];
     this.data.trocas_veiculos = [];
@@ -3495,6 +3713,9 @@ class Store {
       'jr_cargas',
       'jr_controle_viagens',
       'jr_resumo_diario_cd',
+      'jr_ocorrencias_cd',
+      'jr_ocorrencias_colaborador',
+      'jr_cortes_cd',
       'jr_relatorios_divergencia',
       'jr_auditoria_produtividade',
       'jr_sinistros',
@@ -4812,9 +5033,21 @@ class Store {
 Store.COLECOES_COM_ATUALIZADO_EM = new Set([
   'ocorrencias_devolucao', 'itens_devolucao', 'ocorrencias_rota', 'ocorrencias_viagens',
   'controle_viagens', 'reentregas', 'resumo_diario_cd', 'retencoes_frota', 'sinistros',
-  'trocas_veiculos'
+  'trocas_veiculos',
+  'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd'   // 6.7.0, migration 44
 ]);
 Store.COLECOES_COM_ATUALIZADO_POR = new Set(['ocorrencias_devolucao', 'ocorrencias_rota', 'reentregas']);
+
+// Gestor padrão de cada turno do Resumo Diário (6.7.0). Único lugar: antes
+// vivia aqui E em app.js:renderResumoDiarioCdView, com risco de divergirem.
+// Os turnos são os três que o seletor oferece; 3º TURNO - FRIO existe no
+// cadastro e não aqui — pendência anotada no plano.
+Store.GESTOR_PADRAO_POR_TURNO = {
+  'SECO':            'MARCOS ADRIANO',
+  '1º TURNO - FRIO': 'MELQUIADES NETO',
+  '2º TURNO - FRIO': 'GUSTAVO CAMARA'
+};
+Store.TURNOS_RESUMO_DIARIO = Object.keys(Store.GESTOR_PADRAO_POR_TURNO);
 
 var db;
 try {

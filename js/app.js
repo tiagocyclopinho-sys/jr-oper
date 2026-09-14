@@ -52,7 +52,6 @@ if (typeof document !== 'undefined') {
 
 let activeTab = 'dashboard';
 let activeCadSubTab = 'motoristas';
-let activeResumoSubTab = 'resumo';
 let activeFrotaSubTab = 'reter'; // 'reter' | 'retidos' | 'liberados'
 let uploadedFotosBase64 = [];
 let uploadedVideosBase64 = [];
@@ -111,6 +110,34 @@ window.addEventListener('jr-cloud-sync', () => {
     return;
   }
   if (typeof renderApp === 'function') renderApp();
+});
+
+// 6.7.0 — MIGRAÇÃO DOS FILHOS DO RESUMO DIÁRIO (ver Store#migrarFilhosDoResumoDiario).
+// Roda depois de CADA pull concluído, e não no init(): o aparelho precisa
+// ter visto o que a nuvem já tem nas tabelas novas antes de copiar qualquer
+// coisa do envelope antigo. Idempotente por id, custa ~30 envelopes.
+// Sem nuvem configurada (modo local) roda uma vez na inicialização.
+window.addEventListener('jr-cloud-pull-ok', () => {
+  try {
+    if (!window.db || typeof db.migrarFilhosDoResumoDiario !== 'function') return;
+    const criados = db.migrarFilhosDoResumoDiario();
+    if (criados > 0) {
+      if (window.cloudStore && window.cloudStore.isConfigured()) {
+        window.cloudStore.syncLocalToCloud().catch(() => {});
+      }
+      const emCampo = document.activeElement && document.activeElement.matches &&
+        document.activeElement.matches('input, textarea, select');
+      if (!emCampo && !window._jrTelaComDigitacao && typeof renderApp === 'function') renderApp();
+    }
+  } catch (e) {
+    console.warn('[App] Migração dos filhos do Resumo Diário falhou:', e && e.message);
+  }
+});
+window.addEventListener('load', () => {
+  try {
+    if (window.cloudStore && window.cloudStore.isConfigured()) return;   // com nuvem, espera o pull
+    if (window.db && typeof db.migrarFilhosDoResumoDiario === 'function') db.migrarFilhosDoResumoDiario();
+  } catch (e) {}
 });
 
 // Acende a marca de "tem coisa digitada nesta tela ainda não salva". Só vale
@@ -944,16 +971,31 @@ function formatarTipoMedidaLabel(tipo) {
 
 // Seletor de colaborador reutilizável — busca por nome, funciona tanto
 // para colaboradores_cd quanto para motoristas conforme `tipo`.
+// 6.7.0 (Bloco E): o Dossiê virou "Dossiê Prestador" e varre motoristas E
+// ajudantes — os dois são prestadores PJ e os dois pagam adiantamento.
+function listaPrestadoresDossie() {
+  const vivos = l => (l || []).filter(x => x && x.nome && !x.is_deleted);
+  return vivos(db.data.motoristas).map(m => ({ ...m, _tipoPrestador: 'MOTORISTA' }))
+    .concat(vivos(db.data.ajudantes).map(a => ({ ...a, _tipoPrestador: 'AJUDANTE' })));
+}
+function getDadosPrestadorMestre(nome) {
+  if (!nome) return null;
+  const alvo = String(nome).toUpperCase().trim();
+  const achado = listaPrestadoresDossie().find(x => String(x.nome || '').toUpperCase().trim() === alvo);
+  if (!achado) return null;
+  return { nome: achado.nome, matricula: achado.cod_erp || achado.matricula || '', tipo: achado._tipoPrestador };
+}
+
 function renderSeletorColaboradorAcompanhamento(tipo, varFiltro, varSelecionado, onSelectFn) {
-  const lista = tipo === 'MOTORISTA' ? (db.data.motoristas || []) : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
+  const lista = tipo === 'MOTORISTA' ? listaPrestadoresDossie() : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
   const busca = window[varFiltro] || '';
   const datalistId = tipo === 'MOTORISTA' ? 'dossie-datalist-motorista' : 'acomp-datalist-colaborador';
 
   return `
     <div class="max-w-md mx-auto mt-10 space-y-3 text-center">
       <div class="text-4xl">${tipo === 'MOTORISTA' ? '🪪' : '👤'}</div>
-      <h2 class="text-base font-black text-white">${tipo === 'MOTORISTA' ? 'Dossiê Motorista' : 'Acompanhamento de Funcionário CD'}</h2>
-      <p class="text-xs text-slate-400">Selecione um ${tipo === 'MOTORISTA' ? 'motorista' : 'colaborador'} cadastrado para ver o histórico completo.</p>
+      <h2 class="text-base font-black text-white">${tipo === 'MOTORISTA' ? 'Dossiê Prestador' : 'Acompanhamento de Funcionário CD'}</h2>
+      <p class="text-xs text-slate-400">Selecione um ${tipo === 'MOTORISTA' ? 'motorista ou ajudante' : 'colaborador'} cadastrado para ver o histórico completo.</p>
       <form onsubmit="handleSelecionarComValidacao(event, '${tipo}', '${datalistId}', '${onSelectFn}')" class="flex gap-2">
         <input type="text" id="${datalistId}-input" value="${busca}" list="${datalistId}" placeholder="Digite o nome cadastrado..." autofocus
           oninput="forcarMaiuscula(this); window['${varFiltro}']=this.value"
@@ -961,9 +1003,9 @@ function renderSeletorColaboradorAcompanhamento(tipo, varFiltro, varSelecionado,
         <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 rounded-lg text-sm shadow">Abrir</button>
       </form>
       <datalist id="${datalistId}">
-        ${lista.map(c => `<option value="${c.nome}">${c.chapa ? `Chapa ${c.chapa}` : ''}</option>`).join('')}
+        ${lista.map(c => `<option value="${c.nome}">${c._tipoPrestador ? c._tipoPrestador + (c.cod_erp ? ' · ERP ' + c.cod_erp : '') : (c.chapa ? `Chapa ${c.chapa}` : '')}</option>`).join('')}
       </datalist>
-      <p class="text-[10px] text-slate-500">A busca só aceita nomes já cadastrados — use o cadastro de ${tipo === 'MOTORISTA' ? 'Motoristas' : 'Colaboradores CD'} em Cadastros Mestres se o nome não aparecer na lista.</p>
+      <p class="text-[10px] text-slate-500">A busca só aceita nomes já cadastrados — use o cadastro de ${tipo === 'MOTORISTA' ? 'Motoristas / Ajudantes' : 'Colaboradores CD'} em Cadastros Mestres se o nome não aparecer na lista.</p>
     </div>`;
 }
 
@@ -974,10 +1016,10 @@ function handleSelecionarComValidacao(e, tipo, datalistId, onSelectFn) {
   e.preventDefault();
   const input = document.getElementById(datalistId + '-input');
   const nomeDigitado = (input?.value || '').trim().toUpperCase();
-  const lista = tipo === 'MOTORISTA' ? (db.data.motoristas || []) : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
+  const lista = tipo === 'MOTORISTA' ? listaPrestadoresDossie() : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
   const match = lista.find(c => String(c.nome || '').toUpperCase().trim() === nomeDigitado);
   if (!match) {
-    alert(`⚠️ "${input?.value || ''}" não foi encontrado no cadastro de ${tipo === 'MOTORISTA' ? 'motoristas' : 'colaboradores CD'}. Selecione um nome da lista sugerida.`);
+    alert(`⚠️ "${input?.value || ''}" não foi encontrado no cadastro de ${tipo === 'MOTORISTA' ? 'motoristas / ajudantes' : 'colaboradores CD'}. Selecione um nome da lista sugerida.`);
     return;
   }
   window[onSelectFn === 'selecionarMotoristaDossie' ? '_dossieMotoristaFiltroBusca' : '_acompFuncFiltroBusca'] = '';
@@ -997,6 +1039,20 @@ function selecionarMotoristaDossie(nome) {
 }
 
 function renderCabecalhoAcompanhamento(dadosMestre, tipo, onVoltarFn) {
+  // 6.7.0: prestador é PJ — sem chapa, CNH, admissão ou desligamento.
+  if (tipo === 'MOTORISTA') {
+    return `
+    <div class="flex items-start justify-between flex-wrap gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div>
+        <button onclick="${onVoltarFn}" class="text-[10px] text-slate-400 hover:text-white font-bold mb-1.5">← Trocar prestador</button>
+        <h2 class="text-base font-black text-white">${dadosMestre.nome}</h2>
+        <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-slate-400 mt-1">
+          <span>Matrícula ERP: <b class="text-slate-300">${dadosMestre.matricula || '—'}</b></span>
+          <span><b class="${dadosMestre.tipo === 'AJUDANTE' ? 'text-cyan-300' : 'text-emerald-300'}">${dadosMestre.tipo === 'AJUDANTE' ? 'Ajudante' : 'Motorista'}</b></span>
+        </div>
+      </div>
+    </div>`;
+  }
   return `
     <div class="flex items-start justify-between flex-wrap gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-4">
       <div>
@@ -1043,7 +1099,7 @@ function renderBlocoOrientacaoFeedback(nome, tipo, varDe, varAte, formVisivelVar
       <div class="flex items-center justify-between flex-wrap gap-2">
         <h3 class="text-xs font-black text-emerald-400 uppercase flex items-center gap-2"><span>💬</span> Orientação e Feedback (${registros.length})</h3>
         <div class="flex items-center gap-1.5">
-          <button onclick="abrirModalEmissaoDisciplinarCD({ tipo: 'ORIENTACAO_VERBAL', colabNome: '${nome.replace(/'/g,"\\'")}' })" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1 rounded-full font-bold transition flex items-center gap-1" title="Formulário completo, com gestor responsável e detalhamento dos fatos">🗣️ Emitir Orientação Verbal</button>
+          ${tipo === 'MOTORISTA' ? '' : `<button onclick="abrirModalEmissaoDisciplinarCD({ tipo: 'ORIENTACAO_VERBAL', colabNome: '${nome.replace(/'/g,"\\'")}' })" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1 rounded-full font-bold transition flex items-center gap-1" title="Formulário completo, com gestor responsável e detalhamento dos fatos">🗣️ Emitir Orientação Verbal</button>`}
           <button onclick="window['${formVisivelVar}']=${!formAberto}; renderApp()" class="text-[10px] bg-emerald-900/60 hover:bg-emerald-800 border border-emerald-700 text-emerald-300 px-2 py-1 rounded-full font-bold transition">${formAberto ? '✕ Fechar' : '+ Adicionar Nota Rápida'}</button>
         </div>
       </div>
@@ -1269,15 +1325,93 @@ function renderAcompanhamentoFuncionarioView() {
     </div>`;
 }
 
-// --- TELA: Dossiê Motorista ---
+// --- TELA: Dossiê Prestador (6.7.0; a chave interna continua dossie_motorista) ---
+//
+// Devoluções por ERRO MOTORISTA em que o prestador estava na equipe — como
+// motorista OU como ajudante (equipeDaDevolucao). A data vem de
+// data_abertura || criado_em, porque a devolução não tem campo `data` e
+// filtrarPorData() lê exatamente esse campo.
+function devolucoesErroMotoristaDoPrestador(nome) {
+  const alvo = String(nome || '').trim().toUpperCase();
+  return db.getDevolucoes()
+    .filter(d => String(d.tipo_erro || '').trim().toUpperCase() === 'ERRO MOTORISTA')
+    .filter(d => equipeDaDevolucao(d).includes(alvo))
+    .map(d => ({ ...d, data: String(d.data_abertura || d.criado_em || '').slice(0, 10) }));
+}
+
+function renderBlocoDevolucoesErroMotorista(nome, varDe, varAte) {
+  const devs = filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte)
+    .sort((a, b) => String(b.data).localeCompare(String(a.data)));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 class="text-xs font-black text-red-400 uppercase flex items-center gap-2"><span>📝</span> Devoluções por Erro Motorista — ${devs.length}</h3>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Protocolo</th><th class="p-2">Cliente</th><th class="p-2">Motivo</th><th class="p-2 text-right">Valor</th><th class="p-2">Tratativa</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${devs.length === 0 ? '<tr><td colspan="6" class="p-3 text-center text-slate-500">Nenhuma devolução encontrada.</td></tr>' :
+              devs.map(d => `<tr><td class="p-2">${formatarData(d.data)}</td><td class="p-2 font-bold text-emerald-400">${d.numero_devolucao || d.numero_protocolo || '—'}</td><td class="p-2">${d.cliente_nome || '—'}</td><td class="p-2">${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="p-2 text-right font-bold">R$ ${(parseFloat(d.valor_reclamado)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td class="p-2">${d.status_gestao === 'CONCLUIDO' ? '<span class="text-emerald-400 font-bold">Concluída</span>' : '<span class="text-amber-400 font-bold">Pendente</span>'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// Deduções / Adiantamentos: a mesma regra do recibo (equipeDaDevolucao +
+// ratearValor, em centavos) — a parte que cabe a ESTE prestador em cada
+// devolução por erro de motorista.
+function deducoesDoPrestador(nome) {
+  const alvo = String(nome || '').trim().toUpperCase();
+  return devolucoesErroMotoristaDoPrestador(nome).map(d => {
+    const equipe = equipeDaDevolucao(d);
+    const partes = ratearValor(d.valor_reclamado, equipe.length);
+    const idx = equipe.indexOf(alvo);
+    return {
+      data: d.data,
+      protocolo: d.numero_devolucao || d.numero_protocolo || '—',
+      total: parseFloat(d.valor_reclamado) || 0,
+      pessoas: equipe.length,
+      parte: idx >= 0 ? partes[idx] : 0,
+      status: d.status_gestao === 'CONCLUIDO' ? 'CONCLUÍDO' : 'PENDENTE GESTÃO',
+      devId: d.id
+    };
+  });
+}
+
+function renderBlocoDeducoesPrestador(nome, varDe, varAte) {
+  const linhas = filtrarPorData(deducoesDoPrestador(nome), varDe, varAte)
+    .sort((a, b) => String(b.data).localeCompare(String(a.data)));
+  const total = linhas.reduce((acc, l) => acc + l.parte, 0);
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <h3 class="text-xs font-black text-amber-400 uppercase flex items-center gap-2"><span>💸</span> Deduções / Adiantamentos — ${linhas.length}</h3>
+        <span class="bg-amber-950 text-amber-300 border border-amber-800 text-[11px] font-extrabold px-2.5 py-1 rounded">Total no período: R$ ${total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Protocolo</th><th class="p-2 text-right">Valor da devolução</th><th class="p-2 text-center">Equipe</th><th class="p-2 text-right">Parte deste prestador</th><th class="p-2">Situação</th><th class="p-2"></th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${linhas.length === 0 ? '<tr><td colspan="7" class="p-3 text-center text-slate-500">Nenhuma dedução no período.</td></tr>' :
+              linhas.map(l => `<tr><td class="p-2">${formatarData(l.data)}</td><td class="p-2 font-bold text-emerald-400">${l.protocolo}</td><td class="p-2 text-right">R$ ${l.total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td class="p-2 text-center">${l.pessoas}</td><td class="p-2 text-right font-bold text-amber-300">R$ ${l.parte.toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td class="p-2">${l.status}</td><td class="p-2 text-right"><button onclick="gerarAdiantamentoPdf('${l.devId}')" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 px-2 py-0.5 rounded font-bold" title="Recibo de adiantamento (PDF)">📄 Recibo</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function renderDossieMotoristaView() {
   const nomeSelecionado = window._dossieMotoristaSelecionado || '';
   if (!nomeSelecionado) {
     return renderSeletorColaboradorAcompanhamento('MOTORISTA', '_dossieMotoristaFiltroBusca', '_dossieMotoristaSelecionado', 'selecionarMotoristaDossie');
   }
 
-  const dadosMestre = db.getDadosMotoristaMestre(nomeSelecionado) || { nome: nomeSelecionado };
+  const dadosMestre = getDadosPrestadorMestre(nomeSelecionado) || { nome: nomeSelecionado, matricula: '', tipo: 'MOTORISTA' };
+  const ehMotorista = dadosMestre.tipo !== 'AJUDANTE';
 
+  // Sem Medidas Administrativas e sem Orientação Verbal: prestador é PJ e
+  // não recebe medida CLT. Oc. em Rota e Sinistros só fazem sentido para
+  // quem dirige.
   return `
     <div class="max-w-5xl mx-auto space-y-4">
       ${renderCabecalhoAcompanhamento(dadosMestre, 'MOTORISTA', "window._dossieMotoristaSelecionado=''; renderApp()")}
@@ -1289,10 +1423,11 @@ function renderDossieMotoristaView() {
       ${renderBlocoOrientacaoFeedback(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieOfFormAberto')}
       ${renderBlocoAtestadosMedicos(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieAmFormAberto')}
       ${renderBlocoAusencias(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieArFormAberto')}
-      ${renderBlocoMedidasAdministrativas(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoDevolucoesErroMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoDeducoesPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoOcOperacionalMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
-      ${renderBlocoOcRotaMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
-      ${renderBlocoSinistrosMotorista(nomeSelecionado)}
+      ${ehMotorista ? renderBlocoOcRotaMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte') : ''}
+      ${ehMotorista ? renderBlocoSinistrosMotorista(nomeSelecionado) : ''}
     </div>`;
 }
 
@@ -1301,14 +1436,24 @@ function renderDossieMotoristaView() {
 function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   const varDe = tipo === 'MOTORISTA' ? '_dossieFiltroDataDe' : '_acompFiltroDataDe';
   const varAte = tipo === 'MOTORISTA' ? '_dossieFiltroDataAte' : '_acompFiltroDataAte';
-  const dadosMestre = tipo === 'MOTORISTA' ? (db.getDadosMotoristaMestre(nome) || { nome }) : (getDadosColaboradorMestre(nome) || { nome });
+  const dadosMestre = tipo === 'MOTORISTA' ? (getDadosPrestadorMestre(nome) || { nome, matricula: '', tipo: 'MOTORISTA' }) : (getDadosColaboradorMestre(nome) || { nome });
 
   const orientacoes = filtrarPorData(db.getOrientacoesFeedback(nome), varDe, varAte);
   const atestados = filtrarPorData(db.getAtestadosMedicos(nome), varDe, varAte);
-  const ausencias = filtrarPorData(db.getAusenciasRegistros(nome), varDe, varAte);
+  // 6.7.0 (Bloco F): a tela lê getFaltasCondutasPorColaborador() desde
+  // 19/08/2026; PDF e CSV liam ausencias_registros, coleção morta, e saíam
+  // sem as faltas.
+  const ausencias = filtrarPorData(db.getFaltasCondutasPorColaborador(nome), varDe, varAte);
   const dataDe = window[varDe] || '';
   const dataAte = window[varAte] || '';
-  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined });
+  // 6.7.0: prestador não tem medida CLT; tem devolução por erro e dedução.
+  // Orientação Verbal vive no bloco de Orientação e Feedback desde
+  // 19/08/2026; a tela já a tira daqui (renderBlocoMedidasAdministrativas),
+  // e sem este filtro o impresso a listava duas vezes (Bloco F, 6.7.0).
+  const medidas = tipo === 'MOTORISTA' ? [] : db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
+    .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
+  const devsErro = tipo === 'MOTORISTA' ? filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte) : [];
+  const deducoes = tipo === 'MOTORISTA' ? filtrarPorData(deducoesDoPrestador(nome), varDe, varAte) : [];
 
   const secaoTabela = (titulo, cols, rows) => `
     <h2>${titulo}</h2>
@@ -1344,23 +1489,26 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   <div class="header">
     <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
     <div class="title-area">
-      <h1>${tipo === 'MOTORISTA' ? 'Dossiê Motorista' : 'Acompanhamento de Funcionário'}</h1>
+      <h1>${tipo === 'MOTORISTA' ? 'Dossiê Prestador' : 'Acompanhamento de Funcionário'}</h1>
       <p>JR Distribuidora • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
     </div>
   </div>
   <div class="info-box">
     <b>Nome:</b> ${dadosMestre.nome} &nbsp;&nbsp;
+    ${tipo === 'MOTORISTA' ? `<b>Matrícula ERP:</b> ${dadosMestre.matricula || '—'} &nbsp;&nbsp; <b>${dadosMestre.tipo === 'AJUDANTE' ? 'Ajudante' : 'Motorista'}</b>` : `
     ${dadosMestre.chapa ? `<b>Chapa:</b> ${dadosMestre.chapa} &nbsp;&nbsp;` : ''}
     ${dadosMestre.funcao ? `<b>Função:</b> ${dadosMestre.funcao} &nbsp;&nbsp;` : ''}
     ${dadosMestre.cnh ? `<b>CNH:</b> ${dadosMestre.cnh} &nbsp;&nbsp;` : ''}
     <b>Admissão:</b> ${dadosMestre.data_admissao ? formatarData(dadosMestre.data_admissao) : '—'} &nbsp;&nbsp;
-    <b>Desligamento:</b> ${dadosMestre.data_desligamento ? formatarData(dadosMestre.data_desligamento) : '—'}
+    <b>Desligamento:</b> ${dadosMestre.data_desligamento ? formatarData(dadosMestre.data_desligamento) : '—'}`}
   </div>
 
   ${secaoTabela('Orientação e Feedback', ['Data','Ocorrência','Ação'], orientacoes.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.ocorrencia}</td><td>${r.acao}</td></tr>`))}
   ${secaoTabela('Atestados Médicos', ['Data','Parcial/Integral','Motivo','CID','Médico','CRM/CRO'], atestados.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.tipo_afastamento==='INTEGRAL'?'Integral':'Parcial'}</td><td>${r.motivo||'—'}</td><td>${r.cid||'—'}</td><td>${r.medico||'—'}</td><td>${r.crm_cro||'—'}</td></tr>`))}
-  ${secaoTabela('Dispensas / Atrasos / Faltas', ['Data','Motivo'], ausencias.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.motivo}</td></tr>`))}
-  ${secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td>${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
+  ${secaoTabela('Faltas, Condutas & Ausências', ['Data','Turno','Conduta / Ausência','Avisado?','Período','Compensar?'], ausencias.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.turno||'—'}</td><td>${r.conduta||'—'}</td><td>${r.avisado||'—'}</td><td>${r.periodo||'Integral'}</td><td>${r.compensar||'NÃO'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? '' : secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td>${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Devoluções por Erro Motorista', ['Data','Protocolo','Cliente','Motivo','Valor','Tratativa'], devsErro.map(d => `<tr><td>${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td style="text-align:right;">R$ ${(parseFloat(d.valor_reclamado)||0).toFixed(2)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`)) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Deduções / Adiantamentos', ['Data','Protocolo','Valor da devolução','Equipe','Parte deste prestador','Situação'], deducoes.map(l => `<tr><td>${formatarData(l.data)}</td><td>${l.protocolo}</td><td style="text-align:right;">R$ ${l.total.toFixed(2)}</td><td style="text-align:center;">${l.pessoas}</td><td style="text-align:right;"><b>R$ ${l.parte.toFixed(2)}</b></td><td>${l.status}</td></tr>`)) : ''}
 
   <script>window.onload = function() { setTimeout(function(){ window.print(); }, 500); }</script>
 </body>
@@ -1377,15 +1525,24 @@ function exportarAcompanhamentoCsv(nome, tipo) {
 
   const orientacoes = filtrarPorData(db.getOrientacoesFeedback(nome), varDe, varAte);
   const atestados = filtrarPorData(db.getAtestadosMedicos(nome), varDe, varAte);
-  const ausencias = filtrarPorData(db.getAusenciasRegistros(nome), varDe, varAte);
+  // 6.7.0 (Bloco F): a tela lê getFaltasCondutasPorColaborador() desde
+  // 19/08/2026; PDF e CSV liam ausencias_registros, coleção morta, e saíam
+  // sem as faltas.
+  const ausencias = filtrarPorData(db.getFaltasCondutasPorColaborador(nome), varDe, varAte);
   const dataDe = window[varDe] || '';
   const dataAte = window[varAte] || '';
-  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined });
+  // Orientação Verbal vive no bloco de Orientação e Feedback desde
+  // 19/08/2026; a tela já a tira daqui (renderBlocoMedidasAdministrativas),
+  // e sem este filtro o impresso a listava duas vezes (Bloco F, 6.7.0).
+  const medidas = tipo === 'MOTORISTA' ? [] : db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
+    .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
+  const deducoes = tipo === 'MOTORISTA' ? filtrarPorData(deducoesDoPrestador(nome), varDe, varAte) : [];
 
   const linhas = [['Secao','Data','Campo1','Campo2','Campo3','Campo4','Campo5'].map(h => `"${h}"`).join(';')];
+  deducoes.forEach(l => linhas.push(['DEDUCAO_ADIANTAMENTO', formatarData(l.data), l.protocolo, l.total.toFixed(2), String(l.pessoas), l.parte.toFixed(2), l.status].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
   orientacoes.forEach(r => linhas.push(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao, '', '', ''].map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')));
   atestados.forEach(r => linhas.push(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
-  ausencias.forEach(r => linhas.push(['AUSENCIA', formatarData(r.data), r.motivo, '', '', '', ''].map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')));
+  ausencias.forEach(r => linhas.push(['FALTA_CONDUTA', formatarData(r.data), r.turno, r.conduta, r.avisado, r.periodo || 'Integral', r.compensar || 'NÃO'].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
   medidas.forEach(m => linhas.push(['MEDIDA_DISCIPLINAR', formatarData(m.data_ocorrencia), m.tipo, m.alineas_clt, m.motivo, m.gestor, ''].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
 
   if (linhas.length === 1) { alert('Nenhum registro encontrado para exportar com os filtros atuais.'); return; }
@@ -2678,8 +2835,17 @@ const NAV_GRUPOS = [
   {
     id: 'visao_geral', icon: '📊', titulo: 'Visão Geral',
     itens: [
-      { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo', papeis: null },
-      { tab: 'boletim_gerencial', icon: '📄', label: 'Boletim Gerencial', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] }
+      { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo', papeis: null }
+    ]
+  },
+  {
+    // 6.7.0 (decisão 6 do plano): as três subabas do Boletim subiram para o
+    // menu. Os três itens abrem a mesma tela; o que muda é a subaba.
+    id: 'boletim', icon: '📄', titulo: 'Boletim Gerencial',
+    itens: [
+      { tab: 'boletim_gerencial', icon: '📊', label: 'Visão Executiva', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] },
+      { tab: 'boletim_export_csv', icon: '📥', label: 'Exportação CSV', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] },
+      { tab: 'boletim_pdfs', icon: '📄', label: 'Central de PDFs', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] }
     ]
   },
   {
@@ -2691,23 +2857,29 @@ const NAV_GRUPOS = [
     ]
   },
   {
+    // 6.7.0: Ocorrência Colaborador (a antiga subaba "Ocorrências CD"),
+    // Ocorrência CD e Corte viraram telas próprias — cada registro ganhou
+    // identidade e data próprias (migration 44).
     id: 'cd', icon: '📦', titulo: 'Centro de Distribuição',
     itens: [
-      { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico CD', papeis: ['CD', 'GESTOR', 'ADMIN'] },
-      { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário CD', papeis: ['CD', 'GESTOR', 'ADMIN'] }
+      { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'ocorrencia_colaborador', icon: '👤', label: 'Ocorrência Colaborador', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'ocorrencia_cd', icon: '📢', label: 'Ocorrência CD', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'corte_cd', icon: '✂️', label: 'Corte', papeis: ['CD', 'GESTOR', 'ADMIN'] }
     ]
   },
   {
+    // 6.7.0 (decisão 4): "Largada" deixou de existir como subaba — é a
+    // própria tela de Controle de Viagens. As outras quatro subiram para
+    // irmãs dela.
     id: 'frota', icon: '🚚', titulo: 'Operação & Frota',
     itens: [
-      { tab: 'controle_viagens', icon: '🚍', label: 'Controle de Viagens', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'],
-        sub: [
-          { valor: 'largada', icon: '🚩', label: 'Largada' },
-          { valor: 'operacional', icon: '⚠️', label: 'Oc. Operacional' },
-          { valor: 'frota_rota', icon: '🚚', label: 'Oc. em Rota' },
-          { valor: 'troca_veiculos', icon: '🔄', label: 'Trocas de Veículos' },
-          { valor: 'reentregas', icon: '🔁', label: 'Reentregas' }
-        ] },
+      { tab: 'controle_viagens', icon: '🚍', label: 'Controle de Viagens', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'oc_operacional', icon: '⚠️', label: 'Oc. Operacional', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'oc_rota', icon: '🚚', label: 'Oc. em Rota', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'reentregas', icon: '🔁', label: 'Reentregas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'troca_veiculos', icon: '🔄', label: 'Troca de Veículos', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'disponibilidade_frota', icon: '🚛', label: 'Disponibilidade da Frota', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] }
     ]
@@ -2715,7 +2887,9 @@ const NAV_GRUPOS = [
   {
     id: 'pessoas', icon: '👤', titulo: 'Pessoas',
     itens: [
-      { tab: 'dossie_motorista', icon: '🪪', label: 'Dossiê do Motorista', papeis: ['GESTOR', 'ADMIN'] },
+      // A chave interna 'dossie_motorista' é mantida de propósito (6.7.0):
+      // só o rótulo muda, para não quebrar nada que aponte para ela.
+      { tab: 'dossie_motorista', icon: '🪪', label: 'Dossiê Prestador', papeis: ['GESTOR', 'ADMIN'] },
       { tab: 'acompanhamento_funcionario', icon: '📁', label: 'Acompanhamento do Funcionário', papeis: ['GESTOR', 'ADMIN'] }
     ]
   },
@@ -2793,13 +2967,21 @@ function toggleNavVerTudo() {
 }
 window.toggleNavVerTudo = toggleNavVerTudo;
 
-// Atalho direto para uma sub-aba de Controle de Viagens. Precisa ser uma
-// função em window: `activeViagensSubTab` é declarada com `let` no escopo do
-// script e um onclick inline (que roda no escopo global) não enxerga esse
-// tipo de binding. Mesmo motivo do atalho 'rota_ocorrencias' já existente.
+// 6.7.0: as antigas subabas de Controle de Viagens viraram telas irmãs.
+// switchViagensSubTab() continua existindo por compatibilidade — vários
+// botões (Dashboard, modal de detalhes) chamam switchTab('controle_viagens')
+// seguido de switchViagensSubTab('reentregas') — e passa a ser um atalho
+// para a tela correspondente.
+const TELA_POR_SUBABA_VIAGENS = {
+  largada: 'controle_viagens',
+  operacional: 'oc_operacional',
+  ocorrencias: 'oc_operacional',
+  frota_rota: 'oc_rota',
+  troca_veiculos: 'troca_veiculos',
+  reentregas: 'reentregas'
+};
 function switchTabViagensSub(sub) {
-  activeViagensSubTab = sub;
-  switchTab('controle_viagens');
+  switchTab(TELA_POR_SUBABA_VIAGENS[sub] || 'controle_viagens');
 }
 window.switchTabViagensSub = switchTabViagensSub;
 
@@ -2861,17 +3043,8 @@ function renderNavMenu() {
             ? '<span class="text-[10px] opacity-60" title="Exige a senha de administrador">🔒</span>' : ''}
         </button>`;
 
-      // Sub-abas só aparecem quando a tela-mãe está aberta: manter as 5 de
-      // Controle de Viagens sempre visíveis devolveria o menu ao tamanho de
-      // antes, que é o problema que este trabalho veio resolver.
-      if (!i.sub || !ativo) return botao;
-
-      const htmlSub = i.sub.map(s => `
-        <button onclick="switchTabViagensSub('${s.valor}')" class="w-full text-left pl-9 pr-3 py-1.5 rounded-lg text-[11px] font-semibold transition flex items-center gap-2 ${activeViagensSubTab === s.valor ? 'text-emerald-300 bg-slate-800/60' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}">
-          <span>${s.icon}</span> ${s.label}
-        </button>`).join('');
-
-      return botao + `<div class="mt-0.5 space-y-0.5 border-l border-slate-800 ml-5">${htmlSub}</div>`;
+      // 6.7.0: não há mais subabas no menu — cada antiga subaba é um item.
+      return botao;
     }).join('');
 
     return `
@@ -2966,18 +3139,29 @@ function renderApp() {
         html = renderCdRecepcaoView();
         break;
       case 'controle_viagens':
+        activeViagensSubTab = 'largada';
         html = renderControleViagensView();
+        break;
+      // 6.7.0: as quatro antigas subabas de Controle de Viagens são telas.
+      case 'oc_operacional':
+        activeViagensSubTab = 'operacional';
+        html = renderTelaFrota('⚠️', 'Ocorrência Operacional', 'Ocorrências operacionais das viagens', renderViagensOcorrenciasSubTab());
+        break;
+      case 'oc_rota':
+      case 'rota_ocorrencias':   // apelido antigo, ainda usado por atalhos
+        activeViagensSubTab = 'frota_rota';
+        html = renderTelaFrota('🚚', 'Ocorrência em Rota', 'Socorro, retenção e chamados da frota em rota', renderRotaOcorrenciasView());
+        break;
+      case 'reentregas':
+        activeViagensSubTab = 'reentregas';
+        html = renderTelaFrota('🔁', 'Reentregas', 'Registro e custódia das reentregas', renderViagensReentregasSubTab());
+        break;
+      case 'troca_veiculos':
+        activeViagensSubTab = 'troca_veiculos';
+        html = renderTelaFrota('🔄', 'Troca de Veículos', 'Trocas de veículo escalado', renderViagensTrocaVeiculosSubTab());
         break;
       case 'disponibilidade_frota':
         html = renderDisponibilidadeFrotaView();
-        break;
-      case 'rota_ocorrencias':
-        // PRIORIDADE 3: a tela lê a variável "activeViagensSubTab" (não
-        // "window._activeViagensSubTab") e o valor esperado da sub-aba de
-        // frota é "frota_rota" (não "frota") — antes este atalho não
-        // abria a sub-aba correta dentro de Controle de Viagens.
-        activeViagensSubTab = 'frota_rota';
-        html = renderControleViagensView();
         break;
       case 'cadastros_dados':
         html = renderCadastrosDadosView();
@@ -3000,7 +3184,21 @@ function renderApp() {
       case 'resumo_diario_cd':
         html = renderResumoDiarioCdView();
         break;
+      // 6.7.0: as três telas novas do CD.
+      case 'ocorrencia_colaborador':
+        html = renderOcorrenciaColaboradorView();
+        break;
+      case 'ocorrencia_cd':
+        html = renderOcorrenciaCDView();
+        break;
+      case 'corte_cd':
+        html = renderCorteCDView();
+        break;
+      // 6.7.0: as três subabas do Boletim no menu — mesma tela, subaba
+      // decidida pelo activeTab (ver renderBoletimGerencialView).
       case 'boletim_gerencial':
+      case 'boletim_export_csv':
+      case 'boletim_pdfs':
         html = renderBoletimGerencialView();
         break;
       // Apelido antigo do Conector Power BI: nenhum switchTab() aponta para
@@ -3499,14 +3697,12 @@ function switchCdSubTab(sub) {
 }
 window.switchCdSubTab = switchCdSubTab;
 
-function switchResumoSubTab(sub) {
-  activeResumoSubTab = sub;
-  renderApp();
-}
-window.switchResumoSubTab = switchResumoSubTab;
-
+// 6.7.0: as subabas do Boletim são itens do menu. Quem chama isto direto
+// ainda funciona — vira um switchTab para a tela certa.
+const TELA_POR_SUBABA_BOLETIM = { executiva: 'boletim_gerencial', export_csv: 'boletim_export_csv', relatorios_pdf: 'boletim_pdfs' };
 function switchBolSubTab(sub) {
   window._activeBolSubTab = sub;
+  if (TELA_POR_SUBABA_BOLETIM[sub] && activeTab !== TELA_POR_SUBABA_BOLETIM[sub]) { switchTab(TELA_POR_SUBABA_BOLETIM[sub]); return; }
   renderApp();
 }
 window.switchBolSubTab = switchBolSubTab;
@@ -4869,7 +5065,7 @@ function renderDashboardView() {
   const allViagens = db.getControleViagens();
   const allOcViagens = db.getOcorrenciasViagens();
   const allTrocas = db.getTrocasVeiculos();
-  const rawResumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
+  const rawResumosCd = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
 
   // Filtragem periódica por intervalo de datas.
   //
@@ -8479,27 +8675,22 @@ function renderGestaoGestorView() {
   const todosPendentes = todosDevs.filter(d => d.status_gestao !== 'CONCLUIDO');
   const todosConcluidos = todosDevs.filter(d => d.status_gestao === 'CONCLUIDO');
 
-  let devsExibidos = activeGestorTab === 'pendentes' ? todosPendentes : todosConcluidos;
+  // 6.7.0 (Bloco F): o predicado dos filtros vira função e é aplicado ao
+  // universo inteiro ANTES de separar por status — assim os três cards
+  // reagem aos filtros como o rodapé. Os badges das abas continuam globais.
+  const passaFiltros = d => {
+    if (filtroCarga && !String(d.carga_numero || d.carga || d.carga_rota || '').toLowerCase().includes(filtroCarga.toLowerCase().trim())) return false;
+    if (filtroTipoErro && d.tipo_erro !== filtroTipoErro) return false;
+    const criado = d.criado_em ? d.criado_em.split('T')[0] : '';
+    if (filtroDataDe && criado < filtroDataDe) return false;
+    if (filtroDataAte && criado > filtroDataAte) return false;
+    return true;
+  };
+  const devsFiltrados = todosDevs.filter(passaFiltros);
+  const pendentesFiltrados = devsFiltrados.filter(d => d.status_gestao !== 'CONCLUIDO');
+  const concluidosFiltrados = devsFiltrados.filter(d => d.status_gestao === 'CONCLUIDO');
 
-  // Aplicação dos filtros no painel ativo (especialmente para Concluídos)
-  if (filtroCarga) {
-    devsExibidos = devsExibidos.filter(d => String(d.carga_numero || d.carga || d.carga_rota || '').toLowerCase().includes(filtroCarga.toLowerCase().trim()));
-  }
-  if (filtroTipoErro) {
-    devsExibidos = devsExibidos.filter(d => d.tipo_erro === filtroTipoErro);
-  }
-  if (filtroDataDe) {
-    devsExibidos = devsExibidos.filter(d => {
-      const criado = d.criado_em ? d.criado_em.split('T')[0] : '';
-      return criado >= filtroDataDe;
-    });
-  }
-  if (filtroDataAte) {
-    devsExibidos = devsExibidos.filter(d => {
-      const criado = d.criado_em ? d.criado_em.split('T')[0] : '';
-      return criado <= filtroDataAte;
-    });
-  }
+  let devsExibidos = activeGestorTab === 'pendentes' ? pendentesFiltrados : concluidosFiltrados;
 
   // Ordenação dinâmica pelo campo selecionado
   devsExibidos = [...devsExibidos].sort((a, b) => {
@@ -8531,7 +8722,7 @@ function renderGestaoGestorView() {
     }
   });
 
-  const totDesconto = todosDevs.filter(d => d.desconto_produtividade_gestor).length;
+  const totDesconto = devsFiltrados.filter(d => d.desconto_produtividade_gestor).length;
   const separadores = db.data.separadores_conferentes || [];
 
   return `
@@ -8558,11 +8749,11 @@ function renderGestaoGestorView() {
       <!-- CARDS DE INDICADORES DO GESTOR -->
       <div class="grid grid-cols-3 gap-3">
         <div class="bg-slate-900 border border-amber-800/50 p-3 rounded-xl text-center shadow">
-          <div class="text-xl font-black text-amber-400">${todosPendentes.length}</div>
+          <div class="text-xl font-black text-amber-400">${pendentesFiltrados.length}</div>
           <div class="text-[10px] text-slate-400 mt-0.5 font-bold uppercase">Pendentes de Ação</div>
         </div>
         <div class="bg-slate-900 border border-emerald-800/50 p-3 rounded-xl text-center shadow">
-          <div class="text-xl font-black text-emerald-400">${todosConcluidos.length}</div>
+          <div class="text-xl font-black text-emerald-400">${concluidosFiltrados.length}</div>
           <div class="text-[10px] text-slate-400 mt-0.5 font-bold uppercase">Concluídas</div>
         </div>
         <div class="bg-slate-900 border border-red-800/50 p-3 rounded-xl text-center shadow">
@@ -10775,59 +10966,47 @@ function baixarRelatorioDivergencia(relatorio) {
 // ===== MÓDULO: CONTROLE DE VIAGENS (LARGADAS & OCORRÊNCIAS OPERACIONAIS) =====
 let activeViagensSubTab = 'largada';
 
+// 6.7.0: a subaba virou tela. Mantida por compatibilidade com os botões
+// que ainda chamam switchViagensSubTab('reentregas') etc.
 function switchViagensSubTab(sub) {
-  activeViagensSubTab = sub;
-  renderApp();
+  switchTabViagensSub(sub);
 }
 window.switchViagensSubTab = switchViagensSubTab;
 
+// Cabeçalho comum das quatro telas que eram subabas de Controle de Viagens.
+function renderTelaFrota(icone, titulo, subtitulo, contentHtml) {
+  return `
+    <div class="space-y-5">
+      <div>
+        <h1 class="text-xl font-black text-white flex items-center gap-2">
+          <span>${icone}</span> ${titulo}
+        </h1>
+        <p class="text-xs text-slate-400">${subtitulo}</p>
+      </div>
+      <div>${contentHtml}</div>
+    </div>`;
+}
+
+// Controle de Viagens É a Largada (decisão 4 do plano, 6.7.0): sem barra de
+// subabas — Oc. Operacional, Oc. em Rota, Reentregas e Troca de Veículos são
+// telas irmãs no menu.
 function renderControleViagensView() {
-  let contentHtml = renderViagensLargadaSubTab();
-  if (activeViagensSubTab === 'operacional' || activeViagensSubTab === 'ocorrencias') {
-    contentHtml = renderViagensOcorrenciasSubTab();
-  } else if (activeViagensSubTab === 'frota_rota') {
-    contentHtml = renderRotaOcorrenciasView();
-  } else if (activeViagensSubTab === 'troca_veiculos') {
-    contentHtml = renderViagensTrocaVeiculosSubTab();
-  } else if (activeViagensSubTab === 'reentregas') {
-    contentHtml = renderViagensReentregasSubTab();
-  }
+  const contentHtml = renderViagensLargadaSubTab();
 
   return `
     <div class="space-y-5">
-      <!-- TOPO E NAVEGAÇÃO ENTRE SUB-ABAS -->
       <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
         <div>
           <h1 class="text-xl font-black text-white flex items-center gap-2">
             <span>🚍</span> Controle de Viagens
           </h1>
-          <p class="text-xs text-slate-400">Escala de largada, trocas, ocorrências e reentregas</p>
+          <p class="text-xs text-slate-400">Escala de largada e retorno das viagens</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
-          <!-- Botão Relatório de Largada -->
           <div class="flex gap-2"><button onclick="gerarRelatorioLargadaOperacaoModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow flex items-center gap-1.5" title="Relatório Corporativo de Largada">
             <span>📄</span> Relatório de Largada
           </button>${btnCompartilharPdf('gerarRelatorioLargadaOperacaoModal', 'Boletim de Largada')}</div>
-
-          <!-- SELETOR DE SUB-ABAS -->
-          <div class="flex flex-wrap gap-1 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg">
-            <button onclick="switchViagensSubTab('largada')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='largada'?'bg-emerald-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🚩</span> Largada
-            </button>
-            <button onclick="switchViagensSubTab('operacional')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${(activeViagensSubTab==='operacional'||activeViagensSubTab==='ocorrencias')?'bg-amber-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>⚠️</span> Oc. Operacional
-            </button>
-            <button onclick="switchViagensSubTab('frota_rota')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='frota_rota'?'bg-red-800 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🚚</span> Oc. em Rota
-            </button>
-            <button onclick="switchViagensSubTab('troca_veiculos')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='troca_veiculos'?'bg-purple-800 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🔄</span> Trocas de veículos
-            </button>
-            <button onclick="switchViagensSubTab('reentregas')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='reentregas'?'bg-purple-700 text-white shadow-lg border border-purple-500':'text-slate-400 hover:text-white'}">
-              <span>🔄</span> Reentregas
-            </button>
-          </div>
         </div>
       </div>
 
@@ -14131,6 +14310,17 @@ function handleNovaOcViagemSubmit(e) {
   const ocorrencia = (document.getElementById('ocv-ocorrencia')?.value || '').trim();
   const acao = (document.getElementById('ocv-acao')?.value || '').trim();
   const status = (ocorrencia && acao) ? 'FINALIZADA' : 'PENDENTE';
+
+  // 6.7.0 (Bloco E): o datalist filtra por função, mas não rejeita nome
+  // digitado fora da lista — e nome fora do cadastro nunca casa com o Dossiê
+  // Prestador nem com o Acompanhamento. Só vale nome que está no cadastro
+  // daquela função.
+  const funcaoSel = (document.getElementById('ocv-funcao')?.value || '').trim();
+  const funcDigitado = (document.getElementById('ocv-funcionario')?.value || '').trim().toUpperCase();
+  if (funcDigitado && !getFuncionariosPorFuncao(funcaoSel).includes(funcDigitado)) {
+    alert(`⚠️ "${funcDigitado}" não está no cadastro de ${funcaoSel || 'colaboradores'}. Selecione um nome da lista sugerida — ou cadastre a pessoa em Cadastros Mestres.`);
+    return;
+  }
 
   db.addOcorrenciaViagem({
     data: document.getElementById('ocv-data').value,
@@ -18179,215 +18369,60 @@ function downloadSqlScript() { window.open('./database/schema.sql','_blank'); }
 function copyJsonData() { navigator.clipboard.writeText(JSON.stringify(db.data,null,2)).then(()=>alert('✅ JSON copiado!')); }
 
 // ===== MÓDULO: RESUMO DIÁRIO CD & GESTÃO DE OCORRÊNCIAS =====
-function getTodasOcorrenciasCD() {
-  const list = [];
-  if (!db.data || !db.data.resumo_diario_cd) return list;
-
-  db.data.resumo_diario_cd.forEach(r => {
-    // 1. Ocorrências Gerais (Item 3)
-    if (Array.isArray(r.ocorrencias)) {
-      r.ocorrencias.forEach((o, idx) => {
-        list.push({
-          _parentData: r.data,
-          _parentTurno: r.turno,
-          _type: 'operacional',
-          _index: idx,
-          id: o.id || `op_${r.data}_${r.turno}_${idx}`,
-          data: r.data,
-          turno: r.turno,
-          gestor: r.gestor || '',
-          titulo: o.ocorrencia || 'OCORRÊNCIA OPERACIONAL',
-          colaborador: o.funcionario || 'OPERAÇÃO CD',
-          causa: o.causa || '',
-          acao: o.acao || '',
-          status: o.status || 'PENDENTE'
-        });
-      });
-    }
-    // 2. Ocorrências Colaboradores (Item 5)
-    if (Array.isArray(r.ocorrencias_colaboradores)) {
-      r.ocorrencias_colaboradores.forEach((oc, idx) => {
-        list.push({
-          _parentData: r.data,
-          _parentTurno: r.turno,
-          _type: 'colaborador',
-          _index: idx,
-          id: oc.id || `col_${r.data}_${r.turno}_${idx}`,
-          data: oc.data || r.data,
-          turno: r.turno,
-          gestor: r.gestor || '',
-          titulo: oc.requisito || 'APONTAMENTO COLABORADOR',
-          colaborador: oc.funcionario || '-',
-          causa: oc.detalhamento || '',
-          acao: oc.acao || '',
-          peso: oc.peso || '',
-          carga: oc.carga || '',
-          status: oc.status || 'PENDENTE'
-        });
-      });
-    }
-  });
-
-  return list;
+// OCORRÊNCIA COLABORADOR (6.7.0) — a antiga subaba "Ocorrências CD" virou
+// tela própria e lê só ocorrencias_colaborador. Aqui há pessoa, e ela é CLT:
+// mantém Pendentes + Fechadas, filtros, PDF, Excel e os botões
+// disciplinares. Cada registro é endereçado pelo id — acabou o
+// (data, turno, tipo, índice). getTodasOcorrenciasCD() deixou de existir: era
+// ela que forçava dois formatos na mesma tabela e imprimia "OPERAÇÃO CD" na
+// coluna Funcionário.
+function listarOcorrenciasColaboradorView() {
+  return db.getOcorrenciasColaborador().map(oc => ({
+    id: oc.id,
+    data: oc.data,
+    turno: oc.turno,
+    gestor: oc.gestor || '',
+    titulo: oc.requisito || 'APONTAMENTO COLABORADOR',
+    colaborador: oc.funcionario || '-',
+    causa: oc.detalhamento || '',
+    acao: oc.acao || '',
+    peso: (oc.peso === null || oc.peso === undefined) ? '' : oc.peso,
+    carga: oc.carga || '',
+    status: oc.status || 'PENDENTE',
+    medida_disciplinar: oc.medida_disciplinar || '',
+    dias_suspensao: oc.dias_suspensao || ''
+  }));
 }
 
-function alterarStatusOcorrenciaCD(parentData, parentTurno, type, index, novoStatus) {
-  const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-  if (type === 'operacional' && resumo.ocorrencias?.[index]) {
-    resumo.ocorrencias[index].status = novoStatus;
-  } else if (type === 'colaborador' && resumo.ocorrencias_colaboradores?.[index]) {
-    resumo.ocorrencias_colaboradores[index].status = novoStatus;
-  }
-  db.saveResumoDiarioCD(resumo);
+function alterarStatusOcorrenciaColaborador(id, novoStatus) {
+  const res = db.updateOcorrenciaColaborador(id, { status: novoStatus });
+  if (!res.success) { alert(res.message); return; }
   renderApp();
 }
 
-function removerOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
-  if (!confirm('Excluir esta ocorrência do CD?')) return;
-  const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-  if (type === 'operacional' && resumo.ocorrencias) {
-    resumo.ocorrencias.splice(index, 1);
-  } else if (type === 'colaborador' && resumo.ocorrencias_colaboradores) {
-    resumo.ocorrencias_colaboradores.splice(index, 1);
-  }
-  db.saveResumoDiarioCD(resumo);
+function removerOcorrenciaColaborador(id) {
+  if (!confirm('Excluir esta ocorrência do colaborador?')) return;
+  const res = db.deleteOcorrenciaColaborador(id);
+  if (!res.success) { alert(res.message); return; }
   renderApp();
 }
 
-function editarOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
+// Um formulário só para criar e editar. Data e Turno editáveis e efetivos.
+function _modalOcorrenciaColaborador({ titulo, data, turno, item, onSalvar, rotuloBotao }) {
   const container = document.getElementById('modal-container');
   if (!container) return;
-
-  const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-  let item = null;
-  if (type === 'colaborador') item = resumo.ocorrencias_colaboradores?.[index];
-  else if (type === 'operacional') item = resumo.ocorrencias?.[index];
-  if (!item) return;
-
   const colabs = getListaTodosColaboradores();
-  const funcAtual = item.funcionario || item.colaborador || '';
-  const reqAtual = item.requisito || item.ocorrencia || 'OUTRO';
+  const funcAtual = (item && item.funcionario) || '';
+  const reqAtual = (item && item.requisito) || '';
+  const requisitos = getRequisitosFalhaCD();
+  const reqForaDaLista = reqAtual && !requisitos.includes(reqAtual);
+  const esc = v => String(v == null ? '' : v).replace(/"/g, '&quot;');
 
   container.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4">
       <div class="flex items-center justify-between border-b border-slate-800 pb-3">
         <h3 class="text-sm font-bold text-amber-400 uppercase flex items-center gap-2">
-          <span>✏️</span> Editar Ocorrência do CD
-        </h3>
-        <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
-      </div>
-
-      <div class="space-y-3 text-xs">
-        <div class="grid grid-cols-3 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data</label>
-            <input type="date" id="md-edit-data" value="${item.data || parentData}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor</label>
-            <input type="text" readonly value="${parentTurno}" class="w-full bg-slate-800/60 border border-slate-700 text-slate-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status *</label>
-            <select id="md-edit-status" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-extrabold">
-              <option value="PENDENTE" ${item.status==='PENDENTE'?'selected':''}>PENDENTE</option>
-              <option value="FECHADO" ${item.status==='FECHADO'?'selected':''}>FECHADO</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Funcionário / Envolvido *</label>
-            <select id="md-edit-colab" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
-              <option value="">-- Selecione o Colaborador --</option>
-              ${colabs.map(c => `<option value="${c}" ${c === funcAtual ? 'selected' : ''}>${c}</option>`).join('')}
-            </select>
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha *</label>
-            <input type="text" id="md-edit-req" value="${reqAtual}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
-            <input type="text" id="md-edit-carga" list="cargas-list-mdedit" value="${item.carga || ''}" placeholder="ex: 7689"
-              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-edit-carga','md-edit-carga-aviso',this.value)"
-              onchange="atualizarAvisoCargaNaoEncontrada('md-edit-carga','md-edit-carga-aviso',this.value)"
-              class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-            ${renderDatalistCargas('cargas-list-mdedit')}
-            <div id="md-edit-carga-aviso" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Peso em Kg (Se houver)</label>
-            <input type="number" step="0.01" id="md-edit-peso" value="${item.peso || ''}" placeholder="ex: 15.50" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-edit-causa" rows="3" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.detalhamento || item.causa || ''}</textarea>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-edit-acao" rows="2" class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.acao || ''}</textarea>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
-        <div class="flex items-center gap-1.5">
-          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
-          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Advertência CLT">⚠️ Advertência</button>
-          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Suspensão CLT">⛔ Suspensão</button>
-        </div>
-        <div class="flex items-center gap-2">
-          <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-          <button onclick="confirmarEditarOcorrenciaCD('${parentData}', '${parentTurno}', '${type}', ${index})" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Alterações</button>
-        </div>
-      </div>
-    </div>`;
-  container.classList.remove('hidden');
-}
-
-function confirmarEditarOcorrenciaCD(parentData, parentTurno, type, index) {
-  const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-  let item = null;
-  if (type === 'colaborador') item = resumo.ocorrencias_colaboradores?.[index];
-  else if (type === 'operacional') item = resumo.ocorrencias?.[index];
-  if (!item) return;
-
-  item.data = document.getElementById('md-edit-data')?.value || item.data;
-  item.status = document.getElementById('md-edit-status')?.value || item.status;
-  item.funcionario = (document.getElementById('md-edit-colab')?.value || item.funcionario || '').toUpperCase().trim();
-  const reqVal = (document.getElementById('md-edit-req')?.value || '').toUpperCase().trim();
-  if (type === 'colaborador') item.requisito = reqVal;
-  else item.ocorrencia = reqVal;
-
-  item.carga = (document.getElementById('md-edit-carga')?.value || '').trim();
-  item.peso = (document.getElementById('md-edit-peso')?.value || '').trim();
-  const causaVal = (document.getElementById('md-edit-causa')?.value || '').trim();
-  if (type === 'colaborador') item.detalhamento = causaVal;
-  else item.causa = causaVal;
-  item.acao = (document.getElementById('md-edit-acao')?.value || '').trim();
-
-  db.saveResumoDiarioCD(resumo);
-  fecharModalResumo();
-  renderApp();
-}
-
-function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
-  const container = document.getElementById('modal-container');
-  if (!container) return;
-  const colabs = getListaTodosColaboradores();
-
-  container.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-emerald-400 uppercase flex items-center gap-2">
-          <span>📢</span> Registrar Ocorrência do CD (Item 5)
+          <span>👤</span> ${titulo}
         </h3>
         <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
       </div>
@@ -18396,21 +18431,17 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
         <div class="grid grid-cols-3 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
-            <input type="date" id="md-oc2-data" value="${defaultData || hojeIsoBrasilia()}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <input type="date" id="md-occ-data" value="${data || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor *</label>
-            <select id="md-oc2-turno" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
-              <option value="SECO" ${defaultTurno==='SECO'?'selected':''}>SECO</option>
-              <option value="1º TURNO - FRIO" ${defaultTurno==='1º TURNO - FRIO'?'selected':''}>1º TURNO - FRIO</option>
-              <option value="2º TURNO - FRIO" ${defaultTurno==='2º TURNO - FRIO'?'selected':''}>2º TURNO - FRIO</option>
-            </select>
+            ${_selectTurnoResumo('md-occ-turno', turno)}
           </div>
           <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status Inicial *</label>
-            <select id="md-oc2-status" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-extrabold">
-              <option value="PENDENTE" selected>PENDENTE</option>
-              <option value="FECHADO">FECHADO</option>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status *</label>
+            <select id="md-occ-status" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-extrabold">
+              <option value="PENDENTE" ${(!item || item.status !== 'FECHADO') ? 'selected' : ''}>PENDENTE</option>
+              <option value="FECHADO" ${(item && item.status === 'FECHADO') ? 'selected' : ''}>FECHADO</option>
             </select>
           </div>
         </div>
@@ -18418,15 +18449,16 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Funcionário / Envolvido *</label>
-            <select id="md-oc2-colab" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+            <select id="md-occ-func" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
               <option value="">-- Selecione o Colaborador --</option>
-              ${colabs.map(c => `<option value="${c}">${c}</option>`).join('')}
+              ${colabs.map(c => `<option value="${esc(c)}" ${c === funcAtual ? 'selected' : ''}>${c}</option>`).join('')}
             </select>
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha *</label>
-            <select id="md-oc2-titulo" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
-              ${renderOptionsRequisitoFalhaCD()}
+            <select id="md-occ-req" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
+              ${reqForaDaLista ? `<option value="${esc(reqAtual)}" selected>${reqAtual}</option>` : ''}
+              ${requisitos.map(r => `<option value="${esc(r)}" ${r === reqAtual ? 'selected' : ''}>${r}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -18434,73 +18466,95 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
-            <input type="text" id="md-oc2-carga" list="cargas-list-mdoc2" placeholder="ex: 7689"
-              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-oc2-carga','md-oc2-carga-aviso',this.value)"
-              onchange="atualizarAvisoCargaNaoEncontrada('md-oc2-carga','md-oc2-carga-aviso',this.value)"
+            <input type="text" id="md-occ-carga" list="cargas-list-mdocc" value="${esc(item && item.carga)}" placeholder="ex: 7689"
+              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
+              onchange="atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
               class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-            ${renderDatalistCargas('cargas-list-mdoc2')}
-            <div id="md-oc2-carga-aviso" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
+            ${renderDatalistCargas('cargas-list-mdocc')}
+            <div id="md-occ-carga-aviso" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Peso em Kg (Se houver)</label>
-            <input type="number" step="0.01" id="md-oc2-peso" placeholder="ex: 15.50" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <input type="number" step="0.01" id="md-occ-peso" value="${item && item.peso != null ? item.peso : ''}" placeholder="ex: 15.50" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
           </div>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-oc2-causa" rows="3" placeholder="Descreva os detalhes da ocorrência..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <textarea id="md-occ-detalhamento" rows="3" placeholder="Descreva os detalhes da ocorrência ocorrida com o colaborador..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${(item && item.detalhamento) || ''}</textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-oc2-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <textarea id="md-occ-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${(item && item.acao) || ''}</textarea>
         </div>
       </div>
 
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-        <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarNovaOcorrenciaCD()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Ocorrência</button>
+      <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
+        <div class="flex items-center gap-1.5">
+          ${item ? `
+          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', ocorrenciaId:'${item.id}', dataOcorrencia:'${item.data||''}', colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${((item.detalhamento)||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
+          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', ocorrenciaId:'${item.id}', dataOcorrencia:'${item.data||''}', colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${((item.detalhamento)||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Advertência CLT">⚠️ Advertência</button>
+          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', ocorrenciaId:'${item.id}', dataOcorrencia:'${item.data||''}', colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${((item.detalhamento)||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Suspensão CLT">⛔ Suspensão</button>
+          ` : ''}
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
+          <button onclick="${onSalvar}" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">${rotuloBotao}</button>
+        </div>
       </div>
     </div>`;
   container.classList.remove('hidden');
 }
 
-function confirmarSalvarNovaOcorrenciaCD() {
-  const dt = document.getElementById('md-oc2-data')?.value;
-  const turno = document.getElementById('md-oc2-turno')?.value;
-  const status = document.getElementById('md-oc2-status')?.value || 'PENDENTE';
-  const colab = document.getElementById('md-oc2-colab')?.value || 'OPERAÇÃO CD';
-  const titulo = document.getElementById('md-oc2-titulo')?.value || 'OUTRO';
-
-  if (!dt || !turno) { alert('Preencha a data e turno!'); return; }
-
-  const carga = document.getElementById('md-oc2-carga')?.value || '';
-  const peso = document.getElementById('md-oc2-peso')?.value || '';
-  const causa = document.getElementById('md-oc2-causa')?.value || '';
-  const acao = document.getElementById('md-oc2-acao')?.value || '';
-
-  const resumo = db.getResumoDiarioCD(dt, turno);
-  if (!resumo.ocorrencias_colaboradores) resumo.ocorrencias_colaboradores = [];
-  resumo.ocorrencias_colaboradores.push({
-    id: db.gerarIdUnico(),
-    data: dt,
-    funcionario: colab.toUpperCase().trim(),
-    requisito: titulo.toUpperCase().trim(),
-    carga: carga.trim(),
-    detalhamento: causa.trim(),
-    acao: acao.trim(),
-    peso: peso ? String(peso).trim() : '',
-    status: status
+function adicionarOcorrenciaColaboradorModal(data, turno) {
+  _modalOcorrenciaColaborador({
+    titulo: 'Registrar Ocorrência do Colaborador',
+    data: data || hojeIsoBrasilia(),
+    turno: turno || turnoResumoAtual() || '',
+    item: null,
+    onSalvar: 'confirmarSalvarOcorrenciaColaborador()',
+    rotuloBotao: 'Salvar Ocorrência'
   });
+}
 
-  db.saveResumoDiarioCD(resumo);
+function editarOcorrenciaColaboradorModal(id) {
+  const item = db.getFilhoResumoPorId('colaborador', id);
+  if (!item) { alert('Ocorrência não encontrada.'); return; }
+  _modalOcorrenciaColaborador({
+    titulo: 'Editar Ocorrência do Colaborador',
+    data: item.data, turno: item.turno, item,
+    onSalvar: `confirmarSalvarOcorrenciaColaborador('${item.id}')`,
+    rotuloBotao: 'Salvar Alterações'
+  });
+}
+
+function confirmarSalvarOcorrenciaColaborador(editId) {
+  const data = document.getElementById('md-occ-data')?.value;
+  const turno = document.getElementById('md-occ-turno')?.value;
+  const funcionario = document.getElementById('md-occ-func')?.value;
+  if (!data) { alert('Informe a data!'); return; }
+  if (!turno) { alert('Selecione o turno!'); return; }
+  // Sem valor por omissão: era o 'OPERAÇÃO CD' gravado quando ninguém
+  // selecionava — o duplicado que este formulário substitui.
+  if (!funcionario) { alert('Selecione o funcionário!'); return; }
+  const dados = {
+    data, turno, funcionario,
+    requisito: document.getElementById('md-occ-req')?.value || 'OUTRO',
+    carga: (document.getElementById('md-occ-carga')?.value || '').trim(),
+    peso: document.getElementById('md-occ-peso')?.value || '',
+    detalhamento: (document.getElementById('md-occ-detalhamento')?.value || '').trim(),
+    acao: (document.getElementById('md-occ-acao')?.value || '').trim(),
+    status: document.getElementById('md-occ-status')?.value || 'PENDENTE'
+  };
+  const res = editId ? db.updateOcorrenciaColaborador(editId, dados) : db.addOcorrenciaColaborador(dados);
+  if (!res || !res.success) { alert(res && res.message ? res.message : 'Não foi possível salvar.'); return; }
   fecharModalResumo();
   renderApp();
 }
 
 function exportarOcorrenciasExcel() {
-  const todas = getTodasOcorrenciasCD();
+  const todas = listarOcorrenciasColaboradorView();
   const busca = (window._ocFiltroBusca || '').toLowerCase().trim();
   const fData = window._ocFiltroData || '';
   const fTurno = window._ocFiltroTurno || 'TODOS';
@@ -18549,7 +18603,7 @@ function exportarOcorrenciasExcel() {
 }
 
 function gerarRelatorioOcorrenciasPdf() {
-  const todas = getTodasOcorrenciasCD();
+  const todas = listarOcorrenciasColaboradorView();
   const busca = (window._ocFiltroBusca || '').toLowerCase().trim();
   const fData = window._ocFiltroData || '';
   const fTurno = window._ocFiltroTurno || 'TODOS';
@@ -20706,17 +20760,58 @@ function emitirRelatorioChamadosRotaA4(filtro = null) {
 }
 
 
+// TURNO PADRÃO PELO CADASTRO DO USUÁRIO LOGADO (6.7.0, decisão de 09/09/2026).
+// Antes a tela abria sempre em 2º TURNO - FRIO para qualquer pessoa, e o
+// supervisor do 1º turno que não trocasse o seletor lançava no turno errado.
+// A chave é a `secao` do colaboradores_cd — dado que alguém preencheu de
+// propósito e que continua certo se o supervisor mudar de turno. Nome de
+// login foi descartado: o mesmo supervisor aparece grafado de três jeitos.
+// Devolve null quando não dá para saber (não é supervisor, seção genérica,
+// 3º turno sem turno correspondente) — e null NÃO vira chute: a tela pede a
+// escolha.
+function turnoPadraoDoUsuario() {
+  try {
+    const nome = db.currentUser && db.currentUser.nome;
+    if (!nome) return null;
+    // Lê colaboradores_cd DIRETO, com casamento exato e depois por
+    // substring — e nada mais. getDadosColaboradorMestre() não serve aqui:
+    // ela casa por tokens soltos e, sem seção, INVENTA 'CARREGAMENTO SECOS'
+    // (é uma função de preenchimento de formulário, não de identificação).
+    // Um chute aqui é lançamento no turno errado, que é o que este código
+    // veio impedir.
+    const alvo = normalizeStr(nome);
+    if (!alvo) return null;
+    const colabs = (db.data.colaboradores_cd || []).filter(c => c && c.nome && !c.is_deleted && c.ativo !== false);
+    let colab = colabs.find(c => normalizeStr(c.nome) === alvo);
+    if (!colab) colab = colabs.find(c => { const n = normalizeStr(c.nome); return n.length > 5 && (n.includes(alvo) || alvo.includes(n)); });
+    const secao = colab && colab.secao ? normalizeStr(colab.secao) : '';
+    if (!secao) return null;
+    if (secao.includes('SECO')) return 'SECO';
+    if (/\b1\s*TURNO/.test(secao)) return '1º TURNO - FRIO';
+    if (/\b2\s*TURNO/.test(secao)) return '2º TURNO - FRIO';
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// O turno em uso na tela: o escolhido no seletor, senão o do cadastro do
+// usuário, senão null (seletor sem pré-seleção). Nunca chuta um turno.
+function turnoResumoAtual() {
+  if (window._resumoFiltroTurno) return window._resumoFiltroTurno;
+  return turnoPadraoDoUsuario();
+}
+
 function renderResumoDiarioCdView() {
 
   const fData = window._resumoFiltroData || hojeIsoBrasilia();
-  const fTurno = window._resumoFiltroTurno || '2º TURNO - FRIO';
+  const fTurno = turnoResumoAtual();
 
-  const resumo = db.getResumoDiarioCD(fData, fTurno);
+  // Sem turno não há envelope para ler: mostra a tela vazia com o aviso e
+  // o botão de salvar bloqueado (ver renderSubabaResumoDiario).
+  const resumo = fTurno ? db.getResumoDiarioCD(fData, fTurno) : db.getResumoDiarioCD(fData, '__SEM_TURNO__');
 
-  let gestorNome = resumo.gestor;
-  if (fTurno === 'SECO') gestorNome = 'MARCOS ADRIANO';
-  else if (fTurno === '1º TURNO - FRIO') gestorNome = 'MELQUIADES NETO';
-  else if (fTurno === '2º TURNO - FRIO') gestorNome = 'GUSTAVO CAMARA';
+  const gestorNome = fTurno ? (resumo.gestor || db.gestorPadraoDoTurno(fTurno)) : '';
 
   const rec = resumo.movimentacao?.recebimento || { peso: 0, aux_junior: 0, movimentador: 0, conferente: 0, empilhador: 0, cargas_previstas: 0, cargas_realizadas: 0, cargas_veiculos: 0 };
   const exp = resumo.movimentacao?.expedicao || { peso: 0, aux_junior: 0, movimentador: 0, conferente: 0, empilhador: 0, cargas_previstas: 0, cargas_realizadas: 0, cargas_veiculos: 0 };
@@ -20739,34 +20834,19 @@ function renderResumoDiarioCdView() {
   const totReal = (parseInt(rec.cargas_realizadas)||0) + (parseInt(exp.cargas_realizadas)||0);
   const totVeic = (parseInt(rec.cargas_veiculos)||0) + (parseInt(exp.cargas_veiculos)||0);
 
+  // Faltas continuam no envelope; ocorrências e cortes vêm das coleções
+  // próprias (6.7.0). A aparência dos Itens 3 e 4 não muda — só de onde lê.
   const faltas = resumo.faltas_condutas || [];
-  const ocorrencias = resumo.ocorrencias || [];
-  const cortes = resumo.cortes || [];
+  const ocorrencias = fTurno ? db.getOcorrenciasCD({ data: fData, turno: fTurno }).slice().reverse() : [];
+  const cortes = fTurno ? db.getCortesCD({ data: fData, turno: fTurno }).slice().reverse() : [];
 
   const valorTotalCortes = cortes.reduce((acc, c) => acc + (parseFloat(c.valor)||0), 0);
-  const ocColaboradores = resumo.ocorrencias_colaboradores || [];
 
-  const todasOcorrencias = getTodasOcorrenciasCD();
-  const pendentesTotais = todasOcorrencias.filter(o => o.status === 'PENDENTE').length;
-
+  // A barra de subabas saiu (6.7.0): Ocorrência Colaborador virou tela
+  // própria no menu, e o Resumo Diário voltou a ser uma tela só.
   return `
     <div class="space-y-5">
-      <!-- BARRA DE SUBABAS: RESUMO DIÁRIO CD vs OCORRÊNCIAS -->
-      <div class="flex items-center justify-between bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg">
-        <div class="flex items-center gap-2">
-          <button onclick="switchResumoSubTab('resumo')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeResumoSubTab === 'resumo' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800'}">
-            <span>📋</span> Resumo Diário
-          </button>
-          <button onclick="switchResumoSubTab('ocorrencias')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeResumoSubTab === 'ocorrencias' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800'}">
-            <span>🚨</span> Ocorrências CD ${pendentesTotais > 0 ? `<span class="bg-amber-500 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-full">${pendentesTotais}</span>` : ''}
-          </button>
-        </div>
-        <div class="text-[11px] text-slate-400 font-medium hidden sm:block pr-2">
-          JR Distribuidora • Gestão Integrada de CD
-        </div>
-      </div>
-
-      ${activeResumoSubTab === 'resumo' ? renderSubabaResumoDiario({ fData, fTurno, gestorNome, rec, exp, recQtdFunc, expQtdFunc, recTonH, expTonH, totPeso, totAux, totMov, totConf, totEmp, totFunc, totTonH, totPrev, totReal, totVeic, faltas, ocorrencias, cortes, valorTotalCortes, ocColaboradores }) : renderSubabaOcorrenciasCD({ fData, fTurno })}
+      ${renderSubabaResumoDiario({ fData, fTurno, gestorNome, rec, exp, recQtdFunc, expQtdFunc, recTonH, expTonH, totPeso, totAux, totMov, totConf, totEmp, totFunc, totTonH, totPrev, totReal, totVeic, faltas, ocorrencias, cortes, valorTotalCortes })}
     </div>
   `;
 }
@@ -20796,8 +20876,9 @@ function renderSubabaResumoDiario(p) {
 
           <!-- SELETOR DE TURNO -->
           <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700">
-            <label class="block text-[9px] text-emerald-400 font-bold uppercase">Turno / Setor</label>
-            <select onchange="window._resumoFiltroTurno=this.value; renderApp()" class="bg-slate-800 border border-slate-600 text-amber-300 text-xs rounded p-1 font-bold">
+            <label class="block text-[9px] ${p.fTurno ? 'text-emerald-400' : 'text-amber-400'} font-bold uppercase">Turno / Setor${p.fTurno ? '' : ' — selecione o turno'}</label>
+            <select onchange="window._resumoFiltroTurno=this.value; renderApp()" class="bg-slate-800 border ${p.fTurno ? 'border-slate-600' : 'border-amber-500 ring-2 ring-amber-500/40'} text-amber-300 text-xs rounded p-1 font-bold">
+              ${p.fTurno ? '' : '<option value="" selected disabled>-- selecione o turno --</option>'}
               <option value="SECO" ${p.fTurno==='SECO'?'selected':''}>SECO (Marcos Adriano)</option>
               <option value="1º TURNO - FRIO" ${p.fTurno==='1º TURNO - FRIO'?'selected':''}>1º TURNO - FRIO (Melquiades Neto)</option>
               <option value="2º TURNO - FRIO" ${p.fTurno==='2º TURNO - FRIO'?'selected':''}>2º TURNO - FRIO (Gustavo Camara)</option>
@@ -20810,7 +20891,7 @@ function renderSubabaResumoDiario(p) {
             <input type="text" id="rs-gestor" value="${p.gestorNome}" class="bg-slate-800 border border-slate-600 text-white text-xs rounded p-1 font-bold uppercase w-36" oninput="forcarMaiuscula(this)">
           </div>
 
-          <button onclick="salvarResumoDiarioCdCurrent()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
+          <button onclick="salvarResumoDiarioCdCurrent()" ${p.fTurno ? '' : 'disabled title="Selecione o turno antes de salvar"'} class="${p.fTurno ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-700 cursor-not-allowed opacity-60'} text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
             💾 Salvar Resumo
           </button>
 
@@ -20907,7 +20988,7 @@ function renderSubabaResumoDiario(p) {
               <h3 class="text-xs font-bold text-amber-400 uppercase flex items-center gap-1.5">
                 <span>⚠️</span> 2. GESTÃO DE FALTAS, CONDUTAS & AUSÊNCIAS
               </h3>
-              <button onclick="adicionarFaltaResumo('${p.fData}', '${p.fTurno}')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Falta</button>
+              <button onclick="adicionarFaltaResumo('${p.fData}', '${p.fTurno || ''}')" ${p.fTurno ? '' : 'disabled'} class="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Falta</button>
             </div>
 
             <div class="overflow-x-auto">
@@ -20951,7 +21032,7 @@ function renderSubabaResumoDiario(p) {
                 </h3>
                 <span class="text-[9px] text-slate-400">Apontamentos sobre a Operação Geral do CD</span>
               </div>
-              <button onclick="adicionarOcorrenciaResumo('${p.fData}', '${p.fTurno}')" class="bg-blue-700 hover:bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Ocorrência Operacional</button>
+              <button onclick="adicionarOcorrenciaResumo('${p.fData}', '${p.fTurno || ''}')" ${p.fTurno ? '' : 'disabled'} class="bg-blue-700 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Ocorrência Operacional</button>
             </div>
 
             <div class="overflow-x-auto">
@@ -20966,14 +21047,14 @@ function renderSubabaResumoDiario(p) {
                 </thead>
                 <tbody class="divide-y divide-slate-800 text-xs">
                   ${p.ocorrencias.length === 0 ? '<tr><td colspan="4" class="p-4 text-center text-slate-500 text-[11px]">Nenhuma ocorrência operacional geral registrada.</td></tr>' :
-                  p.ocorrencias.map((o, idx) => `
+                  p.ocorrencias.map(o => `
                     <tr>
-                      <td class="p-1.5 font-bold text-white uppercase">${o.ocorrencia}</td>
-                      <td class="p-1.5 text-slate-300 leading-tight text-[11px]">${o.causa}</td>
-                      <td class="p-1.5 text-emerald-300 font-medium text-[11px]">${o.acao}</td>
+                      <td class="p-1.5 font-bold text-white uppercase">${o.ocorrencia || ''}</td>
+                      <td class="p-1.5 text-slate-300 leading-tight text-[11px]">${o.causa || ''}</td>
+                      <td class="p-1.5 text-emerald-300 font-medium text-[11px]">${o.acao || ''}</td>
                       <td class="p-1.5 text-center whitespace-nowrap">
-                        <button onclick="editarOcorrenciaResumoModal('${p.fData}', '${p.fTurno}', ${idx})" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
-                        <button onclick="removerOcorrenciaResumo('${p.fData}', '${p.fTurno}', ${idx})" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
+                        <button onclick="editarOcorrenciaResumoModal('${o.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
+                        <button onclick="removerOcorrenciaResumo('${o.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
                       </td>
                     </tr>
                   `).join('')}
@@ -20993,7 +21074,7 @@ function renderSubabaResumoDiario(p) {
               <span class="bg-red-950 text-red-300 border border-red-800 text-xs font-extrabold px-2.5 py-1 rounded">
                 Total: R$ ${p.valorTotalCortes.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
               </span>
-              <button onclick="adicionarCorteResumo('${p.fData}', '${p.fTurno}')" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Corte</button>
+              <button onclick="adicionarCorteResumo('${p.fData}', '${p.fTurno || ''}')" ${p.fTurno ? '' : 'disabled'} class="bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Corte</button>
             </div>
           </div>
 
@@ -21010,15 +21091,15 @@ function renderSubabaResumoDiario(p) {
               </thead>
               <tbody class="divide-y divide-slate-800 text-xs">
                 ${p.cortes.length === 0 ? '<tr><td colspan="5" class="p-4 text-center text-slate-500 text-[11px]">Nenhum corte de produto registrado neste turno.</td></tr>' :
-                p.cortes.map((c, idx) => `
+                p.cortes.map(c => `
                   <tr>
-                    <td class="p-1.5 font-bold text-emerald-400">${c.codigo_item}</td>
-                    <td class="p-1.5 font-bold text-white uppercase">${c.descricao}</td>
+                    <td class="p-1.5 font-bold text-emerald-400">${c.codigo_item || ''}</td>
+                    <td class="p-1.5 font-bold text-white uppercase">${c.descricao || ''}</td>
                     <td class="p-1.5 text-center font-bold text-amber-300">${_qtdCorteNumero(c.quantidade)}</td>
                     <td class="p-1.5 text-right font-extrabold text-red-400">R$ ${(parseFloat(c.valor)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
                     <td class="p-1.5 text-center whitespace-nowrap">
-                      <button onclick="editarCorteResumoModal('${p.fData}', '${p.fTurno}', ${idx})" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
-                      <button onclick="removerCorteResumo('${p.fData}', '${p.fTurno}', ${idx})" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
+                      <button onclick="editarCorteResumoModal('${c.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
+                      <button onclick="removerCorteResumo('${c.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
                     </td>
                   </tr>
                 `).join('')}
@@ -21031,8 +21112,8 @@ function renderSubabaResumoDiario(p) {
   `;
 }
 
-function renderSubabaOcorrenciasCD({ fData, fTurno }) {
-  const todas = getTodasOcorrenciasCD();
+function renderOcorrenciaColaboradorView() {
+  const todas = listarOcorrenciasColaboradorView();
 
   const busca = (window._ocFiltroBusca || '').toLowerCase().trim();
   const filtroData = window._ocFiltroData !== undefined ? window._ocFiltroData : '';
@@ -21052,31 +21133,78 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
     return true;
   });
 
+  const botoesDisciplinares = o => `
+    <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', ocorrenciaId:'${o.id}', dataOcorrencia:'${o.data||''}', colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
+    <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', ocorrenciaId:'${o.id}', dataOcorrencia:'${o.data||''}', colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Advertência CLT">⚠️ Gerar Advertência</button>
+    <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', ocorrenciaId:'${o.id}', dataOcorrencia:'${o.data||''}', colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Suspensão CLT">⛔ Gerar Suspensão</button>
+    <button onclick="editarOcorrenciaColaboradorModal('${o.id}')" class="text-blue-400 hover:text-blue-300 p-1 text-xs" title="Editar Ocorrência">✏️</button>`;
+
+  const marcaDisciplinar = o => `
+    ${o.medida_disciplinar === 'ORIENTACAO_VERBAL' ? '<div class="mt-1"><span class="bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">🗣️ Orientado</span></div>' : ''}
+    ${o.medida_disciplinar === 'ADVERTENCIA' ? '<div class="mt-1"><span class="bg-purple-950 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⚠️ Adv. Emitida</span></div>' : ''}
+    ${o.medida_disciplinar === 'SUSPENSAO' ? `<div class="mt-1"><span class="bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⛔ Susp. (${o.dias_suspensao||1}d)</span></div>` : ''}`;
+
+  const linha = (o, fechada) => `
+    <tr class="hover:bg-slate-800/40">
+      <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">
+        <div class="font-bold">${formatarData(o.data)}</div>
+        <div class="text-[10px] ${fechada ? 'text-emerald-400' : 'text-amber-400'} font-semibold">${o.turno}</div>
+      </td>
+      <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.colaborador}</td>
+      <td class="p-2 border-r border-slate-800 font-bold text-amber-300">${o.titulo}</td>
+      <td class="p-2 border-r border-slate-800 text-center font-bold text-slate-300">${o.carga || '-'}</td>
+      <td class="p-2 border-r border-slate-800 text-slate-300 leading-tight text-[11px]">${o.causa}</td>
+      <td class="p-2 border-r border-slate-800 text-emerald-300 font-medium leading-tight text-[11px]">${o.acao || '-'}</td>
+      <td class="p-2 border-r border-slate-800 text-right font-bold text-slate-300">${o.peso !== '' ? `${o.peso} Kg` : '-'}</td>
+      <td class="p-2 border-r border-slate-800 text-center whitespace-nowrap">
+        ${fechada
+          ? '<span class="bg-emerald-950 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">FECHADO</span>'
+          : '<span class="bg-amber-950 text-amber-300 border border-amber-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">PENDENTE</span>'}
+        ${marcaDisciplinar(o)}
+      </td>
+      <td class="p-2 text-center whitespace-nowrap space-x-1">
+        ${botoesDisciplinares(o)}
+        ${fechada
+          ? `<button onclick="alterarStatusOcorrenciaColaborador('${o.id}', 'PENDENTE')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[10px] px-2 py-1 rounded border border-amber-500/40 shadow transition" title="Reabrir Ocorrência">🔄 Reabrir</button>`
+          : `<button onclick="alterarStatusOcorrenciaColaborador('${o.id}', 'FECHADO')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Concluir Ocorrência">✔️ Fechar</button>`}
+        <button onclick="removerOcorrenciaColaborador('${o.id}')" class="text-red-400 hover:text-red-300 p-1 text-xs" title="Excluir">🗑️</button>
+      </td>
+    </tr>`;
+
+  const cabecalho = `
+    <tr>
+      <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data / Turno</th>
+      <th class="p-2 border-r border-slate-800 min-w-[150px]">Funcionário</th>
+      <th class="p-2 border-r border-slate-800 font-bold text-amber-400">Requisito / Falha</th>
+      <th class="p-2 border-r border-slate-800 text-center">Carga</th>
+      <th class="p-2 border-r border-slate-800 min-w-[200px]">Detalhamento</th>
+      <th class="p-2 border-r border-slate-800 min-w-[180px] text-emerald-400">Ação Corretiva</th>
+      <th class="p-2 border-r border-slate-800 text-right">Peso (Kg)</th>
+      <th class="p-2 border-r border-slate-800 text-center">Status</th>
+      <th class="p-2 text-center min-w-[120px]">Ações</th>
+    </tr>`;
+
   return `
     <div class="space-y-5">
-      <!-- HEADER SUBABA OCORRÊNCIAS -->
       <div class="bg-gradient-to-r from-slate-900 via-amber-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-amber-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
         <div class="flex items-center gap-3">
-          <div class="bg-amber-600/30 p-2.5 rounded-xl border border-amber-500/40 text-2xl">🚨</div>
+          <div class="bg-amber-600/30 p-2.5 rounded-xl border border-amber-500/40 text-2xl">👤</div>
           <div>
             <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
-              GESTÃO DE OCORRÊNCIAS DO CD
-              <span class="bg-amber-800 text-amber-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">OCORRÊNCIAS POR COLABORADOR & OPERAÇÃO</span>
+              OCORRÊNCIA COLABORADOR
+              <span class="bg-amber-800 text-amber-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">CENTRO DE DISTRIBUIÇÃO</span>
             </h2>
-            <p class="text-[11px] text-slate-300 font-medium">Controle unificado de apontamentos, ações corretivas e encerramento de ocorrências do CD</p>
+            <p class="text-[11px] text-slate-300 font-medium">Apontamentos por colaborador, ações corretivas e medidas disciplinares</p>
           </div>
         </div>
-
         <div class="flex flex-wrap items-center gap-2">
-          <button onclick="abrirModalNovaOcorrenciaCD('${fData}', '${fTurno}')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
+          <button onclick="adicionarOcorrenciaColaboradorModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
             + Nova Ocorrência
           </button>
         </div>
       </div>
 
-      <!-- PAINÉIS DIVIDIDOS: PENDENTES E FECHADAS -->
       <div class="space-y-6">
-        <!-- PAINEL 1: OCORRÊNCIAS PENDENTES -->
         <div class="bg-slate-900 border border-amber-800/60 rounded-xl p-4 shadow-xl space-y-3">
           <div class="flex items-center justify-between border-b border-slate-800 pb-2">
             <h3 class="text-sm font-extrabold text-amber-400 uppercase flex items-center gap-2">
@@ -21085,60 +21213,16 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
             </h3>
             <span class="text-[10px] text-amber-300/80 font-medium">Ocorrências aguardando providência ou finalização</span>
           </div>
-
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs border-collapse">
-              <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
-                <tr>
-                  <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data / Turno</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[150px]">Funcionário</th>
-                  <th class="p-2 border-r border-slate-800 font-bold text-amber-400">Requisito / Falha</th>
-                  <th class="p-2 border-r border-slate-800 text-center">Carga</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[200px]">Detalhamento</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[180px] text-emerald-400">Ação Corretiva</th>
-                  <th class="p-2 border-r border-slate-800 text-right">Peso (Kg)</th>
-                  <th class="p-2 border-r border-slate-800 text-center">Status</th>
-                  <th class="p-2 text-center min-w-[120px]">Ações</th>
-                </tr>
-              </thead>
+              <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">${cabecalho}</thead>
               <tbody class="divide-y divide-slate-800 text-xs">
-                ${pendentes.length === 0 ? '<tr><td colspan="9" class="p-6 text-center text-slate-500 text-xs font-medium">Nenhuma ocorrência pendente no momento.</td></tr>' :
-                pendentes.map(o => `
-                  <tr class="hover:bg-slate-800/40">
-                    <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">
-                      <div class="font-bold">${formatarData(o.data)}</div>
-                      <div class="text-[10px] text-amber-400 font-semibold">${o.turno}</div>
-                    </td>
-                    <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.colaborador}</td>
-                    <td class="p-2 border-r border-slate-800 font-bold text-amber-300">${o.titulo}</td>
-                    <td class="p-2 border-r border-slate-800 text-center font-bold text-slate-300">${o.carga || '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-slate-300 leading-tight text-[11px]">${o.causa}</td>
-                    <td class="p-2 border-r border-slate-800 text-emerald-300 font-medium leading-tight text-[11px]">${o.acao || '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-right font-bold text-slate-300">${o.peso ? `${o.peso} Kg` : '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-center whitespace-nowrap">
-                      <span class="bg-amber-950 text-amber-300 border border-amber-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">PENDENTE</span>
-                      ${o.medida_disciplinar === 'ORIENTACAO_VERBAL' ? '<div class="mt-1"><span class="bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">🗣️ Orientado</span></div>' : ''}
-                      ${o.medida_disciplinar === 'ADVERTENCIA' ? '<div class="mt-1"><span class="bg-purple-950 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⚠️ Adv. Emitida</span></div>' : ''}
-                      ${o.medida_disciplinar === 'SUSPENSAO' ? `<div class="mt-1"><span class="bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⛔ Susp. (${o.dias_suspensao||1}d)</span></div>` : ''}
-                    </td>
-                    <td class="p-2 text-center whitespace-nowrap space-x-1">
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Advertência CLT">⚠️ Gerar Advertência</button>
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Suspensão CLT">⛔ Gerar Suspensão</button>
-                      <button onclick="editarOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-blue-400 hover:text-blue-300 p-1 text-xs" title="Editar Ocorrência">✏️</button>
-                      <button onclick="alterarStatusOcorrenciaCD('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index}, 'FECHADO')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Concluir Ocorrência">
-                        ✔️ Fechar
-                      </button>
-                      <button onclick="removerOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-red-400 hover:text-red-300 p-1 text-xs" title="Excluir">🗑️</button>
-                    </td>
-                  </tr>
-                `).join('')}
+                ${pendentes.length === 0 ? '<tr><td colspan="9" class="p-6 text-center text-slate-500 text-xs font-medium">Nenhuma ocorrência pendente no momento.</td></tr>' : pendentes.map(o => linha(o, false)).join('')}
               </tbody>
             </table>
           </div>
         </div>
 
-        <!-- PAINEL 2: OCORRÊNCIAS FECHADAS (COM BARRA DE BUSCA, FILTROS E EXPORTAÇÃO) -->
         <div class="bg-slate-900 border border-emerald-800/60 rounded-xl p-4 shadow-xl space-y-4">
           <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-3 gap-3">
             <div>
@@ -21148,18 +21232,12 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
               </h3>
               <p class="text-[10px] text-emerald-300/80 font-medium">Consulte, filtre e exporte relatórios de ocorrências finalizadas</p>
             </div>
-
             <div class="flex items-center gap-2 shrink-0">
-              <button onclick="gerarRelatorioOcorrenciasPdf()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5" title="Imprimir Relatório de Fechadas">
-                🖨️ Imprimir PDF (Fechadas)
-              </button>
-              <button onclick="exportarOcorrenciasExcel()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5" title="Exportar Excel/CSV">
-                📊 Exportar Excel
-              </button>
+              <button onclick="gerarRelatorioOcorrenciasPdf()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5" title="Imprimir Relatório de Fechadas">🖨️ Imprimir PDF (Fechadas)</button>
+              <button onclick="exportarOcorrenciasExcel()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5" title="Exportar Excel/CSV">📊 Exportar Excel</button>
             </div>
           </div>
 
-          <!-- BARRA DE FILTROS DEDICADA ÀS OCORRÊNCIAS FECHADAS -->
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-4 gap-3 items-center">
             <div class="sm:col-span-2">
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Pesquisar em Fechadas (Funcionário, Falha, Carga ou Solução)</label>
@@ -21182,51 +21260,9 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
 
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs border-collapse">
-              <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
-                <tr>
-                  <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data / Turno</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[150px]">Funcionário</th>
-                  <th class="p-2 border-r border-slate-800 font-bold text-amber-400">Requisito / Falha</th>
-                  <th class="p-2 border-r border-slate-800 text-center">Carga</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[200px]">Detalhamento</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[180px] text-emerald-400">Ação Corretiva Tomada</th>
-                  <th class="p-2 border-r border-slate-800 text-right">Peso (Kg)</th>
-                  <th class="p-2 border-r border-slate-800 text-center">Status</th>
-                  <th class="p-2 text-center min-w-[120px]">Ações</th>
-                </tr>
-              </thead>
+              <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">${cabecalho.replace('Ação Corretiva<', 'Ação Corretiva Tomada<')}</thead>
               <tbody class="divide-y divide-slate-800 text-xs">
-                ${fechadas.length === 0 ? '<tr><td colspan="9" class="p-6 text-center text-slate-500 text-xs font-medium">Nenhuma ocorrência fechada encontrada para os filtros aplicados.</td></tr>' :
-                fechadas.map(o => `
-                  <tr class="hover:bg-slate-800/40">
-                    <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">
-                      <div class="font-bold">${formatarData(o.data)}</div>
-                      <div class="text-[10px] text-emerald-400 font-semibold">${o.turno}</div>
-                    </td>
-                    <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.colaborador}</td>
-                    <td class="p-2 border-r border-slate-800 font-bold text-amber-300">${o.titulo}</td>
-                    <td class="p-2 border-r border-slate-800 text-center font-bold text-slate-300">${o.carga || '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-slate-300 leading-tight text-[11px]">${o.causa}</td>
-                    <td class="p-2 border-r border-slate-800 text-emerald-300 font-medium leading-tight text-[11px]">${o.acao || '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-right font-bold text-slate-300">${o.peso ? `${o.peso} Kg` : '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-center whitespace-nowrap">
-                      <span class="bg-emerald-950 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">FECHADO</span>
-                      ${o.medida_disciplinar === 'ORIENTACAO_VERBAL' ? '<div class="mt-1"><span class="bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">🗣️ Orientado</span></div>' : ''}
-                      ${o.medida_disciplinar === 'ADVERTENCIA' ? '<div class="mt-1"><span class="bg-purple-950 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⚠️ Adv. Emitida</span></div>' : ''}
-                      ${o.medida_disciplinar === 'SUSPENSAO' ? `<div class="mt-1"><span class="bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⛔ Susp. (${o.dias_suspensao||1}d)</span></div>` : ''}
-                    </td>
-                    <td class="p-2 text-center whitespace-nowrap space-x-1">
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Advertência CLT">⚠️ Gerar Advertência</button>
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Suspensão CLT">⛔ Gerar Suspensão</button>
-                      <button onclick="editarOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-blue-400 hover:text-blue-300 p-1 text-xs" title="Editar Ocorrência">✏️</button>
-                      <button onclick="alterarStatusOcorrenciaCD('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index}, 'PENDENTE')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[10px] px-2 py-1 rounded border border-amber-500/40 shadow transition" title="Reabrir Ocorrência">
-                        🔄 Reabrir
-                      </button>
-                      <button onclick="removerOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-red-400 hover:text-red-300 p-1 text-xs" title="Excluir">🗑️</button>
-                    </td>
-                  </tr>
-                `).join('')}
+                ${fechadas.length === 0 ? '<tr><td colspan="9" class="p-6 text-center text-slate-500 text-xs font-medium">Nenhuma ocorrência fechada encontrada para os filtros aplicados.</td></tr>' : fechadas.map(o => linha(o, true)).join('')}
               </tbody>
             </table>
           </div>
@@ -21236,9 +21272,236 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
   `;
 }
 
+// ===== OCORRÊNCIA CD (tela própria, 6.7.0) =====
+// Lista corrida do Item 3 do Resumo Diário: sem funcionário, sem carga, sem
+// peso, sem status, sem botão disciplinar (decisões 1 e 2 do plano).
+function _filtrosOcorrenciaCD() {
+  return {
+    dataDe: window._occdFiltroDe || '',
+    dataAte: window._occdFiltroAte || '',
+    turno: window._occdFiltroTurno || 'TODOS',
+    busca: (window._occdBusca || '').toLowerCase().trim()
+  };
+}
+
+function listarOcorrenciasCDFiltradas() {
+  const f = _filtrosOcorrenciaCD();
+  return db.getOcorrenciasCD({ dataDe: f.dataDe, dataAte: f.dataAte, turno: f.turno }).filter(o => {
+    if (!f.busca) return true;
+    return `${o.data} ${o.turno} ${o.ocorrencia || ''} ${o.causa || ''} ${o.acao || ''} ${o.gestor || ''}`.toLowerCase().includes(f.busca);
+  });
+}
+
+function _barraFiltrosPeriodoTurno({ prefixo, de, ate, turno, busca, placeholderBusca }) {
+  return `
+    <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+      <div class="sm:col-span-2">
+        <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Pesquisar</label>
+        <input type="text" placeholder="${placeholderBusca}" value="${busca || ''}" oninput="forcarMaiuscula(this); window.${prefixo}Busca=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-medium focus:border-emerald-500 focus:outline-none">
+      </div>
+      <div>
+        <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">De</label>
+        <input type="date" value="${de || ''}" onchange="window.${prefixo}FiltroDe=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-bold">
+      </div>
+      <div>
+        <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Até</label>
+        <input type="date" value="${ate || ''}" onchange="window.${prefixo}FiltroAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-bold">
+      </div>
+      <div>
+        <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Turno</label>
+        <select onchange="window.${prefixo}FiltroTurno=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-amber-300 text-xs rounded-lg p-2 font-bold">
+          <option value="TODOS" ${turno==='TODOS'?'selected':''}>TODOS OS TURNOS</option>
+          ${(Store.TURNOS_RESUMO_DIARIO || []).map(t => `<option value="${t}" ${turno===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+}
+
+function renderOcorrenciaCDView() {
+  const f = _filtrosOcorrenciaCD();
+  const lista = listarOcorrenciasCDFiltradas();
+
+  return `
+    <div class="space-y-5">
+      <div class="bg-gradient-to-r from-slate-900 via-blue-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-blue-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+        <div class="flex items-center gap-3">
+          <div class="bg-blue-600/30 p-2.5 rounded-xl border border-blue-500/40 text-2xl">📢</div>
+          <div>
+            <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+              OCORRÊNCIA CD
+              <span class="bg-blue-800 text-blue-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">OPERAÇÃO GERAL DO CD</span>
+            </h2>
+            <p class="text-[11px] text-slate-300 font-medium">Ocorrências operacionais do armazém — o mesmo Item 3 do Resumo Diário, em lista corrida</p>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button onclick="gerarRelatorioOcorrenciasCdPdf({ lista: listarOcorrenciasCDFiltradas(), fDe: window._occdFiltroDe, fAte: window._occdFiltroAte })" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5">🖨️ Imprimir PDF</button>
+          <button onclick="exportarOcorrenciasCDCsv()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-2 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5">📊 Exportar CSV</button>
+          <button onclick="adicionarOcorrenciaResumo()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">+ Nova Ocorrência</button>
+        </div>
+      </div>
+
+      ${_barraFiltrosPeriodoTurno({ prefixo: '_occd', de: f.dataDe, ate: f.dataAte, turno: f.turno, busca: window._occdBusca, placeholderBusca: '🔎 Ocorrência, causa, ação ou gestor...' })}
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <h3 class="text-xs font-bold text-blue-400 uppercase flex items-center gap-1.5"><span>📢</span> Ocorrências <span class="bg-blue-950 text-blue-300 border border-blue-800/80 text-[10px] font-black px-2 py-0.5 rounded-full">${lista.length}</span></h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr>
+                <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data</th>
+                <th class="p-2 border-r border-slate-800 whitespace-nowrap">Turno</th>
+                <th class="p-2 border-r border-slate-800 w-1/5">Ocorrência</th>
+                <th class="p-2 border-r border-slate-800 w-2/5">Causa / Detalhamento</th>
+                <th class="p-2 border-r border-slate-800 w-1/5">Ação Tomada</th>
+                <th class="p-2 text-center">Ações</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-xs">
+              ${lista.length === 0 ? '<tr><td colspan="6" class="p-6 text-center text-slate-500 text-[11px]">Nenhuma ocorrência encontrada para os filtros informados.</td></tr>' :
+              lista.map(o => `
+                <tr class="hover:bg-slate-800/40">
+                  <td class="p-2 border-r border-slate-800 font-bold text-slate-200 whitespace-nowrap">${formatarData(o.data)}</td>
+                  <td class="p-2 border-r border-slate-800 text-[10px] text-amber-400 font-semibold whitespace-nowrap">${o.turno}</td>
+                  <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.ocorrencia || ''}</td>
+                  <td class="p-2 border-r border-slate-800 text-slate-300 leading-tight text-[11px]">${o.causa || ''}</td>
+                  <td class="p-2 border-r border-slate-800 text-emerald-300 font-medium text-[11px]">${o.acao || ''}</td>
+                  <td class="p-2 text-center whitespace-nowrap">
+                    <button onclick="editarOcorrenciaResumoModal('${o.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
+                    <button onclick="removerOcorrenciaResumo('${o.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
+                  </td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+function exportarOcorrenciasCDCsv() {
+  const lista = listarOcorrenciasCDFiltradas();
+  if (lista.length === 0) { alert('Nenhuma ocorrência para exportar com os filtros atuais.'); return; }
+  const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  const linhas = [['Data', 'Turno', 'Ocorrência', 'Causa / Detalhamento', 'Ação Tomada', 'Gestor'].map(esc).join(';')];
+  lista.forEach(o => linhas.push([formatarData(o.data), o.turno, o.ocorrencia, o.causa, o.acao, o.gestor].map(esc).join(';')));
+  baixarCsv('ocorrencias_cd.csv', linhas.join('\n'));
+}
+
+// ===== CORTE (tela própria, 6.7.0) =====
+// A mesma tabela do Item 4 do Resumo Diário, com filtro por período e o
+// total em R$ do período.
+function _filtrosCorteCD() {
+  return {
+    dataDe: window._corteFiltroDe || '',
+    dataAte: window._corteFiltroAte || '',
+    turno: window._corteFiltroTurno || 'TODOS',
+    busca: (window._corteBusca || '').toLowerCase().trim()
+  };
+}
+
+function listarCortesCDFiltrados() {
+  const f = _filtrosCorteCD();
+  return db.getCortesCD({ dataDe: f.dataDe, dataAte: f.dataAte, turno: f.turno }).filter(c => {
+    if (!f.busca) return true;
+    return `${c.data} ${c.turno} ${c.codigo_item || ''} ${c.descricao || ''}`.toLowerCase().includes(f.busca);
+  });
+}
+
+function renderCorteCDView() {
+  const f = _filtrosCorteCD();
+  const lista = listarCortesCDFiltrados();
+  const total = lista.reduce((acc, c) => acc + (parseFloat(c.valor) || 0), 0);
+
+  return `
+    <div class="space-y-5">
+      <div class="bg-gradient-to-r from-slate-900 via-red-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-red-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+        <div class="flex items-center gap-3">
+          <div class="bg-red-600/30 p-2.5 rounded-xl border border-red-500/40 text-2xl">✂️</div>
+          <div>
+            <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+              CORTE
+              <span class="bg-red-800 text-red-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">CORTES DE PRODUTO DO CD</span>
+            </h2>
+            <p class="text-[11px] text-slate-300 font-medium">O mesmo Item 4 do Resumo Diário, por período</p>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="bg-red-950 text-red-300 border border-red-800 text-xs font-extrabold px-2.5 py-1.5 rounded">Total do período: R$ ${total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+          <button onclick="gerarRelatorioCortesCdPdf({ lista: listarCortesCDFiltrados(), fDe: window._corteFiltroDe, fAte: window._corteFiltroAte })" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5">🖨️ Imprimir PDF</button>
+          <button onclick="exportarCortesCDCsv()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-2 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5">📊 Exportar CSV</button>
+          <button onclick="adicionarCorteResumo()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">+ Novo Corte</button>
+        </div>
+      </div>
+
+      ${_barraFiltrosPeriodoTurno({ prefixo: '_corte', de: f.dataDe, ate: f.dataAte, turno: f.turno, busca: window._corteBusca, placeholderBusca: '🔎 Código ou descrição do produto...' })}
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <h3 class="text-xs font-bold text-red-400 uppercase flex items-center gap-1.5"><span>✂️</span> Cortes <span class="bg-red-950 text-red-300 border border-red-800/80 text-[10px] font-black px-2 py-0.5 rounded-full">${lista.length}</span></h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr>
+                <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data</th>
+                <th class="p-2 border-r border-slate-800 whitespace-nowrap">Turno</th>
+                <th class="p-2 border-r border-slate-800">Cód Item</th>
+                <th class="p-2 border-r border-slate-800">Descrição do Produto</th>
+                <th class="p-2 border-r border-slate-800 font-bold text-amber-300 text-center">Qtd Cortada</th>
+                <th class="p-2 border-r border-slate-800 text-right">Valor (R$)</th>
+                <th class="p-2 text-center">Ações</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-xs">
+              ${lista.length === 0 ? '<tr><td colspan="7" class="p-6 text-center text-slate-500 text-[11px]">Nenhum corte encontrado para os filtros informados.</td></tr>' :
+              lista.map(c => `
+                <tr class="hover:bg-slate-800/40">
+                  <td class="p-2 border-r border-slate-800 font-bold text-slate-200 whitespace-nowrap">${formatarData(c.data)}</td>
+                  <td class="p-2 border-r border-slate-800 text-[10px] text-amber-400 font-semibold whitespace-nowrap">${c.turno}</td>
+                  <td class="p-2 border-r border-slate-800 font-bold text-emerald-400">${c.codigo_item || ''}</td>
+                  <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${c.descricao || ''}</td>
+                  <td class="p-2 border-r border-slate-800 text-center font-bold text-amber-300">${_qtdCorteNumero(c.quantidade)}</td>
+                  <td class="p-2 border-r border-slate-800 text-right font-extrabold text-red-400">R$ ${(parseFloat(c.valor)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
+                  <td class="p-2 text-center whitespace-nowrap">
+                    <button onclick="editarCorteResumoModal('${c.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
+                    <button onclick="removerCorteResumo('${c.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
+                  </td>
+                </tr>`).join('')}
+            </tbody>
+            ${lista.length > 0 ? `<tfoot><tr class="bg-red-950/40 font-bold text-red-200 border-t-2 border-red-800"><td colspan="5" class="p-2 uppercase text-right">Total do período</td><td class="p-2 text-right text-red-300 font-extrabold">R$ ${total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td></td></tr></tfoot>` : ''}
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+function exportarCortesCDCsv() {
+  const lista = listarCortesCDFiltrados();
+  if (lista.length === 0) { alert('Nenhum corte para exportar com os filtros atuais.'); return; }
+  const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  const linhas = [['Data', 'Turno', 'Cód Item', 'Descrição', 'Qtd Cortada', 'Valor (R$)', 'Gestor'].map(esc).join(';')];
+  lista.forEach(c => linhas.push([formatarData(c.data), c.turno, c.codigo_item, c.descricao, _qtdCorteNumero(c.quantidade), (parseFloat(c.valor)||0).toFixed(2).replace('.', ','), c.gestor].map(esc).join(';')));
+  baixarCsv('cortes_cd.csv', linhas.join('\n'));
+}
+
+// Download de CSV com BOM (o Excel em pt-BR abre com acentos certos).
+function baixarCsv(nomeArquivo, conteudo) {
+  const blob = new Blob(['\ufeff' + conteudo], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nomeArquivo;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function salvarResumoDiarioCdCurrent(showAlert = true) {
   const fData = window._resumoFiltroData || hojeIsoBrasilia();
-  const fTurno = window._resumoFiltroTurno || '2º TURNO - FRIO';
+  // Sem turno não se grava: o chute em 2º TURNO - FRIO era o que fazia o
+  // supervisor do 1º turno lançar no envelope errado (6.7.0).
+  const fTurno = turnoResumoAtual();
+  if (!fTurno) { alert('Selecione o turno antes de salvar o Resumo.'); return; }
 
   const resumo = db.getResumoDiarioCD(fData, fTurno);
   resumo.gestor = document.getElementById('rs-gestor')?.value || resumo.gestor;
@@ -21292,6 +21555,7 @@ function fecharModalResumo() {
 }
 
 function adicionarFaltaResumo(data, turno) {
+  if (!turno) { alert('Selecione o turno antes de lançar uma falta.'); return; }
   const colabs = getListaTodosColaboradores();
   const container = document.getElementById('modal-container');
   if (!container) return;
@@ -21481,219 +21745,185 @@ function confirmarEditarFaltaResumo(data, turno, index) {
   renderApp();
 }
 
-function adicionarOcorrenciaResumo(data, turno) {
+// Um formulário só para criar e editar a Ocorrência do CD (Item 3), com Data
+// e Turno editáveis e EFETIVOS (6.7.0): o registro tem data própria, então
+// mudar a data move o registro de dia — antes isso exigia tirar de um array
+// e pôr em outro, e nenhum código fazia. Sem funcionário, sem status: são
+// decisões 1 e 2 do plano de reorganização.
+function _selectTurnoResumo(id, turnoAtual) {
+  const turnos = (typeof Store !== 'undefined' && Store.TURNOS_RESUMO_DIARIO) ? Store.TURNOS_RESUMO_DIARIO : ['SECO', '1º TURNO - FRIO', '2º TURNO - FRIO'];
+  return `<select id="${id}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
+    ${turnoAtual ? '' : '<option value="" selected disabled>-- selecione --</option>'}
+    ${turnos.map(t => `<option value="${t}" ${t === turnoAtual ? 'selected' : ''}>${t}</option>`).join('')}
+  </select>`;
+}
+
+function _modalOcorrenciaCD({ titulo, data, turno, o, onSalvar, rotuloBotao, cor }) {
   const container = document.getElementById('modal-container');
   if (!container) return;
-
   container.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
       <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-blue-400 uppercase flex items-center gap-2">
-          <span>📢</span> Registrar Ocorrência Operacional do CD
+        <h3 class="text-sm font-bold text-${cor}-400 uppercase flex items-center gap-2">
+          <span>📢</span> ${titulo}
         </h3>
         <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
       </div>
 
       <div class="space-y-3 text-xs">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
+            <input type="date" id="md-oc-data" value="${data || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          </div>
+          <div>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor *</label>
+            ${_selectTurnoResumo('md-oc-turno', turno)}
+          </div>
+        </div>
+
         <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Título / Tipo de Ocorrência *</label>
-          <input type="text" id="md-oc-titulo" placeholder="ex: QUEBRA DE EMPILHADEIRA, QUEDA DE ENERGIA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ocorrência *</label>
+          <input type="text" id="md-oc-titulo" value="${(o && o.ocorrencia) || ''}" placeholder="ex: QUEBRA DE EMPILHADEIRA, QUEDA DE ENERGIA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Causa / Detalhamento</label>
-          <textarea id="md-oc-causa" rows="3" placeholder="Descreva os detalhes e causas do ocorrido..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <textarea id="md-oc-causa" rows="3" placeholder="Descreva os detalhes e causas do ocorrido..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${(o && o.causa) || ''}</textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Tomada / Solução</label>
-          <textarea id="md-oc-acao" rows="2" placeholder="Descreva a solução ou encaminhamento realizado..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <textarea id="md-oc-acao" rows="2" placeholder="Descreva a solução ou encaminhamento realizado..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${(o && o.acao) || ''}</textarea>
         </div>
       </div>
 
       <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
         <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarOcorrenciaResumo('${data}', '${turno}')" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Ocorrência</button>
+        <button onclick="${onSalvar}" class="bg-${cor}-600 hover:bg-${cor}-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">${rotuloBotao}</button>
       </div>
     </div>`;
   container.classList.remove('hidden');
 }
 
-function confirmarSalvarOcorrenciaResumo(data, turno, editIndex = -1) {
-  const titulo = document.getElementById('md-oc-titulo')?.value;
-  if (!titulo) { alert('Informe o título da ocorrência!'); return; }
-  const causa = document.getElementById('md-oc-causa')?.value || '';
-  const acao = document.getElementById('md-oc-acao')?.value || '';
+function adicionarOcorrenciaResumo(data, turno) {
+  _modalOcorrenciaCD({
+    titulo: 'Registrar Ocorrência do CD',
+    data: data || hojeIsoBrasilia(),
+    turno: turno || turnoResumoAtual() || '',
+    o: null,
+    onSalvar: "confirmarSalvarOcorrenciaResumo()",
+    rotuloBotao: 'Salvar Ocorrência',
+    cor: 'blue'
+  });
+}
 
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (!resumo.ocorrencias) resumo.ocorrencias = [];
+function editarOcorrenciaResumoModal(id) {
+  const o = db.getFilhoResumoPorId('ocorrencia', id);
+  if (!o) { alert('Ocorrência não encontrada.'); return; }
+  _modalOcorrenciaCD({
+    titulo: 'Editar Ocorrência do CD',
+    data: o.data, turno: o.turno, o,
+    onSalvar: `confirmarSalvarOcorrenciaResumo('${o.id}')`,
+    rotuloBotao: 'Salvar Edição',
+    cor: 'blue'
+  });
+}
 
-  const item = {
-    id: editIndex >= 0 ? resumo.ocorrencias[editIndex].id : Date.now(),
-    ocorrencia: titulo.toUpperCase().trim(),
-    causa: causa.trim(),
-    acao: acao.trim()
+function _lerFormOcorrenciaCD() {
+  const data = document.getElementById('md-oc-data')?.value;
+  const turno = document.getElementById('md-oc-turno')?.value;
+  const ocorrencia = (document.getElementById('md-oc-titulo')?.value || '').trim();
+  if (!data) { alert('Informe a data da ocorrência!'); return null; }
+  if (!turno) { alert('Selecione o turno!'); return null; }
+  if (!ocorrencia) { alert('Informe a ocorrência!'); return null; }
+  return {
+    data, turno, ocorrencia,
+    causa: (document.getElementById('md-oc-causa')?.value || '').trim(),
+    acao: (document.getElementById('md-oc-acao')?.value || '').trim()
   };
+}
 
-  if (editIndex >= 0) {
-    resumo.ocorrencias[editIndex] = item;
-  } else {
-    resumo.ocorrencias.push(item);
-  }
-
-  db.saveResumoDiarioCD(resumo);
+function confirmarSalvarOcorrenciaResumo(editId) {
+  const dados = _lerFormOcorrenciaCD();
+  if (!dados) return;
+  const res = editId ? db.updateOcorrenciaCD(editId, dados) : db.addOcorrenciaCD(dados);
+  if (!res || !res.success) { alert(res && res.message ? res.message : 'Não foi possível salvar.'); return; }
   fecharModalResumo();
   renderApp();
 }
 
-function editarOcorrenciaResumoModal(data, turno, index) {
-  const resumo = db.getResumoDiarioCD(data, turno);
-  const o = resumo.ocorrencias?.[index];
-  if (!o) return;
-
-  const container = document.getElementById('modal-container');
-  if (!container) return;
-
-  container.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-blue-400 uppercase flex items-center gap-2">
-          <span>✏️</span> Editar Ocorrência Operacional do CD
-        </h3>
-        <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
-      </div>
-
-      <div class="space-y-3 text-xs">
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Título / Tipo de Ocorrência *</label>
-          <input type="text" id="md-oc-titulo" value="${o.ocorrencia}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Causa / Detalhamento</label>
-          <textarea id="md-oc-causa" rows="3" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${o.causa||''}</textarea>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Tomada / Solução</label>
-          <textarea id="md-oc-acao" rows="2" class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${o.acao||''}</textarea>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-        <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarOcorrenciaResumo('${data}', '${turno}', ${index})" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Edição</button>
-      </div>
-    </div>`;
-  container.classList.remove('hidden');
-}
-
-function removerOcorrenciaResumo(data, turno, index) {
+function removerOcorrenciaResumo(id) {
   if (!confirm('Excluir esta ocorrência do CD?')) return;
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (resumo.ocorrencias) {
-    resumo.ocorrencias.splice(index, 1);
-    db.saveResumoDiarioCD(resumo);
-    renderApp();
-  }
+  const res = db.deleteOcorrenciaCD(id);
+  if (!res.success) { alert(res.message); return; }
+  renderApp();
 }
 
-function editarCorteResumoModal(data, turno, index) {
-  const resumo = db.getResumoDiarioCD(data, turno);
-  const c = resumo.cortes?.[index];
-  if (!c) return;
-
-  const prods = db.data.produtos || [];
+function _modalCorteCD({ titulo, data, turno, c, onSalvar, rotuloBotao }) {
   const container = document.getElementById('modal-container');
   if (!container) return;
-
   container.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
       <div class="flex items-center justify-between border-b border-slate-800 pb-3">
         <h3 class="text-sm font-bold text-red-400 uppercase flex items-center gap-2">
-          <span>✏️</span> Editar Corte de Produto
+          <span>✂️</span> ${titulo}
         </h3>
         <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
       </div>
 
       <div class="space-y-3 text-xs">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
+            <input type="date" id="md-cr-data" value="${data || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          </div>
+          <div>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor *</label>
+            ${_selectTurnoResumo('md-cr-turno', turno)}
+          </div>
+        </div>
+
         <div class="grid grid-cols-3 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Cód Item</label>
-            <input type="text" id="md-cr-cod" list="produtos-list-corte" value="${c.codigo_item}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this); autoFillProdutoCorte(this.value)">
+            <input type="text" id="md-cr-cod" list="produtos-list-corte" value="${(c && c.codigo_item) || ''}" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this); autoFillProdutoCorte(this.value)">
             ${renderDatalistProdutos('produtos-list-corte')}
           </div>
           <div class="col-span-2">
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Descrição do Produto</label>
-            <input type="text" id="md-cr-desc" value="${c.descricao}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
+            <input type="text" id="md-cr-desc" value="${(c && c.descricao) || ''}" placeholder="ex: MEIO DA ASA C/PONTA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada</label>
-            <input type="text" id="md-cr-qtd" value="${_qtdCorteNumero(c.quantidade)}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+            <input type="text" id="md-cr-qtd" value="${c ? _qtdCorteNumero(c.quantidade) : ''}" placeholder="ex: 45.00 ou 15,5" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Valor Total (R$)</label>
-            <input type="number" step="0.01" id="md-cr-valor" value="${c.valor||0}" class="w-full bg-slate-800 border border-slate-700 text-red-400 rounded p-2 text-xs font-extrabold">
+            <input type="number" step="0.01" id="md-cr-valor" value="${c ? (c.valor || 0) : ''}" placeholder="0.00" class="w-full bg-slate-800 border border-slate-700 text-red-400 rounded p-2 text-xs font-extrabold">
           </div>
         </div>
       </div>
 
       <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
         <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarCorteResumo('${data}', '${turno}', ${index})" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Edição</button>
+        <button onclick="${onSalvar}" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">${rotuloBotao}</button>
       </div>
     </div>`;
   container.classList.remove('hidden');
+}
+
+function editarCorteResumoModal(id) {
+  const c = db.getFilhoResumoPorId('corte', id);
+  if (!c) { alert('Corte não encontrado.'); return; }
+  _modalCorteCD({ titulo: 'Editar Corte de Produto', data: c.data, turno: c.turno, c, onSalvar: `confirmarSalvarCorteResumo('${c.id}')`, rotuloBotao: 'Salvar Edição' });
 }
 
 function adicionarCorteResumo(data, turno) {
-  const container = document.getElementById('modal-container');
-  if (!container) return;
-
-  container.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-red-400 uppercase flex items-center gap-2">
-          <span>✂️</span> Registrar Corte de Produto
-        </h3>
-        <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
-      </div>
-
-      <div class="space-y-3 text-xs">
-        <div class="grid grid-cols-3 gap-2">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Cód Item</label>
-            <input type="text" id="md-cr-cod" list="produtos-list-corte" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this); autoFillProdutoCorte(this.value)">
-            ${renderDatalistProdutos('produtos-list-corte')}
-          </div>
-          <div class="col-span-2">
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Descrição do Produto</label>
-            <input type="text" id="md-cr-desc" placeholder="ex: MEIO DA ASA C/PONTA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada</label>
-            <input type="text" id="md-cr-qtd" placeholder="ex: 45.00 ou 15,5" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Valor Total (R$)</label>
-            <input type="number" step="0.01" id="md-cr-valor" placeholder="0.00" class="w-full bg-slate-800 border border-slate-700 text-red-400 rounded p-2 text-xs font-extrabold">
-          </div>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-        <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarCorteResumo('${data}', '${turno}')" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Corte</button>
-      </div>
-    </div>
-  `;
-  container.classList.remove('hidden');
+  _modalCorteCD({ titulo: 'Registrar Corte de Produto', data: data || hojeIsoBrasilia(), turno: turno || turnoResumoAtual() || '', c: null, onSalvar: 'confirmarSalvarCorteResumo()', rotuloBotao: 'Salvar Corte' });
 }
 
 // Preenche automaticamente a Descrição quando o código digitado bate com um
@@ -21736,158 +21966,32 @@ function _qtdCorteNumero(valor) {
 }
 window._qtdCorteNumero = _qtdCorteNumero;
 
-function confirmarSalvarCorteResumo(data, turno, editIndex = -1) {
+function confirmarSalvarCorteResumo(editId) {
+  const data = document.getElementById('md-cr-data')?.value;
+  const turno = document.getElementById('md-cr-turno')?.value;
   const codigo = document.getElementById('md-cr-cod')?.value;
+  if (!data) { alert('Informe a data do corte!'); return; }
+  if (!turno) { alert('Selecione o turno!'); return; }
   if (!codigo) { alert('Informe o código ou selecione um produto!'); return; }
   const descricao = document.getElementById('md-cr-desc')?.value || '';
   // A UNIDADE SAIU DAQUI EM 26/08/2026. Este campo carimbava " Kg" no valor
   // salvo, e nem todo produto do CD e vendido por peso - tem pack e tem
-  // unidade. "36,00 Kg" num item que sai em pack de 12 nao e formatacao
-  // errada, e informacao errada, e ela viajava para o PDF e para a exportacao.
-  // Agora guarda so o numero; quem sabe a unidade e o cadastro do produto.
-  let quantidade = document.getElementById('md-cr-qtd')?.value || '0.00';
-  quantidade = _qtdCorteNumero(quantidade);
+  // unidade. Agora guarda so o numero; quem sabe a unidade e o cadastro do produto.
+  const quantidade = _qtdCorteNumero(document.getElementById('md-cr-qtd')?.value || '0.00');
   const valor = parseFloat(document.getElementById('md-cr-valor')?.value) || 0;
 
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (!resumo.cortes) resumo.cortes = [];
-
-  const item = {
-    id: editIndex >= 0 ? resumo.cortes[editIndex].id : Date.now(),
-    codigo_item: codigo.trim(),
-    descricao: descricao.toUpperCase().trim(),
-    quantidade: quantidade.trim(),
-    valor: valor
-  };
-
-  if (editIndex >= 0) {
-    resumo.cortes[editIndex] = item;
-  } else {
-    resumo.cortes.push(item);
-  }
-
-  db.saveResumoDiarioCD(resumo);
+  const dados = { data, turno, codigo_item: codigo.trim(), descricao, quantidade: quantidade.trim(), valor };
+  const res = editId ? db.updateCorteCD(editId, dados) : db.addCorteCD(dados);
+  if (!res || !res.success) { alert(res && res.message ? res.message : 'Não foi possível salvar.'); return; }
   fecharModalResumo();
   renderApp();
 }
 
-function removerCorteResumo(data, turno, index) {
+function removerCorteResumo(id) {
   if (!confirm('Excluir este corte de produto?')) return;
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (resumo.cortes) {
-    resumo.cortes.splice(index, 1);
-    db.saveResumoDiarioCD(resumo);
-    renderApp();
-  }
-}
-
-function adicionarOcorrenciaColaboradorResumo(data, turno) {
-  const colabs = getListaTodosColaboradores();
-  const container = document.getElementById('modal-container');
-  if (!container) return;
-
-  container.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-emerald-400 uppercase flex items-center gap-2">
-          <span>👤</span> Apontamento por Colaborador (SAC / Supervisão)
-        </h3>
-        <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
-      </div>
-
-      <div class="space-y-3 text-xs">
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data da Ocorrência</label>
-            <input type="date" id="md-occ-data" value="${data}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
-            <input type="text" id="md-occ-carga" list="cargas-list-mdocc" placeholder="ex: 7689"
-              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
-              onchange="atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
-              class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-            ${renderDatalistCargas('cargas-list-mdocc')}
-            <div id="md-occ-carga-aviso" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Funcionário (Dados SAC)</label>
-          <select id="md-occ-func" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
-            <option value="">-- Selecione o Colaborador --</option>
-            ${colabs.map(c => `<option value="${c}">${c}</option>`).join('')}
-          </select>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha</label>
-            <select id="md-occ-req" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
-              ${renderOptionsRequisitoFalhaCD()}
-            </select>
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Peso em Kg (Se identificar)</label>
-            <input type="number" step="0.01" id="md-occ-peso" placeholder="ex: 15.50" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-occ-detalhamento" rows="3" placeholder="Descreva os detalhes da ocorrência ocorrida com o colaborador..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-occ-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-        <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarOcorrenciaColaboradorResumo('${data}', '${turno}')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Apontamento</button>
-      </div>
-    </div>
-  `;
-  container.classList.remove('hidden');
-}
-
-function confirmarSalvarOcorrenciaColaboradorResumo(data, turno) {
-  const funcionario = document.getElementById('md-occ-func')?.value;
-  if (!funcionario) { alert('Selecione o funcionário!'); return; }
-  const dt = document.getElementById('md-occ-data')?.value || data;
-  const requisito = document.getElementById('md-occ-req')?.value || 'OUTRO';
-  const carga = document.getElementById('md-occ-carga')?.value || '';
-  const detalhamento = document.getElementById('md-occ-detalhamento')?.value || '';
-  const acao = document.getElementById('md-occ-acao')?.value || '';
-  const peso = document.getElementById('md-occ-peso')?.value || '';
-
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (!resumo.ocorrencias_colaboradores) resumo.ocorrencias_colaboradores = [];
-  resumo.ocorrencias_colaboradores.push({
-    id: db.gerarIdUnico(),
-    data: dt,
-    funcionario: funcionario.toUpperCase().trim(),
-    requisito: requisito.toUpperCase().trim(),
-    carga: carga.trim(),
-    detalhamento: detalhamento.trim(),
-    acao: acao.trim(),
-    peso: peso ? parseFloat(peso) : ''
-  });
-  db.saveResumoDiarioCD(resumo);
-  fecharModalResumo();
+  const res = db.deleteCorteCD(id);
+  if (!res.success) { alert(res.message); return; }
   renderApp();
-}
-
-function removerOcorrenciaColaboradorResumo(data, turno, index) {
-  if (!confirm('Excluir este apontamento por colaborador?')) return;
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (resumo.ocorrencias_colaboradores) {
-    resumo.ocorrencias_colaboradores.splice(index, 1);
-    db.saveResumoDiarioCD(resumo);
-    renderApp();
-  }
 }
 
 // Relatório Impresso A4 do Resumo Diário CD
@@ -21915,8 +22019,9 @@ function gerarResumoDiarioPdf(data, turno) {
   const totTonH = totFunc > 0 ? totPeso / totFunc : 0;
 
   const faltas = resumo.faltas_condutas || [];
-  const ocorrencias = resumo.ocorrencias || [];
-  const cortes = resumo.cortes || [];
+  // 6.7.0: ocorrências e cortes moram em coleção própria.
+  const ocorrencias = db.getOcorrenciasCD({ data, turno }).slice().reverse();
+  const cortes = db.getCortesCD({ data, turno }).slice().reverse();
   const totalCortes = cortes.reduce((a, b) => a + (parseFloat(b.valor)||0), 0);
 
   const htmlContent = `<!DOCTYPE html>
@@ -22331,7 +22436,7 @@ function imprimirBoletimGerencialExecutivo() {
   const trocas = allTrocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
   const reentregas = allReentregas.filter(re => registroNoPeriodo(re, 'reentregas', fDe, fAte));
 
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
+  let resumosCd = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
@@ -22996,10 +23101,10 @@ function getRawDataParaModulo(modulo) {
     return db.getReentregas ? db.getReentregas() : (db.data.reentregas || []);
   }
   if (modulo === 'resumos_cd' || modulo === 'cd_resumo_diario') {
-    return Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
+    return db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
   }
   if (modulo === 'cd_faltas_condutas') {
-    const list = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
+    const list = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
     const result = [];
     list.forEach(r => {
       if (r && Array.isArray(r.faltas_condutas)) {
@@ -23010,45 +23115,21 @@ function getRawDataParaModulo(modulo) {
     });
     return result;
   }
+  // 6.7.0: os três filhos do Resumo Diário têm coleção própria. data_resumo
+  // e turno_resumo continuam existindo com o mesmo nome para o layout de
+  // exportação não mudar.
   if (modulo === 'cd_outras_oc') {
-    const list = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
-    const result = [];
-    list.forEach(r => {
-      if (r && Array.isArray(r.ocorrencias)) {
-        r.ocorrencias.forEach(o => {
-          result.push({ ...o, data_resumo: r.data, turno_resumo: r.turno });
-        });
-      }
-    });
-    return result;
+    return db.getOcorrenciasCD().map(o => ({ ...o, data_resumo: o.data, turno_resumo: o.turno }));
   }
   if (modulo === 'cd_ocorrencia_colaborador') {
-    const list = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
-    const result = [];
-    list.forEach(r => {
-      if (r && Array.isArray(r.ocorrencias_colaboradores)) {
-        r.ocorrencias_colaboradores.forEach(oc => {
-          result.push({ ...oc, data_resumo: oc.data || r.data, turno_resumo: r.turno });
-        });
-      }
-    });
-    return result;
+    return db.getOcorrenciasColaborador().map(oc => ({ ...oc, data_resumo: oc.data, turno_resumo: oc.turno }));
   }
   if (modulo === 'cd_corte') {
-    const list = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
-    const result = [];
-    list.forEach(r => {
-      if (r && Array.isArray(r.cortes)) {
-        r.cortes.forEach(c => {
-          // Sem o normalizador, o Power BI e o Excel recebiam "36.00 Kg" como
-          // TEXTO nos registros anteriores a 26/08/2026 — coluna que deveria
-          // somar e que não soma, além de afirmar peso num item vendido em
-          // pack ou unidade.
-          result.push({ ...c, quantidade: _qtdCorteNumero(c.quantidade), data_resumo: r.data, turno_resumo: r.turno });
-        });
-      }
-    });
-    return result;
+    // Sem o normalizador, o Power BI e o Excel recebiam "36.00 Kg" como
+    // TEXTO nos registros anteriores a 26/08/2026 — coluna que deveria
+    // somar e que não soma, além de afirmar peso num item vendido em
+    // pack ou unidade.
+    return db.getCortesCD().map(c => ({ ...c, quantidade: _qtdCorteNumero(c.quantidade), data_resumo: c.data, turno_resumo: c.turno }));
   }
   if (modulo === 'divergencia_fisica_cd') {
     const list = db.data.relatorios_divergencia || [];
@@ -23481,7 +23562,7 @@ function renderBoletimGerencialView() {
   const trocas = allTrocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
   const reentregas = allReentregas.filter(re => registroNoPeriodo(re, 'reentregas', fDe, fAte));
 
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
+  let resumosCd = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
@@ -23535,7 +23616,11 @@ function renderBoletimGerencialView() {
 
   const isD1Active = (fDe === dMenosUmStr && fAte === dMenosUmStr);
 
-  const activeBolSubTab = window._activeBolSubTab || 'executiva';
+  // 6.7.0: a subaba é decidida pelo item do menu que abriu a tela.
+  const activeBolSubTab = activeTab === 'boletim_export_csv' ? 'export_csv'
+    : activeTab === 'boletim_pdfs' ? 'relatorios_pdf'
+    : 'executiva';
+  window._activeBolSubTab = activeBolSubTab;
 
   return `
     <div class="space-y-8 max-w-7xl mx-auto pb-12">
@@ -23551,17 +23636,8 @@ function renderBoletimGerencialView() {
           </div>
         </div>
 
-        <!-- SUBABAS BOLETIM GERENCIAL -->
-        <div class="flex gap-1 bg-slate-950 border border-slate-800 p-1.5 rounded-xl shadow-lg shrink-0 no-print">
-          <button onclick="switchBolSubTab('executiva')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'executiva' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📊</span> Visão Executiva
-          </button>
-          <button onclick="switchBolSubTab('export_csv')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'export_csv' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📥</span> Exportação CSV
-          </button>
-          <button onclick="switchBolSubTab('relatorios_pdf')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'relatorios_pdf' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📄</span> Central de PDFs
-          </button>
+        <div class="text-[11px] text-slate-400 font-bold uppercase shrink-0 no-print">
+          ${activeBolSubTab === 'executiva' ? '📊 Visão Executiva' : activeBolSubTab === 'export_csv' ? '📥 Exportação CSV' : '📄 Central de PDFs'}
         </div>
       </div>
 
@@ -25298,18 +25374,13 @@ function gerarRelatorioTrocasVeiculosPdf() {
   win.document.close();
 }
 
-function gerarRelatorioCortesCdPdf() {
-  const fDe = window._pdfFiltroDe || '';
-  const fAte = window._pdfFiltroAte || '';
-
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
-  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
-
-  let cortes = [];
-  resumosCd.forEach(r => {
-    if (r && Array.isArray(r.cortes)) cortes.push(...r.cortes);
-  });
+// 6.7.0: lê cortes_cd. Sem argumentos usa o período da Central de PDFs;
+// a tela Corte passa a lista já filtrada.
+function gerarRelatorioCortesCdPdf(opts) {
+  const fDe = (opts && opts.fDe !== undefined) ? (opts.fDe || '') : (window._pdfFiltroDe || '');
+  const fAte = (opts && opts.fAte !== undefined) ? (opts.fAte || '') : (window._pdfFiltroAte || '');
+  const cortes = (opts && Array.isArray(opts.lista)) ? opts.lista : db.getCortesCD({ dataDe: fDe, dataAte: fAte });
+  const totalCortes = cortes.reduce((acc, c) => acc + (parseFloat(c.valor) || 0), 0);
 
   const win = window.open('', '_blank');
   win.document.write(`
@@ -25332,6 +25403,8 @@ function gerarRelatorioCortesCdPdf() {
       <table>
         <thead>
           <tr>
+            <th>Data</th>
+            <th>Turno</th>
             <th>Cód. Item</th>
             <th>Descrição do Produto</th>
             <th style="text-align:center;">Quantidade Cortada</th>
@@ -25339,9 +25412,11 @@ function gerarRelatorioCortesCdPdf() {
           </tr>
         </thead>
         <tbody>
-          ${cortes.length === 0 ? '<tr><td colspan="4" style="text-align:center;">Nenhum corte de produto registrado no período.</td></tr>' :
+          ${cortes.length === 0 ? '<tr><td colspan="6" style="text-align:center;">Nenhum corte de produto registrado no período.</td></tr>' :
             cortes.map(c => `
               <tr>
+                <td>${formatarData(c.data)}</td>
+                <td>${c.turno || '-'}</td>
                 <td><b>${c.codigo_item || '-'}</b></td>
                 <td><b>${c.descricao || '-'}</b></td>
                 <td style="text-align:center; font-weight:bold; color:#b45309;">${_qtdCorteNumero(c.quantidade)}</td>
@@ -25349,6 +25424,7 @@ function gerarRelatorioCortesCdPdf() {
               </tr>
             `).join('')}
         </tbody>
+        ${cortes.length > 0 ? `<tfoot><tr><td colspan="5" style="text-align:right; font-weight:bold;">TOTAL DO PERÍODO</td><td style="text-align:right; font-weight:bold; color:#b91c1c;">R$ ${totalCortes.toFixed(2)}</td></tr></tfoot>` : ''}
       </table>
     </body>
     </html>
@@ -25356,18 +25432,12 @@ function gerarRelatorioCortesCdPdf() {
   win.document.close();
 }
 
-function gerarRelatorioOcorrenciasCdPdf() {
-  const fDe = window._pdfFiltroDe || '';
-  const fAte = window._pdfFiltroAte || '';
-
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
-  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
-
-  let ocs = [];
-  resumosCd.forEach(r => {
-    if (r && Array.isArray(r.ocorrencias)) ocs.push(...r.ocorrencias);
-  });
+// 6.7.0: lê ocorrencias_cd. Sem argumentos usa o período da Central de
+// PDFs; a tela Ocorrência CD passa a lista já filtrada.
+function gerarRelatorioOcorrenciasCdPdf(opts) {
+  const fDe = (opts && opts.fDe !== undefined) ? (opts.fDe || '') : (window._pdfFiltroDe || '');
+  const fAte = (opts && opts.fAte !== undefined) ? (opts.fAte || '') : (window._pdfFiltroAte || '');
+  const ocs = (opts && Array.isArray(opts.lista)) ? opts.lista : db.getOcorrenciasCD({ dataDe: fDe, dataAte: fAte });
 
   const win = window.open('', '_blank');
   win.document.write(`
@@ -25390,15 +25460,19 @@ function gerarRelatorioOcorrenciasCdPdf() {
       <table>
         <thead>
           <tr>
-            <th>Título da Ocorrência</th>
-            <th>Causa Raiz / Detalhamento</th>
+            <th>Data</th>
+            <th>Turno</th>
+            <th>Ocorrência</th>
+            <th>Causa / Detalhamento</th>
             <th>Ação Tomada</th>
           </tr>
         </thead>
         <tbody>
-          ${ocs.length === 0 ? '<tr><td colspan="3" style="text-align:center;">Nenhuma ocorrência do galpão registrada no período.</td></tr>' :
+          ${ocs.length === 0 ? '<tr><td colspan="5" style="text-align:center;">Nenhuma ocorrência do galpão registrada no período.</td></tr>' :
             ocs.map(o => `
               <tr>
+                <td>${formatarData(o.data)}</td>
+                <td>${o.turno || '-'}</td>
                 <td><b>${o.ocorrencia || '-'}</b></td>
                 <td>${o.causa || '-'}</td>
                 <td style="color:#047857; font-weight:bold;">${o.acao || '-'}</td>
@@ -25543,7 +25617,7 @@ function gerarRelatorioFaltasDisciplinarPdf() {
   const fDe = window._pdfFiltroDe || '';
   const fAte = window._pdfFiltroAte || '';
 
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
+  let resumosCd = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
@@ -26063,10 +26137,9 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
         <form onsubmit="handleConfirmarEmissaoDisciplinar(event)" class="space-y-4 text-xs">
           <input type="hidden" id="disc-tipo" value="${tipo}">
           <input type="hidden" id="disc-gerar-pdf" value="${isVerbal ? 'false' : 'true'}">
-          <input type="hidden" id="disc-parent-data" value="${options.parentData||''}">
-          <input type="hidden" id="disc-parent-turno" value="${options.parentTurno||''}">
-          <input type="hidden" id="disc-parent-type" value="${options.type||''}">
-          <input type="hidden" id="disc-parent-index" value="${options.index!==undefined?options.index:''}">
+          <!-- 6.7.0: a ocorrência de origem é endereçada pelo id do registro em
+               ocorrencias_colaborador, não mais por data+turno+tipo+índice. -->
+          <input type="hidden" id="disc-ocorrencia-id" value="${options.ocorrenciaId||''}">
 
           <!-- COLABORADOR DO CD (CADASTRO MESTRE) -->
           <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
@@ -26130,7 +26203,7 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Data da Ocorrência *</label>
-              <input type="date" id="disc-data" value="${options.parentData || agoraIsoBrasilia().slice(0,10)}" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+              <input type="date" id="disc-data" value="${options.dataOcorrencia || agoraIsoBrasilia().slice(0,10)}" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-xs font-bold">
             </div>
             <div class="sm:col-span-2">
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Gestor Emissor / Responsável *</label>
@@ -26193,10 +26266,7 @@ async function handleConfirmarEmissaoDisciplinar(e) {
   const gestor = (document.getElementById('disc-gestor')?.value || '').trim().toUpperCase();
   const motivo = (document.getElementById('disc-motivo')?.value || '').trim();
 
-  const parentData = document.getElementById('disc-parent-data')?.value;
-  const parentTurno = document.getElementById('disc-parent-turno')?.value;
-  const parentType = document.getElementById('disc-parent-type')?.value;
-  const parentIndexStr = document.getElementById('disc-parent-index')?.value;
+  const ocorrenciaId = document.getElementById('disc-ocorrencia-id')?.value;
 
   if (!nome || !motivo) {
     alert('Preencha o nome do colaborador e o detalhamento do motivo.');
@@ -26215,20 +26285,14 @@ async function handleConfirmarEmissaoDisciplinar(e) {
     try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
   }
 
-  if (parentData && parentTurno && parentType && parentIndexStr !== '') {
-    const parentIndex = parseInt(parentIndexStr, 10);
-    const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-    let item = null;
-    if (parentType === 'colaborador') item = resumo.ocorrencias_colaboradores?.[parentIndex];
-    else if (parentType === 'operacional') item = resumo.ocorrencias?.[parentIndex];
-    
-    if (item) {
-      item.medida_disciplinar = tipo;
-      item.alinea_clt = alineasSelecionadasKeys.join(', ');
-      if (tipo === 'SUSPENSAO') item.dias_suspensao = diasSuspensao;
-      item.disciplinar_gerada_em = agoraIsoBrasilia();
-      db.saveResumoDiarioCD(resumo);
-    }
+  if (ocorrenciaId) {
+    const marca = {
+      medida_disciplinar: tipo,
+      alinea_clt: alineasSelecionadasKeys.join(', '),
+      disciplinar_gerada_em: agoraIsoBrasilia()
+    };
+    if (tipo === 'SUSPENSAO') marca.dias_suspensao = diasSuspensao;
+    db.updateOcorrenciaColaborador(ocorrenciaId, marca);
   }
 
   // Orientação Verbal não é mais uma medida administrativa (pedido de

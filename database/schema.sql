@@ -1445,3 +1445,75 @@ NOTIFY pgrst, 'reload schema';
 --
 -- As duas sao idempotentes: rodar em banco que ja as tem nao quebra nada.
 -- =============================================================================
+
+-- =============================================================================
+-- 6.7.0 — Reorganização do CD (migration_44_reorganizacao_cd.sql, 11/09/2026)
+-- Os três filhos do Resumo Diário em tabela própria. As colunas JSONB
+-- ocorrencias / ocorrencias_colaboradores / cortes de resumo_diario_cd
+-- permanecem como rede de segurança (ver a migration).
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS ocorrencias_cd (
+    id BIGINT PRIMARY KEY,
+    data DATE NOT NULL,
+    turno VARCHAR(40) NOT NULL,
+    ocorrencia TEXT,
+    causa TEXT,
+    acao TEXT,
+    gestor VARCHAR(120),
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP,
+    atualizado_em TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP,
+    deleted_by_nome VARCHAR(120)
+);
+ALTER TABLE ocorrencias_cd ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON ocorrencias_cd;
+CREATE POLICY "acesso_total_anon" ON ocorrencias_cd FOR ALL TO anon USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS ocorrencias_colaborador (
+    id BIGINT PRIMARY KEY,
+    data DATE NOT NULL,
+    turno VARCHAR(40) NOT NULL,
+    funcionario VARCHAR(120),
+    requisito VARCHAR(120),
+    carga VARCHAR(40),
+    peso NUMERIC(12,2),
+    detalhamento TEXT,
+    acao TEXT,
+    status VARCHAR(20) DEFAULT 'PENDENTE',
+    medida_disciplinar VARCHAR(30),
+    alinea_clt TEXT,
+    dias_suspensao INT,
+    disciplinar_gerada_em TIMESTAMP,
+    gestor VARCHAR(120),
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP,
+    atualizado_em TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP,
+    deleted_by_nome VARCHAR(120)
+);
+ALTER TABLE ocorrencias_colaborador ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON ocorrencias_colaborador;
+CREATE POLICY "acesso_total_anon" ON ocorrencias_colaborador FOR ALL TO anon USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS cortes_cd (
+    id BIGINT PRIMARY KEY,
+    data DATE NOT NULL,
+    turno VARCHAR(40) NOT NULL,
+    codigo_item VARCHAR(40),
+    descricao VARCHAR(200),
+    quantidade VARCHAR(40),
+    valor NUMERIC(12,2) DEFAULT 0,
+    gestor VARCHAR(120),
+    criado_por VARCHAR(120),
+    criado_em TIMESTAMP,
+    atualizado_em TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    deleted_at TIMESTAMP,
+    deleted_by_nome VARCHAR(120)
+);
+ALTER TABLE cortes_cd ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON cortes_cd;
+CREATE POLICY "acesso_total_anon" ON cortes_cd FOR ALL TO anon USING (true) WITH CHECK (true);

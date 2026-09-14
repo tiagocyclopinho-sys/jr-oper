@@ -147,6 +147,60 @@ Administração                           (sem mudança)
 
 ---
 
+## Estado em 11/09/2026 — Blocos A a F executados, no disco, não publicados
+
+Os seis blocos foram feitos em 11/09/2026 na pasta viva, como **v6.7.0 /
+`reorganizacao-cd-6.7.0`** (os quatro marcadores já estão no disco;
+`version.json` traz `resumo_reorganizacao_cd_670`, `migrations_necessarias` e
+`observacao_deploy` desta versão). A 6.6.3 (Blocos 0 e 0.1) ficou congelada
+em `Downloads/jr-oper-6.6.3-PUBLICAR` para sair antes.
+
+**Conferido em navegador, modo local, com envelope antigo de teste:** as 16
+telas renderizam; a migração copiou 1/1/1 filhos; editar a data de uma
+ocorrência a moveu de dia (o defeito 1 do plano); a emissão disciplinar
+grava de volta por id; sem turno o Salvar e os "+ Adicionar" ficam
+bloqueados; o menu bate com a árvore acima item a item; o Dossiê Prestador
+abre motorista e ajudante, com Devoluções por Erro e Deduções.
+
+**Quatro desvios do texto original, todos deliberados:**
+
+1. **A migração de dados não roda no `init()` — roda depois de cada pull
+   concluído** (evento novo `jr-cloud-pull-ok`, disparado por
+   `_pullDaNuvem()` tenha ou não havido mudança). Motivo: um aparelho que
+   abre a 6.7.0 dias depois dos outros faz o `init()` com a cópia antiga do
+   envelope e, se migrasse ali, recriaria com conteúdo velho registros que
+   já foram editados na nuvem — e o upsert os devolveria ao passado. Depois
+   do pull a coleção nova já veio da nuvem, e a migração (idempotente por
+   id) só copia o que ainda não existe. Sem nuvem configurada roda uma vez
+   no `load`.
+2. **Não há `filhos_migrados_em` no envelope.** `resumo_diario_cd` não tem
+   lista branca no push; uma chave nova derrubaria o lote com PGRST204 (a
+   lição do Bloco 0). A idempotência é a varredura por id — ~30 envelopes,
+   custa nada.
+3. **`turnoPadraoDoUsuario()` não reaproveita `getDadosColaboradorMestre()`.**
+   Ela casa por tokens soltos e, quando o colaborador não tem seção,
+   INVENTA `CARREGAMENTO SECOS` — é função de preenchimento de formulário,
+   não de identificação. Testado: "PESSOA SEM SECAO" voltava `SECO`. A
+   função lê `colaboradores_cd` direto, exato e depois substring, e nada
+   mais. Resultado nos casos do plano: Gustavo → 2º, Melquiades (nome
+   completo) → 1º, Itajaci → SECO, Cicero (3º turno) → null, "MELQUIADES
+   NETO" (forma curta) → null, sem seção → null.
+4. **As três coleções novas entraram em `Store.COLECOES_COM_ATUALIZADO_EM`**
+   (Bloco 0.1): todo `add`/`update`/`delete` delas carimba `atualizado_em`.
+
+**Pendente para publicar a 6.7.0, nesta ordem:**
+
+1. Publicar a 6.6.3 e confirmá-la nos aparelhos (Bloco 0.1).
+2. Rodar `database/migration_44_reorganizacao_cd.sql` no Supabase — aditiva,
+   idempotente, não toca em dado existente. Sem ela o app novo grava e recebe
+   404; os filhos migrados ficam presos (sujos) em cada aparelho até a
+   tabela existir. **Ainda não foi rodada.**
+3. Publicar a 6.7.0 (mesmo roteiro do Bloco 0.1) e, depois de um aparelho
+   abrir o app, rodar a consulta de conferência no fim da migration 44: os
+   totais das três tabelas têm de bater com os filhos do JSONB (em 11/09:
+   17 ocorrências, 2 colaborador, 14 cortes).
+4. Só depois disso, em outro plano, decidir sobre as colunas JSONB.
+
 ## A ordem, e ela importa
 
 ### Bloco 0 — A sincronização da Disponibilidade da Frota (10/09/2026)
@@ -504,8 +558,9 @@ Independentes de tudo acima; podem ser puxados para antes se conveniente.
 estão no disco). São consertos de defeito em produção e não dependem de
 nenhum outro bloco. A trava que segurava o Bloco 0 — as liberações do
 Leonardo estarem no banco — fechou em 11/09. O roteiro de publicação está no
-Bloco 0.1. A reorganização (Blocos A–F) continua como `6.7.0`, e só começa
-depois de a 6.6.3 estar confirmada nos aparelhos.
+Bloco 0.1. A reorganização (Blocos A–F) é a `6.7.0` — código pronto no disco
+desde 11/09 (ver "Estado em 11/09/2026") — e só é **publicada** depois de a
+6.6.3 estar confirmada nos aparelhos e de a migration 44 ter rodado.
 
 Os cinco marcadores, conforme `GO_LIVE.md`:
 
