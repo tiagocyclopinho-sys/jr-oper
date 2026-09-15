@@ -3266,7 +3266,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "reorganizacao-cd-6.7.0";
+CloudStore.BUILD = "carimbo-usuarios-6.7.1";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3391,9 +3391,23 @@ CloudStore.COLUNAS_POR_TABELA = {
   // a projeção envia SEMPRE todas as colunas que declara, então declarar
   // `criado_em` faria todo upsert sobrescrever com null o carimbo que o
   // DEFAULT do banco pôs no INSERT.
+  //
+  // atualizado_em (15/09/2026, migration 46). Era a única tabela editável
+  // sem carimbo, e o custo apareceu: a senha da Adriana foi redefinida em
+  // "Logins e Senhas" e o login continuou recusando. Sem carimbo, o pull
+  // decide só por hash — um aparelho com a cópia dela "suja" (um switchRole
+  // bastava) recusava o hash novo e devolvia o antigo no push. Com o
+  // carimbo, vale o DESEMPATE POR atualizado_em de _mesclarPorRegistro e a
+  // guarda BEFORE UPDATE do banco. Quem carimba é o app (carimbarEdicao),
+  // não trigger: é o mesmo desenho das outras dez tabelas desde a 6.6.3.
+  //
+  // ATENÇÃO: declarar a coluna muda a assinatura da projeção (ver
+  // _assinaturaProjecao) — no primeiro pull da build nova a tabela rebaseia
+  // pela nuvem, e é isso que se quer aqui: cópia local sem carimbo perde.
   usuarios: {
     texto:        ['nome', 'email', 'senha_hash', 'role', 'cargo', 'departamento'],
-    booleanoTrue: ['ativo']
+    booleanoTrue: ['ativo'],
+    data:         ['atualizado_em']
   }
 };
 

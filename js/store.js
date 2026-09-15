@@ -1382,7 +1382,11 @@ class Store {
         return { success: false, message: 'Senha incorreta' };
       }
       if (user.senha_hash !== hashed) {
+        // Senha guardada em texto puro (cadastro legado) vira hash no
+        // primeiro login. É edição de verdade do registro: carimba, senão
+        // o pull trata como mutação incidental e a nuvem desfaz.
         user.senha_hash = hashed;
+        this.carimbarEdicao('usuarios', user);
         this.save();
       }
       this.currentUser = user;
@@ -1414,7 +1418,10 @@ class Store {
         console.warn("Nao foi possivel salvar role no localStorage:", e);
       }
       const u = (this.data && Array.isArray(this.data.usuarios)) ? this.data.usuarios.find(x => x.id === this.currentUser.id) : null;
-      if (u) u.role = role;
+      // Persiste no cadastro: é edição de verdade, carimba (migration 46).
+      // Era exatamente este caminho que deixava a cópia local "suja" e fazia
+      // o aparelho recusar uma senha redefinida em outro lugar.
+      if (u) { u.role = role; this.carimbarEdicao('usuarios', u); }
       this.save();
     }
   }
@@ -1436,6 +1443,7 @@ class Store {
       ativo: true,
       criado_em: agoraIsoBrasilia()
     };
+    this.carimbarEdicao('usuarios', newUser);
     this.data.usuarios.push(newUser);
     const salvou = this.save();
     if (!salvou) {
@@ -5034,7 +5042,8 @@ Store.COLECOES_COM_ATUALIZADO_EM = new Set([
   'ocorrencias_devolucao', 'itens_devolucao', 'ocorrencias_rota', 'ocorrencias_viagens',
   'controle_viagens', 'reentregas', 'resumo_diario_cd', 'retencoes_frota', 'sinistros',
   'trocas_veiculos',
-  'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd'   // 6.7.0, migration 44
+  'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd',  // 6.7.0, migration 44
+  'usuarios'   // 15/09/2026, migration 46 — senha redefinida perdia para cache sujo
 ]);
 Store.COLECOES_COM_ATUALIZADO_POR = new Set(['ocorrencias_devolucao', 'ocorrencias_rota', 'reentregas']);
 

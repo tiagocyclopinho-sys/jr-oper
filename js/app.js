@@ -857,6 +857,7 @@ function handleSalvarEdicaoUsuario(e, userId) {
   u.departamento = document.getElementById('edit-usr-departamento')?.value || u.departamento;
   u.role = document.getElementById('edit-usr-role')?.value || u.role;
   u.cargo = document.getElementById('edit-usr-cargo')?.value?.trim() || '';
+  db.carimbarEdicao('usuarios', u);   // migration 46
 
   const salvou = db.save();
   closeModal();
@@ -923,6 +924,10 @@ function handleRedefinirSenha(e, userId) {
 
   // Mesmo padrão de hash já usado em addUsuario/login (sha256Sync).
   u.senha_hash = sha256Sync(nova);
+  // Carimbo (migration 46): sem ele, o aparelho da pessoa podia recusar o
+  // hash novo no pull e devolver o antigo no push — caso da Adriana em
+  // 15/09/2026, "redefinida com sucesso" aqui e "Senha incorreta" lá.
+  db.carimbarEdicao('usuarios', u);
   const salvou = db.save();
   closeModal();
   if (!salvou) {
@@ -945,6 +950,7 @@ function toggleAtivoUsuario(userId) {
   if (!confirm(vaiDesativar ? `Desativar o acesso de ${u.nome}? O usuário não conseguirá mais fazer login.` : `Reativar o acesso de ${u.nome}?`)) return;
 
   u.ativo = vaiDesativar ? false : true;
+  db.carimbarEdicao('usuarios', u);   // migration 46
   const salvou = db.save();
   if (!salvou) {
     showToast('Não foi possível salvar a alteração neste dispositivo. Tente novamente.', 'error');
@@ -6099,9 +6105,14 @@ function renderSacAberturaView() {
     }
   });
 
-  // Gerar próximo número de protocolo automaticamente
-  const nextNum = (db.data.ocorrencias_devolucao.length + 1).toString().padStart(3,'0');
-  const nextProtocol = `DEV-${new Date().getFullYear()}-${nextNum}`;
+  // Prévia do próximo número de protocolo. É SÓ prévia: o número de verdade
+  // sai em addDevolucao(), depois do pull da nuvem. Mas tem de ser calculada
+  // pela MESMA regra (maior número + 1, via getNextSequenceNumber), não por
+  // "quantidade de registros + 1": em 15/09/2026 a lista tinha 73 linhas e o
+  // maior número era 077 (excluídas definitivas/expurgadas saem da contagem,
+  // não da numeração), e a prévia mostrava DEV-2026-074 — o mesmo número de
+  // uma devolução já aberta e em análise. Parecia duplicidade; era a prévia.
+  const nextProtocol = db.getNextSequenceNumber('ocorrencias_devolucao', 'numero_protocolo', 'DEV-2026-', 3);
 
   return `
     <div class="max-w-4xl mx-auto space-y-5">
