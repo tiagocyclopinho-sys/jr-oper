@@ -9444,12 +9444,12 @@ function renderCdRecepcaoView() {
                           <div class="font-bold text-white">${item.produto_codigo ? `<span class="text-emerald-400 font-mono">[${item.produto_codigo}]</span> ` : ''}${item.produto_descricao || 'Produto'}</div>
                           <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}</div>${fotosHtml}
                         </td>
-                        <td class="p-3 text-center font-bold text-amber-400 text-sm">${item.quantidade} un</td>
+                        <td class="p-3 text-center font-bold text-amber-400 text-sm">${item.quantidade}</td>
                         <td class="p-3 font-semibold text-emerald-300">
                           ${temDivisoes
                             ? `<div class="space-y-0.5">
                                  <span class="inline-block bg-violet-950 text-violet-300 border border-violet-700 px-1.5 py-0.5 rounded text-[9px] font-bold mb-0.5">🔀 Dividido</span>
-                                 ${item.divisoes_destino.map(dv => `<div class="text-[10px] text-slate-300">${dv.quantidade} un → ${formatarDestinoLabel(dv.destino)}</div>`).join('')}
+                                 ${item.divisoes_destino.map(dv => `<div class="text-[10px] text-slate-300">${dv.quantidade} → ${formatarDestinoLabel(dv.destino)}</div>`).join('')}
                                </div>`
                             : formatarDestinoLabel(item.destino)}
                         </td>
@@ -9740,7 +9740,7 @@ function abrirModalDivisaoDestino(itemId, devId) {
             ${divisoes.map(dv => `
               <div class="flex items-center justify-between bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2 text-xs">
                 <div>
-                  <span class="font-bold text-white">${dv.quantidade} un</span>
+                  <span class="font-bold text-white">${dv.quantidade}</span>
                   <span class="text-slate-400"> → </span>
                   <span class="font-semibold text-emerald-300">${formatarDestinoLabel(dv.destino)}</span>
                   ${dv.destino === 'PRODUTOS_NEGOCIACAO' ? `<span class="ml-1 text-[10px] text-amber-300">(${formatarStatusNegociacaoLabel(dv.status_negociacao)})</span>` : ''}
@@ -10107,9 +10107,9 @@ function gerarRelatorioDestinacaoPdf() {
           <tr>
             <td>${item.devId === '__AVULSO__' ? '<span class="badge-avulso">AVULSO</span>' : (item.protocolo || '—')}</td>
             <td>${item.produto_codigo ? `[${item.produto_codigo}] ` : ''}${item.produto_descricao || item.descricao || 'Produto'}</td>
-            <td>${item.quantidade} un</td>
+            <td>${item.quantidade}</td>
             <td>${Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0
-                ? item.divisoes_destino.map(dv => `${dv.quantidade}un: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
+                ? item.divisoes_destino.map(dv => `${dv.quantidade}: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
                 : formatarDestinoLabel(item.destino)}</td>
             <td>${item.validade || '—'}</td>
             <td>${item.cliente_nome || '—'}</td>
@@ -10145,7 +10145,7 @@ function exportarDestinacaoCsv() {
 
   itensDestinadosFiltrados.forEach(item => {
     const destinoTxt = Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0
-      ? item.divisoes_destino.map(dv => `${dv.quantidade}un: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
+      ? item.divisoes_destino.map(dv => `${dv.quantidade}: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
       : formatarDestinoLabel(item.destino);
     const linha = [
       item.devId === '__AVULSO__' ? 'AVULSO' : (item.protocolo || ''),

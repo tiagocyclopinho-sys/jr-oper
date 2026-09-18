@@ -990,12 +990,50 @@ class CloudStore {
     return mudados;
   }
 
-  _confirmarEnvio(tableName, enviados) {
+  // O HASH DO QUE FOI ENVIADO, NÃO DO QUE O OBJETO É AGORA (18/09/2026).
+  //
+  // `enviados` são os objetos VIVOS de db.data — os mesmos que a tela edita.
+  // Entre o JSON.stringify do POST e a resposta há uma janela de rede, e
+  // qualquer gravação nessa janela (uma edição, o caminho de uma foto que
+  // acabou de subir) muda o objeto DEPOIS de ele ter sido serializado.
+  // Hashear o objeto aqui, depois da resposta, anotava como "a nuvem tem
+  // isto" um estado que a nuvem NUNCA recebeu. No pull seguinte o registro
+  // parecia limpo (hash == conhecido), a nuvem ganhava, e a edição da
+  // janela era desfeita em silêncio — sem nunca ter subido.
+  //
+  // Foi exatamente assim que a primeira foto de item avulso sumiu em
+  // 18/09/2026: o arquivo subiu para o Storage às 13:15:10.72, o POST da
+  // tabela chegou às 13:15:10.84 já serializado com fotos_pendentes = 1, o
+  // caminho foi gravado no objeto no meio, e o mapa anotou o hash do objeto
+  // com caminho. Pull seguinte: nuvem (sem caminho) por cima. O arquivo
+  // ficou órfão num bucket que nega DELETE e a linha, com "1 a enviar" para
+  // sempre. A fila de fotos torna a janela quase certa, porque
+  // processarFila() anda no mesmo tick do sync — mas a janela sempre esteve
+  // aí para toda tabela e toda edição.
+  //
+  // `hashesAntes` é o hash de cada registro calculado ANTES do POST, pelo
+  // id de então. Um registro que a resolução de colisão de sequência tenha
+  // renumerado durante o envio não bate pelo id e cai no hash do objeto
+  // vivo, que é o comportamento anterior — nesse caso o que subiu na 2ª
+  // tentativa É o objeto renumerado.
+  _hashesAntesDoEnvio(tableName, registros) {
+    const m = {};
+    for (const r of registros) {
+      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+      if (id !== null) m[id] = this._hashParaSync(tableName, r);
+    }
+    return m;
+  }
+
+  _confirmarEnvio(tableName, enviados, hashesAntes) {
     const mapa = this._lerMapaSync();
     if (!mapa[tableName]) mapa[tableName] = {};
     for (const r of enviados) {
       const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
-      if (id !== null) mapa[tableName][id] = this._hashParaSync(tableName, r);
+      if (id === null) continue;
+      mapa[tableName][id] = (hashesAntes && hashesAntes[id] !== undefined)
+        ? hashesAntes[id]
+        : this._hashParaSync(tableName, r);
     }
     this._anotarProjecao(tableName, mapa);
     this._mapaSync = mapa;
@@ -2418,10 +2456,13 @@ class CloudStore {
           // só o que mudou aqui desde a última confirmação da nuvem.
           const mudados = this._separarOQueMudou(m.tableName, records);
           if (mudados.length === 0) continue;
+          // Hash do estado que VAI subir, tirado antes do await — ver
+          // _confirmarEnvio para o porquê.
+          const antes = this._hashesAntesDoEnvio(m.tableName, mudados);
           const enviou = await this.upsert(m.tableName, mudados);
           // Só marca como confirmado se o POST passou. Envio recusado
           // continua "sujo" e é tentado de novo no ciclo seguinte.
-          if (enviou) this._confirmarEnvio(m.tableName, mudados);
+          if (enviou) this._confirmarEnvio(m.tableName, mudados, antes);
         }
       } catch(e) {
         console.warn(`[CloudStore] Erro ao sincronizar ${m.tableName}:`, e);
@@ -3218,8 +3259,9 @@ class CloudStore {
       if (!registros.length) continue;
       const mudados = this._separarOQueMudou(t.tableName, registros);
       if (!mudados.length) continue;
+      const antes = this._hashesAntesDoEnvio(t.tableName, mudados);
       if (await this.upsert(t.tableName, mudados)) {
-        this._confirmarEnvio(t.tableName, mudados);
+        this._confirmarEnvio(t.tableName, mudados, antes);
         enviouAlgo = true;
         console.log(`[CloudStore] Catálogo: ${mudados.length} ${t.dbKey} enviado(s) para a nuvem.`);
       }
