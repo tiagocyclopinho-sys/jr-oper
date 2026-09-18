@@ -130,3 +130,26 @@ SELECT count(*) FROM controle_viagens
 ```
 
 Não é urgente e altera dado antigo. Outra janela.
+
+---
+
+## 4. Limpeza inicial da Destinação de Itens do CD
+
+**Natureza:** dado. **Não precisa de deploy.** **Executada em 18/09/2026 às 09:15.**
+
+O CD quer começar a aba *Destinação de Itens* do zero. Em 18/09/2026 ela mostra
+**111 itens** (de 59 devoluções `RECEBIDO_CD`); os 16 itens das 13 devoluções
+`PENDENTE_FISICO` não aparecem e não seriam tocados.
+
+O roteiro está pronto em **`database/limpeza_destinacao_itens_cd.sql`**: lápide
+(`is_deleted = true`, mesma regra do botão Excluir da tela), não `DELETE`, com
+marca `LIMPEZA INICIAL CD 18/09/2026` em `deleted_by_nome` para dar rastro e
+permitir desfazer. O arquivo traz conferência antes, o `UPDATE` protegido por
+contagem, conferência depois e o SQL de reversão.
+
+As cinco decisões da seção 2 do arquivo foram alinhadas com o supervisor no
+mesmo dia (limpeza total, itens redestinados como avulsos, BI avisado) e o
+bloco rodou: **111 itens marcados, 0 ativos**, pendentes intactos. Cópia crua
+em `bkp_itens_devolucao_limpeza_20260918` — apagar quando não precisar mais.
+O que resta: quem cuida do Power BI filtrar `is_deleted` em qualquer consulta
+nova sobre `itens_devolucao`.

@@ -54,7 +54,11 @@ const FOTO_STORE      = 'fila';
 // ---------------------------------------------------------------
 const FOTO_BUCKETS = {
   reentregas: 'reentregas-fotos',
-  devolucoes: 'devolucoes-fotos'
+  devolucoes: 'devolucoes-fotos',
+  // Item avulso da Destinacao (18/09/2026, migration 47). Mesmo bucket da
+  // devolucao, pasta propria: e a mesma prova de avaria, so que sem chamado.
+  // Bucket separado exigiria policies novas para ganhar nada.
+  avulsos:    'devolucoes-fotos'
 };
 const FOTO_MODULO_PADRAO = 'reentregas';
 const FOTO_BUCKET     = FOTO_BUCKETS[FOTO_MODULO_PADRAO];

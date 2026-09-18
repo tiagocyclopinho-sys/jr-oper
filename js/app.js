@@ -9422,12 +9422,27 @@ function renderCdRecepcaoView() {
                       'DESCARTADO': '<span class="bg-red-950 text-red-300 border border-red-700 px-2 py-0.5 rounded text-[10px] font-bold">🗑️ Descarte</span>'
                     };
                     const temDivisoes = Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0;
+                    // Fotos do avulso (migration 47): miniatura por caminho
+                    // do Storage + aviso de quantas ainda estão só no
+                    // aparelho que fotografou. Item de devolução não tem
+                    // foto própria — a prova dele está no protocolo.
+                    const isAvulso = String(item.devId) === '__AVULSO__';
+                    const estFotos = (isAvulso && db && typeof db.estadoFotos === 'function')
+                      ? db.estadoFotos(item, 'foto', 'avulsos') : null;
+                    const fotosHtml = !estFotos || !estFotos.temAlguma ? '' : `
+                          <div class="flex items-center gap-1 mt-1 flex-wrap">
+                            ${estFotos.paths.map(p => {
+                              const u = window.fotoStore ? window.fotoStore.urlPublica(p) : p;
+                              return `<a href="${u}" target="_blank" rel="noopener" title="Abrir foto"><img src="${u}" loading="lazy" class="w-9 h-9 object-cover rounded border border-slate-700"></a>`;
+                            }).join('')}
+                            ${estFotos.pendentes > 0 ? `<span class="text-[9px] text-amber-300 font-bold" title="Ainda no aparelho que fotografou, aguardando rede">📷 ${estFotos.pendentes} a enviar</span>` : ''}
+                          </div>`;
 
                     return `
                       <tr class="hover:bg-slate-800/40">
                         <td class="p-3">
                           <div class="font-bold text-white">${item.produto_codigo ? `<span class="text-emerald-400 font-mono">[${item.produto_codigo}]</span> ` : ''}${item.produto_descricao || 'Produto'}</div>
-                          <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}</div>
+                          <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}</div>${fotosHtml}
                         </td>
                         <td class="p-3 text-center font-bold text-amber-400 text-sm">${item.quantidade} un</td>
                         <td class="p-3 font-semibold text-emerald-300">
@@ -9457,6 +9472,7 @@ function renderCdRecepcaoView() {
                           <div class="flex items-center justify-center gap-1.5 flex-wrap">
                             <button onclick="openEditarItemDestinoModal('${item.id}', '${item.devId}')" class="bg-blue-900/60 hover:bg-blue-800 text-blue-200 border border-blue-700 px-2 py-1 rounded text-[10px] font-bold transition">✏️ Editar</button>
                             <button onclick="abrirModalDivisaoDestino('${item.id}', '${item.devId}')" class="bg-violet-900/60 hover:bg-violet-800 text-violet-200 border border-violet-700 px-2 py-1 rounded text-[10px] font-bold transition">🔀 Dividir</button>
+                            ${isAvulso ? `<button onclick="adicionarFotoItemAvulso('${item.id}')" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 px-2 py-1 rounded text-[10px] font-bold transition" title="Anexar foto da avaria a este item">📷 Foto</button>` : ''}
                             <button onclick="excluirItemDestino('${item.id}', '${item.devId}')" class="bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-700 px-2 py-1 rounded text-[10px] font-bold transition">🗑️ Excluir</button>
                           </div>
                         </td>
@@ -9650,9 +9666,10 @@ function handleSalvarEdicaoItemDestino(e, itemId, devId) {
 
   item.destino_item = destinoSelecionado;
   item.status_negociacao = statusNegociacao;
-  // carimbarEdicao() em vez de escrever atualizado_em direto: o item AVULSO
-  // vai para itens_avulsos_destinacao, que NÃO tem essa coluna — a chave a
-  // mais derrubaria o lote inteiro da tabela no POST (PGRST204).
+  // carimbarEdicao() em vez de escrever atualizado_em direto: é a lista
+  // COLECOES_COM_ATUALIZADO_EM que sabe qual tabela tem a coluna — uma chave
+  // a mais derrubaria o lote inteiro da tabela no POST (PGRST204). O avulso
+  // só entrou nessa lista na 6.7.3 (migration 47).
   db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', item);
 
   const salvou = db.save();
@@ -9902,6 +9919,13 @@ function abrirModalItemAvulso() {
             <input type="text" id="avulso-obs" placeholder="Ex: Caixa avariada, reembalado..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
           </div>
 
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">📷 Fotos da Avaria (opcional — pode selecionar várias)</label>
+            <input type="file" id="avulso-foto-file" accept="image/*" multiple onchange="handleFotoAvulsoUpload(this)"
+              class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-1.5 text-xs file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-violet-700 file:text-white hover:file:bg-violet-600">
+            <div id="avulso-foto-preview" class="hidden mt-1 flex gap-2 flex-wrap"></div>
+          </div>
+
           <div class="pt-2 flex gap-2">
             <button type="button" onclick="closeModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg">Cancelar</button>
             <button type="submit" class="flex-1 bg-violet-600 hover:bg-violet-500 text-white font-bold py-2 rounded-lg shadow">Salvar Item Avulso</button>
@@ -9909,7 +9933,56 @@ function abrirModalItemAvulso() {
         </form>
       </div>
     </div>`;
+  window._fotosAvulso = [];
   modal.classList.remove('hidden');
+}
+
+// Fotos do item avulso (18/09/2026, migration 47). Mesmo caminho da devolução:
+// comprimirImagem() (1280 px / JPEG 75%), o base64 fica SÓ nesta lista em
+// memória enquanto o modal está aberto, e depois de salvar vai para a fila
+// do IndexedDB → Storage. Nunca entra no registro nem no localStorage.
+window._fotosAvulso = [];
+function handleFotoAvulsoUpload(inputEl) {
+  const files = Array.from(inputEl.files || []);
+  if (!files.length) return;
+  const container = document.getElementById('avulso-foto-preview');
+  files.forEach(file => {
+    comprimirImagem(file).then(dataUrl => {
+      window._fotosAvulso.push(dataUrl);
+      if (container) {
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        img.className = 'w-16 h-16 object-cover rounded-lg border border-slate-700 shadow';
+        container.appendChild(img);
+        container.classList.remove('hidden');
+      }
+    }).catch(err => {
+      console.warn('[Foto Avulso] Falha ao processar imagem:', err.message);
+      showToast('Não foi possível processar uma das fotos selecionadas.', 'error');
+    });
+  });
+}
+
+// Anexar foto a um avulso que JÁ existe, direto da linha da Destinação. O CD
+// lança o item na conferência e fotografa depois, ou fotografa de outro
+// aparelho — a fila aceita foto a qualquer momento, desde que haja um id.
+function adicionarFotoItemAvulso(itemId) {
+  const item = (db.data.itens_avulsos_destinacao || []).find(i => String(i.id) === String(itemId) && !i.is_deleted);
+  if (!item) { alert('Item avulso não encontrado.'); return; }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.multiple = true;
+  input.onchange = async () => {
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    const fotos = (await Promise.all(files.map(f => comprimirImagem(f).catch(() => null)))).filter(Boolean);
+    if (!fotos.length) { showToast('Não foi possível processar as fotos selecionadas.', 'error'); return; }
+    const n = await _enfileirarFotosDevolucao(item, 'foto', fotos, 'avulsos');
+    if (n > 0) showToast(`📷 ${n} foto(s) guardada(s). Sobem sozinhas quando houver rede.`);
+    renderApp();
+  };
+  input.click();
 }
 
 function autoFillProdutoAvulso(val) {
@@ -9922,7 +9995,7 @@ function autoFillProdutoAvulso(val) {
   }
 }
 
-function handleSalvarItemAvulso(e) {
+async function handleSalvarItemAvulso(e) {
   e.preventDefault();
   const motivo = document.getElementById('avulso-motivo')?.value?.trim();
   const cod = document.getElementById('avulso-cod')?.value?.trim();
@@ -9944,6 +10017,15 @@ function handleSalvarItemAvulso(e) {
     observacao: obs,
     motivo_avulso: motivo
   });
+
+  // A foto só pode ir para a fila agora: antes disto não havia id para ela
+  // apontar. Se falhar, o item JÁ ESTÁ GRAVADO — o aviso do helper diz
+  // exatamente isso. Foto é opcional: sem foto, o helper sai calado.
+  const fotos = Array.isArray(window._fotosAvulso) ? window._fotosAvulso.filter(Boolean) : [];
+  window._fotosAvulso = [];
+  if (res.success && fotos.length) {
+    await _enfileirarFotosDevolucao(res.item, 'foto', fotos, 'avulsos');
+  }
 
   closeModal();
   if (!res.success) {
@@ -13528,7 +13610,12 @@ async function handleSalvarDespachoReentrega(e, id) {
 // Chamado sempre DEPOIS de o registro estar gravado, porque a fila precisa de
 // um id para apontar.
 // -----------------------------------------------------------------------------
-async function _enfileirarFotosDevolucao(dev, etapa, fotos) {
+//
+// `modulo` (18/09/2026, migration 47): o item avulso da Destinação entra na
+// mesma fila com modulo 'avulsos'. O nome da função ficou — são três
+// chamadas da devolução que nada têm a ganhar com um rename — e o padrão
+// mantém as três exatamente como eram.
+async function _enfileirarFotosDevolucao(dev, etapa, fotos, modulo = 'devolucoes') {
   const lista = (fotos || []).filter(Boolean);
   if (!dev || !dev.id || lista.length === 0) return 0;
 
@@ -13543,7 +13630,7 @@ async function _enfileirarFotosDevolucao(dev, etapa, fotos) {
   try {
     for (const dataUrl of lista) {
       enfileiradas.push(await window.fotoStore.enfileirar({
-        registro_id: dev.id, etapa, dataUrl, modulo: 'devolucoes'
+        registro_id: dev.id, etapa, dataUrl, modulo
       }));
     }
   } catch (err) {
@@ -13556,7 +13643,7 @@ async function _enfileirarFotosDevolucao(dev, etapa, fotos) {
   // para quem não tirou a foto. Sem ele, uma foto ainda na fila deste
   // aparelho seria invisível para todo mundo — inclusive para quem cobra.
   if (typeof db.ajustarFotosPendentes === 'function') {
-    db.ajustarFotosPendentes(dev.id, etapa, enfileiradas.length, 'devolucoes');
+    db.ajustarFotosPendentes(dev.id, etapa, enfileiradas.length, modulo);
   }
   if (typeof window.atualizarTarjaFotosPendentes === 'function') window.atualizarTarjaFotosPendentes();
 

@@ -4059,10 +4059,17 @@ class Store {
       status_negociacao: status_negociacao || 'EM_NEGOCIACAO',
       motivo_avulso: String(motivo_avulso || '').toUpperCase().trim(),
       divisoes_destino: [],
+      // Foto (migration 47): so o CAMINHO no Storage e o contador de
+      // pendentes. O base64 nunca entra no registro - ver
+      // _enfileirarFotosDevolucao() em app.js, que enfileira DEPOIS de o id
+      // existir.
+      fotos_paths: [],
+      fotos_pendentes: 0,
       is_deleted: false,
       criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
       criado_em: agoraIsoBrasilia()
     };
+    this.carimbarEdicao('itens_avulsos_destinacao', item);
     this.data.itens_avulsos_destinacao.push(item);
     const salvou = this.save();
     return salvou
@@ -4746,6 +4753,17 @@ class Store {
           // sem coluna no banco devolve lista vazia sem quebrar nada.
           nf:           { paths: 'nf_paths',                 pendentes: 'nf_pendentes',                 legado: 'nf_legado' }
         }
+      },
+      // Item avulso da Destinacao (18/09/2026, migration 47). Uma etapa so:
+      // o avulso nao tem abertura/investigacao, e a foto da avaria que o CD
+      // tirou na hora. Nunca houve base64 aqui, entao 'fotos_legado' e uma
+      // chave declarada sem coluna, pelo mesmo motivo de nf_legado acima.
+      avulsos: {
+        colecao: 'itens_avulsos_destinacao',
+        etapaPadrao: 'foto',
+        etapas: {
+          foto: { paths: 'fotos_paths', pendentes: 'fotos_pendentes', legado: 'fotos_legado' }
+        }
       }
     };
   }
@@ -4900,8 +4918,12 @@ class Store {
     if (atual === alvo) return { success: true, pendentes: alvo, mudou: false };
 
     item[c.pendentes] = alvo;
-    item.atualizado_em = agoraIsoBrasilia();
-    item.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    // carimbarEdicao, e nao as duas atribuicoes a mao que ficavam aqui: para
+    // reentrega e devolucao da no mesmo (as duas estao nas duas listas), mas
+    // itens_avulsos_destinacao NAO tem coluna atualizado_por - e a tabela
+    // sobe sem lista branca, entao um campo a mais derrubaria o lote inteiro
+    // com PGRST204.
+    this.carimbarEdicao(Store._moduloFoto(modulo).colecao, item);
     this.save();
     // Mesmo motivo do _confirmarGravacaoDaFoto: _reconciliar() larga a POSSE
     // quando a fila zera E o registro concorda. Se o zero ficou so na memoria,
@@ -5043,7 +5065,8 @@ Store.COLECOES_COM_ATUALIZADO_EM = new Set([
   'controle_viagens', 'reentregas', 'resumo_diario_cd', 'retencoes_frota', 'sinistros',
   'trocas_veiculos',
   'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd',  // 6.7.0, migration 44
-  'usuarios'   // 15/09/2026, migration 46 — senha redefinida perdia para cache sujo
+  'usuarios',  // 15/09/2026, migration 46 — senha redefinida perdia para cache sujo
+  'itens_avulsos_destinacao'  // 18/09/2026, migration 47 — caminho da foto perdia para cache sujo
 ]);
 Store.COLECOES_COM_ATUALIZADO_POR = new Set(['ocorrencias_devolucao', 'ocorrencias_rota', 'reentregas']);
 
