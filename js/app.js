@@ -4737,6 +4737,17 @@ function registroNoPeriodo(registro, colecao, de, ate) {
   return true;
 }
 
+// Para o que é INTERVALO e não instante (retenção de oficina, socorro em
+// rota): tocou o período se começou até o fim dele e terminou depois do
+// início. fimMs null = ainda em aberto, logo toca qualquer período que
+// comece antes de agora. Comparação por data de calendário em Brasília,
+// igual ao registroNoPeriodo.
+function imobilizacaoTocaPeriodo(iniMs, fimMs, de, ate) {
+  if (ate && dataIsoBrasilia(iniMs) > ate) return false;
+  if (de && fimMs !== null && dataIsoBrasilia(fimMs) < de) return false;
+  return true;
+}
+
 // =============================================================================
 // TIPO DE ERRO — FONTE ÚNICA (26/08/2026)
 //
@@ -5117,7 +5128,11 @@ function renderDashboardView() {
 
   const totalValor = devs.reduce((a, d) => a + (parseFloat(d.valor_reclamado)||0), 0);
   const pendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
-  const veicParados = rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO').length;
+  // (18/09/2026) "Parado em rota" é retrato de AGORA — não pode depender da
+  // data em que o chamado abriu. Com o filtro em "Esta Semana", um caminhão
+  // que quebrou na sexta anterior e continuava parado na segunda marcava 0
+  // aqui. Mesma lista do alerta (veicParadosAlerta, abaixo).
+  const veicParados = allRotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO').length;
   const allRetencoes = typeof db.getRetencoesFrota === 'function' ? db.getRetencoesFrota() : [];
   const retencoes = allRetencoes.filter(r => r.status === 'RETIDO');
   const veicRetidos = retencoes.length;
@@ -5209,9 +5224,14 @@ function renderDashboardView() {
   const indiceReentregaViagemPct = viagensIniciadas > 0 ? ((reentregasPeriodo.length / viagensIniciadas) * 100).toFixed(1) : '0.0';
 
   // ===== NOVOS KPIs: TRANSPORTE =====
-  const ocOperacionais = (Array.isArray(db.data.transporte_oc_operacionais) ? db.data.transporte_oc_operacionais : []).filter(o => registroNoPeriodo(o, 'transporte_oc_operacionais', fDe, fAte));
-  const totOcOperacionais = ocOperacionais.length;
-  const totOcOperacionaisPend = ocOperacionais.filter(o => o.status !== 'FINALIZADA').length;
+  // (18/09/2026) ESTE CARTÃO SEMPRE MARCOU ZERO. Lia db.data.transporte_oc_operacionais,
+  // que é a coleção do módulo de importação por CSV — vazia em produção. A
+  // tela "Ocorrência Operacional" (renderViagensOcorrenciasSubTab) lê
+  // 'ocorrencias_viagens', que é a tabela que sincroniza e onde o CCO lança.
+  // Havia 16 pendentes na tela e "0" no Dashboard. Mesma coleção, mesma
+  // regra de pendência (status !== 'FINALIZADA'; status nulo é pendente).
+  const totOcOperacionais = ocViagens.length;
+  const totOcOperacionaisPend = ocViagens.filter(o => o.status !== 'FINALIZADA').length;
   const totFusionIniciado = viagens.filter(v => (v.fusion || '').toUpperCase() === 'INICIADO').length;
   const pctFusionIniciado = viagensIniciadas > 0 ? Math.round((totFusionIniciado / viagensIniciadas) * 100) : 0;
 
@@ -5248,10 +5268,19 @@ function renderDashboardView() {
   const leadTimeMedioHhmmss = formatarDuracaoHHMMSS(leadTimeMedioMs, 'ms');
 
   // 2. MTTR Operacional / Tempo Médio de Imobilização (Formato hh:mm:ss — Tempo médio entre parada e liberação)
+  //
+  // (18/09/2026) Até aqui só entrava imobilização ABERTA dentro do período
+  // (registroNoPeriodo olha a data de abertura). Um caminhão que quebrou na
+  // sexta 11/09 e foi liberado na segunda 14/09 sumia do filtro "Esta Semana"
+  // (14 a 18/09) — o Dashboard mostrava 00:00:00 na semana em que a frota
+  // ficou três dias com um veículo parado. Imobilização é um INTERVALO, não
+  // um instante: entra no MTTR toda parada que TOCOU o período — começou
+  // antes do fim dele e terminou (ou ainda não terminou) depois do início.
+  // A mesma lista alimenta o rodapé do cartão de Veículos Parados em Rota.
   let totalMttrMs = 0;
   let countMttr = 0;
-  const retencoesPeriodo = allRetencoes.filter(r => registroNoPeriodo(r, 'retencoes_frota', fDe, fAte));
-  retencoesPeriodo.forEach(r => {
+  const chamadosRotaPeriodo = [];
+  allRetencoes.forEach(r => {
     const msIniR = r.criado_em ? _parseDataFlex(r.criado_em) : (r.data_parada ? _parseDataFlex(r.data_parada + 'T08:00:00') : null);
     const dtInicio = msIniR === null ? null : new Date(msIniR);
     if (dtInicio && !isNaN(dtInicio.getTime())) {
@@ -5261,21 +5290,24 @@ function renderDashboardView() {
       } else if (r.status === 'RETIDO') {
         dtFim = new Date();
       }
-      if (dtFim && !isNaN(dtFim.getTime())) {
+      if (dtFim && !isNaN(dtFim.getTime()) && imobilizacaoTocaPeriodo(dtInicio.getTime(), r.status === 'RETIDO' ? null : dtFim.getTime(), fDe, fAte)) {
         totalMttrMs += Math.max(0, dtFim.getTime() - dtInicio.getTime());
         countMttr++;
       }
     }
   });
-  rotas.forEach(r => {
+  allRotas.forEach(r => {
     if (r.veiculo_parado || r.status_chamado === 'finalizado' || r.status === 'RESOLVIDO') {
       const msIniC = r.criado_em ? _parseDataFlex(r.criado_em) : (r.data_chamado ? _parseDataFlex(r.data_chamado + 'T08:00:00') : null);
       const dtInicio = msIniC === null ? null : new Date(msIniC);
       if (dtInicio && !isNaN(dtInicio.getTime())) {
-        const dtFim = (r.status === 'RESOLVIDO' || r.status_chamado === 'finalizado') && r.resolvido_em ? new Date(r.resolvido_em) : new Date();
-        if (!isNaN(dtFim.getTime())) {
+        const finalizado = (r.status === 'RESOLVIDO' || r.status_chamado === 'finalizado') && r.resolvido_em;
+        const msFimC = finalizado ? _parseDataFlex(r.resolvido_em) : null;
+        const dtFim = msFimC === null ? new Date() : new Date(msFimC);
+        if (!isNaN(dtFim.getTime()) && imobilizacaoTocaPeriodo(dtInicio.getTime(), finalizado ? dtFim.getTime() : null, fDe, fAte)) {
           totalMttrMs += Math.max(0, dtFim.getTime() - dtInicio.getTime());
           countMttr++;
+          chamadosRotaPeriodo.push(r);
         }
       }
     }
@@ -5654,13 +5686,13 @@ function renderDashboardView() {
               <span>⏱️</span> MTTR Imobilização
             </div>
             <div class="text-lg font-black text-amber-300 mt-1 font-mono">${mttrMedioHhmmss}</div>
-            <div class="text-[10px] text-slate-400 mt-0.5">Média oficina (hh:mm:ss)</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">${countMttr} imobilização(ões) • oficina + socorro</div>
           </div>
 
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Veículos Parados em Rota</div>
             <div class="text-xl font-black ${veicParados > 0 ? 'text-red-400 animate-pulse' : 'text-slate-300'} mt-1">${veicParados}</div>
-            <div class="text-[10px] text-slate-500 mt-0.5">Socorro mecânico</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Parado(s) agora • ${chamadosRotaPeriodo.length} socorro(s) no período</div>
           </div>
 
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
