@@ -12002,18 +12002,22 @@ function renderViagensLargadaSubTab() {
             </div>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <!-- Motorista e ajudante enxergam a MESMA lista (jrOpcoesEquipe):
+                 em emergencia um motorista sai como ajudante de outro. E o
+                 ajudante deixou de ser obrigatorio — ha viagem que sai so com
+                 o motorista, e o recibo ja cobra 100% dele nesse caso. -->
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Motorista *</label>
               <select id="vg-motorista" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
                 <option value="">-- Selecione --</option>
-                ${motoristas.map(m => `<option value="${m.nome}">${m.nome}</option>`).join('')}
+                ${jrOpcoesEquipe('')}
               </select>
             </div>
             <div>
-              <label class="block text-[10px] text-slate-300 mb-1">Ajudante *</label>
-              <select id="vg-ajudante" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
-                <option value="">-- Selecione --</option>
-                ${ajudantes.map(a => `<option value="${a.nome}">${a.nome}</option>`).join('')}
+              <label class="block text-[10px] text-slate-300 mb-1">Ajudante</label>
+              <select id="vg-ajudante" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+                <option value="">-- Sem ajudante --</option>
+                ${jrOpcoesEquipe('')}
               </select>
             </div>
           </div>
@@ -12249,20 +12253,14 @@ function editarViagemModal(id) {
   if (!modalContainer) return;
 
   const veiculos = db.data.veiculos || [];
-  const motoristas = db.data.motoristas || [];
-  const ajudantes = db.data.ajudantes || [];
 
   const veiculosOpts = veiculos.map(veic => veic.placa);
   if (v.placa && !veiculosOpts.includes(v.placa)) veiculosOpts.push(v.placa);
 
-  const motoristasOpts = motoristas.map(m => m.nome);
-  if (v.motorista && !motoristasOpts.includes(v.motorista)) motoristasOpts.push(v.motorista);
-
-  const ajudantesOpts = ajudantes.map(a => a.nome);
-  if (v.ajudante && !ajudantesOpts.includes(v.ajudante)) ajudantesOpts.push(v.ajudante);
-  // Quem ja esta gravado na viagem aparece na lista mesmo sem estar no
-  // cadastro — senao reabrir a viagem apagaria o nome em silencio.
-  if (v.ajudante_2 && !ajudantesOpts.includes(v.ajudante_2)) ajudantesOpts.push(v.ajudante_2);
+  // Motorista, ajudante e 2o ajudante partem da MESMA lista (18/09/2026, ver
+  // jrEquipeCadastrada). Quem ja esta gravado na viagem aparece mesmo sem
+  // estar no cadastro — senao reabrir a viagem apagaria o nome em silencio;
+  // jrOpcoesEquipe(atual) cuida disso.
 
   modalContainer.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl space-y-4">
@@ -12301,14 +12299,14 @@ function editarViagemModal(id) {
             <label class="block text-[10px] text-emerald-400 font-bold mb-1">Motorista *</label>
             <select id="ed-vg-motorista" required class="w-full bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
               <option value="">-- Selecione Motorista --</option>
-              ${motoristasOpts.map(m => `<option value="${m}" ${m === v.motorista ? 'selected' : ''}>${m}</option>`).join('')}
+              ${jrOpcoesEquipe(v.motorista)}
             </select>
           </div>
           <div>
-            <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ajudante *</label>
-            <select id="ed-vg-ajudante" required class="w-full bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
-              <option value="">-- Selecione Ajudante --</option>
-              ${ajudantesOpts.map(a => `<option value="${a}" ${a === v.ajudante ? 'selected' : ''}>${a}</option>`).join('')}
+            <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ajudante</label>
+            <select id="ed-vg-ajudante" class="w-full bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
+              <option value="">-- Sem ajudante --</option>
+              ${jrOpcoesEquipe(v.ajudante)}
             </select>
           </div>
         </div>
@@ -12321,7 +12319,7 @@ function editarViagemModal(id) {
           <div class="flex gap-2">
             <select id="ed-vg-ajudante-2" class="flex-1 bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
               <option value="">-- Selecione o 2º Ajudante --</option>
-              ${ajudantesOpts.map(a => `<option value="${a}" ${a === v.ajudante_2 ? 'selected' : ''}>${a}</option>`).join('')}
+              ${jrOpcoesEquipe(v.ajudante_2)}
             </select>
             <button type="button" onclick="toggleSegundoAjudante('ed-vg', false)" class="bg-slate-800 border border-slate-700 text-slate-300 hover:text-red-300 font-bold px-3 rounded shrink-0">Remover</button>
           </div>
@@ -25875,16 +25873,79 @@ function jrParecemMesmoNome(a, b) {
   return (casaram / curto.length) >= 0.6;
 }
 
-// As pendencias de cadastro de UMA viagem — motorista e os dois ajudantes.
-// Vazio quando esta tudo certo, que e o caso normal.
-function jrPendenciasDaViagem(v) {
-  if (!v) return [];
+// ===== EQUIPE DA VIAGEM: UMA LISTA SO (18/09/2026) =====
+//
+// Motorista e ajudante eram duas listas fechadas: o campo Motorista so
+// aceitava quem estava em `motoristas`, o campo Ajudante so quem estava em
+// `ajudantes`. Na operacao real isso nao fecha: em emergencia um motorista
+// sai como ajudante de outro, e a escala precisa registrar isso do jeito que
+// aconteceu. A partir daqui os tres campos da viagem (motorista, ajudante e
+// 2o ajudante) enxergam a MESMA lista — todo mundo dos dois cadastros.
+//
+// A lista continua dizendo quem e quem: cada nome carrega `origem`, e o
+// <select> agrupa em "Motoristas" / "Ajudantes" para quem digita nao se
+// perder no meio de ~90 nomes. Nome que esta nos dois cadastros entra uma
+// vez so, como motorista.
+//
+// E MEMOIZADA pelo conteudo (assinatura dos nomes), nao pela referencia:
+// jrConferirCadastro guarda cache num WeakMap chaveado pela lista, e uma
+// lista nova a cada chamada jogaria esse cache fora a cada linha da escala.
+let _jrEquipeMemo = null;
+function jrEquipeCadastrada() {
   const motoristas = (db.data && db.data.motoristas) || [];
   const ajudantes  = (db.data && db.data.ajudantes)  || [];
+  const nomeDe = (p) => String((p && p.nome) || '').trim();
+  const assinatura = motoristas.map(nomeDe).join('|') + '#' + ajudantes.map(nomeDe).join('|');
+  if (_jrEquipeMemo && _jrEquipeMemo.assinatura === assinatura) return _jrEquipeMemo.lista;
+
+  const vistos = new Set();
+  const lista = [];
+  const incluir = (nome, origem) => {
+    const chave = normalizeStr(nome);
+    if (!chave || vistos.has(chave)) return;
+    vistos.add(chave);
+    lista.push({ nome, origem });
+  };
+  motoristas.forEach(m => incluir(nomeDe(m), 'MOTORISTA'));
+  ajudantes.forEach(a => incluir(nomeDe(a), 'AJUDANTE'));
+  lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+  _jrEquipeMemo = { assinatura, lista };
+  return lista;
+}
+
+// As <option>s de um campo de equipe, agrupadas por origem. `atual` e o nome
+// que ja esta gravado na viagem: se ele nao estiver em cadastro nenhum,
+// aparece mesmo assim, no fim — reabrir a viagem nunca pode apagar um nome
+// em silencio (mesma regra que a edicao ja seguia).
+function jrOpcoesEquipe(atual) {
+  const lista = jrEquipeCadastrada();
+  const opt = (nome) => `<option value="${vgEscTxt(nome)}" ${nome === atual ? 'selected' : ''}>${vgEscTxt(nome)}</option>`;
+  const grupo = (rotulo, origem) => {
+    const nomes = lista.filter(p => p.origem === origem).map(p => p.nome);
+    return nomes.length ? `<optgroup label="${rotulo}">${nomes.map(opt).join('')}</optgroup>` : '';
+  };
+  let html = grupo('Motoristas', 'MOTORISTA') + grupo('Ajudantes', 'AJUDANTE');
+  const atualLimpo = String(atual || '').trim();
+  if (atualLimpo && !lista.some(p => p.nome === atualLimpo)) {
+    html += `<optgroup label="Fora do cadastro">${opt(atualLimpo)}</optgroup>`;
+  }
+  return html;
+}
+
+// As pendencias de cadastro de UMA viagem — motorista e os dois ajudantes.
+// Vazio quando esta tudo certo, que e o caso normal.
+//
+// Os tres campos conferem contra a lista UNIDA (jrEquipeCadastrada). Antes
+// cada um olhava so o seu cadastro, e um motorista lancado como ajudante
+// numa emergencia acenderia "fora do cadastro" sem estar.
+function jrPendenciasDaViagem(v) {
+  if (!v) return [];
+  const equipe = jrEquipeCadastrada();
   const campos = [
-    { rotulo: 'Motorista',   valor: v.motorista,  lista: motoristas, campoId: 'ed-vg-motorista' },
-    { rotulo: 'Ajudante',    valor: v.ajudante,   lista: ajudantes,  campoId: 'ed-vg-ajudante' },
-    { rotulo: '2º Ajudante', valor: v.ajudante_2, lista: ajudantes,  campoId: 'ed-vg-ajudante-2' }
+    { rotulo: 'Motorista',   valor: v.motorista,  lista: equipe, campoId: 'ed-vg-motorista' },
+    { rotulo: 'Ajudante',    valor: v.ajudante,   lista: equipe, campoId: 'ed-vg-ajudante' },
+    { rotulo: '2º Ajudante', valor: v.ajudante_2, lista: equipe, campoId: 'ed-vg-ajudante-2' }
   ];
   const pendencias = [];
   campos.forEach(c => {
