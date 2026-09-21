@@ -1263,44 +1263,114 @@ function renderBlocoMedidasAdministrativas(nome, tipo, varDe, varAte) {
     </div>`;
 }
 
-// --- Blocos exclusivos do Dossiê Motorista (reaproveitam dados já
+// --- Blocos exclusivos do Dossiê Prestador (reaproveitam dados já
 // existentes — nenhuma coleção nova) ---
+//
+// 21/09/2026: as quatro fontes abaixo ganharam função de dados própria,
+// usada pela tela, pelo impresso e pelo CSV — antes cada um montava a
+// lista do seu jeito, e o impresso simplesmente não montava (saía sem
+// Oc Operacional, Oc em Rota, Sinistros e Viagens que existiam na tela).
+// Todas devolvem registros com `data` em YYYY-MM-DD, que é o que
+// filtrarPorData() compara.
+
+// Viagens em que o prestador saiu — como motorista, ajudante ou 2º ajudante.
+function viagensDoPrestador(nome) {
+  const alvo = normalizeStr(nome);
+  return (db.getControleViagens ? db.getControleViagens() : (db.data.controle_viagens || []))
+    .filter(v => [v.motorista, v.ajudante, v.ajudante_2].some(n => n && normalizeStr(n) === alvo))
+    .map(v => ({
+      ...v,
+      data: String(v.data_saida || v.data_viagem || v.data || v.criado_em || '').slice(0, 10),
+      papel: normalizeStr(v.motorista) === alvo ? 'MOTORISTA' : (normalizeStr(v.ajudante_2) === alvo ? '2º AJUDANTE' : 'AJUDANTE'),
+      equipe: [v.motorista, v.ajudante, v.ajudante_2].filter(Boolean).join(' / ')
+    }));
+}
+
+// Oc Operacional fica dentro de Controle de Viagens, coleção
+// ocorrencias_viagens — não em resumo_diario_cd (achado corrigido em
+// 18/08/2026: o Dossiê Motorista buscava no lugar errado).
+function ocOperacionaisDoPrestador(nome) {
+  const alvo = normalizeStr(nome);
+  return db.getOcorrenciasViagens()
+    .filter(o => normalizeStr(o.funcionario || '') === alvo)
+    .map(o => ({ ...o, data: String(o.data || o.criado_em || '').slice(0, 10) }));
+}
+
+// Oc em Rota não tem campo de data próprio: a data é a do chamado
+// (criado_em). Cortada em 10 caracteres para o filtro "até" não excluir o
+// próprio dia (timestamp completo é sempre "maior" que YYYY-MM-DD).
+function ocRotaDoPrestador(nome) {
+  const alvo = normalizeStr(nome);
+  return (db.getOcorrenciasRota ? db.getOcorrenciasRota() : (db.data.ocorrencias_rota || []))
+    .filter(r => normalizeStr(r.motorista_nome || r.motorista || '') === alvo)
+    .map(r => ({ ...r, data: String(r.data_chamado || r.criado_em || r.data || '').slice(0, 10) }));
+}
+
+function sinistrosDoPrestador(nome) {
+  return db.getSinistros({ motoristaNome: nome })
+    .map(s => ({ ...s, data: String(s.data_acidente || s.criado_em || '').slice(0, 10) }));
+}
+
+function ordenarPorDataDesc(lista) {
+  return lista.slice().sort((a, b) => String(b.data || '').localeCompare(String(a.data || '')));
+}
+
+function statusViagemTexto(v) {
+  const st = String(v.status_viagem || '').toUpperCase();
+  if (st === 'FINALIZADO' || st === 'FINALIZADA') return 'Finalizada';
+  if (st === 'CANCELADO' || st === 'CANCELADA') return 'Cancelada';
+  return v.status_viagem || 'Em andamento';
+}
+function statusViagemLabel(v) {
+  const txt = statusViagemTexto(v);
+  const cor = txt === 'Finalizada' ? 'text-emerald-400' : (txt === 'Cancelada' ? 'text-red-400' : 'text-blue-300');
+  return `<span class="${cor} font-bold">${txt}</span>`;
+}
+
+function renderBlocoViagensPrestador(nome, varDe, varAte) {
+  const viagens = ordenarPorDataDesc(filtrarPorData(viagensDoPrestador(nome), varDe, varAte));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 class="text-xs font-black text-blue-400 uppercase flex items-center gap-2"><span>🚛</span> Viagens — ${viagens.length}</h3>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Saída</th><th class="p-2">Carga</th><th class="p-2">Rota</th><th class="p-2">Placa</th><th class="p-2">Papel</th><th class="p-2">Equipe</th><th class="p-2">Retorno</th><th class="p-2">Status</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${viagens.length === 0 ? '<tr><td colspan="8" class="p-3 text-center text-slate-500">Nenhuma viagem encontrada.</td></tr>' :
+              viagens.map(v => `<tr><td class="p-2 whitespace-nowrap">${formatarData(v.data)}${v.hora_saida ? ` <span class="text-slate-500">${v.hora_saida}</span>` : ''}</td><td class="p-2 font-bold text-emerald-400">${v.carga||'—'}</td><td class="p-2">${v.rota||'—'}</td><td class="p-2">${v.placa||'—'}</td><td class="p-2">${v.papel}</td><td class="p-2">${v.equipe||'—'}</td><td class="p-2 whitespace-nowrap">${v.data_retorno ? formatarData(v.data_retorno) : '—'}</td><td class="p-2">${statusViagemLabel(v)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function renderBlocoOcOperacionalMotorista(nomeMotorista, varDe, varAte) {
-  const termo = normalizeStr(nomeMotorista);
-  // Oc Operacional fica dentro de Controle de Viagens, coleção
-  // ocorrencias_viagens — não em resumo_diario_cd (achado corrigido em
-  // 18/08/2026: o Dossiê Motorista buscava no lugar errado).
-  let ocorrencias = db.getOcorrenciasViagens().filter(o => normalizeStr(o.funcionario || '') === termo);
-  ocorrencias = filtrarPorData(ocorrencias, varDe, varAte).sort((a,b) => new Date(b.data||0) - new Date(a.data||0));
+  const ocorrencias = ordenarPorDataDesc(filtrarPorData(ocOperacionaisDoPrestador(nomeMotorista), varDe, varAte));
   return `
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
       <h3 class="text-xs font-black text-cyan-400 uppercase flex items-center gap-2"><span>📋</span> Ocorrências Operacionais (Oc Operacional) — ${ocorrencias.length}</h3>
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
-          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Carga</th><th class="p-2">Motivo</th><th class="p-2">Status</th></tr></thead>
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Carga</th><th class="p-2">Rota</th><th class="p-2">Função</th><th class="p-2">Motivo</th><th class="p-2">Causa</th><th class="p-2">Ocorrência</th><th class="p-2">Ação</th><th class="p-2">Status</th></tr></thead>
           <tbody class="divide-y divide-slate-800">
-            ${ocorrencias.length === 0 ? '<tr><td colspan="4" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
-              ocorrencias.map(o => `<tr><td class="p-2">${formatarData(o.data)}</td><td class="p-2">${o.carga||'—'}</td><td class="p-2">${o.motivo||o.causa||'—'}</td><td class="p-2">${o.status||'—'}</td></tr>`).join('')}
+            ${ocorrencias.length === 0 ? '<tr><td colspan="9" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
+              ocorrencias.map(o => `<tr class="align-top"><td class="p-2 whitespace-nowrap">${formatarData(o.data)}</td><td class="p-2 font-bold text-emerald-400">${o.carga||'—'}</td><td class="p-2">${o.rota||'—'}</td><td class="p-2">${o.funcao||'—'}</td><td class="p-2">${o.motivo||'—'}</td><td class="p-2">${o.causa||'—'}</td><td class="p-2">${o.ocorrencia||'—'}</td><td class="p-2">${o.acao||'—'}</td><td class="p-2 whitespace-nowrap">${o.status||'—'}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>
     </div>`;
 }
 function renderBlocoOcRotaMotorista(nomeMotorista, varDe, varAte) {
-  const termo = normalizeStr(nomeMotorista);
-  let ocorrencias = (db.getOcorrenciasRota ? db.getOcorrenciasRota() : (db.data.ocorrencias_rota || []))
-    .filter(r => normalizeStr(r.motorista_nome || r.motorista || '') === termo)
-    .map(r => ({ ...r, data: r.data_parada || r.criado_em }));
-  ocorrencias = filtrarPorData(ocorrencias, varDe, varAte).sort((a,b) => new Date(b.data||0) - new Date(a.data||0));
+  const ocorrencias = ordenarPorDataDesc(filtrarPorData(ocRotaDoPrestador(nomeMotorista), varDe, varAte));
   return `
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
       <h3 class="text-xs font-black text-cyan-400 uppercase flex items-center gap-2"><span>🚚</span> Ocorrências em Rota (Oc em Rota) — ${ocorrencias.length}</h3>
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
-          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Carga</th><th class="p-2">Motivo</th><th class="p-2">Status</th></tr></thead>
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Protocolo</th><th class="p-2">Carga</th><th class="p-2">Placa</th><th class="p-2">Motivo</th><th class="p-2">Descrição</th><th class="p-2">Local</th><th class="p-2">Status</th></tr></thead>
           <tbody class="divide-y divide-slate-800">
-            ${ocorrencias.length === 0 ? '<tr><td colspan="4" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
-              ocorrencias.map(o => `<tr><td class="p-2">${formatarData(o.data)}</td><td class="p-2">${o.carga||'—'}</td><td class="p-2">${o.motivo||'—'}</td><td class="p-2">${o.status_chamado||o.status||'—'}</td></tr>`).join('')}
+            ${ocorrencias.length === 0 ? '<tr><td colspan="8" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
+              ocorrencias.map(o => `<tr class="align-top"><td class="p-2 whitespace-nowrap">${formatarData(o.data)}</td><td class="p-2 font-bold text-emerald-400">${o.numero_protocolo||'—'}</td><td class="p-2">${o.carga_numero||o.carga||'—'}</td><td class="p-2">${o.veiculo_placa||'—'}</td><td class="p-2">${o.motivo_resumido||o.tipo_ocorrencia||o.motivo||'—'}</td><td class="p-2">${o.descricao||'—'}</td><td class="p-2">${o.localizacao||'—'}</td><td class="p-2 whitespace-nowrap">${String(o.status_chamado||o.status||'—').toUpperCase()}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>
@@ -1431,9 +1501,10 @@ function renderDossieMotoristaView() {
       ${renderBlocoAusencias(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieArFormAberto')}
       ${renderBlocoDevolucoesErroMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoDeducoesPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoViagensPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoOcOperacionalMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${ehMotorista ? renderBlocoOcRotaMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte') : ''}
-      ${ehMotorista ? renderBlocoSinistrosMotorista(nomeSelecionado) : ''}
+      ${ehMotorista ? renderBlocoSinistrosMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte') : ''}
     </div>`;
 }
 
@@ -1458,15 +1529,44 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   // e sem este filtro o impresso a listava duas vezes (Bloco F, 6.7.0).
   const medidas = tipo === 'MOTORISTA' ? [] : db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
     .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
-  const devsErro = tipo === 'MOTORISTA' ? filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte) : [];
-  const deducoes = tipo === 'MOTORISTA' ? filtrarPorData(deducoesDoPrestador(nome), varDe, varAte) : [];
+  const devsErro = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte)) : [];
+  const deducoes = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(deducoesDoPrestador(nome), varDe, varAte)) : [];
+  // 21/09/2026: o impresso saía sem Viagens, Oc Operacional, Oc em Rota e
+  // Sinistros — tudo que a tela do Dossiê Prestador mostra. Mesmas
+  // funções de dados da tela, mesmo filtro de período.
+  const ehMotorista = tipo === 'MOTORISTA' && dadosMestre.tipo !== 'AJUDANTE';
+  const viagens = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(viagensDoPrestador(nome), varDe, varAte)) : [];
+  const ocOper = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(ocOperacionaisDoPrestador(nome), varDe, varAte)) : [];
+  const ocRota = ehMotorista ? ordenarPorDataDesc(filtrarPorData(ocRotaDoPrestador(nome), varDe, varAte)) : [];
+  const sinistros = ehMotorista ? ordenarPorDataDesc(filtrarPorData(sinistrosDoPrestador(nome), varDe, varAte)) : [];
+  const totalDeducoes = deducoes.reduce((acc, l) => acc + l.parte, 0);
+  const periodoTexto = (dataDe || dataAte)
+    ? `${dataDe ? 'de ' + formatarData(dataDe) : ''}${dataDe && dataAte ? ' ' : ''}${dataAte ? 'até ' + formatarData(dataAte) : ''}`
+    : 'Todo o histórico';
+  const brl = v => 'R$ ' + (parseFloat(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 
-  const secaoTabela = (titulo, cols, rows) => `
-    <h2>${titulo}</h2>
+  const secaoTabela = (titulo, cols, rows, rodape = '') => `
+    <h2>${titulo} <span class="qtd">${rows.length}</span></h2>
     <table>
       <thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>
-      <tbody>${rows.length === 0 ? `<tr><td colspan="${cols.length}" style="text-align:center;">Nenhum registro.</td></tr>` : rows.join('')}</tbody>
+      <tbody>${rows.length === 0 ? `<tr><td colspan="${cols.length}" style="text-align:center;">Nenhum registro.</td></tr>` : rows.join('') + rodape}</tbody>
     </table>`;
+
+  const resumoItens = tipo === 'MOTORISTA' ? [
+    ['Viagens', viagens.length],
+    ['Orientações', orientacoes.length],
+    ['Atestados', atestados.length],
+    ['Faltas / Condutas', ausencias.length],
+    ['Devoluções (erro motorista)', devsErro.length],
+    ['Deduções', brl(totalDeducoes)],
+    ['Oc. Operacionais', ocOper.length],
+    ...(ehMotorista ? [['Oc. em Rota', ocRota.length], ['Sinistros', sinistros.length]] : [])
+  ] : [
+    ['Orientações', orientacoes.length],
+    ['Atestados', atestados.length],
+    ['Faltas / Condutas', ausencias.length],
+    ['Medidas Administrativas', medidas.length]
+  ];
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -1489,6 +1589,14 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
     th, td { border: 1px solid #cbd5e1; padding: 5px 7px; text-align: left; }
     th { background: #4c1d95; color: #fff; text-transform: uppercase; font-size: 9px; }
     tr:nth-child(even) { background: #f8fafc; }
+    td { vertical-align: top; }
+    h2 .qtd { display: inline-block; background: #ede9fe; color: #4c1d95; border-radius: 10px; padding: 0 7px; font-size: 10px; margin-left: 6px; }
+    .resumo { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .resumo div { border: 1px solid #ddd6fe; border-radius: 6px; padding: 5px 9px; min-width: 90px; background: #faf5ff; }
+    .resumo b { display: block; font-size: 13px; color: #4c1d95; }
+    .resumo span { font-size: 8px; color: #64748b; text-transform: uppercase; }
+    .nowrap { white-space: nowrap; }
+    .num { text-align: right; }
   </style>
 </head>
 <body>
@@ -1507,14 +1615,22 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
     ${dadosMestre.cnh ? `<b>CNH:</b> ${dadosMestre.cnh} &nbsp;&nbsp;` : ''}
     <b>Admissão:</b> ${dadosMestre.data_admissao ? formatarData(dadosMestre.data_admissao) : '—'} &nbsp;&nbsp;
     <b>Desligamento:</b> ${dadosMestre.data_desligamento ? formatarData(dadosMestre.data_desligamento) : '—'}`}
+    &nbsp;&nbsp; <b>Período:</b> ${periodoTexto}
+  </div>
+  <div class="resumo">
+    ${resumoItens.map(([rotulo, valor]) => `<div><b>${valor}</b><span>${rotulo}</span></div>`).join('')}
   </div>
 
-  ${secaoTabela('Orientação e Feedback', ['Data','Ocorrência','Ação'], orientacoes.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.ocorrencia}</td><td>${r.acao}</td></tr>`))}
-  ${secaoTabela('Atestados Médicos', ['Data','Parcial/Integral','Motivo','CID','Médico','CRM/CRO'], atestados.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.tipo_afastamento==='INTEGRAL'?'Integral':'Parcial'}</td><td>${r.motivo||'—'}</td><td>${r.cid||'—'}</td><td>${r.medico||'—'}</td><td>${r.crm_cro||'—'}</td></tr>`))}
-  ${secaoTabela('Faltas, Condutas & Ausências', ['Data','Turno','Conduta / Ausência','Avisado?','Período','Compensar?'], ausencias.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.turno||'—'}</td><td>${r.conduta||'—'}</td><td>${r.avisado||'—'}</td><td>${r.periodo||'Integral'}</td><td>${r.compensar||'NÃO'}</td></tr>`))}
-  ${tipo === 'MOTORISTA' ? '' : secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td>${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
-  ${tipo === 'MOTORISTA' ? secaoTabela('Devoluções por Erro Motorista', ['Data','Protocolo','Cliente','Motivo','Valor','Tratativa'], devsErro.map(d => `<tr><td>${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td style="text-align:right;">R$ ${(parseFloat(d.valor_reclamado)||0).toFixed(2)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`)) : ''}
-  ${tipo === 'MOTORISTA' ? secaoTabela('Deduções / Adiantamentos', ['Data','Protocolo','Valor da devolução','Equipe','Parte deste prestador','Situação'], deducoes.map(l => `<tr><td>${formatarData(l.data)}</td><td>${l.protocolo}</td><td style="text-align:right;">R$ ${l.total.toFixed(2)}</td><td style="text-align:center;">${l.pessoas}</td><td style="text-align:right;"><b>R$ ${l.parte.toFixed(2)}</b></td><td>${l.status}</td></tr>`)) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Viagens', ['Saída','Carga','Rota','Placa','Papel','Equipe','Retorno','Status'], viagens.map(v => `<tr><td class="nowrap">${formatarData(v.data)}${v.hora_saida ? ' ' + v.hora_saida : ''}</td><td>${v.carga||'—'}</td><td>${v.rota||'—'}</td><td>${v.placa||'—'}</td><td>${v.papel}</td><td>${v.equipe||'—'}</td><td class="nowrap">${v.data_retorno ? formatarData(v.data_retorno) : '—'}</td><td>${statusViagemTexto(v)}</td></tr>`)) : ''}
+  ${secaoTabela('Orientação e Feedback', ['Data','Ocorrência','Ação'], orientacoes.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.ocorrencia}</td><td>${r.acao}</td></tr>`))}
+  ${secaoTabela('Atestados Médicos', ['Data','Parcial/Integral','Motivo','CID','Médico','CRM/CRO'], atestados.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.tipo_afastamento==='INTEGRAL'?'Integral':'Parcial'}</td><td>${r.motivo||'—'}</td><td>${r.cid||'—'}</td><td>${r.medico||'—'}</td><td>${r.crm_cro||'—'}</td></tr>`))}
+  ${secaoTabela('Faltas, Condutas & Ausências', ['Data','Turno','Conduta / Ausência','Avisado?','Período','Compensar?'], ausencias.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.turno||'—'}</td><td>${r.conduta||'—'}</td><td>${r.avisado||'—'}</td><td>${r.periodo||'Integral'}</td><td>${r.compensar||'NÃO'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? '' : secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td class="nowrap">${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Devoluções por Erro Motorista', ['Data','Protocolo','Cliente','Motivo','Valor','Tratativa'], devsErro.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`)) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Deduções / Adiantamentos', ['Data','Protocolo','Valor da devolução','Equipe','Parte deste prestador','Situação'], deducoes.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${l.protocolo}</td><td class="num">${brl(l.total)}</td><td style="text-align:center;">${l.pessoas}</td><td class="num"><b>${brl(l.parte)}</b></td><td>${l.status}</td></tr>`), `<tr><td colspan="4" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalDeducoes)}</b></td><td></td></tr>`) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Ocorrências Operacionais (Oc Operacional)', ['Data','Carga','Rota','Função','Motivo','Causa','Ocorrência','Ação','Status'], ocOper.map(o => `<tr><td class="nowrap">${formatarData(o.data)}</td><td>${o.carga||'—'}</td><td>${o.rota||'—'}</td><td>${o.funcao||'—'}</td><td>${o.motivo||'—'}</td><td>${o.causa||'—'}</td><td>${o.ocorrencia||'—'}</td><td>${o.acao||'—'}</td><td>${o.status||'—'}</td></tr>`)) : ''}
+  ${ehMotorista ? secaoTabela('Ocorrências em Rota (Oc em Rota)', ['Data','Protocolo','Carga','Placa','Motivo','Descrição','Local','Status'], ocRota.map(o => `<tr><td class="nowrap">${formatarData(o.data)}</td><td>${o.numero_protocolo||'—'}</td><td>${o.carga_numero||o.carga||'—'}</td><td>${o.veiculo_placa||'—'}</td><td>${o.motivo_resumido||o.tipo_ocorrencia||o.motivo||'—'}</td><td>${o.descricao||'—'}</td><td>${o.localizacao||'—'}</td><td>${String(o.status_chamado||o.status||'—').toUpperCase()}</td></tr>`)) : ''}
+  ${ehMotorista ? secaoTabela('Sinistros', ['Nº','Data','Placa','Carga','Local','Responsabilidade','Desconto','Status'], sinistros.map(s => `<tr><td class="nowrap">${s.numero_sinistro||'—'}</td><td class="nowrap">${formatarData(s.data)}</td><td>${s.placa||'—'}</td><td>${s.carga||'—'}</td><td>${s.local_acidente||'—'}</td><td>${s.etapa_diretoria_completa ? (s.responsabilidade_motorista ? 'Sim' : 'Não') : 'Em apuração'}</td><td>${s.desconto_motorista ? brl(s.valor_desconto) + (s.numero_parcelas ? ` (${s.numero_parcelas}x)` : '') : '—'}</td><td>${s.status_geral === 'CONCLUIDO' ? 'Concluído' : 'Pendente'}</td></tr>`)) : ''}
 
   <script>window.onload = function() { setTimeout(function(){ window.print(); }, 500); }</script>
 </body>
@@ -1543,13 +1659,28 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   const medidas = tipo === 'MOTORISTA' ? [] : db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
     .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
   const deducoes = tipo === 'MOTORISTA' ? filtrarPorData(deducoesDoPrestador(nome), varDe, varAte) : [];
+  // 21/09/2026: mesmas fontes que a tela e o impresso — o CSV saía sem
+  // devoluções, viagens, Oc Operacional, Oc em Rota e sinistros.
+  const dadosMestre = tipo === 'MOTORISTA' ? getDadosPrestadorMestre(nome) : null;
+  const ehMotorista = tipo === 'MOTORISTA' && (!dadosMestre || dadosMestre.tipo !== 'AJUDANTE');
+  const devsErro = tipo === 'MOTORISTA' ? filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte) : [];
+  const viagens = tipo === 'MOTORISTA' ? filtrarPorData(viagensDoPrestador(nome), varDe, varAte) : [];
+  const ocOper = tipo === 'MOTORISTA' ? filtrarPorData(ocOperacionaisDoPrestador(nome), varDe, varAte) : [];
+  const ocRota = ehMotorista ? filtrarPorData(ocRotaDoPrestador(nome), varDe, varAte) : [];
+  const sinistros = ehMotorista ? filtrarPorData(sinistrosDoPrestador(nome), varDe, varAte) : [];
 
-  const linhas = [['Secao','Data','Campo1','Campo2','Campo3','Campo4','Campo5'].map(h => `"${h}"`).join(';')];
-  deducoes.forEach(l => linhas.push(['DEDUCAO_ADIANTAMENTO', formatarData(l.data), l.protocolo, l.total.toFixed(2), String(l.pessoas), l.parte.toFixed(2), l.status].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
-  orientacoes.forEach(r => linhas.push(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao, '', '', ''].map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')));
-  atestados.forEach(r => linhas.push(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
-  ausencias.forEach(r => linhas.push(['FALTA_CONDUTA', formatarData(r.data), r.turno, r.conduta, r.avisado, r.periodo || 'Integral', r.compensar || 'NÃO'].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
-  medidas.forEach(m => linhas.push(['MEDIDA_DISCIPLINAR', formatarData(m.data_ocorrencia), m.tipo, m.alineas_clt, m.motivo, m.gestor, ''].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
+  const linhas = [['Secao','Data','Campo1','Campo2','Campo3','Campo4','Campo5','Campo6','Campo7','Campo8'].map(h => `"${h}"`).join(';')];
+  const csvLinha = campos => linhas.push(campos.concat(Array(Math.max(0, 10 - campos.length)).fill('')).map(v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g,'""')}"`).join(';'));
+  viagens.forEach(v => csvLinha(['VIAGEM', formatarData(v.data), v.carga, v.rota, v.placa, v.papel, v.equipe, v.data_retorno ? formatarData(v.data_retorno) : '', statusViagemTexto(v)]));
+  deducoes.forEach(l => csvLinha(['DEDUCAO_ADIANTAMENTO', formatarData(l.data), l.protocolo, l.total.toFixed(2), String(l.pessoas), l.parte.toFixed(2), l.status]));
+  devsErro.forEach(d => csvLinha(['DEVOLUCAO_ERRO_MOTORISTA', formatarData(d.data), d.numero_devolucao || d.numero_protocolo, d.cliente_nome, d.motivo_real_causa_raiz || d.motivo_reclamado, (parseFloat(d.valor_reclamado)||0).toFixed(2), d.status_gestao === 'CONCLUIDO' ? 'CONCLUIDA' : 'PENDENTE']));
+  orientacoes.forEach(r => csvLinha(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao]));
+  atestados.forEach(r => csvLinha(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro]));
+  ausencias.forEach(r => csvLinha(['FALTA_CONDUTA', formatarData(r.data), r.turno, r.conduta, r.avisado, r.periodo || 'Integral', r.compensar || 'NÃO']));
+  medidas.forEach(m => csvLinha(['MEDIDA_DISCIPLINAR', formatarData(m.data_ocorrencia), m.tipo, m.alineas_clt, m.motivo, m.gestor]));
+  ocOper.forEach(o => csvLinha(['OC_OPERACIONAL', formatarData(o.data), o.carga, o.rota, o.funcao, o.motivo, o.causa, o.ocorrencia, o.acao, o.status]));
+  ocRota.forEach(o => csvLinha(['OC_EM_ROTA', formatarData(o.data), o.numero_protocolo, o.carga_numero || o.carga, o.veiculo_placa, o.motivo_resumido || o.tipo_ocorrencia || o.motivo, o.descricao, o.localizacao, String(o.status_chamado || o.status || '').toUpperCase()]));
+  sinistros.forEach(s => csvLinha(['SINISTRO', formatarData(s.data), s.numero_sinistro, s.placa, s.carga, s.local_acidente, s.etapa_diretoria_completa ? (s.responsabilidade_motorista ? 'RESP. MOTORISTA: SIM' : 'RESP. MOTORISTA: NÃO') : 'EM APURAÇÃO', s.desconto_motorista ? (parseFloat(s.valor_desconto)||0).toFixed(2) : '', s.status_geral]));
 
   if (linhas.length === 1) { alert('Nenhum registro encontrado para exportar com os filtros atuais.'); return; }
 
@@ -2084,8 +2215,12 @@ function handleSalvarEtapaSinistro(e, id, etapa) {
 }
 
 // --- Bloco no Dossiê Motorista ---
-function renderBlocoSinistrosMotorista(nomeMotorista) {
-  const sinistros = db.getSinistros({ motoristaNome: nomeMotorista });
+// 21/09/2026: passou a respeitar o filtro de período do dossiê (varDe/
+// varAte), como os outros blocos — antes listava todo o histórico.
+function renderBlocoSinistrosMotorista(nomeMotorista, varDe, varAte) {
+  const sinistros = (varDe || varAte)
+    ? ordenarPorDataDesc(filtrarPorData(sinistrosDoPrestador(nomeMotorista), varDe, varAte))
+    : db.getSinistros({ motoristaNome: nomeMotorista });
   return `
     <div class="bg-slate-900 border border-red-900/60 rounded-2xl p-4 space-y-3">
       <div class="flex items-center justify-between">
