@@ -58,7 +58,15 @@ const FOTO_BUCKETS = {
   // Item avulso da Destinacao (18/09/2026, migration 47). Mesmo bucket da
   // devolucao, pasta propria: e a mesma prova de avaria, so que sem chamado.
   // Bucket separado exigiria policies novas para ganhar nada.
-  avulsos:    'devolucoes-fotos'
+  avulsos:    'devolucoes-fotos',
+  // Ocorrencia em rota (migration 41) e sinistro (migration 42), os dois
+  // ultimos pontos de upload que ainda gravavam imagem dentro do banco. O
+  // codigo do app so chegou em 21/09/2026, quando a cota de um aparelho
+  // bateu 98% com 3 chamados de rota (1.229 KB) e 1 sinistro (795 KB).
+  // Buckets proprios, e nao o da devolucao: as policies sao por bucket e o
+  // prazo de guarda de prova de acidente e outro.
+  rota:       'rota-fotos',
+  sinistros:  'sinistros-fotos'
 };
 const FOTO_MODULO_PADRAO = 'reentregas';
 const FOTO_BUCKET     = FOTO_BUCKETS[FOTO_MODULO_PADRAO];
@@ -212,6 +220,20 @@ class FotoStore {
 
   async contarDoAlvo(registro_id, etapa, modulo) {
     return (await this.listarDoAlvo(registro_id, etapa, modulo)).length;
+  }
+
+  /** Tudo que este aparelho ainda deve de UM registro, em todas as etapas. */
+  async listarDoRegistro(registro_id, modulo) {
+    if (!this.disponivel()) return [];
+    try {
+      const st = await this._tx('readonly');
+      const idx = st.index('por_registro');
+      return (await this._pedido(idx.getAll([modulo || 'reentregas', String(registro_id)]))) || [];
+    } catch (e) { return []; }
+  }
+
+  async contarDoRegistro(registro_id, modulo) {
+    return (await this.listarDoRegistro(registro_id, modulo)).length;
   }
 
   /** Panorama da fila, para a tarja e para o diagnostico do aparelho. */
@@ -513,7 +535,14 @@ class FotoStore {
         delete posse[k]; mudou = true; continue;
       }
 
-      const naFila = await this.contarDoAlvo(registro_id, etapa, modulo);
+      // Sinistro (migration 42) tem UM contador para o registro inteiro; o
+      // que se reescreve nele e o total do registro, nao o da etapa - senao
+      // dois grupos com foto pendente ficariam se sobrescrevendo.
+      const compartilhado = (typeof Store !== 'undefined' && typeof Store._contadorFotoCompartilhado === 'function')
+        && Store._contadorFotoCompartilhado(modulo);
+      const naFila = compartilhado
+        ? await this.contarDoRegistro(registro_id, modulo)
+        : await this.contarDoAlvo(registro_id, etapa, modulo);
       const res = window.db.ajustarFotosPendentes(registro_id, etapa, naFila, modulo);
 
       // Larga a posse so quando nao ha mais nada na fila e o registro ja
@@ -735,6 +764,149 @@ window.jrMigrarFotosDevolucaoLegado = async function() {
   }
   if (typeof renderApp === 'function') { try { renderApp(); } catch (e) {} }
   return r;
+};
+
+// -----------------------------------------------------------------
+// MIGRACAO DO LEGADO DA OCORRENCIA EM ROTA (21/09/2026, migration 41)
+//
+// Mesma mecanica da devolucao. midia_fotos e TEXT no banco - o array JA
+// SERIALIZADO - entao aqui ele pode chegar como string; Store._lerLegadoFoto
+// aceita as duas formas. Grava direto, sem passar por updateOcorrenciaRota:
+// mover uma foto de lugar nao e uma edicao de ninguem e nao deve ir para a
+// trilha nem mexer no status do chamado.
+// -----------------------------------------------------------------
+FotoStore.prototype.migrarLegadoRota = async function() {
+  if (!this.disponivel()) return { migrados: 0, erro: 'Sem IndexedDB neste navegador.' };
+  if (!window.db || !Array.isArray(window.db.data && window.db.data.ocorrencias_rota)) {
+    return { migrados: 0, erro: 'Base local indisponivel.' };
+  }
+  const c = Store._camposFoto('fotos', 'rota');
+  let migrados = 0, registros = 0;
+
+  for (const r of window.db.data.ocorrencias_rota.slice()) {
+    if (r.is_deleted) continue;
+    const legado = Store._lerLegadoFoto(r, c).filter(f => f.startsWith('data:'));
+    if (!legado.length) continue;
+
+    const idsLocais = [];
+    try {
+      for (const b64 of legado) {
+        idsLocais.push(await this.enfileirar({ registro_id: r.id, etapa: 'fotos', dataUrl: b64, modulo: 'rota' }));
+      }
+    } catch (e) {
+      for (const x of idsLocais) { try { await this.remover(x); } catch (y) {} }
+      console.warn('[FotoStore] Rota ' + (r.numero_protocolo || r.id) + ' nao migrou: ' + e.message);
+      continue;
+    }
+
+    // Esvazia o base64 e assume a pendencia na MESMA gravacao. O que nao era
+    // base64 (URL) fica.
+    r[c.legado] = Store._lerLegadoFoto(r, c).filter(f => !f.startsWith('data:'));
+    r[c.pendentes] = (parseInt(r[c.pendentes]) || 0) + idsLocais.length;
+    if (!Array.isArray(r[c.paths])) r[c.paths] = [];
+    r.atualizado_em = (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString();
+    window.db.save();
+    migrados += idsLocais.length;
+    registros++;
+  }
+
+  console.log('[FotoStore] Legado da rota: ' + migrados + ' foto(s) de ' + registros + ' chamado(s) entraram na fila.');
+  const res = await this.processarFila();
+  return { migrados, registros, enviadas: res.enviadas, falhas: res.falhas };
+};
+
+// -----------------------------------------------------------------
+// MIGRACAO DO LEGADO DO SINISTRO (21/09/2026, migration 42)
+//
+// A migration dizia "sinistros tem ZERO linhas, nao precisa de migracao" -
+// era verdade em 07/09. Em 14/09 entrou o SIN-2026-0001 com 7 fotos em
+// base64 (795 KB), porque o codigo do app ficou duas semanas sem sair. Seis
+// grupos, um contador so: o contador sobe pelo total de fotos do registro.
+// -----------------------------------------------------------------
+FotoStore.prototype.migrarLegadoSinistro = async function() {
+  if (!this.disponivel()) return { migrados: 0, erro: 'Sem IndexedDB neste navegador.' };
+  if (!window.db || !Array.isArray(window.db.data && window.db.data.sinistros)) {
+    return { migrados: 0, erro: 'Base local indisponivel.' };
+  }
+  const m = Store._moduloFoto('sinistros');
+  let migrados = 0, registros = 0;
+
+  for (const sn of window.db.data.sinistros.slice()) {
+    if (sn.is_deleted) continue;
+    let doRegistro = 0;
+    for (const grupo of Object.keys(m.etapas)) {
+      const c = Store._camposFoto(grupo, 'sinistros');
+      const legado = Store._lerLegadoFoto(sn, c).filter(f => f.startsWith('data:'));
+      if (!legado.length) continue;
+
+      const idsLocais = [];
+      try {
+        for (const b64 of legado) {
+          idsLocais.push(await this.enfileirar({ registro_id: sn.id, etapa: grupo, dataUrl: b64, modulo: 'sinistros' }));
+        }
+      } catch (e) {
+        for (const x of idsLocais) { try { await this.remover(x); } catch (y) {} }
+        console.warn('[FotoStore] Sinistro ' + (sn.numero_sinistro || sn.id) + '/' + grupo + ' nao migrou: ' + e.message);
+        continue;
+      }
+
+      sn[c.legado] = Store._lerLegadoFoto(sn, c).filter(f => !f.startsWith('data:'));
+      sn[c.pendentes] = (parseInt(sn[c.pendentes]) || 0) + idsLocais.length;
+      if (!sn[c.pathsObjeto] || typeof sn[c.pathsObjeto] !== 'object') sn[c.pathsObjeto] = {};
+      sn.atualizado_em = (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString();
+      window.db.save();
+      migrados += idsLocais.length;
+      doRegistro += idsLocais.length;
+    }
+    if (doRegistro) registros++;
+  }
+
+  console.log('[FotoStore] Legado do sinistro: ' + migrados + ' foto(s) de ' + registros + ' sinistro(s) entraram na fila.');
+  const res = await this.processarFila();
+  return { migrados, registros, enviadas: res.enviadas, falhas: res.falhas };
+};
+
+// Rodar UMA VEZ cada, do console de um aparelho que ja tenha puxado a nuvem
+// inteira:  jrMigrarFotosRotaLegado()   e   jrMigrarFotosSinistroLegado()
+window.jrMigrarFotosRotaLegado = async function() {
+  const r = await window.fotoStore.migrarLegadoRota();
+  console.log('[FotoStore] Resultado (rota):', r);
+  if (typeof showToast === 'function') {
+    showToast(r.erro ? ('⚠️ ' + r.erro)
+      : ('✅ ' + r.migrados + ' foto(s) de rota na fila; ' + r.enviadas + ' ja subiram.'),
+      r.erro ? 'error' : 'success');
+  }
+  if (typeof renderApp === 'function') { try { renderApp(); } catch (e) {} }
+  return r;
+};
+window.jrMigrarFotosSinistroLegado = async function() {
+  const r = await window.fotoStore.migrarLegadoSinistro();
+  console.log('[FotoStore] Resultado (sinistro):', r);
+  if (typeof showToast === 'function') {
+    showToast(r.erro ? ('⚠️ ' + r.erro)
+      : ('✅ ' + r.migrados + ' foto(s) de sinistro na fila; ' + r.enviadas + ' ja subiram.'),
+      r.erro ? 'error' : 'success');
+  }
+  if (typeof renderApp === 'function') { try { renderApp(); } catch (e) {} }
+  return r;
+};
+
+// UM COMANDO SO PARA O APARELHO CHEIO (21/09/2026): roda as tres migracoes
+// de legado em sequencia - devolucao, rota e sinistro - e devolve a soma.
+window.jrMigrarTodasFotosLegado = async function() {
+  const d = await window.fotoStore.migrarLegadoDevolucao();
+  const r = await window.fotoStore.migrarLegadoRota();
+  const s = await window.fotoStore.migrarLegadoSinistro();
+  const tot = {
+    migrados: (d.migrados || 0) + (r.migrados || 0) + (s.migrados || 0),
+    enviadas: (d.enviadas || 0) + (r.enviadas || 0) + (s.enviadas || 0),
+    falhas:   (d.falhas   || 0) + (r.falhas   || 0) + (s.falhas   || 0),
+    devolucao: d, rota: r, sinistro: s
+  };
+  console.log('[FotoStore] Resultado (todas):', tot);
+  if (typeof showToast === 'function') showToast('✅ ' + tot.migrados + ' foto(s) legada(s) na fila; ' + tot.enviadas + ' ja subiram.', 'success');
+  if (typeof renderApp === 'function') { try { renderApp(); } catch (e) {} }
+  return tot;
 };
 
 // -----------------------------------------------------------------

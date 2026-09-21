@@ -1943,9 +1943,10 @@ function renderEtapaMotorista(s) {
           <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Relatar Sinalização / De quem era a preferência</label><input type="text" id="em-sinalizacao-relato" value="${s.sinalizacao_relato_motorista||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-800 pt-2">
-          ${renderUploadFotosSinistro('danos_jr_motorista', 'Fotos dos Danos — Veículo JR *', s.fotos_danos_jr_motorista)}
-          ${renderUploadFotosSinistro('danos_terceiro_motorista', 'Fotos dos Danos — Veículo Terceiro', s.fotos_danos_terceiro_motorista)}
+          ${renderUploadFotosSinistro(s, 'danos_jr_motorista', 'Fotos dos Danos — Veículo JR *')}
+          ${renderUploadFotosSinistro(s, 'danos_terceiro_motorista', 'Fotos dos Danos — Veículo Terceiro')}
         </div>
+        ${_avisoFotosPendentesSinistro(s)}
         <div class="grid grid-cols-2 gap-3">
           <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Assinatura (Nome do Motorista) <span class="text-red-400">*</span></label><input type="text" id="em-assinatura" required value="${s.motorista_assinatura_nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
           <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data <span class="text-red-400">*</span></label><input type="date" id="em-assinatura-data" required value="${s.motorista_assinatura_data||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
@@ -1982,13 +1983,14 @@ function renderEtapaManutencao(s) {
           <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Relatar Sinalização / Preferência</label><input type="text" id="man-sinalizacao-relato" value="${s.sinalizacao_relato_manutencao||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-800 pt-2">
-          ${renderUploadFotosSinistro('danos_jr_manutencao', 'Fotos dos Danos — Veículo JR', s.fotos_danos_jr_manutencao, s.fotos_danos_jr_motorista)}
-          ${renderUploadFotosSinistro('danos_terceiro_manutencao', 'Fotos dos Danos — Veículo Terceiro', s.fotos_danos_terceiro_manutencao, s.fotos_danos_terceiro_motorista)}
+          ${renderUploadFotosSinistro(s, 'danos_jr_manutencao', 'Fotos dos Danos — Veículo JR', 'danos_jr_motorista')}
+          ${renderUploadFotosSinistro(s, 'danos_terceiro_manutencao', 'Fotos dos Danos — Veículo Terceiro', 'danos_terceiro_motorista')}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          ${renderUploadFotosSinistro('orcamentos', 'Orçamentos Anexados (até 3)', s.orcamentos_anexos)}
-          ${renderUploadFotosSinistro('fotos_acidente_bo', 'Fotos do Acidente + B.O.', s.fotos_acidente_bo)}
+          ${renderUploadFotosSinistro(s, 'orcamentos', 'Orçamentos Anexados (até 3)')}
+          ${renderUploadFotosSinistro(s, 'fotos_acidente_bo', 'Fotos do Acidente + B.O.')}
         </div>
+        ${_avisoFotosPendentesSinistro(s)}
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 border-t border-slate-800 pt-2">
           <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Há Testemunhas?</label>
             <select id="man-testemunhas" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
@@ -2120,7 +2122,11 @@ function renderEtapaDiretoria(s) {
     </div>`;
 }
 
-function handleSalvarEtapaSinistro(e, id, etapa) {
+// 21/09/2026 (migration 42): virou async porque a foto de cada grupo vai para
+// a fila do fotoStore DEPOIS de a etapa gravar — e nao mais como base64 dentro
+// de fotos_danos_* pelo Object.assign do store. UM sinistro com 7 fotos pesava
+// 795 KB no localStorage de todo aparelho.
+async function handleSalvarEtapaSinistro(e, id, etapa) {
   e.preventDefault();
   const sAtual = (db.data.sinistros || []).find(x => String(x.id) === String(id));
   let dados = {};
@@ -2138,15 +2144,17 @@ function handleSalvarEtapaSinistro(e, id, etapa) {
       havia_sinalizacao_motorista: document.getElementById('em-sinalizacao')?.value === 'SIM',
       sinalizacao_relato_motorista: document.getElementById('em-sinalizacao-relato')?.value,
       motorista_assinatura_nome: document.getElementById('em-assinatura')?.value,
-      motorista_assinatura_data: document.getElementById('em-assinatura-data')?.value,
-      fotos_danos_jr_motorista: (window._sinistroFotos.danos_jr_motorista && window._sinistroFotos.danos_jr_motorista.length) ? window._sinistroFotos.danos_jr_motorista : undefined,
-      fotos_danos_terceiro_motorista: (window._sinistroFotos.danos_terceiro_motorista && window._sinistroFotos.danos_terceiro_motorista.length) ? window._sinistroFotos.danos_terceiro_motorista : undefined
+      motorista_assinatura_data: document.getElementById('em-assinatura-data')?.value
+      // As fotos (danos_jr_motorista / danos_terceiro_motorista) nao vao nos
+      // dados: entram na fila depois do salvar, la embaixo.
     };
     var completaEl = document.getElementById('em-completa');
     // Fotos são obrigatórias na Etapa 1 (pedido de 18/08/2026) — conta o
-    // que já existia no registro somado ao que acabou de ser anexado
-    // agora, já que o upload não substitui, ele soma à galeria.
-    const totalFotosJr = (sAtual?.fotos_danos_jr_motorista?.length || 0) + (window._sinistroFotos.danos_jr_motorista?.length || 0);
+    // que já existia no registro (Storage + legado + pendente) somado ao
+    // que acabou de ser anexado agora, já que o upload soma à galeria.
+    const jaTem = (sAtual && db && typeof db.estadoFotos === 'function')
+      ? db.estadoFotos(sAtual, 'danos_jr_motorista', 'sinistros').total : 0;
+    const totalFotosJr = jaTem + (window._sinistroFotos.danos_jr_motorista?.length || 0);
     if (totalFotosJr === 0) {
       alert('⚠️ Anexe ao menos uma foto dos danos do Veículo JR antes de salvar esta etapa.');
       return;
@@ -2160,11 +2168,8 @@ function handleSalvarEtapaSinistro(e, id, etapa) {
       testemunha_nome_contato: document.getElementById('man-testemunha-contato')?.value,
       parecer_manutencao: document.getElementById('man-parecer')?.value,
       manutencao_gestor_nome: document.getElementById('man-gestor')?.value,
-      manutencao_data: document.getElementById('man-data')?.value,
-      fotos_danos_jr_manutencao: (window._sinistroFotos.danos_jr_manutencao && window._sinistroFotos.danos_jr_manutencao.length) ? window._sinistroFotos.danos_jr_manutencao : undefined,
-      fotos_danos_terceiro_manutencao: (window._sinistroFotos.danos_terceiro_manutencao && window._sinistroFotos.danos_terceiro_manutencao.length) ? window._sinistroFotos.danos_terceiro_manutencao : undefined,
-      orcamentos_anexos: (window._sinistroFotos.orcamentos && window._sinistroFotos.orcamentos.length) ? window._sinistroFotos.orcamentos : undefined,
-      fotos_acidente_bo: (window._sinistroFotos.fotos_acidente_bo && window._sinistroFotos.fotos_acidente_bo.length) ? window._sinistroFotos.fotos_acidente_bo : undefined
+      manutencao_data: document.getElementById('man-data')?.value
+      // Os quatro grupos de foto desta etapa entram na fila depois do salvar.
     };
     var completaEl = document.getElementById('man-completa');
   } else if (etapa === 'operacoes') {
@@ -2197,6 +2202,11 @@ function handleSalvarEtapaSinistro(e, id, etapa) {
   const marcarCompleta = completaEl ? completaEl.checked : true;
   const res = db.atualizarEtapaSinistro(id, etapa, dados, marcarCompleta);
   if (!res.success) { showToast(res.message, 'error'); return; }
+
+  // DEPOIS de a etapa gravar, e nunca antes: sem etapa salva nao ha por que
+  // guardar foto para ela. Todos os grupos que a pessoa anexou nesta tela.
+  await _enfileirarFotosSinistro(res.sinistro,
+    Object.keys(window._sinistroFotos || {}).map(g => ({ grupo: g, fotos: window._sinistroFotos[g] })));
   window._sinistroFotos = {};
 
   // Acordeão: ao concluir uma etapa, minimiza ela e abre a próxima do
@@ -4186,7 +4196,15 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
   empurrar(videos, registro.video_investigacao_url);
   empurrar(fotos, registro.fotos);
   empurrar(videos, registro.videos);
-  empurrar(fotos, registro.midia_fotos);
+  // Rota (migration 41) e sinistro (migration 42): o caminho no Storage vem
+  // primeiro; midia_fotos pode ser o array serializado (coluna TEXT), e
+  // Store._lerLegadoFoto aceita as duas formas.
+  empurrar(fotos, (registro.midia_fotos_paths || []).map(_urlDaFoto));
+  if (registro.midias_paths && typeof registro.midias_paths === 'object') {
+    Object.values(registro.midias_paths).forEach(l => empurrar(fotos, (Array.isArray(l) ? l : []).map(_urlDaFoto)));
+  }
+  empurrar(fotos, (typeof Store !== 'undefined' && Store._lerLegadoFoto)
+    ? Store._lerLegadoFoto(registro, { legado: 'midia_fotos' }) : registro.midia_fotos);
   empurrar(videos, registro.midia_videos);
   if (Array.isArray(registro.anexos)) {
     registro.anexos.forEach(a => {
@@ -7100,25 +7118,77 @@ function limparSinistroFotosGrupo(grupo) {
   const container = document.getElementById('sinistro-foto-preview-' + grupo);
   if (container) container.innerHTML = '';
 }
-function renderUploadFotosSinistro(grupo, label, fotosExistentes, fotosHerdadas) {
-  const existentes = fotosExistentes || [];
-  const herdadas = fotosHerdadas || [];
+// 21/09/2026 (migration 42): recebe o SINISTRO e o nome do grupo, e monta a
+// galeria pelo db.estadoFotos(s, grupo, 'sinistros') — caminho no Storage
+// primeiro, base64 legado depois, e o que ainda esta so neste aparelho. A
+// assinatura antiga recebia os arrays de base64 direto do registro; nao ha
+// mais base64 para receber.
+function renderUploadFotosSinistro(s, grupo, label, grupoHerdado) {
+  const herdadas = grupoHerdado ? _galeriaFotosModulo(s, grupoHerdado, 'sinistros', { compacta: true, classeThumb: 'border border-slate-600 opacity-90' }) : '';
   return `
     <div>
       <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">${label}</label>
       <input type="file" accept="image/*" multiple onchange="handleSinistroFotoUpload(this, '${grupo}')"
         class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-emerald-700 file:text-white hover:file:bg-emerald-600 cursor-pointer">
-      ${herdadas.length > 0 ? `
+      ${herdadas ? `
       <div class="mt-1.5">
         <div class="text-[9px] text-slate-500 font-bold uppercase mb-1">Da Etapa 1 (já enviadas)</div>
-        <div class="flex gap-2 flex-wrap">
-          ${herdadas.map(f => `<img src="${f}" class="w-16 h-16 object-cover rounded-lg border border-slate-600 shadow opacity-90">`).join('')}
-        </div>
+        ${herdadas}
       </div>` : ''}
-      <div id="sinistro-foto-preview-${grupo}" class="flex gap-2 flex-wrap mt-1.5">
-        ${existentes.map(f => `<img src="${f}" class="w-16 h-16 object-cover rounded-lg border border-slate-700 shadow">`).join('')}
-      </div>
+      ${_galeriaFotosModulo(s, grupo, 'sinistros', { compacta: true })}
+      <div id="sinistro-foto-preview-${grupo}" class="flex gap-2 flex-wrap mt-1.5"></div>
     </div>`;
+}
+
+// O contador do sinistro e UM para o registro inteiro (migration 42), entao o
+// aviso "aguardando envio" aparece uma vez por etapa, e nao grupo a grupo.
+function _avisoFotosPendentesSinistro(s) {
+  const pend = Math.max(0, parseInt(s && s.midias_pendentes) || 0);
+  if (!pend) return '';
+  return `<div class="text-[10px] font-bold text-amber-300 bg-amber-950/70 border border-amber-700 rounded px-2 py-1 inline-block"
+               title="A foto existe, mas ainda está no aparelho de quem fotografou. Sobe sozinha quando aquele aparelho tiver rede.">📷 ${pend} foto(s) deste sinistro aguardando envio</div>`;
+}
+
+// Enfileira as fotos de varios grupos de UM sinistro. Existe separada de
+// _enfileirarFotosDevolucao por causa do contador: no sinistro ele e UM para o
+// registro inteiro (migration 42), entao so pode ser escrito depois de TODOS
+// os grupos entrarem, e com o total que esta na fila deste aparelho — nao com
+// o tamanho do ultimo grupo.
+async function _enfileirarFotosSinistro(sn, grupos) {
+  const lista = (grupos || []).map(g => ({ grupo: g.grupo, fotos: (g.fotos || []).filter(Boolean) })).filter(g => g.fotos.length);
+  if (!sn || !sn.id || !lista.length) return 0;
+
+  if (!window.fotoStore || !window.fotoStore.disponivel()) {
+    alert('⚠️ A etapa foi gravada, mas a(s) foto(s) NÃO puderam ser guardadas: '
+        + 'este navegador não permite armazenamento local (IndexedDB). '
+        + 'Se estiver em aba anônima, saia dela e anexe a foto de novo.');
+    return 0;
+  }
+
+  const enfileiradas = [];
+  try {
+    for (const g of lista) {
+      for (const dataUrl of g.fotos) {
+        enfileiradas.push(await window.fotoStore.enfileirar({
+          registro_id: sn.id, etapa: g.grupo, dataUrl, modulo: 'sinistros'
+        }));
+      }
+    }
+  } catch (err) {
+    for (const x of enfileiradas) { try { await window.fotoStore.remover(x); } catch (e) {} }
+    alert('⚠️ A etapa foi gravada, mas não consegui guardar a(s) foto(s) neste aparelho: ' + err.message);
+    return 0;
+  }
+
+  let naFila = enfileiradas.length;
+  try { naFila = await window.fotoStore.contarDoRegistro(sn.id, 'sinistros'); } catch (e) {}
+  if (typeof db.ajustarFotosPendentes === 'function') {
+    db.ajustarFotosPendentes(sn.id, lista[0].grupo, naFila, 'sinistros');
+  }
+  if (typeof window.atualizarTarjaFotosPendentes === 'function') window.atualizarTarjaFotosPendentes();
+
+  window.fotoStore.processarFila().catch(() => {});
+  return enfileiradas.length;
 }
 
 // =============================================================================
@@ -8776,7 +8846,10 @@ function gerarValeMotoristaPdf(devId) {
   gerarAdiantamentoPdf(devId);
 }
 
-function handleInvestigacaoSubmit(e, devId) {
+// 21/09/2026: virou async pelo mesmo motivo do modal de edição (migration
+// 38): a foto da investigação vai para a fila do fotoStore DEPOIS de o
+// registro gravar, e não como base64 dentro dele.
+async function handleInvestigacaoSubmit(e, devId) {
   e.preventDefault();
 
   const causaVal = document.getElementById(`inv-causa-${devId}`)?.value || '';
@@ -8814,9 +8887,16 @@ function handleInvestigacaoSubmit(e, devId) {
     separador_apurado: document.getElementById(`inv-sep-${devId}`)?.value || '',
     conferente_apurado: document.getElementById(`inv-conf-${devId}`)?.value || '',
     video_investigacao_url: videoInvUrl,
-    // ADENDO: novas fotos/vídeos anexados durante a Investigação (arrays
-    // completos) — são ACUMULADOS ao histórico da ocorrência em updateInvestigacao()
-    fotos_investigacao_novas: (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : [],
+    // FOTO NÃO ENTRA AQUI (achado de 21/09/2026). Este formulário era o
+    // ÚNICO caminho da devolução que ainda gravava foto em base64 dentro do
+    // registro: a migration 38 tirou o base64 da abertura e do modal de
+    // edição da investigação, mas esqueceu este submit. Medido no aparelho
+    // do gestor: 8 devoluções apuradas num só dia puseram 1.616 KB de
+    // fotos_investigacao no jr_sac_db e levaram a cota a 98%. A foto vai
+    // para a fila logo abaixo (_enfileirarFotosDevolucao), que é o mesmo
+    // caminho da abertura; o vídeo continua por aqui porque tem bucket
+    // próprio desde a migration 35 e não pesa na cota.
+    fotos_investigacao_novas: [],
     videos_investigacao_novas: (typeof uploadedVideosBase64Inv !== 'undefined' && Array.isArray(uploadedVideosBase64Inv)) ? uploadedVideosBase64Inv : [],
     acao_tomada: acaoVal,
     responsavel_analise: respAnalise,
@@ -8824,6 +8904,13 @@ function handleInvestigacaoSubmit(e, devId) {
   });
 
   const dev = db.data.ocorrencias_devolucao.find(x => x.id == devId);
+
+  // DEPOIS do update, e nunca antes: se a apuração não gravar, não há por que
+  // guardar foto para ela. Mesma ordem do modal de edição.
+  if (dev) {
+    await _enfileirarFotosDevolucao(dev, 'investigacao',
+      (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : []);
+  }
 
   if (typeof uploadedVideosBase64Inv !== 'undefined' && Array.isArray(uploadedVideosBase64Inv)) uploadedVideosBase64Inv = [];
   if (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) uploadedFotosBase64Inv = [];
@@ -13502,6 +13589,78 @@ function _galeriaFotosReentrega(r, etapa) {
     </div>`;
 }
 
+// -----------------------------------------------------------------------------
+// GALERIA DE QUALQUER MODULO DA FILA (21/09/2026)
+//
+// A mesma leitura em tres lugares da galeria da reentrega acima, so que
+// perguntando ao db.estadoFotos(item, etapa, modulo) — serve a ocorrencia em
+// rota (migration 41) e o sinistro (migration 42), que foram os dois ultimos
+// a sair do base64. Para o sinistro a "etapa" e o grupo de foto.
+//
+// opcoes: titulo (cabecalho com contagem), cor (do cabecalho), compacta (sem
+// cabecalho, sem "sem foto"), classeThumb (borda das miniaturas).
+// -----------------------------------------------------------------------------
+function _galeriaFotosModulo(item, etapa, modulo, opcoes = {}) {
+  const { titulo = null, cor = 'emerald', compacta = false, classeThumb = 'border border-slate-700' } = opcoes;
+  if (!window.fotoStore) {
+    return '<div class="text-[10px] text-amber-400 mt-1">⚠️ Recarregue a página (Ctrl+Shift+R): falta um arquivo desta versão.</div>';
+  }
+  const est = (db && typeof db.estadoFotos === 'function') ? db.estadoFotos(item, etapa, modulo) : null;
+  if (!est || !est.temAlguma) return '';
+
+  const idLocais = `fotos-locais-${modulo}-${etapa}-${item.id}`;
+  const thumb = (src, tit, classe) =>
+    `<div class="w-16 h-16 rounded-lg overflow-hidden ${classe} bg-black cursor-pointer hover:border-${cor}-500 transition shrink-0" onclick="visualizarMidiaModal('${src}', 'image')" title="${tit}">
+       <img src="${src}" class="w-full h-full object-cover hover:scale-105 transition duration-200">
+     </div>`;
+
+  const nuvem =
+      est.paths.map(p => thumb(window.fotoStore.urlPublica(p), 'Arquivada no servidor', classeThumb)).join('')
+    + est.legado.map(b => thumb(b, 'Formato antigo (imagem dentro do banco)', 'border border-slate-600 opacity-90')).join('');
+
+  // Contador compartilhado (sinistro): o numero e do registro inteiro, entao
+  // o aviso numerico nao se repete grupo a grupo — cada grupo so mostra as
+  // miniaturas locais que forem dele.
+  const compartilhado = (typeof Store !== 'undefined' && typeof Store._contadorFotoCompartilhado === 'function') && Store._contadorFotoCompartilhado(modulo);
+  if (est.pendentes > 0) setTimeout(() => _preencherFotosLocaisModulo(item.id, etapa, modulo, idLocais), 0);
+
+  const aviso = (est.pendentes > 0 && !compartilhado)
+    ? `<span class="text-[10px] font-bold text-amber-300 bg-amber-950/70 border border-amber-700 rounded px-1.5 py-1"
+             title="A foto existe, mas ainda está no aparelho de quem fotografou. Sobe sozinha quando aquele aparelho tiver rede.">📷 ${est.pendentes} aguardando envio</span>`
+    : '';
+
+  const cabecalho = (titulo && !compacta)
+    ? `<div class="font-bold text-${cor}-400 text-[11px] mb-1.5 flex items-center gap-1"><span>📷</span> ${titulo} (${est.total}):</div>`
+    : '';
+
+  return `
+    ${compacta ? '' : '<div class="pt-2 border-t border-slate-800">'}
+      ${cabecalho}
+      <div class="flex flex-wrap gap-2 mt-1.5 items-center">
+        ${nuvem}
+        <span id="${idLocais}" class="flex gap-2 flex-wrap items-center">${aviso}</span>
+      </div>
+    ${compacta ? '' : '</div>'}`;
+}
+
+async function _preencherFotosLocaisModulo(registroId, etapa, modulo, containerId) {
+  if (!window.fotoStore || !window.fotoStore.disponivel()) return;
+  let regs = [];
+  try { regs = await window.fotoStore.listarDoAlvo(registroId, etapa, modulo); } catch (e) { return; }
+  if (!regs.length) return;
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  box.innerHTML = regs.map(reg => {
+    const u = window.fotoStore.urlLocal(reg);
+    return `<span class="relative inline-block">
+        <img src="${u}" onclick="visualizarMidiaModal('${u}', 'image')"
+             title="Ainda só neste aparelho — aguardando rede para subir"
+             class="w-16 h-16 object-cover rounded-lg border-2 border-amber-500 cursor-pointer">
+        <span class="absolute -top-1 -right-1 bg-amber-500 text-slate-950 text-[9px] font-black rounded-full w-4 h-4 flex items-center justify-center">↑</span>
+      </span>`;
+  }).join('');
+}
+
 // Troca o aviso "aguardando envio" pelas miniaturas de verdade, quando as
 // fotos pendentes estão NESTE aparelho. Se a fila local estiver vazia, o aviso
 // fica: a foto é de outro aparelho, e dizer isso é mais honesto do que fingir
@@ -15233,20 +15392,13 @@ function renderRotaOcorrenciasView() {
                   </div>
                   <div class="text-slate-300 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800 leading-relaxed">${r.descricao}</div>
 
-                  <!-- MÍDIAS ANEXADAS -->
-                  ${Array.isArray(r.midia_fotos) && r.midia_fotos.length > 0 ? `
-                    <div class="pt-2 border-t border-slate-800">
-                      <div class="font-bold text-emerald-400 text-[11px] mb-1.5 flex items-center gap-1">
-                        <span>📷</span> Fotos Anexadas (${r.midia_fotos.length}):
-                      </div>
-                      <div class="flex flex-wrap gap-2">
-                        ${r.midia_fotos.map(img => `
-                          <div class="w-16 h-16 rounded-lg overflow-hidden border border-slate-700 bg-black cursor-pointer hover:border-emerald-500 transition shrink-0" onclick="visualizarMidiaModal('${img}', 'image')">
-                            <img src="${img}" class="w-full h-full object-cover hover:scale-105 transition duration-200" title="Clique para ampliar">
-                          </div>
-                        `).join('')}
-                      </div>
-                    </div>` : ''}
+                  <!-- MÍDIAS ANEXADAS — caminho no Storage primeiro (migration
+                       41), base64 legado depois, e o que ainda está só no
+                       aparelho que fotografou. Antes disto o teste era
+                       Array.isArray(r.midia_fotos), e midia_fotos volta da
+                       nuvem como STRING (coluna TEXT): todo aparelho que não
+                       fosse o que abriu o chamado via zero foto. -->
+                  ${_galeriaFotosModulo(r, 'fotos', 'rota', { titulo: 'Fotos Anexadas', cor: 'emerald' })}
 
                   ${Array.isArray(r.midia_videos) && r.midia_videos.length > 0 ? `
                     <div class="pt-2 border-t border-slate-800">
@@ -17129,7 +17281,7 @@ async function handleNovaRotaSubmit(e) {
     try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
   }
 
-  db.addOcorrenciaRota({
+  const novaRota = db.addOcorrenciaRota({
     carga_numero: cargaNum,
     veiculo_id: veicSel ? veicSel.value : null,
     veiculo_placa: veicOpt?.getAttribute('data-placa') || '',
@@ -17140,9 +17292,19 @@ async function handleNovaRotaSubmit(e) {
     status_veiculo: statusVeic,
     localizacao: loc.trim(),
     descricao: desc.trim(),
-    midia_fotos: [...uploadedRotaFotos],
+    // FOTO NAO VAI MAIS AQUI (21/09/2026, migration 41 — aplicada em 07/09 e
+    // ociosa desde entao). midia_fotos em base64 era o que fazia UM chamado
+    // com 4 fotos pesar 619 KB no localStorage de todo aparelho. A foto vai
+    // para a fila do fotoStore logo abaixo, depois de o registro existir; o
+    // video continua por aqui porque ja sobe para o Storage desde a v5.1.0.
+    midia_fotos: [],
     midia_videos: [...uploadedRotaVideos]
   });
+
+  // DEPOIS do registro existir, porque a fila precisa de um id para apontar.
+  if (novaRota && novaRota.id) {
+    await _enfileirarFotosDevolucao(novaRota, 'fotos', uploadedRotaFotos, 'rota');
+  }
 
   uploadedRotaFotos = [];
   uploadedRotaVideos = [];

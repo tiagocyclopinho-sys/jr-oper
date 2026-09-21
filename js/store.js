@@ -2178,8 +2178,27 @@ class Store {
       // array, para as galerias novas conseguirem enxergá-los.
       if (!Array.isArray(dev.fotos_investigacao)) dev.fotos_investigacao = [];
       if (!Array.isArray(dev.videos_investigacao)) dev.videos_investigacao = [];
+      // TRAVA (21/09/2026): base64 NUNCA entra em fotos_investigacao. Este
+      // array e a coluna JSONB e, portanto, a cota do localStorage de todo
+      // aparelho; foi ele que levou a cota a 98% quando um dos dois
+      // formularios de investigacao ficou de fora da migration 38. Quem
+      // chamar isto com dataURL nao perde a foto: ela vai para a fila do
+      // fotoStore (o caminho certo) e o aviso no console aponta o chamador
+      // que ainda precisa de conserto. So o que NAO e dataURL (caminho ja
+      // gravado no Storage, URL) passa direto, como sempre passou.
       if (Array.isArray(updateData.fotos_investigacao_novas)) {
-        dev.fotos_investigacao.push(...updateData.fotos_investigacao_novas);
+        const b64 = [], resto = [];
+        for (const f of updateData.fotos_investigacao_novas) {
+          if (!f) continue;
+          (typeof f === 'string' && f.startsWith('data:') ? b64 : resto).push(f);
+        }
+        dev.fotos_investigacao.push(...resto);
+        if (b64.length) {
+          console.warn('[Store] updateInvestigacao recebeu ' + b64.length + ' foto(s) em base64 — desviadas para a fila do fotoStore. Corrija o chamador.');
+          if (typeof window._enfileirarFotosDevolucao === 'function') {
+            setTimeout(() => window._enfileirarFotosDevolucao(dev, 'investigacao', b64).catch(() => {}), 0);
+          }
+        }
       }
       if (Array.isArray(updateData.videos_investigacao_novas)) {
         dev.videos_investigacao.push(...updateData.videos_investigacao_novas);
@@ -2360,7 +2379,16 @@ class Store {
       motivo_resumido: rotaData.motivo_resumido || rotaData.tipo_ocorrencia || 'AVARIA MECÂNICA',
       localizacao: (rotaData.localizacao || '').trim(),
       descricao: rotaData.descricao || '',
-      midia_fotos: Array.isArray(rotaData.midia_fotos) ? rotaData.midia_fotos : [],
+      // FOTO NAO ENTRA MAIS AQUI (21/09/2026, migration 41). midia_fotos era
+      // o array de dataURLs em base64 - uma ocorrencia com 4 fotos pesava
+      // 619 KB dentro do localStorage de TODO aparelho. A foto vai para a
+      // fila do fotoStore (modulo 'rota') depois que este registro existe, e
+      // o que fica aqui e o caminho no Storage. O que chegar em base64 por
+      // algum chamador antigo e desviado para a fila logo abaixo, nunca
+      // gravado.
+      midia_fotos: [],
+      midia_fotos_paths: [],
+      midia_fotos_pendentes: 0,
       midia_videos: Array.isArray(rotaData.midia_videos) ? rotaData.midia_videos : [],
       status_veiculo: statusVeic,
       status: isEmRota ? 'RESOLVIDO' : 'ABERTO',
@@ -2388,6 +2416,17 @@ class Store {
       diff: { depois: newRota }
     });
     this.save();
+
+    // TRAVA (mesma da updateInvestigacao): base64 que ainda chegar aqui vai
+    // para a fila, nao para o registro.
+    const b64 = (Array.isArray(rotaData.midia_fotos) ? rotaData.midia_fotos : [])
+      .filter(f => typeof f === 'string' && f.startsWith('data:'));
+    if (b64.length) {
+      console.warn('[Store] addOcorrenciaRota recebeu ' + b64.length + ' foto(s) em base64 — desviadas para a fila do fotoStore. Corrija o chamador.');
+      if (typeof window._enfileirarFotosDevolucao === 'function') {
+        setTimeout(() => window._enfileirarFotosDevolucao(newRota, 'fotos', b64, 'rota').catch(() => {}), 0);
+      }
+    }
     return newRota;
   }
 
@@ -2409,7 +2448,11 @@ class Store {
       if (updateData.tipo_ocorrencia !== undefined) r.tipo_ocorrencia = this._tipoOcorrenciaDoMotivo(updateData.tipo_ocorrencia);
       if (updateData.motivo_resumido !== undefined) r.motivo_resumido = updateData.motivo_resumido;
       if (updateData.descricao !== undefined) r.descricao = updateData.descricao;
-      if (updateData.midia_fotos !== undefined && Array.isArray(updateData.midia_fotos)) r.midia_fotos = updateData.midia_fotos;
+      // Desde a migration 41 so aceita o que NAO e base64 (a lista legada
+      // esvaziada pela migracao, ou URL). dataURL aqui e o que encheu a cota.
+      if (updateData.midia_fotos !== undefined && Array.isArray(updateData.midia_fotos)) {
+        r.midia_fotos = updateData.midia_fotos.filter(f => !(typeof f === 'string' && f.startsWith('data:')));
+      }
       if (updateData.midia_videos !== undefined && Array.isArray(updateData.midia_videos)) r.midia_videos = updateData.midia_videos;
 
       if (updateData.localizacao !== undefined) {
@@ -4348,7 +4391,26 @@ class Store {
   atualizarEtapaSinistro(id, etapa, dadosEtapa, completa) {
     const s = (this.data.sinistros || []).find(x => String(x.id) === String(id) && !x.is_deleted);
     if (!s) return { success: false, message: 'Sinistro não encontrado.' };
-    Object.assign(s, dadosEtapa || {});
+    // TRAVA (21/09/2026, migration 42): os seis campos de foto em base64 nao
+    // entram mais pelo Object.assign. Um sinistro com 7 fotos pesava 795 KB
+    // dentro do localStorage de todo aparelho. Quem ainda mandar dataURL num
+    // deles tem a foto desviada para a fila do fotoStore (grupo = nome do
+    // campo sem o prefixo), e o registro guarda so o caminho em midias_paths.
+    const dados = Object.assign({}, dadosEtapa || {});
+    const desviar = [];
+    for (const [campo, e] of Object.entries(Store._moduloFoto('sinistros').etapas)) {
+      if (!Array.isArray(dados[e.legado])) continue;
+      const b64 = dados[e.legado].filter(f => typeof f === 'string' && f.startsWith('data:'));
+      if (b64.length) desviar.push({ grupo: campo, fotos: b64 });
+      delete dados[e.legado];
+    }
+    Object.assign(s, dados);
+    if (desviar.length) {
+      console.warn('[Store] atualizarEtapaSinistro recebeu foto em base64 — desviada para a fila do fotoStore. Corrija o chamador.');
+      if (typeof window._enfileirarFotosSinistro === 'function') {
+        setTimeout(() => window._enfileirarFotosSinistro(s, desviar).catch(() => {}), 0);
+      }
+    }
     if (etapa === 'motorista') s.etapa_motorista_completa = completa !== false;
     else if (etapa === 'manutencao') s.etapa_manutencao_completa = completa !== false;
     else if (etapa === 'operacoes') s.etapa_operacoes_completa = completa !== false;
@@ -4764,8 +4826,84 @@ class Store {
         etapas: {
           foto: { paths: 'fotos_paths', pendentes: 'fotos_pendentes', legado: 'fotos_legado' }
         }
+      },
+      // OCORRENCIA EM ROTA (21/09/2026, migration 41 - aplicada em 07/09,
+      // colunas ociosas desde entao). Uma etapa so: a foto da avaria/socorro
+      // tirada na abertura do chamado. O legado midia_fotos e TEXT no banco
+      // (o array JA SERIALIZADO), entao chega como string depois do pull -
+      // _lerLegadoFoto() abaixo aceita as duas formas.
+      rota: {
+        colecao: 'ocorrencias_rota',
+        etapaPadrao: 'fotos',
+        etapas: {
+          fotos: { paths: 'midia_fotos_paths', pendentes: 'midia_fotos_pendentes', legado: 'midia_fotos' }
+        }
+      },
+      // SINISTRO (21/09/2026, migration 42). Seis grupos de foto e DUAS
+      // colunas, nao doze: midias_paths e um OBJETO com o grupo na chave, e
+      // midias_pendentes e UM contador para o registro inteiro - a decisao
+      // esta escrita na propria migration. Aqui a "etapa" da fila e o grupo,
+      // e as duas funcoes de acesso logo abaixo (_lerPathsFoto /
+      // _gravarPathsFoto) sao o que deixa o resto do arquivo continuar
+      // perguntando "quais sao os caminhos desta etapa?" sem saber que, neste
+      // modulo, a resposta mora dentro de um objeto.
+      sinistros: {
+        colecao: 'sinistros',
+        etapaPadrao: 'danos_jr_motorista',
+        pathsObjeto: 'midias_paths',
+        pendentesUnico: 'midias_pendentes',
+        etapas: {
+          danos_jr_motorista:        { legado: 'fotos_danos_jr_motorista' },
+          danos_terceiro_motorista:  { legado: 'fotos_danos_terceiro_motorista' },
+          danos_jr_manutencao:       { legado: 'fotos_danos_jr_manutencao' },
+          danos_terceiro_manutencao: { legado: 'fotos_danos_terceiro_manutencao' },
+          orcamentos:                { legado: 'orcamentos_anexos' },
+          fotos_acidente_bo:         { legado: 'fotos_acidente_bo' }
+        }
       }
     };
+  }
+
+  /** Modulos cujo contador de pendentes e um so para o registro inteiro. */
+  static _contadorFotoCompartilhado(modulo) {
+    return !!Store._moduloFoto(modulo).pendentesUnico;
+  }
+
+  /** Caminhos ja gravados de uma etapa: array direto (c.paths) ou chave dentro de um objeto (c.pathsObjeto). */
+  static _lerPathsFoto(item, c) {
+    if (!item) return [];
+    const lista = c.pathsObjeto
+      ? ((item[c.pathsObjeto] && typeof item[c.pathsObjeto] === 'object') ? item[c.pathsObjeto][c.grupo] : null)
+      : item[c.paths];
+    return Array.isArray(lista) ? lista.filter(Boolean) : [];
+  }
+
+  static _gravarPathsFoto(item, c, paths) {
+    if (c.pathsObjeto) {
+      const obj = (item[c.pathsObjeto] && typeof item[c.pathsObjeto] === 'object' && !Array.isArray(item[c.pathsObjeto]))
+        ? item[c.pathsObjeto] : {};
+      obj[c.grupo] = paths;
+      item[c.pathsObjeto] = obj;
+    } else {
+      item[c.paths] = paths;
+    }
+  }
+
+  /**
+   * Base64 legado de uma etapa. Aceita array e tambem o array serializado
+   * como string - e assim que ocorrencias_rota.midia_fotos (TEXT) volta da
+   * nuvem, e era por isso que a tela da rota mostrava zero foto em todo
+   * aparelho que nao fosse o que abriu o chamado.
+   */
+  static _lerLegadoFoto(item, c) {
+    if (!item || !c.legado) return [];
+    let v = item[c.legado];
+    if (typeof v === 'string') {
+      const t = v.trim();
+      if (t.startsWith('[')) { try { v = JSON.parse(t); } catch (e) { v = []; } }
+      else v = t ? [t] : [];
+    }
+    return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x) : [];
   }
 
   /** Modulo valido, com 'reentregas' como padrao (era o unico ate 04/09/2026). */
@@ -4781,7 +4919,12 @@ class Store {
    */
   static _camposFoto(etapa, modulo) {
     const m = Store._moduloFoto(modulo);
-    return m.etapas[String(etapa)] || m.etapas[m.etapaPadrao];
+    const grupo = m.etapas[String(etapa)] ? String(etapa) : m.etapaPadrao;
+    const base = m.etapas[grupo];
+    if (!m.pathsObjeto) return base;
+    // Modulo agrupado (sinistros): o descritor ganha o grupo, o nome do
+    // objeto de caminhos e o contador unico - ver _lerPathsFoto.
+    return Object.assign({ grupo, pathsObjeto: m.pathsObjeto, pendentes: m.pendentesUnico }, base);
   }
 
   /** O registro-alvo de uma foto, na colecao do modulo dele. */
@@ -4811,7 +4954,7 @@ class Store {
     if (!caminho) return { success: false, message: 'Caminho vazio.' };
 
     const c = Store._camposFoto(etapa, modulo);
-    const paths = Array.isArray(item[c.paths]) ? item[c.paths].slice() : [];
+    const paths = Store._lerPathsFoto(item, c).slice();
     // Idempotente: subir a mesma foto duas vezes (app fechado no meio do
     // caminho) nao pode gerar dois caminhos iguais no registro.
     if (!paths.includes(caminho)) paths.push(caminho);
@@ -4834,7 +4977,7 @@ class Store {
       return this._confirmarGravacaoDaFoto(r, restantes);
     }
 
-    item[c.paths] = paths;
+    Store._gravarPathsFoto(item, c, paths);
     item[c.pendentes] = restantes;
     item.atualizado_em = agoraIsoBrasilia();
     this.save();
@@ -4948,8 +5091,11 @@ class Store {
   /** Idem, para qualquer modulo. A tela da devolucao entra por aqui. */
   estadoFotos(item, etapa, modulo) {
     const c = Store._camposFoto(etapa, modulo);
-    const paths = Array.isArray(item && item[c.paths]) ? item[c.paths].filter(Boolean) : [];
-    const legado = Array.isArray(item && item[c.legado]) ? item[c.legado].filter(Boolean) : [];
+    const paths = Store._lerPathsFoto(item, c);
+    const legado = Store._lerLegadoFoto(item, c);
+    // No sinistro o contador e do registro inteiro, entao "pendentes" aqui
+    // quer dizer "deste sinistro", nao "deste grupo" - e e o que a tela
+    // precisa dizer: falta prova subir, va ao aparelho que fotografou.
     const pendentes = Math.max(0, parseInt(item && item[c.pendentes]) || 0);
     return {
       paths, legado, pendentes,
