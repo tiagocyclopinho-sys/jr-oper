@@ -4979,6 +4979,235 @@ function opcoesTipoErro(valorAtual, incluirLegado) {
   return partes.join('');
 }
 
+// =============================================================================
+// RESPONSÁVEL PELA DEVOLUÇÃO (22/09/2026)
+//
+// O gerente cobra a correção de alguém, e até aqui tinha de descobrir quem era
+// pesquisando caso a caso. A regra que ele já usa na prática é fixa e sai do
+// TIPO DE ERRO — com UMA exceção, o ERRO CARREGAMENTO, que depende do turno de
+// quem separou ou conferiu.
+//
+// É DERIVAÇÃO NA HORA, NÃO CARIMBO. Decisão do dia: se o responsável por um
+// tipo mudar, a tela inteira passa a refletir a mudança, inclusive no
+// histórico. É o que dispensa migration — nenhuma coluna nova em
+// ocorrencias_devolucao, que é justamente a tabela SEM lista branca no
+// cloudStore: campo que o JS invente e não seja coluna volta PGRST204 e derruba
+// o lote inteiro, calado, a cada 30s (foi o que aconteceu com retencoes_frota
+// em 10/09 e com sinistros em 21/09).
+// =============================================================================
+const RESPONSAVEL_POR_TIPO_ERRO = {
+  'ERRO MOTORISTA':         'VICTOR HUGO',
+  'ERRO LOGÍSTICO':         'VICTOR HUGO',
+  'PROBLEMA MECÂNICO':      'VICTOR HUGO',
+  'RESP. NÃO IDENTIFICADO': 'VICTOR HUGO',
+  'ERRO COMERCIAL':         'TIAGO FERREIRA',
+  'ERRO INDÚSTRIA':         'TIAGO FERREIRA',
+  'ERRO CLIENTE':           'TIAGO FERREIRA'
+  // ERRO CARREGAMENTO não entra aqui de propósito: sai do turno do
+  // separador/conferente, em supervisorCarregamentoDaSecao().
+  // OUTRO (categoria antiga) também não: não há a quem atribuir um registro
+  // que ninguém classificou ainda — ele aparece como "—" e pede reclassificação.
+};
+
+const SUPERVISORES_CARREGAMENTO = {
+  SECO:    'MARCOS ADRIANO',
+  TURNO_1: 'MELQUIADES NETO',
+  TURNO_2: 'GUSTAVO CAMARA'
+};
+
+// Supervisor do carregamento a partir da `secao` do colaboradores_cd.
+//
+// O 3º TURNO NÃO EXISTE na operação — é nomenclatura de DP. Em 22/09/2026 os 5
+// colaboradores que estavam nessa seção foram migrados para o 2º turno e a
+// opção saiu do cadastro. A linha do 3º turno FICA aqui de propósito, como
+// rede: colaboradores_cd não tem `atualizado_em`, então o desempate por carimbo
+// do pull não vale para ela e um aparelho com cache sujo pode devolver a seção
+// antiga. Sem esta linha, essas cinco pessoas sumiriam do filtro; com ela,
+// continuam apontando para o mesmo supervisor.
+//
+// Não confundir com turnoPadraoDoUsuario(), que responde outra pergunta (em que
+// turno o USUÁRIO LOGADO lança o Resumo Diário) e por isso devolve null no que
+// não reconhece. Aqui, null é devolução sem responsável na tela do gerente.
+function supervisorCarregamentoDaSecao(secao) {
+  const s = normalizeStr(secao);
+  if (!s) return '';
+  if (s.includes('SECO')) return SUPERVISORES_CARREGAMENTO.SECO;
+  if (/\b1\s*TURNO/.test(s)) return SUPERVISORES_CARREGAMENTO.TURNO_1;
+  if (/\b2\s*TURNO/.test(s)) return SUPERVISORES_CARREGAMENTO.TURNO_2;
+  if (/\b3\s*TURNO/.test(s)) return SUPERVISORES_CARREGAMENTO.TURNO_2;  // ver comentário acima
+  return '';
+}
+
+// A seção cadastrada de um colaborador do CD, pelo NOME gravado na apuração.
+//
+// Casamento exato e depois por substring, igual a turnoPadraoDoUsuario — e pelo
+// mesmo motivo: o mesmo nome aparece grafado de mais de um jeito. O que NÃO se
+// repete daquela função é o filtro `ativo !== false`: aqui se está respondendo
+// de quem era a responsabilidade NAQUELA devolução, e desligar alguém não pode
+// apagar o supervisor de um erro que já aconteceu.
+function secaoDoColaboradorCd(nome) {
+  const alvo = normalizeStr(nome);
+  if (!alvo) return '';
+  const colabs = (db.data.colaboradores_cd || []).filter(c => c && c.nome && !c.is_deleted);
+  let colab = colabs.find(c => normalizeStr(c.nome) === alvo);
+  if (!colab) colab = colabs.find(c => { const n = normalizeStr(c.nome); return n.length > 5 && (n.includes(alvo) || alvo.includes(n)); });
+  return colab && colab.secao ? colab.secao : '';
+}
+
+// Quem responde por esta devolução. Lista, e não nome único, por causa do
+// ERRO CARREGAMENTO: separador e conferente podem ser de turnos diferentes
+// (na base de hoje, DEV-021 e DEV-095 são assim) e aí os DOIS supervisores
+// precisam enxergar o chamado — cada um tem uma pessoa a cobrar.
+// Devolve [{ nome, papel }]; papel só é preenchido no carregamento.
+function responsaveisDaDevolucao(dev) {
+  if (!dev) return [];
+  const tipo = String(dev.tipo_erro || '').trim().toUpperCase();
+  if (tipo !== 'ERRO CARREGAMENTO') {
+    const nome = RESPONSAVEL_POR_TIPO_ERRO[tipo];
+    return nome ? [{ nome, papel: '' }] : [];
+  }
+  const out = [];
+  [['separador_apurado', 'Separador'], ['conferente_apurado', 'Conferente']].forEach(([campo, papel]) => {
+    const sup = supervisorCarregamentoDaSecao(secaoDoColaboradorCd(dev[campo]));
+    if (!sup) return;
+    const ja = out.find(o => o.nome === sup);
+    if (ja) { ja.papel += ' / ' + papel; return; }
+    out.push({ nome: sup, papel });
+  });
+  return out;
+}
+
+function nomesResponsaveisDaDevolucao(dev) {
+  return responsaveisDaDevolucao(dev).map(r => r.nome);
+}
+
+// Texto para a tela e para o PDF. Quando o carregamento dá dois supervisores,
+// sai "FULANO (Separador) · SICRANO (Conferente)" — quem olha precisa saber
+// por que são dois, senão parece erro do sistema.
+function textoResponsavelDaDevolucao(dev) {
+  const rs = responsaveisDaDevolucao(dev);
+  if (rs.length === 0) return '—';
+  return rs.map(r => r.papel ? `${r.nome} (${r.papel})` : r.nome).join(' · ');
+}
+
+// Todos os nomes que o filtro pode oferecer, em ordem alfabética.
+function todosResponsaveisDevolucao() {
+  const set = new Set([
+    ...Object.values(RESPONSAVEL_POR_TIPO_ERRO),
+    ...Object.values(SUPERVISORES_CARREGAMENTO)
+  ]);
+  return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function opcoesResponsavelDevolucao(valorAtual) {
+  const atual = String(valorAtual || '');
+  return todosResponsaveisDevolucao()
+    .map(n => `<option value="${n}"${atual === n ? ' selected' : ''}>${n}</option>`)
+    .join('');
+}
+
+// O predicado do filtro, um só, usado pela Análise e pela Tratativa.
+// '__SEM__' isola o que não tem responsável (hoje: só a categoria antiga
+// OUTRO, e carregamento cujo separador/conferente não casa com o cadastro) —
+// é essa a fila que precisa de reclassificação.
+function devolucaoCasaResponsavel(dev, filtro) {
+  if (!filtro) return true;
+  const nomes = nomesResponsaveisDaDevolucao(dev);
+  if (filtro === '__SEM__') return nomes.length === 0;
+  return nomes.includes(filtro);
+}
+
+// As seções oferecidas no cadastro de colaboradores do CD.
+//
+// O 3º TURNO SAIU EM 22/09/2026. Não existe na operação — é nomenclatura que
+// só o DP usa. Os 5 colaboradores que estavam nessa seção (Cicero, Wilian,
+// Ueslei, Igor e Klaefy) foram migrados para o 2º turno no mesmo dia, e
+// nenhuma outra tabela tinha uma linha sequer com 3º turno.
+//
+// `colaborador` opcional: quando informado e ainda gravado numa seção que não
+// está mais na lista, ela volta só para ele. É o que impede o <select> de abrir
+// na primeira opção e trocar a seção da pessoa em silêncio no primeiro save —
+// colaboradores_cd não tem `atualizado_em`, então o desempate por carimbo do
+// pull não protege essa tabela e um aparelho com cache antigo pode reapresentar
+// a seção velha a qualquer momento.
+const SECOES_CD = [
+  'CARREGAMENTO FRIOS - 1 TURNO',
+  'CARREGAMENTO FRIOS - 2 TURNO',
+  'CARREGAMENTO SECOS',
+  'CARREGAMENTO'
+];
+
+function secoesParaColaborador(colaborador) {
+  const atual = colaborador && colaborador.secao ? String(colaborador.secao).trim() : '';
+  if (atual && !SECOES_CD.includes(atual)) return [...SECOES_CD, atual];
+  return [...SECOES_CD];
+}
+
+// ERRO CARREGAMENTO EXIGE SEPARADOR E CONFERENTE (22/09/2026).
+//
+// Não é higiene de cadastro: é o que torna o chamado cobrável. Em todo tipo de
+// erro o responsável sai direto do tipo; no carregamento ele sai do TURNO de
+// quem separou e de quem conferiu. Sem os dois nomes, responsaveisDaDevolucao()
+// devolve lista vazia e a devolução cai em "sem responsável" — o gerente vê o
+// erro e não vê de quem cobrar, que é exatamente o problema que esta entrega
+// veio resolver.
+//
+// Vale só para ERRO CARREGAMENTO. Os outros tipos continuam podendo salvar sem
+// separador/conferente, de propósito: numa devolução comercial ou de indústria
+// o responsável já nasce identificado pelo tipo, e cobrar dois campos que não
+// mudam nada seria atrito à toa no SAC (24 das 93 de hoje são comerciais).
+//
+// Chamada pelos DOIS caminhos que gravam apuração — o formulário da Análise e
+// o modal de editar análise. Devolve false e avisa quando falta algo.
+function exigeSeparadorConferente(tipoErro, separador, conferente) {
+  if (String(tipoErro || '').trim().toUpperCase() !== 'ERRO CARREGAMENTO') return true;
+  const faltando = [];
+  if (!String(separador  || '').trim()) faltando.push('Separador');
+  if (!String(conferente || '').trim()) faltando.push('Conferente');
+  if (faltando.length === 0) return true;
+  alert(
+    `⚠️ ERRO CARREGAMENTO exige ${faltando.join(' e ')}.\n\n` +
+    `É pelo turno do separador e do conferente que o sistema sabe qual supervisor responde pela devolução ` +
+    `(1º turno, 2º turno ou Seco). Sem esse nome, o gestor vê o erro e não vê de quem cobrar.\n\n` +
+    `Selecione ${faltando.length > 1 ? 'os dois campos' : 'o campo'} e salve de novo.`
+  );
+  return false;
+}
+
+// A MESMA busca da Análise e da Tratativa (22/09/2026). Era só da Análise; a
+// Tratativa não tinha busca nenhuma, e com o volume de devoluções que subiu o
+// gestor passou a percorrer a lista no olho.
+//
+// SUBSTRING DE PROPÓSITO, e não casamento do número inteiro: digitar "42" tem
+// de trazer a DEV-042. Que traga junto a DEV-142, a DEV-242 e a DEV-420 é o
+// comportamento pedido — é mais barato ler quatro linhas do que não achar a
+// que se procura. Pelo mesmo motivo o protocolo (DEV-2026-042) entra na busca:
+// quem digita "42" acha o registro pelos dois números.
+//
+// normalizeStr e não toLowerCase: é a mesma regra do resto do app desde a
+// 6.6.0 (colapsa acento e espaço repetido), e "EDSON  DOS  SANTOS", gravado
+// com espaço duplo, precisa casar com o que a pessoa digita.
+function devolucaoCasaBusca(dev, termo) {
+  const q = normalizeStr(termo);
+  if (!q) return true;
+  return normalizeStr(dev.numero_devolucao).includes(q)
+      || normalizeStr(dev.numero_protocolo).includes(q)
+      || normalizeStr(dev.cliente_nome).includes(q)
+      || normalizeStr(dev.nota_fiscal).includes(q);
+}
+
+// O aviso de aba (22/09/2026). Buscar "42" numa aba que não tem a DEV-042
+// devolvia "Nenhuma ocorrência encontrada" — indistinguível de "essa devolução
+// não existe". Quem procura um protocolo não sabe, e não tem por que saber, se
+// ele já foi concluído. O aviso diz onde está e leva até lá.
+function avisoOutraAba(qtdOutraAba, rotuloOutraAba, onclickIr) {
+  if (!qtdOutraAba) return '';
+  return `<div class="mt-3 bg-sky-950/50 border border-sky-800 rounded-lg p-3 flex flex-wrap items-center justify-between gap-2">
+      <span class="text-xs text-sky-200">🔎 Nenhuma nesta aba — <b>${qtdOutraAba}</b> em <b>${rotuloOutraAba}</b>.</span>
+      <button onclick="${onclickIr}" class="bg-sky-700 hover:bg-sky-600 text-white font-bold px-3 py-1.5 rounded-lg text-[11px] shadow">Ir para ${rotuloOutraAba}</button>
+    </div>`;
+}
+
 // ===== DASHBOARD =====
 function getSlaBreakdown(list, dateField) {
   const agora = Date.now();
@@ -8263,22 +8492,18 @@ function renderSacInvestigacaoView() {
   const fDataDe = window._invFiltroDataDe || '';
   const fDataAte = window._invFiltroDataAte || '';
   const fTexto = window._invFiltroTexto || '';
+  const fResp = window._invFiltroResponsavel || '';
 
   let devsFiltrados = todosDevs;
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   devsFiltrados = devsFiltrados.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDataDe, fDataAte));
-  if (fTexto) {
-    // Era uma normalizacao propria, quase igual a normalizeStr mas sem colapsar
-    // espaco repetido — e "EDSON  DOS  SANTOS", que esta gravado assim no
-    // banco, nunca casava com o cadastro. Uma regra so (v6.6.0).
-    const norm = normalizeStr;
-    const q = norm(fTexto);
-    devsFiltrados = devsFiltrados.filter(d =>
-      norm(d.numero_devolucao || d.numero_protocolo).includes(q) ||
-      norm(d.cliente_nome).includes(q) ||
-      norm(d.nota_fiscal).includes(q)
-    );
-  }
+  // A busca era escrita aqui e em lugar nenhum mais; passou para
+  // devolucaoCasaBusca(), compartilhada com a Tratativa, para as duas telas não
+  // divergirem. Corrige de passagem um caso que ficava de fora: o protocolo só
+  // era consultado quando numero_devolucao estava vazio (`a || b`), então numa
+  // devolução com os dois preenchidos não se achava nada pelo DEV-2026-xxx.
+  devsFiltrados = devsFiltrados.filter(d => devolucaoCasaBusca(d, fTexto));
+  devsFiltrados = devsFiltrados.filter(d => devolucaoCasaResponsavel(d, fResp));
 
   const pendentes = devsFiltrados.filter(d => !d.motivo_real_causa_raiz || d.motivo_real_causa_raiz.trim() === '');
   const monitorados = devsFiltrados.filter(d => d.motivo_real_causa_raiz && d.motivo_real_causa_raiz.trim() !== '');
@@ -8332,6 +8557,17 @@ function renderSacInvestigacaoView() {
               class="bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs w-40 sm:w-56">
             ${fTexto ? `<button onclick="window._invFiltroTexto=''; renderApp()" class="text-slate-400 hover:text-white text-xs font-bold" title="Limpar busca">✕</button>` : ''}
           </div>
+          <!-- Filtro de responsável (22/09/2026): o mesmo da Tratativa. Aqui
+               ele só tem efeito na aba Monitorados — na Pendentes ainda não há
+               tipo de erro classificado, que é de onde o responsável sai. -->
+          <div class="flex items-center gap-1.5 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
+            <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">👤 Responsável:</span>
+            <select id="inv-filtro-responsavel" onchange="window._invFiltroResponsavel=this.value; renderApp();" class="bg-slate-800 border border-slate-700 text-purple-300 rounded p-1 text-xs font-semibold">
+              <option value="">Todos</option>
+              ${opcoesResponsavelDevolucao(fResp)}
+              <option value="__SEM__" ${fResp==='__SEM__'?'selected':''}>— Sem responsável definido</option>
+            </select>
+          </div>
           <!-- Ordenação por campo -->
           <div class="flex items-center gap-1.5 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
             <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">🔃 Ordenar:</span>
@@ -8369,7 +8605,14 @@ function renderSacInvestigacaoView() {
         </div>
       </div>
 
-      ${exibidos.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">Nenhuma ocorrência encontrada nesta categoria.</div>` :
+      ${exibidos.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">
+          Nenhuma ocorrência encontrada nesta categoria.
+          ${avisoOutraAba(
+            activeInvestigacaoSubTab === 'pendentes' ? monitorados.length : pendentes.length,
+            activeInvestigacaoSubTab === 'pendentes' ? 'Monitorados' : 'Pendentes',
+            `switchInvestigacaoSubTab('${activeInvestigacaoSubTab === 'pendentes' ? 'monitorados' : 'pendentes'}')`
+          )}
+        </div>` :
       exibidos.map(d => `
         <div class="bg-slate-900 border ${d.motivo_real_causa_raiz?'border-emerald-800/60':'border-amber-800/60'} rounded-xl p-5 shadow-xl space-y-4">
           <!-- Cabeçalho -->
@@ -8434,16 +8677,19 @@ function renderSacInvestigacaoView() {
                 <input type="text" id="inv-erro-outro-${d.id}" value="${d.tipo_erro_outro||''}" placeholder="Especifique o outro erro..." class="${d.tipo_erro==='OUTRO'?'':'hidden'} mt-1 w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
               </div>
 
+              <!-- O " *" já sai no HTML quando o registro JÁ está classificado
+                   como ERRO CARREGAMENTO; marcarSeparadorConferenteObrigatorio()
+                   cuida de quem MUDA o tipo com a tela aberta. -->
               <div class="grid grid-cols-2 gap-2">
                 <div>
-                  <label class="block text-[10px] text-slate-300 mb-1">Separador (Equipe CD)</label>
+                  <label class="block text-[10px] text-slate-300 mb-1">Separador (Equipe CD)${d.tipo_erro === 'ERRO CARREGAMENTO' ? ' <span class="text-red-400 font-bold">*</span>' : ''}</label>
                   <select id="inv-sep-${d.id}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
                     <option value="">-- Não identificado --</option>
                     ${separadores.map(s => `<option value="${s}" ${(d.separador_apurado||d.separador_nome)===s?'selected':''}>${s}</option>`).join('')}
                   </select>
                 </div>
                 <div>
-                  <label class="block text-[10px] text-slate-300 mb-1">Conferente (Equipe CD)</label>
+                  <label class="block text-[10px] text-slate-300 mb-1">Conferente (Equipe CD)${d.tipo_erro === 'ERRO CARREGAMENTO' ? ' <span class="text-red-400 font-bold">*</span>' : ''}</label>
                   <select id="inv-conf-${d.id}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
                     <option value="">-- Não identificado --</option>
                     ${conferentes.map(s => `<option value="${s}" ${(d.conferente_apurado||d.conferente_nome)===s?'selected':''}>${s}</option>`).join('')}
@@ -8525,21 +8771,21 @@ function editarInvestigacaoModal(id) {
 
         <div>
           <label class="block text-[10px] text-amber-400 font-bold mb-1">Tipo de Erro *</label>
-          <select id="ed-inv-erro" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 font-bold">
+          <select id="ed-inv-erro" required onchange="marcarSeparadorConferenteObrigatorio(null, this.value, 'ed')" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 font-bold">
             ${opcoesTipoErro(d.tipo_erro)}
           </select>
         </div>
 
         <div class="grid grid-cols-2 gap-2">
           <div>
-            <label class="block text-[10px] text-slate-400 mb-1">Separador</label>
+            <label class="block text-[10px] text-slate-400 mb-1">Separador${d.tipo_erro === 'ERRO CARREGAMENTO' ? ' <span class="text-red-400 font-bold">*</span>' : ''}</label>
             <select id="ed-inv-sep" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
               <option value="">-- Não se aplica --</option>
               ${separadores.map(s => `<option value="${s}" ${(d.separador_apurado||d.separador_nome)===s?'selected':''}>${s}</option>`).join('')}
             </select>
           </div>
           <div>
-            <label class="block text-[10px] text-slate-400 mb-1">Conferente</label>
+            <label class="block text-[10px] text-slate-400 mb-1">Conferente${d.tipo_erro === 'ERRO CARREGAMENTO' ? ' <span class="text-red-400 font-bold">*</span>' : ''}</label>
             <select id="ed-inv-conf" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
               <option value="">-- Não se aplica --</option>
               ${separadores.map(s => `<option value="${s}" ${(d.conferente_apurado||d.conferente_nome)===s?'selected':''}>${s}</option>`).join('')}
@@ -8597,15 +8843,23 @@ async function handleSalvarEdicaoInvestigacao(e, id) {
   // SEM o video - mesma trava que a tela de abertura ja usa.
   if (typeof jrPodeSalvarComVideos === 'function' && !jrPodeSalvarComVideos()) return;
 
+  // A MESMA trava do formulário da Análise, e não uma parecida: travar só lá
+  // deixaria este modal como porta dos fundos para salvar um ERRO CARREGAMENTO
+  // sem separador e sem conferente.
+  const edErro = document.getElementById('ed-inv-erro').value;
+  const edSep  = document.getElementById('ed-inv-sep').value;
+  const edConf = document.getElementById('ed-inv-conf').value;
+  if (!exigeSeparadorConferente(edErro, edSep, edConf)) return;
+
   const dev = db.data.ocorrencias_devolucao.find(x => x.id == id);
   if (dev) {
     db.saveVersion('ocorrencias_devolucao', dev);
   }
   db.updateInvestigacao(id, {
     motivo_real_causa_raiz: document.getElementById('ed-inv-causa').value,
-    tipo_erro: document.getElementById('ed-inv-erro').value,
-    separador_apurado: document.getElementById('ed-inv-sep').value,
-    conferente_apurado: document.getElementById('ed-inv-conf').value,
+    tipo_erro: edErro,
+    separador_apurado: edSep,
+    conferente_apurado: edConf,
     acao_tomada: document.getElementById('ed-inv-acao').value,
     // A foto sai daqui pelo mesmo motivo da abertura (migration 38): vai para
     // a fila logo abaixo, em vez de virar base64 dentro do registro. O vídeo
@@ -8634,6 +8888,37 @@ async function handleSalvarEdicaoInvestigacao(e, id) {
 function toggleOutroErro(devId, valor) {
   const outro = document.getElementById(`inv-erro-outro-${devId}`);
   if (outro) outro.classList.toggle('hidden', valor !== 'OUTRO');
+  marcarSeparadorConferenteObrigatorio(devId, valor);
+}
+
+// Acende o " *" nos rótulos de Separador e Conferente quando o tipo escolhido
+// é ERRO CARREGAMENTO. A trava de verdade é exigeSeparadorConferente(), no
+// submit; isto existe só para a pessoa ver a exigência ANTES de preencher o
+// resto e tomar o alerta na hora de salvar.
+//
+// Não dá para usar o atributo `required` do HTML aqui: a obrigatoriedade
+// depende de OUTRO campo do mesmo formulário, e o <select> é redesenhado
+// inteiro a cada renderApp(). O rótulo é mexido direto no DOM, sem redesenhar
+// — redesenhar perderia o que já estava digitado nos outros cards da tela.
+function marcarSeparadorConferenteObrigatorio(devId, valor, prefixo) {
+  const obrigatorio = String(valor || '').trim().toUpperCase() === 'ERRO CARREGAMENTO';
+  const p = prefixo || 'inv';
+  ['sep', 'conf'].forEach(sufixo => {
+    const campo = document.getElementById(p === 'inv' ? `inv-${sufixo}-${devId}` : `ed-inv-${sufixo}`);
+    if (!campo) return;
+    const label = campo.parentElement ? campo.parentElement.querySelector('label') : null;
+    if (label) {
+      // O texto base sai do próprio rótulo na primeira passada e fica guardado:
+      // as duas telas escrevem o rótulo de um jeito ("Separador (Equipe CD)" na
+      // Análise, "Separador" no modal) e reescrever com um texto fixo daqui
+      // apagaria a diferença.
+      if (!label.dataset.rotuloBase) label.dataset.rotuloBase = label.textContent.replace(/\s*\*\s*$/, '').trim();
+      label.innerHTML = obrigatorio
+        ? `${label.dataset.rotuloBase} <span class="text-red-400 font-bold">*</span>`
+        : label.dataset.rotuloBase;
+    }
+    campo.classList.toggle('border-red-600', obrigatorio && !campo.value);
+  });
 }
 
 // QUEM DIVIDE A CONTA DO ADIANTAMENTO. Uma definicao so, porque ate 04/09/2026
@@ -8892,6 +9177,8 @@ async function handleInvestigacaoSubmit(e, devId) {
   const erroOutro = document.getElementById(`inv-erro-outro-${devId}`)?.value || '';
   const acaoVal = document.getElementById(`inv-acao-${devId}`)?.value || '';
   const respAnalise = document.getElementById(`inv-resp-${devId}`)?.value || '';
+  const sepVal = document.getElementById(`inv-sep-${devId}`)?.value || '';
+  const confVal = document.getElementById(`inv-conf-${devId}`)?.value || '';
 
   if (!causaVal) {
     alert('Por favor, selecione a Causa Raiz Real!');
@@ -8901,6 +9188,7 @@ async function handleInvestigacaoSubmit(e, devId) {
     alert('Por favor, selecione o Tipo de Erro / Categoria!');
     return;
   }
+  if (!exigeSeparadorConferente(erroSel, sepVal, confVal)) return;
   if (!acaoVal.trim()) {
     alert('Por favor, descreva a Ação Tomada / Encaminhamento!');
     return;
@@ -8919,8 +9207,8 @@ async function handleInvestigacaoSubmit(e, devId) {
     motivo_real_causa_raiz: causaVal,
     tipo_erro: erroSel,
     tipo_erro_outro: erroOutro,
-    separador_apurado: document.getElementById(`inv-sep-${devId}`)?.value || '',
-    conferente_apurado: document.getElementById(`inv-conf-${devId}`)?.value || '',
+    separador_apurado: sepVal,
+    conferente_apurado: confVal,
     video_investigacao_url: videoInvUrl,
     // FOTO NÃO ENTRA AQUI (achado de 21/09/2026). Este formulário era o
     // ÚNICO caminho da devolução que ainda gravava foto em base64 dentro do
@@ -8970,6 +9258,8 @@ function renderGestaoGestorView() {
   const filtroDataDe = window._filtroGestorDataDe || '';
   const filtroDataAte = window._filtroGestorDataAte || '';
   const filtroCarga = window._filtroGestorCarga || '';
+  const filtroBusca = window._filtroGestorBusca || '';
+  const filtroResp = window._filtroGestorResponsavel || '';
 
   const filtroSort = window._filtroGestorSort || 'data_desc';
   const todosPendentes = todosDevs.filter(d => d.status_gestao !== 'CONCLUIDO');
@@ -8981,6 +9271,8 @@ function renderGestaoGestorView() {
   const passaFiltros = d => {
     if (filtroCarga && !String(d.carga_numero || d.carga || d.carga_rota || '').toLowerCase().includes(filtroCarga.toLowerCase().trim())) return false;
     if (filtroTipoErro && d.tipo_erro !== filtroTipoErro) return false;
+    if (!devolucaoCasaBusca(d, filtroBusca)) return false;
+    if (!devolucaoCasaResponsavel(d, filtroResp)) return false;
     const criado = d.criado_em ? d.criado_em.split('T')[0] : '';
     if (filtroDataDe && criado < filtroDataDe) return false;
     if (filtroDataAte && criado > filtroDataAte) return false;
@@ -9071,6 +9363,26 @@ function renderGestaoGestorView() {
           <span class="text-[10px] text-slate-400">${devsExibidos.length} ocorrência(s) encontrada(s)</span>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end pt-1">
+          <!-- Busca por número (22/09/2026). Digitar "42" traz a DEV-042.
+               O foco é devolvido depois do renderApp porque a tela inteira é
+               redesenhada a cada tecla — mesmo tratamento da busca da Análise. -->
+          <div class="sm:col-span-2">
+            <label class="block text-[10px] text-sky-400 font-bold mb-1">🔎 Nº da Devolução / Cliente / NF</label>
+            <div class="flex items-center gap-1.5">
+              <input type="text" id="filtro-gestor-busca" value="${filtroBusca}" placeholder="Ex: 42, DEV-042, cliente..."
+                oninput="window._filtroGestorBusca=this.value; renderApp(); setTimeout(()=>{ const el=document.getElementById('filtro-gestor-busca'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0);"
+                class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs placeholder:text-slate-600 focus:border-sky-500 focus:outline-none">
+              ${filtroBusca ? `<button onclick="window._filtroGestorBusca=''; renderApp()" class="text-slate-400 hover:text-white text-xs font-bold px-1 shrink-0" title="Limpar busca">✕</button>` : ''}
+            </div>
+          </div>
+          <div>
+            <label class="block text-[10px] text-purple-400 font-bold mb-1">👤 Responsável</label>
+            <select id="filtro-gestor-responsavel" onchange="aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-purple-300 font-bold rounded-lg p-2 text-xs">
+              <option value="">Todos os Responsáveis</option>
+              ${opcoesResponsavelDevolucao(filtroResp)}
+              <option value="__SEM__" ${filtroResp==='__SEM__'?'selected':''}>— Sem responsável definido</option>
+            </select>
+          </div>
           <div>
             <label class="block text-[10px] text-cyan-400 font-bold mb-1">Nº da Carga</label>
             <input type="text" id="filtro-gestor-carga" value="${filtroCarga}" placeholder="Ex: 43125..." oninput="forcarMaiuscula(this); aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
@@ -9113,7 +9425,14 @@ function renderGestaoGestorView() {
       </div>
 
       <!-- LISTA DE OCORRÊNCIAS NO PAINEL ATIVO -->
-      ${devsExibidos.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">Nenhuma ocorrência encontrada nesta aba com os filtros informados.</div>` :
+      ${devsExibidos.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">
+          Nenhuma ocorrência encontrada nesta aba com os filtros informados.
+          ${avisoOutraAba(
+            activeGestorTab === 'pendentes' ? concluidosFiltrados.length : pendentesFiltrados.length,
+            activeGestorTab === 'pendentes' ? 'Concluídas' : 'Pendentes',
+            `switchGestorSubTab('${activeGestorTab === 'pendentes' ? 'concluidos' : 'pendentes'}')`
+          )}
+        </div>` :
       devsExibidos.map(d => `
         <div class="bg-slate-900 border ${d.status_gestao==='CONCLUIDO'?'border-emerald-800/60':'border-amber-800/60'} rounded-xl shadow-xl overflow-hidden">
           <!-- Cabeçalho -->
@@ -9157,6 +9476,15 @@ function renderGestaoGestorView() {
               <div class="text-slate-400 text-[10px]">${d.conferente_apurado||d.conferente_nome||'—'}</div>
             </div>
           </div>
+          <!-- Responsável pela correção: derivado do tipo de erro (e do turno
+               do separador/conferente, no carregamento). Fica em faixa própria
+               porque é o que o gerente procura quando abre a tela. -->
+          <div class="px-4 pt-3">
+            <div class="bg-purple-950/40 border border-purple-800/60 rounded-lg px-3 py-2 flex flex-wrap items-center gap-2">
+              <span class="text-[9px] text-purple-400 uppercase font-bold">👤 Responsável pela correção</span>
+              <span class="text-xs font-black ${nomesResponsaveisDaDevolucao(d).length ? 'text-purple-200' : 'text-amber-400 italic'}">${textoResponsavelDaDevolucao(d)}</span>
+            </div>
+          </div>
           <!-- O que o cliente reclamou: o gestor decide desconto sobre isto.
                Fica FORA do <form> de propósito - é leitura, não campo, e assim
                não interfere no que o gestor está digitando. -->
@@ -9197,7 +9525,10 @@ function renderGestaoGestorView() {
               </div>
 
               <div class="flex flex-wrap justify-between items-center gap-2 pt-2">
-                <div>
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" onclick="imprimirTratativaDevolucaoPdf('${d.id}')" class="bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold px-4 py-2 rounded-lg text-xs border border-emerald-700/50 shadow flex items-center gap-1.5 transition" title="Abertura, Análise e Tratativa em folhas separadas">
+                    <span>🖨️</span> Imprimir Tratativa
+                  </button>
                   ${d.tipo_erro === 'ERRO MOTORISTA' ? `
                     <button type="button" onclick="gerarAdiantamentoPdf('${d.id}')" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold px-4 py-2 rounded-lg text-xs shadow flex items-center gap-1.5 transition">
                       <span>📄</span> Emitir Adiantamento (PDF)
@@ -9218,6 +9549,10 @@ function aplicarFiltroGestor() {
   window._filtroGestorDataDe = document.getElementById('filtro-gestor-data-de')?.value || '';
   window._filtroGestorDataAte = document.getElementById('filtro-gestor-data-ate')?.value || '';
   window._filtroGestorCarga = document.getElementById('filtro-gestor-carga')?.value || '';
+  window._filtroGestorResponsavel = document.getElementById('filtro-gestor-responsavel')?.value || '';
+  // A busca NÃO é lida aqui: ela grava direto em window no oninput, e reler o
+  // campo neste ponto apagaria o que a pessoa digitou quando outro filtro
+  // mudasse antes do redesenho.
   window._filtroGestorSort = document.getElementById('filtro-gestor-sort')?.value || window._filtroGestorSort || 'data_desc';
   renderApp();
 }
@@ -9228,6 +9563,8 @@ function limparFiltroGestor() {
   window._filtroGestorDataDe = '';
   window._filtroGestorDataAte = '';
   window._filtroGestorCarga = '';
+  window._filtroGestorBusca = '';
+  window._filtroGestorResponsavel = '';
   window._filtroGestorSort = 'data_desc';
   renderApp();
 }
@@ -18275,13 +18612,16 @@ function abrirModalEditarColaboradorCD(id) {
     "GERENTE DE CD"
   ];
 
-  const secoesDisponiveis = [
-    "CARREGAMENTO FRIOS - 1 TURNO",
-    "CARREGAMENTO FRIOS - 2 TURNO",
-    "CARREGAMENTO FRIOS - 3 TURNO",
-    "CARREGAMENTO SECOS",
-    "CARREGAMENTO"
-  ];
+  // O 3º TURNO saiu daqui em 22/09/2026: não existe na operação, é nomenclatura
+  // de DP. Os 5 colaboradores que estavam nele foram migrados para o 2º turno
+  // no mesmo dia (e nenhuma outra tabela — resumo, ocorrências, cortes, medidas
+  // — tinha uma linha sequer com 3º turno).
+  //
+  // A opção volta SOZINHA para quem ainda estiver gravado nela, via
+  // secoesParaColaborador(). Sem isso, abrir o cadastro de uma dessas pessoas
+  // num aparelho com cache antigo mostraria o <select> na PRIMEIRA opção — e
+  // salvar qualquer outro campo mudaria a seção dela para o 1º turno, calado.
+  const secoesDisponiveis = secoesParaColaborador(item);
 
   const container = document.getElementById('modal-container');
   if (!container) return;
@@ -18462,13 +18802,9 @@ function renderCadSubTabContent() {
       "GERENTE DE CD"
     ];
 
-    const secoesDisponiveis = [
-      "CARREGAMENTO FRIOS - 1 TURNO",
-      "CARREGAMENTO FRIOS - 2 TURNO",
-      "CARREGAMENTO FRIOS - 3 TURNO",
-      "CARREGAMENTO SECOS",
-      "CARREGAMENTO"
-    ];
+    // Formulário de cadastro NOVO: sem o 3º turno, que deixou de existir em
+    // 22/09/2026 (ver secoesParaColaborador). Ninguém novo nasce nele.
+    const secoesDisponiveis = secoesParaColaborador(null);
 
     return `
       <div class="space-y-5">
@@ -23239,6 +23575,7 @@ const MODULE_COLUMNS_MAP = {
     { id: 'motivo_real_causa_raiz', label: 'Causa Raiz Apurada' },
     { id: 'tipo_erro', label: 'Tipo de Erro' },
     { id: 'valor_reclamado', label: 'Valor Reclamado (R$)' },
+    { id: 'responsavel_correcao', label: 'Responsável pela Correção' },
     { id: 'status_gestao', label: 'Status Gestão' },
     { id: 'acao_gestor', label: 'Ação do Gestor' },
     { id: 'desconto_produtividade_gestor', label: 'Desconto Aplicado?' },
@@ -23553,7 +23890,12 @@ const MODULE_COLUMNS_MAP = {
 // Fonte de dados crus por módulo (mesma fonte usada na exportação em CSV)
 function getRawDataParaModulo(modulo) {
   if (modulo === 'devolucoes' || modulo === 'devolucao_abertura' || modulo === 'devolucao_analise' || modulo === 'devolucao_tratativa' || modulo === 'devolucao_retorno') {
-    return db.getDevolucoes();
+    // responsavel_correcao é DERIVADO (tipo de erro, e turno do
+    // separador/conferente no carregamento) e não existe no registro — por
+    // isso é anexado aqui, na saída, e não gravado. Assim a coluna chega ao
+    // CSV e ao Power BI sem criar campo novo em ocorrencias_devolucao, que é
+    // a tabela sem lista branca no cloudStore.
+    return db.getDevolucoes().map(d => ({ ...d, responsavel_correcao: textoResponsavelDaDevolucao(d) }));
   }
   if (modulo === 'viagens' || modulo === 'transporte_largada') {
     return db.getControleViagens();
@@ -24720,10 +25062,24 @@ function renderBoletimGerencialView() {
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-emerald-700/60 transition">
                   <div>
                     <div class="text-xs font-bold text-emerald-300 uppercase flex items-center gap-1"><span>📑</span> Ficha Individual de Devolução</div>
-                    <div class="text-[11px] text-slate-400 mt-1">Impressão da ficha completa do protocolo com fotos, produtos e tratativa.</div>
+                    <!-- Dizia "com fotos, produtos e tratativa" e não saía nem
+                         foto nem tratativa — só o cabeçalho da abertura e os
+                         itens. Corrigido em 22/09/2026, junto da impressão da
+                         tratativa, que é a que traz as três etapas. -->
+                    <div class="text-[11px] text-slate-400 mt-1">Cabeçalho da abertura e itens reclamados do protocolo.</div>
                   </div>
                   <button onclick="openPdfFilterModal('ficha_devolucao')" class="w-full bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold py-2 rounded-lg text-xs border border-emerald-700/50 flex items-center justify-center gap-1">
                     <span>🔍</span> Selecionar Ficha (PDF)
+                  </button>
+                </div>
+
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-purple-700/60 transition">
+                  <div>
+                    <div class="text-xs font-bold text-purple-300 uppercase flex items-center gap-1"><span>🖨️</span> Tratativa da Devolução</div>
+                    <div class="text-[11px] text-slate-400 mt-1">Abertura, Análise e Tratativa do Gestor em blocos separados, com o responsável pela correção. Sem fotos.</div>
+                  </div>
+                  <button onclick="openPdfFilterModal('tratativa_devolucao')" class="w-full bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold py-2 rounded-lg text-xs border border-purple-700/50 flex items-center justify-center gap-1">
+                    <span>🔍</span> Selecionar Devolução (PDF)
                   </button>
                 </div>
               </div>
@@ -25211,6 +25567,22 @@ function openPdfFilterModal(pdfType) {
           <span>📑</span> Imprimir Ficha em PDF
         </button>
       </div>`;
+  } else if (pdfType === 'tratativa_devolucao') {
+    title = '🖨️ Seleção para Impressão da Tratativa';
+    fieldsHtml = `
+      <div>
+        <label class="block text-xs font-bold text-slate-300 mb-1">Selecione a Devolução / Protocolo:</label>
+        <select id="pdf-filter-dev-id" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          ${devList.length === 0 ? `<option value="">Nenhuma devolução encontrada no sistema</option>` :
+            devList.map(d => `<option value="${d.id}">${d.numero_devolucao || d.numero_protocolo} — Cliente: ${d.cliente_nome} (Motorista: ${d.motorista_nome || 'N/I'})</option>`).join('')}
+        </select>
+        <div class="text-[10px] text-slate-400 mt-2">Sai em três blocos — Abertura, Análise e Tratativa do Gestor — com o responsável pela correção no topo. Etapa ainda não preenchida aparece marcada como pendente.</div>
+      </div>
+      <div class="pt-3">
+        <button onclick="confirmarEGerarPdf('tratativa_devolucao')" ${devList.length === 0 ? 'disabled' : ''} class="w-full bg-purple-600 hover:bg-purple-500 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
+          <span>🖨️</span> Imprimir Tratativa em PDF
+        </button>
+      </div>`;
   } else if (pdfType === 'resumo_cd') {
     title = '📦 Resumo Diário do Centro de Distribuição (CD)';
     fieldsHtml = `
@@ -25430,6 +25802,9 @@ function confirmarEGerarPdf(pdfType) {
     }
   } else if (pdfType === 'ficha_devolucao') {
     if (devId) imprimirFichaDevolucaoPdf(devId);
+    else alert('Selecione um protocolo válido.');
+  } else if (pdfType === 'tratativa_devolucao') {
+    if (devId) imprimirTratativaDevolucaoPdf(devId);
     else alert('Selecione um protocolo válido.');
   } else if (pdfType === 'ficha_oficina') {
     if (chamadoId) imprimirFichaOficinaChamadoPdf(chamadoId);
@@ -25683,6 +26058,203 @@ function gerarRelatorioDevolucoesPorRotaPdf() {
             }).join('')}
         </tbody>
       </table>
+    </body>
+    </html>
+  `);
+  win.document.close();
+}
+
+// =============================================================================
+// IMPRESSÃO DA TRATATIVA, COM AS TRÊS ETAPAS SEPARADAS (22/09/2026)
+//
+// O gestor precisa levar a devolução para a mesa de reunião, e até aqui a única
+// impressão existente (imprimirFichaDevolucaoPdf, logo abaixo) era a ficha da
+// ABERTURA: cabeçalho, motivo reclamado e itens. A análise não saía, a
+// tratativa não saía, e a causa raiz aparecia espremida na mesma linha do
+// motivo reclamado — justamente a distinção que a reunião discute.
+//
+// Aqui as três etapas são três blocos fechados, cada um com quem respondeu por
+// ele e quando. Quem lê consegue dizer, sem perguntar a ninguém, o que o
+// cliente reclamou, o que a apuração encontrou e o que o gestor decidiu.
+//
+// SEM FOTO, por decisão de 22/09/2026. Desde a migration 38 a foto é caminho no
+// Storage, não base64 no registro: entraria como <img src> remoto e só apareceria
+// no papel com o aparelho online no instante da impressão. Numa folha que vai
+// para reunião, imagem que falha às vezes é pior do que imagem nenhuma.
+// =============================================================================
+function imprimirTratativaDevolucaoPdf(devId) {
+  const dev = db.getDevolucoes().find(d => d.id == devId);
+  if (!dev) {
+    alert('Devolução não encontrada.');
+    return;
+  }
+  const win = window.open('', '_blank', 'width=900,height=950');
+  if (!win) {
+    alert('Bloqueador de pop-up detectado.');
+    return;
+  }
+
+  const esc = v => String(v === undefined || v === null || v === '' ? '—' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const dataHora = v => v ? new Date(v).toLocaleString('pt-BR') : '—';
+  const nomeUsuario = uid => {
+    if (!uid) return '—';
+    const u = (db.data.usuarios || []).find(x => String(x.id) === String(uid));
+    return u && u.nome ? u.nome : '—';
+  };
+  const campo = (rotulo, valor) => `<div class="field"><div class="field-lbl">${rotulo}</div><div class="field-val">${esc(valor)}</div></div>`;
+  const bloco = (n, titulo, quem, quando, miolo) => `
+    <div class="etapa">
+      <div class="etapa-head">
+        <span class="etapa-num">${n}</span>
+        <span class="etapa-tit">${titulo}</span>
+        <span class="etapa-meta">${esc(quem)} · ${esc(quando)}</span>
+      </div>
+      <div class="etapa-body">${miolo}</div>
+    </div>`;
+
+  const itens = Array.isArray(dev.itens) ? dev.itens : [];
+  const numero = dev.numero_devolucao || dev.numero_protocolo || dev.id;
+  const temAnalise = !!(dev.motivo_real_causa_raiz && String(dev.motivo_real_causa_raiz).trim());
+  const temTratativa = !!(dev.acao_gestor && String(dev.acao_gestor).trim());
+
+  const tabelaItens = itens.length === 0
+    ? `<div class="vazio">${dev.sem_itens ? 'Sem itens — ' + esc(dev.observacao_sem_itens) : 'Sem itens detalhados individualmente.'}</div>`
+    : `<table>
+        <thead><tr><th>Código</th><th>Descrição do Produto</th><th class="c">Qtd</th><th class="r">Vlr. Unit.</th><th class="r">Vlr. Total</th></tr></thead>
+        <tbody>${itens.map(i => {
+          const p = getDadosProduto(i);
+          return `<tr>
+            <td><b>${esc(p.codigo)}</b></td>
+            <td>${esc(p.descricao)}</td>
+            <td class="c"><b>${esc(i.quantidade || i.qtd || 1)}</b></td>
+            <td class="r">R$ ${(parseFloat(i.valor_unitario || i.preco || 0)).toFixed(2)}</td>
+            <td class="r"><b>R$ ${(parseFloat(i.valor_total || i.valor || 0)).toFixed(2)}</b></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+
+  win.document.write(`
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+      <meta charset="UTF-8">
+      <title>TRATATIVA DA DEVOLUÇÃO ${esc(numero)}</title>
+      <style>
+        @media print { @page { margin: 10mm; size: A4 portrait; } body { margin:0; padding:0; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .etapa { break-inside: avoid; } }
+        * { box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; padding: 14px; color: #0f172a; background: #fff; }
+        .header { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #0f172a; padding-bottom:9px; margin-bottom:12px; }
+        .logo { height: 42px; }
+        .header-title { text-align:right; }
+        .header-title h2 { margin:0; font-size:15px; font-weight:900; }
+        .header-title p { margin:2px 0 0; font-size:9px; color:#475569; }
+        .badge { background:#0f172a; color:#fff; padding:6px 12px; border-radius:4px; font-weight:bold; font-size:12px; text-align:center; text-transform:uppercase; margin-bottom:6px; }
+        .resp { border:2px solid #6d28d9; background:#f5f3ff; border-radius:4px; padding:7px 10px; margin-bottom:12px; text-align:center; }
+        .resp-lbl { font-size:8px; font-weight:bold; color:#6d28d9; text-transform:uppercase; letter-spacing:.5px; }
+        .resp-val { font-size:13px; font-weight:900; color:#4c1d95; margin-top:2px; }
+        .etapa { border:1px solid #cbd5e1; border-radius:5px; margin-bottom:11px; overflow:hidden; }
+        .etapa-head { background:#0f172a; color:#fff; padding:6px 10px; display:flex; align-items:center; gap:8px; }
+        .etapa-num { background:#fff; color:#0f172a; width:17px; height:17px; border-radius:50%; font-size:10px; font-weight:900; display:inline-flex; align-items:center; justify-content:center; flex:none; }
+        .etapa-tit { font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.5px; flex:1; }
+        .etapa-meta { font-size:8px; color:#cbd5e1; text-align:right; }
+        .etapa-body { padding:9px 10px; }
+        .grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-bottom:8px; }
+        .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; }
+        .field { border:1px solid #e2e8f0; background:#f8fafc; border-radius:3px; padding:5px 8px; }
+        .field-lbl { font-size:7.5px; font-weight:bold; color:#64748b; text-transform:uppercase; }
+        .field-val { font-size:10px; font-weight:bold; margin-top:1px; word-break:break-word; }
+        .texto-lbl { font-size:7.5px; font-weight:bold; color:#64748b; text-transform:uppercase; margin:7px 0 2px; }
+        .texto { border-left:3px solid #94a3b8; background:#f8fafc; padding:6px 9px; font-size:10px; white-space:pre-line; border-radius:0 3px 3px 0; }
+        .destaque { border-left-color:#b45309; background:#fffbeb; }
+        .decisao { border-left-color:#6d28d9; background:#f5f3ff; }
+        .pendente { border:1px dashed #cbd5e1; background:#f8fafc; padding:10px; text-align:center; font-size:10px; color:#64748b; font-style:italic; border-radius:3px; }
+        .desconto-sim { background:#fef2f2; border:1px solid #b91c1c; color:#991b1b; font-weight:900; font-size:10px; padding:6px 9px; border-radius:3px; margin-top:7px; }
+        .desconto-nao { background:#f0fdf4; border:1px solid #15803d; color:#166534; font-weight:bold; font-size:10px; padding:6px 9px; border-radius:3px; margin-top:7px; }
+        table { width:100%; border-collapse:collapse; font-size:9.5px; margin-top:5px; }
+        th, td { border:1px solid #cbd5e1; padding:4px 6px; text-align:left; }
+        th { background:#f1f5f9; font-weight:bold; text-transform:uppercase; font-size:8px; }
+        td.c, th.c { text-align:center; } td.r, th.r { text-align:right; }
+        .vazio { font-size:10px; color:#64748b; font-style:italic; padding:5px 0; }
+        .rodape { margin-top:12px; border-top:1px solid #cbd5e1; padding-top:6px; font-size:8px; color:#64748b; display:flex; justify-content:space-between; }
+        .assinaturas { display:grid; grid-template-columns:1fr 1fr; gap:26px; margin-top:26px; }
+        .ass { border-top:1px solid #0f172a; padding-top:4px; text-align:center; font-size:8.5px; color:#475569; }
+      </style>
+    </head>
+    <body onload="setTimeout(function(){ window.print(); }, 400)">
+      <div class="header">
+        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR" onerror="this.style.display='none'">
+        <div class="header-title">
+          <h2>JR DISTRIBUIDORA</h2>
+          <p>Tratativa de Devolução — Abertura, Análise e Decisão</p>
+        </div>
+      </div>
+
+      <div class="badge">DEVOLUÇÃO Nº ${esc(numero)}${dev.numero_protocolo && dev.numero_protocolo !== numero ? ' &nbsp;·&nbsp; PROTOCOLO ' + esc(dev.numero_protocolo) : ''}</div>
+
+      <div class="resp">
+        <div class="resp-lbl">Responsável pela correção</div>
+        <div class="resp-val">${esc(textoResponsavelDaDevolucao(dev))}</div>
+      </div>
+
+      ${bloco(1, 'Abertura — o que o cliente reclamou', nomeUsuario(dev.criado_por_usuario_id), dataHora(dev.criado_em), `
+        <div class="grid">
+          ${campo('Cliente', dev.cliente_nome)}
+          ${campo('Nota Fiscal', dev.nota_fiscal)}
+          ${campo('Valor Reclamado', 'R$ ' + (parseFloat(dev.valor_reclamado) || 0).toFixed(2))}
+          ${campo('Carga / Rota', (dev.carga_numero || '—') + ' / ' + (dev.carga_rota || '—'))}
+          ${campo('Motorista', dev.motorista_nome)}
+          ${campo('Veículo / Placa', dev.veiculo_placa)}
+        </div>
+        <div class="texto-lbl">Motivo reclamado</div>
+        <div class="texto destaque">${esc(dev.motivo_reclamado)}</div>
+        <div class="texto-lbl">Detalhamento da abertura</div>
+        <div class="texto">${esc(dev.detalhamento_texto)}</div>
+        <div class="texto-lbl">Itens reclamados (${itens.length}) · Forma de acerto: ${esc(dev.forma_acerto)}</div>
+        ${tabelaItens}
+      `)}
+
+      ${bloco(2, 'Análise &amp; Causa Raiz — o que a apuração encontrou',
+        dev.responsavel_analise || dev.atualizado_por || '—',
+        dataHora(dev.atualizado_em), temAnalise ? `
+        <div class="grid">
+          ${campo('Causa Raiz Apurada', dev.motivo_real_causa_raiz)}
+          ${campo('Tipo de Erro', dev.tipo_erro === 'OUTRO' && dev.tipo_erro_outro ? 'OUTRO — ' + dev.tipo_erro_outro : dev.tipo_erro)}
+          ${campo('Responsável pela Análise', dev.responsavel_analise)}
+        </div>
+        <div class="grid2">
+          ${campo('Separador Apurado', dev.separador_apurado || dev.separador_nome)}
+          ${campo('Conferente Apurado', dev.conferente_apurado || dev.conferente_nome)}
+        </div>
+        <div class="texto-lbl">Ação tomada / encaminhamento na análise</div>
+        <div class="texto">${esc(dev.acao_tomada)}</div>
+      ` : `<div class="pendente">⏳ Ocorrência ainda sem apuração de causa raiz.</div>`)}
+
+      ${bloco(3, 'Tratativa do Gestor — o que foi decidido',
+        nomeUsuario(dev.gestor_id),
+        dataHora(dev.data_acao_gestor), temTratativa ? `
+        <div class="grid2">
+          ${campo('Status da Gestão', dev.status_gestao === 'CONCLUIDO' ? 'CONCLUÍDO' : 'PENDENTE')}
+          ${campo('Registrado em', dataHora(dev.data_acao_gestor))}
+        </div>
+        <div class="texto-lbl">Ação do gestor / encaminhamento</div>
+        <div class="texto decisao">${esc(dev.acao_gestor)}</div>
+        <div class="${dev.desconto_produtividade_gestor ? 'desconto-sim' : 'desconto-nao'}">
+          ${dev.desconto_produtividade_gestor
+            ? '⚠️ COM desconto de produtividade — remuneração variável do colaborador'
+            : '✔ SEM desconto de produtividade'}
+        </div>
+      ` : `<div class="pendente">⏳ Ocorrência ainda sem parecer do gestor.</div>`)}
+
+      <div class="assinaturas">
+        <div class="ass">Responsável pela correção</div>
+        <div class="ass">Gestor</div>
+      </div>
+
+      <div class="rodape">
+        <span>Emitido em ${new Date().toLocaleString('pt-BR')}${db.currentUser && db.currentUser.nome ? ' por ' + esc(db.currentUser.nome) : ''}</span>
+        <span>JR Oper · Devolução ${esc(numero)}</span>
+      </div>
     </body>
     </html>
   `);
