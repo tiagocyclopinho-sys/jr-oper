@@ -25062,24 +25062,18 @@ function renderBoletimGerencialView() {
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-emerald-700/60 transition">
                   <div>
                     <div class="text-xs font-bold text-emerald-300 uppercase flex items-center gap-1"><span>📑</span> Ficha Individual de Devolução</div>
-                    <!-- Dizia "com fotos, produtos e tratativa" e não saía nem
-                         foto nem tratativa — só o cabeçalho da abertura e os
-                         itens. Corrigido em 22/09/2026, junto da impressão da
-                         tratativa, que é a que traz as três etapas. -->
-                    <div class="text-[11px] text-slate-400 mt-1">Cabeçalho da abertura e itens reclamados do protocolo.</div>
+                    <!-- Este card PASSOU A IMPRIMIR A TRATATIVA (22/09/2026).
+                         Antes chamava imprimirFichaDevolucaoPdf, que só tirava o
+                         cabeçalho da abertura e os itens — e o texto aqui dizia
+                         "ficha completa com fotos, produtos e tratativa", que
+                         nunca foi verdade. Em vez de conviverem dois botões
+                         quase iguais na mesma tela, a ficha é a impressão das
+                         três etapas: é a folha que alguém leva para a reunião.
+                         A função antiga foi apagada junto. -->
+                    <div class="text-[11px] text-slate-400 mt-1">Abertura, Análise e Tratativa do Gestor em blocos separados, com o responsável pela correção. Sem fotos.</div>
                   </div>
                   <button onclick="openPdfFilterModal('ficha_devolucao')" class="w-full bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold py-2 rounded-lg text-xs border border-emerald-700/50 flex items-center justify-center gap-1">
                     <span>🔍</span> Selecionar Ficha (PDF)
-                  </button>
-                </div>
-
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-purple-700/60 transition">
-                  <div>
-                    <div class="text-xs font-bold text-purple-300 uppercase flex items-center gap-1"><span>🖨️</span> Tratativa da Devolução</div>
-                    <div class="text-[11px] text-slate-400 mt-1">Abertura, Análise e Tratativa do Gestor em blocos separados, com o responsável pela correção. Sem fotos.</div>
-                  </div>
-                  <button onclick="openPdfFilterModal('tratativa_devolucao')" class="w-full bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold py-2 rounded-lg text-xs border border-purple-700/50 flex items-center justify-center gap-1">
-                    <span>🔍</span> Selecionar Devolução (PDF)
                   </button>
                 </div>
               </div>
@@ -25561,26 +25555,11 @@ function openPdfFilterModal(pdfType) {
           ${devList.length === 0 ? `<option value="">Nenhuma devolução encontrada no sistema</option>` :
             devList.map(d => `<option value="${d.id}">${d.numero_devolucao || d.numero_protocolo} — Cliente: ${d.cliente_nome} (Motorista: ${d.motorista_nome || 'N/I'})</option>`).join('')}
         </select>
+        <div class="text-[10px] text-slate-400 mt-2">Sai em três blocos — Abertura, Análise e Tratativa do Gestor — com o responsável pela correção no topo. Etapa ainda não preenchida aparece marcada como pendente.</div>
       </div>
       <div class="pt-3">
         <button onclick="confirmarEGerarPdf('ficha_devolucao')" ${devList.length === 0 ? 'disabled' : ''} class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
           <span>📑</span> Imprimir Ficha em PDF
-        </button>
-      </div>`;
-  } else if (pdfType === 'tratativa_devolucao') {
-    title = '🖨️ Seleção para Impressão da Tratativa';
-    fieldsHtml = `
-      <div>
-        <label class="block text-xs font-bold text-slate-300 mb-1">Selecione a Devolução / Protocolo:</label>
-        <select id="pdf-filter-dev-id" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          ${devList.length === 0 ? `<option value="">Nenhuma devolução encontrada no sistema</option>` :
-            devList.map(d => `<option value="${d.id}">${d.numero_devolucao || d.numero_protocolo} — Cliente: ${d.cliente_nome} (Motorista: ${d.motorista_nome || 'N/I'})</option>`).join('')}
-        </select>
-        <div class="text-[10px] text-slate-400 mt-2">Sai em três blocos — Abertura, Análise e Tratativa do Gestor — com o responsável pela correção no topo. Etapa ainda não preenchida aparece marcada como pendente.</div>
-      </div>
-      <div class="pt-3">
-        <button onclick="confirmarEGerarPdf('tratativa_devolucao')" ${devList.length === 0 ? 'disabled' : ''} class="w-full bg-purple-600 hover:bg-purple-500 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
-          <span>🖨️</span> Imprimir Tratativa em PDF
         </button>
       </div>`;
   } else if (pdfType === 'resumo_cd') {
@@ -25801,9 +25780,9 @@ function confirmarEGerarPdf(pdfType) {
       alert('Nenhum relatório selecionado.');
     }
   } else if (pdfType === 'ficha_devolucao') {
-    if (devId) imprimirFichaDevolucaoPdf(devId);
-    else alert('Selecione um protocolo válido.');
-  } else if (pdfType === 'tratativa_devolucao') {
+    // Desde 22/09/2026 a ficha É a tratativa (as três etapas). O tipo continua
+    // 'ficha_devolucao' de propósito: é o nome do card na Central de PDFs, e
+    // trocá-lo só renomearia a mesma coisa em três lugares.
     if (devId) imprimirTratativaDevolucaoPdf(devId);
     else alert('Selecione um protocolo válido.');
   } else if (pdfType === 'ficha_oficina') {
@@ -26068,14 +26047,21 @@ function gerarRelatorioDevolucoesPorRotaPdf() {
 // IMPRESSÃO DA TRATATIVA, COM AS TRÊS ETAPAS SEPARADAS (22/09/2026)
 //
 // O gestor precisa levar a devolução para a mesa de reunião, e até aqui a única
-// impressão existente (imprimirFichaDevolucaoPdf, logo abaixo) era a ficha da
-// ABERTURA: cabeçalho, motivo reclamado e itens. A análise não saía, a
-// tratativa não saía, e a causa raiz aparecia espremida na mesma linha do
-// motivo reclamado — justamente a distinção que a reunião discute.
+// impressão existente (imprimirFichaDevolucaoPdf) era a ficha da ABERTURA:
+// cabeçalho, motivo reclamado e itens. A análise não saía, a tratativa não
+// saía, e a causa raiz aparecia espremida na mesma linha do motivo reclamado —
+// justamente a distinção que a reunião discute.
 //
 // Aqui as três etapas são três blocos fechados, cada um com quem respondeu por
 // ele e quando. Quem lê consegue dizer, sem perguntar a ninguém, o que o
 // cliente reclamou, o que a apuração encontrou e o que o gestor decidiu.
+//
+// ESTA É A ÚNICA IMPRESSÃO DE DEVOLUÇÃO DESDE 22/09/2026. A antiga foi APAGADA
+// no mesmo dia, e não deixada de lado: a "Ficha Individual de Devolução" da
+// Central de PDFs passou a chamar esta função, e manter a outra viva só criaria
+// duas folhas parecidas com conteúdos diferentes para o mesmo protocolo — que é
+// como o texto do card foi parar em "ficha completa com fotos, produtos e
+// tratativa" descrevendo algo que nunca imprimiu nada disso.
 //
 // SEM FOTO, por decisão de 22/09/2026. Desde a migration 38 a foto é caminho no
 // Storage, não base64 no registro: entraria como <img src> remoto e só apareceria
@@ -26254,107 +26240,6 @@ function imprimirTratativaDevolucaoPdf(devId) {
       <div class="rodape">
         <span>Emitido em ${new Date().toLocaleString('pt-BR')}${db.currentUser && db.currentUser.nome ? ' por ' + esc(db.currentUser.nome) : ''}</span>
         <span>JR Oper · Devolução ${esc(numero)}</span>
-      </div>
-    </body>
-    </html>
-  `);
-  win.document.close();
-}
-
-function imprimirFichaDevolucaoPdf(devId) {
-  const dev = db.getDevolucoes().find(d => d.id == devId);
-  if (!dev) {
-    alert('Devolução não encontrada.');
-    return;
-  }
-  const itens = dev.itens || [];
-  const win = window.open('', '_blank', 'width=900,height=950');
-  if (!win) {
-    alert('Bloqueador de pop-up detectado.');
-    return;
-  }
-  win.document.write(`
-    <!DOCTYPE html>
-    <html lang="pt-BR">
-    <head>
-      <meta charset="UTF-8">
-      <title>FICHA INDIVIDUAL DE DEVOLUÇÃO — ${dev.numero_devolucao || dev.numero_protocolo}</title>
-      <style>
-        @media print {
-          @page { margin: 10mm; size: A4 portrait; }
-          body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        }
-        * { box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; padding: 15px; color: #0f172a; background: #fff; }
-        .page { border: 2px solid #0f172a; border-radius: 8px; padding: 18px; }
-        .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 14px; }
-        .logo { height: 45px; }
-        .header-title { text-align: right; }
-        .header-title h2 { margin: 0; font-size: 16px; color: #0f172a; font-weight: 900; }
-        .header-title p { margin: 2px 0 0; font-size: 10px; color: #475569; }
-        .badge { background: #0f172a; color: #fff; padding: 6px 12px; border-radius: 4px; font-weight: bold; font-size: 11px; text-align: center; text-transform: uppercase; margin-bottom: 14px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-        .field { border: 1px solid #cbd5e1; padding: 6px 10px; border-radius: 4px; background: #f8fafc; }
-        .field-lbl { font-size: 8px; font-weight: bold; color: #64748b; text-transform: uppercase; }
-        .field-val { font-size: 11px; font-weight: bold; color: #0f172a; margin-top: 2px; }
-        .motivo-box { border: 1px solid #cbd5e1; background: #fffbebf5; border-left: 4px solid #f59e0b; padding: 10px; border-radius: 4px; margin-bottom: 14px; }
-        .motivo-lbl { font-size: 9px; font-weight: bold; color: #b45309; text-transform: uppercase; }
-        .motivo-txt { font-size: 11px; font-weight: bold; color: #78350f; margin-top: 2px; }
-        table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 10px; }
-        th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
-        th { background: #f1f5f9; font-weight: bold; text-transform: uppercase; }
-      </style>
-    </head>
-    <body onload="setTimeout(function(){ window.print(); }, 400)">
-      <div class="page">
-        <div class="header">
-          <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
-          <div class="header-title">
-            <h2>JR DISTRIBUIDORA</h2>
-            <p>Ficha Técnica Individual de Ocorrência / SAC</p>
-          </div>
-        </div>
-        <div class="badge">FICHA DE PROTOCOLO Nº ${dev.numero_devolucao || dev.numero_protocolo || dev.id}</div>
-        <div class="grid">
-          <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
-          <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal || '—'}</div></div>
-          <div class="field"><div class="field-lbl">Motorista</div><div class="field-val">${dev.motorista_nome || '—'}</div></div>
-          <div class="field"><div class="field-lbl">Carga / Rota</div><div class="field-val">${dev.carga_numero || '—'} (Rota: ${dev.carga_rota || '—'})</div></div>
-          <div class="field"><div class="field-lbl">Veículo / Placa</div><div class="field-val">${dev.veiculo_placa || '—'}</div></div>
-          <div class="field"><div class="field-lbl">Valor Reclamado</div><div class="field-val" style="color:#047857;">R$ ${(parseFloat(dev.valor_reclamado)||0).toFixed(2)}</div></div>
-        </div>
-        <div class="motivo-box">
-          <div class="motivo-lbl">MOTIVO RECLAMADO DA OCORRÊNCIA</div>
-          <div class="motivo-txt">${dev.motivo_reclamado || 'NÃO INFORMADO'}${dev.motivo_real_causa_raiz ? ' — Causa Raiz Apurada: ' + dev.motivo_real_causa_raiz : ''}</div>
-        </div>
-        <div>
-          <b style="font-size: 11px; text-transform: uppercase; color: #0f172a;">Itens / Produtos Envolvidos (${itens.length})</b>
-          <table>
-            <thead>
-              <tr>
-                <th>Código</th>
-                <th>Descrição do Produto</th>
-                <th style="text-align:center;">Qtd</th>
-                <th style="text-align:right;">Vlr. Unitário</th>
-                <th style="text-align:right;">Vlr. Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itens.length === 0 ? '<tr><td colspan="5" style="text-align:center;">Sem itens detalhados individualmente.</td></tr>' :
-                itens.map(i => {
-                  const pInfo = getDadosProduto(i);
-                  return `
-                  <tr>
-                    <td><b>${pInfo.codigo}</b></td>
-                    <td><b>${pInfo.descricao}</b></td>
-                    <td style="text-align:center; font-weight:bold; color:#b45309;">${i.quantidade || i.qtd || 1}</td>
-                    <td style="text-align:right;">R$ ${(parseFloat(i.valor_unitario||i.preco||0)).toFixed(2)}</td>
-                    <td style="text-align:right; font-weight:bold; color:#047857;">R$ ${(parseFloat(i.valor_total||i.valor||0)).toFixed(2)}</td>
-                  </tr>`;
-                }).join('')}
-            </tbody>
-          </table>
-        </div>
       </div>
     </body>
     </html>
