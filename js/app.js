@@ -25070,7 +25070,7 @@ function renderBoletimGerencialView() {
                          quase iguais na mesma tela, a ficha é a impressão das
                          três etapas: é a folha que alguém leva para a reunião.
                          A função antiga foi apagada junto. -->
-                    <div class="text-[11px] text-slate-400 mt-1">Abertura, Análise e Tratativa do Gestor em blocos separados, com o responsável pela correção. Sem fotos.</div>
+                    <div class="text-[11px] text-slate-400 mt-1">Abertura, Análise e Tratativa do Gestor em blocos separados, cada um com quem respondeu e quando. Sem fotos.</div>
                   </div>
                   <button onclick="openPdfFilterModal('ficha_devolucao')" class="w-full bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold py-2 rounded-lg text-xs border border-emerald-700/50 flex items-center justify-center gap-1">
                     <span>🔍</span> Selecionar Ficha (PDF)
@@ -25555,7 +25555,7 @@ function openPdfFilterModal(pdfType) {
           ${devList.length === 0 ? `<option value="">Nenhuma devolução encontrada no sistema</option>` :
             devList.map(d => `<option value="${d.id}">${d.numero_devolucao || d.numero_protocolo} — Cliente: ${d.cliente_nome} (Motorista: ${d.motorista_nome || 'N/I'})</option>`).join('')}
         </select>
-        <div class="text-[10px] text-slate-400 mt-2">Sai em três blocos — Abertura, Análise e Tratativa do Gestor — com o responsável pela correção no topo. Etapa ainda não preenchida aparece marcada como pendente.</div>
+        <div class="text-[10px] text-slate-400 mt-2">Sai em três blocos — Abertura, Análise e Tratativa do Gestor — cada um com quem respondeu e quando. Etapa ainda não preenchida aparece marcada como pendente.</div>
       </div>
       <div class="pt-3">
         <button onclick="confirmarEGerarPdf('ficha_devolucao')" ${devList.length === 0 ? 'disabled' : ''} class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
@@ -26067,6 +26067,18 @@ function gerarRelatorioDevolucoesPorRotaPdf() {
 // Storage, não base64 no registro: entraria como <img src> remoto e só apareceria
 // no papel com o aparelho online no instante da impressão. Numa folha que vai
 // para reunião, imagem que falha às vezes é pior do que imagem nenhuma.
+//
+// SEM A FAIXA DO RESPONSÁVEL E SEM CAMPO DE ASSINATURA, também por decisão de
+// 22/09/2026 ("o importante é o corpo e a identificação da ocorrência; não há
+// necessidade de evidenciar o gestor"). A faixa roxa existiu por algumas horas
+// no topo desta folha e saiu: numa reunião, uma folha que começa apontando um
+// nome vira uma conversa sobre a pessoa antes de ser sobre o caso. O responsável
+// continua na TELA (faixa no card do gestor, filtro na Análise e na Tratativa) e
+// na coluna do CSV — é lá que ele serve para cobrar, não no papel.
+//
+// O nome de quem respondeu por cada etapa CONTINUA na tarja de cada bloco. Não é
+// a mesma coisa: ali é registro do que aconteceu, na mesma linha da data, e é
+// parte da identificação da ocorrência que a decisão manda preservar.
 // =============================================================================
 function imprimirTratativaDevolucaoPdf(devId) {
   const dev = db.getDevolucoes().find(d => d.id == devId);
@@ -26136,9 +26148,6 @@ function imprimirTratativaDevolucaoPdf(devId) {
         .header-title h2 { margin:0; font-size:15px; font-weight:900; }
         .header-title p { margin:2px 0 0; font-size:9px; color:#475569; }
         .badge { background:#0f172a; color:#fff; padding:6px 12px; border-radius:4px; font-weight:bold; font-size:12px; text-align:center; text-transform:uppercase; margin-bottom:6px; }
-        .resp { border:2px solid #6d28d9; background:#f5f3ff; border-radius:4px; padding:7px 10px; margin-bottom:12px; text-align:center; }
-        .resp-lbl { font-size:8px; font-weight:bold; color:#6d28d9; text-transform:uppercase; letter-spacing:.5px; }
-        .resp-val { font-size:13px; font-weight:900; color:#4c1d95; margin-top:2px; }
         .etapa { border:1px solid #cbd5e1; border-radius:5px; margin-bottom:11px; overflow:hidden; }
         .etapa-head { background:#0f172a; color:#fff; padding:6px 10px; display:flex; align-items:center; gap:8px; }
         .etapa-num { background:#fff; color:#0f172a; width:17px; height:17px; border-radius:50%; font-size:10px; font-weight:900; display:inline-flex; align-items:center; justify-content:center; flex:none; }
@@ -26163,8 +26172,6 @@ function imprimirTratativaDevolucaoPdf(devId) {
         td.c, th.c { text-align:center; } td.r, th.r { text-align:right; }
         .vazio { font-size:10px; color:#64748b; font-style:italic; padding:5px 0; }
         .rodape { margin-top:12px; border-top:1px solid #cbd5e1; padding-top:6px; font-size:8px; color:#64748b; display:flex; justify-content:space-between; }
-        .assinaturas { display:grid; grid-template-columns:1fr 1fr; gap:26px; margin-top:26px; }
-        .ass { border-top:1px solid #0f172a; padding-top:4px; text-align:center; font-size:8.5px; color:#475569; }
       </style>
     </head>
     <body onload="setTimeout(function(){ window.print(); }, 400)">
@@ -26177,11 +26184,6 @@ function imprimirTratativaDevolucaoPdf(devId) {
       </div>
 
       <div class="badge">DEVOLUÇÃO Nº ${esc(numero)}${dev.numero_protocolo && dev.numero_protocolo !== numero ? ' &nbsp;·&nbsp; PROTOCOLO ' + esc(dev.numero_protocolo) : ''}</div>
-
-      <div class="resp">
-        <div class="resp-lbl">Responsável pela correção</div>
-        <div class="resp-val">${esc(textoResponsavelDaDevolucao(dev))}</div>
-      </div>
 
       ${bloco(1, 'Abertura — o que o cliente reclamou', nomeUsuario(dev.criado_por_usuario_id), dataHora(dev.criado_em), `
         <div class="grid">
@@ -26231,11 +26233,6 @@ function imprimirTratativaDevolucaoPdf(devId) {
             : '✔ SEM desconto de produtividade'}
         </div>
       ` : `<div class="pendente">⏳ Ocorrência ainda sem parecer do gestor.</div>`)}
-
-      <div class="assinaturas">
-        <div class="ass">Responsável pela correção</div>
-        <div class="ass">Gestor</div>
-      </div>
 
       <div class="rodape">
         <span>Emitido em ${new Date().toLocaleString('pt-BR')}${db.currentUser && db.currentUser.nome ? ' por ' + esc(db.currentUser.nome) : ''}</span>
