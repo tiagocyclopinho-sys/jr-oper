@@ -1784,8 +1784,43 @@ async function handleCriarSinistro(e) {
   closeModal();
   if (!res.success) { showToast(res.message, 'error'); renderApp(); return; }
   showToast(`✅ Sinistro ${res.sinistro.numero_sinistro} registrado!`);
-  window._sinistroSelecionadoId = res.sinistro.id;
-  switchTab('sinistros');
+  abrirSinistro(res.sinistro.id, 'sinistros');
+}
+
+// ABRIR E FECHAR O DETALHE DO SINISTRO (22/09/2026).
+//
+// Havia QUATRO entradas para a mesma tela, cada uma escrevendo
+// window._sinistroSelecionadoId na mao, e NENHUMA limpava
+// _sinistroEtapaExpandidaId. Como renderSinistroDetalhe so volta a Etapa 1
+// quando esse id MUDA, sair para a lista e reabrir o MESMO sinistro nao
+// reabria a Etapa 1: ela ficava como tivesse ficado da ultima vez — fechada
+// se alguem clicou no cabecalho de outra etapa, ou fechada porque
+// handleSalvarEtapaSinistro avanca a expansao para a etapa SEGUINTE ao
+// concluir uma.
+//
+// Numa base com UM sinistro so, o id nunca muda. Entao o reset nunca mais
+// acontecia na sessao inteira do navegador, e a Etapa 1 ficava fechada para
+// sempre: a barra "Etapa 1 — Motorista Envolvido" continuava na tela, o
+// conteudo nao. Foi o relato de 22/09/2026 ("a investigacao nao esta
+// apresentando a primeira etapa") — e NAO era sincronizacao: jrRastrear
+// mostrou as cinco copias do SIN-2026-0001 com a mesma assinatura, inclusive
+// a da nuvem.
+//
+// O pedido de 18/08/2026 diz "ao ABRIR um sinistro (ou trocar de sinistro) a
+// Etapa 1 comeca expandida". Abrir pela lista e abrir. O estado do acordeao
+// passa a morrer ao sair da tela, que e o unico jeito de a promessa valer em
+// TODA entrada e nao so na primeira. Dentro da tela nada muda: o clique no
+// cabecalho e o avanco automatico ao concluir uma etapa continuam iguais.
+function abrirSinistro(id, aba) {
+  window._sinistroSelecionadoId = String(id);
+  window._sinistroEtapaExpandidaId = null;
+  if (aba) switchTab(aba); else renderApp();
+}
+
+function fecharSinistro() {
+  window._sinistroSelecionadoId = '';
+  window._sinistroEtapaExpandidaId = null;
+  renderApp();
 }
 
 // --- Tela principal: lista + detalhe ---
@@ -1833,14 +1868,14 @@ function renderSinistrosView() {
                 const etapasOk = [s.etapa_motorista_completa, s.etapa_manutencao_completa, s.etapa_operacoes_completa, (!s.juridico_necessario || s.etapa_juridico_completa), s.etapa_diretoria_completa].filter(Boolean).length;
                 const etapasTotal = s.juridico_necessario ? 5 : 4;
                 return `
-                <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="window._sinistroSelecionadoId='${s.id}'; renderApp()">
+                <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="abrirSinistro('${s.id}')">
                   <td class="p-3 font-mono font-bold text-red-400">${s.numero_sinistro}</td>
                   <td class="p-3">${formatarData(s.data_acidente)}</td>
                   <td class="p-3 font-bold text-white">${s.motorista_nome}</td>
                   <td class="p-3">${s.placa||'—'} ${s.carga?`/ ${s.carga}`:''}</td>
                   <td class="p-3 text-center font-bold">${etapasOk}/${etapasTotal}</td>
                   <td class="p-3 text-center">${formatarStatusSinistroBadge(s.status_geral)}</td>
-                  <td class="p-3 text-right"><button onclick="event.stopPropagation(); window._sinistroSelecionadoId='${s.id}'; renderApp()" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td>
+                  <td class="p-3 text-right"><button onclick="event.stopPropagation(); abrirSinistro('${s.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td>
                 </tr>`;
               }).join('')}
           </tbody>
@@ -1867,7 +1902,7 @@ function renderSinistroDetalhe(id) {
     <div class="max-w-4xl mx-auto space-y-4">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-start justify-between flex-wrap gap-3">
         <div>
-          <button onclick="window._sinistroSelecionadoId=''; renderApp()" class="text-[10px] text-slate-400 hover:text-white font-bold mb-1.5">← Voltar à lista</button>
+          <button onclick="fecharSinistro()" class="text-[10px] text-slate-400 hover:text-white font-bold mb-1.5">← Voltar à lista</button>
           <h2 class="text-base font-black text-white">${s.numero_sinistro} — ${s.motorista_nome}</h2>
           <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-slate-400 mt-1">
             <span>Data: <b class="text-slate-300">${formatarData(s.data_acidente)}</b></span>
@@ -2242,7 +2277,7 @@ function renderBlocoSinistrosMotorista(nomeMotorista, varDe, varAte) {
           <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Nº</th><th class="p-2">Data</th><th class="p-2">Placa/Carga</th><th class="p-2">Status</th><th class="p-2 text-right">.</th></tr></thead>
           <tbody class="divide-y divide-slate-800">
             ${sinistros.length === 0 ? '<tr><td colspan="5" class="p-3 text-center text-slate-500">Nenhum sinistro registrado.</td></tr>' :
-              sinistros.map(s => `<tr><td class="p-2 font-mono text-red-400 font-bold">${s.numero_sinistro}</td><td class="p-2">${formatarData(s.data_acidente)}</td><td class="p-2">${s.placa||'—'} ${s.carga?`/ ${s.carga}`:''}</td><td class="p-2">${formatarStatusSinistroBadge(s.status_geral)}</td><td class="p-2 text-right"><button onclick="window._sinistroSelecionadoId='${s.id}'; switchTab('sinistros')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td></tr>`).join('')}
+              sinistros.map(s => `<tr><td class="p-2 font-mono text-red-400 font-bold">${s.numero_sinistro}</td><td class="p-2">${formatarData(s.data_acidente)}</td><td class="p-2">${s.placa||'—'} ${s.carga?`/ ${s.carga}`:''}</td><td class="p-2">${formatarStatusSinistroBadge(s.status_geral)}</td><td class="p-2 text-right"><button onclick="abrirSinistro('${s.id}', 'sinistros')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td></tr>`).join('')}
           </tbody>
         </table>
       </div>

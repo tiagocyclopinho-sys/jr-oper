@@ -3311,7 +3311,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "destinacao-avulso-sync-6.7.7";
+CloudStore.BUILD = "etapa1-sinistro-6.7.8";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3655,7 +3655,81 @@ window.jrDiagnosticoSync = function() {
       d.bloqueadosNaEscrita.exemplos
     );
   }
-  if (!d.tabelasComPendencia.length) console.info('✅ Nenhuma tabela pendente — tudo que foi salvo aqui chegou ao banco.');
+  // O AVESSO DA PERGUNTA, E ELE FICAVA MUDO (22/09/2026).
+  //
+  // getDiagnostico() ja devolvia `recusandoDaNuvem` desde 28/08, com o
+  // comentario "A PERGUNTA QUE FALTAVA" escrito ao lado — mas este comando,
+  // que e por onde todo mundo entra, nunca imprimia o campo. Quem rodava
+  // jrDiagnosticoSync() num aparelho que estava IMPONDO a copia velha dele
+  // por cima da nuvem lia "✅ Nenhuma tabela pendente" e ia embora: as duas
+  // coisas sao verdade ao mesmo tempo, porque sao perguntas diferentes.
+  //
+  //   tabelasComPendencia -> o que este aparelho nao conseguiu MANDAR
+  //   recusandoDaNuvem    -> o que este aparelho se recusa a RECEBER
+  //
+  // O segundo e o que explica "dois aparelhos, mesma versao, telas
+  // diferentes": o registro foi mexido aqui, nao subiu, e por isso a copia
+  // local ganha do que os outros ja preencheram — etapa de sinistro,
+  // analise de devolucao, acao do gestor. O aparelho segue aceitando
+  // registro NOVO, entao parece que sincroniza, e e isso que torna o
+  // sintoma tao confuso de fora.
+  //
+  // So aparece depois de um pull desta sessao (o mapa e de memoria): num
+  // aparelho recem-aberto, esperar um ciclo de 30s antes de concluir.
+  // A CAUSA MAIS COMUM DA RECUSA, E ELA TAMBEM ERA MUDA (22/09/2026).
+  //
+  // Quando o localStorage enche, _gravarMapaSync() falha — e o mapa nao
+  // fica AUSENTE, fica VELHO. Mapa velho faz todo registro que mudou na
+  // nuvem desde a ultima gravacao boa parecer "alteracao local nao
+  // enviada", e a mesclagem, por desenho, deixa a copia local ganhar. O
+  // aparelho passa a ACEITAR registro novo e RECUSAR atualizacao de
+  // registro que ja tem: e a maquina que mostra a devolucao certa com a
+  // analise em branco, ou o sinistro certo com a Etapa 1 em branco, mesmo
+  // com outra pessoa tendo preenchido. O comentario ja estava escrito no
+  // catch de _gravarMapaSync(); o que faltava era ele CHEGAR a quem roda o
+  // diagnostico.
+  //
+  // Nao se conserta mudando quem ganha a mesclagem (a regra existe para nao
+  // perder o que foi digitado offline): conserta-se liberando espaco.
+  if (d.armazenamentoCheio) {
+    console.error(
+      '⛔ ESTE APARELHO NAO CONSEGUE MAIS GUARDAR O QUE BAIXA: ' + d.armazenamentoCheio.detalhe +
+      ' (em ' + d.armazenamentoCheio.quando + '). Enquanto isso durar ele RECUSA atualizacao de ' +
+      'registro que ja tem — a tela fica certa agora e velha de novo no proximo F5. ' +
+      'Libere espaco: jrFaxinarChaves(true) devolve chave sem dono, e jrMigrarTodasFotosLegado() ' +
+      'tira a foto em base64 de dentro do registro. Depois recarregue a pagina.'
+    );
+  }
+  if (d.espelhosSuspensos) {
+    console.warn('⚠️ Cota no limite: este aparelho suspendeu as copias de diagnostico para o dado real caber. Nao ha perda de dado, mas jrConferirCamadas() fica cego aqui.');
+  }
+  if (d.usoDoArmazenamento) {
+    const u = d.usoDoArmazenamento;
+    const critico = Number(u.percentual) >= 85;
+    console[critico ? 'warn' : 'info'](
+      (critico ? '⚠️ ' : '') + 'Armazenamento deste aparelho: ' + u.totalKB + ' KB (' + u.percentual + '%).' +
+      (critico ? ' Acima de ~85% a recusa acima vira questao de tempo.' : '')
+    );
+  }
+
+  const recusas = Object.keys(d.recusandoDaNuvem || {});
+  if (recusas.length) {
+    console.warn(
+      '⚠️ Este aparelho esta IMPONDO a copia local em ' +
+      recusas.reduce((n, t) => n + d.recusandoDaNuvem[t].length, 0) +
+      ' registro(s): eles foram mexidos aqui, ainda nao subiram, e por isso a ' +
+      'tela mostra a versao DESTE aparelho e nao a da nuvem. Se o que falta na ' +
+      'tela foi preenchido em outra maquina, e aqui que ele esta sendo barrado. ' +
+      'Rode jrRastrear(<numero ou id>) para ver as cinco copias do registro.'
+    );
+    console.table(recusas.map(t => ({ tabela: t, registros: d.recusandoDaNuvem[t].join(', ') })));
+  }
+
+  if (!d.tabelasComPendencia.length && !recusas.length) {
+    console.info('✅ Nenhuma tabela pendente e nenhum registro recusado — o que esta na tela e o que a nuvem tem.');
+  } else if (!d.tabelasComPendencia.length) {
+    console.info('Nenhuma tabela pendente de ENVIO — mas veja as recusas acima antes de concluir que esta tudo em dia.');
+  }
   return d;
 };
 
