@@ -3100,6 +3100,9 @@ class CloudStore {
     // ativo. A projeção passa a ler igual.
     (spec.booleanoTrue || []).forEach(c => { out[c] = r[c] !== false; });
     (spec.data || []).forEach(c => { out[c] = vazio(r[c]) ? null : String(r[c]); });
+    // jsonb (21/09/2026, sinistros): vai como esta — array ou objeto. So o
+    // vazio vira null, para nao mandar "" a uma coluna jsonb.
+    (spec.json || []).forEach(c => { out[c] = vazio(r[c]) ? null : r[c]; });
     return out;
   }
 
@@ -3308,7 +3311,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "fotos-fora-do-banco-6.7.6";
+CloudStore.BUILD = "destinacao-avulso-sync-6.7.7";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3407,6 +3410,72 @@ CloudStore.COLUNAS_POR_TABELA = {
     numero:   ['valor'],
     booleano: ['is_deleted'],
     data:     ['data', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
+  // sinistros (21/09/2026) — a lista branca pelo motivo do TIPO, nao da
+  // coluna a mais. O formulario do sinistro tem sete <input type="date">
+  // opcionais (validade da CNH, data da assinatura, datas de cada parecer).
+  // Vazio, um input date devolve "" — e o PostgREST recusa "" numa coluna
+  // DATE com "invalid input syntax for type date", derrubando o lote
+  // inteiro (HTTP 400). Achado ao rodar jrMigrarTodasFotosLegado() em
+  // 21/09/2026: o SIN-2026-0001 estava ha uma semana sem conseguir subir
+  // (a nuvem tinha a copia de 14/09, sem a foto do motorista), calado, a
+  // cada 30s. A projecao converte "" em null para data, numero e texto —
+  // e o tipo jsonb entra aqui pela primeira vez, por causa dos seis grupos
+  // de foto e do midias_paths (migration 42). Espelha a tabela coluna a
+  // coluna; o que o JS inventar e nao for coluna e' podado antes do POST.
+  sinistros: {
+    texto:    ['numero_sinistro', 'carga', 'placa', 'motorista_nome', 'local_acidente', 'status_geral',
+               'motorista_cpf', 'motorista_cnh', 'tipo_veiculo_jr_motorista',
+               'veiculo_terceiro_condutor_nome', 'veiculo_terceiro_placa', 'veiculo_terceiro_renavam',
+               'veiculo_terceiro_marca', 'relato_motorista', 'sinalizacao_relato_motorista',
+               'motorista_assinatura_nome', 'relato_manutencao', 'sinalizacao_relato_manutencao',
+               'testemunha_nome_contato', 'parecer_manutencao', 'manutencao_gestor_nome',
+               'parecer_operacoes', 'operacoes_gestor_nome', 'parecer_juridico', 'juridico_nome',
+               'diretoria_nome', 'criado_por'],
+    numero:   ['ocorrencia_rota_id', 'veiculo_id', 'motorista_id', 'valor_desconto', 'numero_parcelas',
+               'midias_pendentes'],
+    booleano: ['etapa_motorista_completa', 'etapa_manutencao_completa', 'etapa_operacoes_completa',
+               'juridico_necessario', 'etapa_juridico_completa', 'etapa_diretoria_completa',
+               'havia_sinalizacao_motorista', 'havia_sinalizacao_manutencao', 'tem_testemunhas',
+               'responsabilidade_motorista', 'desconto_motorista', 'is_deleted'],
+    data:     ['data_acidente', 'motorista_cnh_validade', 'motorista_assinatura_data', 'manutencao_data',
+               'operacoes_data', 'juridico_data', 'diretoria_data', 'criado_em', 'atualizado_em', 'deleted_at'],
+    json:     ['fotos_danos_jr_motorista', 'fotos_danos_terceiro_motorista', 'fotos_danos_jr_manutencao',
+               'fotos_danos_terceiro_manutencao', 'orcamentos_anexos', 'fotos_acidente_bo', 'midias_paths']
+  },
+  // itens_avulsos_destinacao (22/09/2026) — o MESMO defeito do sinistro,
+  // achado uma semana depois na tabela vizinha, e caro do mesmo jeito.
+  //
+  // O formulario de editar item da Destinacao serve aos dois tipos de item da
+  // tela, e a coluna "data de validade" nao tem o mesmo tipo nos dois:
+  // itens_devolucao.data_validade e VARCHAR (a migration 26 a criou assim de
+  // proposito, porque o campo chegava vazio) e itens_avulsos_destinacao.
+  // data_validade e DATE (schema.sql, bloco 18). Um <input type="date"> em
+  // branco devolve "", e o PostgREST recusa "" numa coluna DATE com HTTP 400
+  // "invalid input syntax for type date" — derrubando o LOTE INTEIRO, nao o
+  // registro.
+  //
+  // Em 21/09/2026, as 14:28, um item avulso foi editado sem preencher a
+  // validade. A partir dali NENHUM item avulso daquele aparelho subiu mais:
+  // 36 itens novos e as 39 fotos que ja estavam no Storage (o upload e outro
+  // caminho e continuou funcionando, deixando os arquivos orfaos de linha)
+  // ficaram so no navegador, retentando a cada 30s, calados, com o indicador
+  // da nuvem verde. A tela mostrava a lista cheia para quem lancou e vazia
+  // para todo mundo.
+  //
+  // A correcao do formulario (js/app.js, handleSalvarEdicaoItemDestino grava
+  // null) fecha a origem. Esta lista fecha a CLASSE e, sobretudo, desbloqueia
+  // o aparelho que JA tem "" gravado em cache: a atualizacao troca o codigo,
+  // nao o localStorage, entao sem isto o item envenenado continuaria travando
+  // a tabela depois do deploy. Espelha o banco coluna a coluna (schema.sql +
+  // migration 47).
+  itens_avulsos_destinacao: {
+    texto:    ['produto_codigo', 'produto_descricao', 'destino_item', 'observacao',
+               'status_negociacao', 'motivo_avulso', 'criado_por'],
+    numero:   ['quantidade', 'fotos_pendentes'],
+    booleano: ['is_deleted'],
+    data:     ['data_validade', 'data_negociacao', 'criado_em', 'atualizado_em', 'deleted_at'],
+    json:     ['divisoes_destino', 'fotos_paths']
   },
   // usuarios (31/08/2026) — o motivo 1 acima, de novo, e caro.
   //

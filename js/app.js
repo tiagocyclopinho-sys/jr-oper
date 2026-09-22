@@ -9900,7 +9900,20 @@ function handleSalvarEdicaoItemDestino(e, itemId, devId) {
   if (!ref) { alert('Item não encontrado para salvar.'); return; }
   const item = ref.raw;
   item.quantidade = parseFloat(document.getElementById('edit-item-qtd')?.value || '1') || 1;
-  item.data_validade = document.getElementById('edit-item-validade')?.value || '';
+  // null, NAO '' (22/09/2026). Este formulario serve aos DOIS tipos de item da
+  // Destinacao, e a coluna data_validade nao tem o mesmo tipo nos dois:
+  // itens_devolucao.data_validade e VARCHAR (a migration 26 a criou assim
+  // justamente porque este campo chegava vazio), mas
+  // itens_avulsos_destinacao.data_validade e DATE. Um <input type="date"> em
+  // branco devolve "", e "" numa coluna DATE e HTTP 400 "invalid input syntax
+  // for type date" — que no upsert derruba o LOTE INTEIRO da tabela, nao so
+  // este registro. Foi o que travou a Destinacao de Itens em 21/09/2026 as
+  // 14:28: a partir da primeira edicao que deixou a validade em branco, NENHUM
+  // item avulso daquele aparelho subiu mais — 36 itens e 39 fotos ficaram so
+  // no navegador, com o indicador de nuvem verde. Mesma classe do achado do
+  // sinistro na 6.7.6; ver a lista branca de itens_avulsos_destinacao em
+  // js/cloudStore.js, que fecha a porta tambem para o "" ja gravado em cache.
+  item.data_validade = document.getElementById('edit-item-validade')?.value || null;
   item.observacao = document.getElementById('edit-item-obs')?.value || '';
 
   let destinoSelecionado = document.getElementById('edit-item-destino')?.value || 'ESTOQUE_REUTILIZACAO';
