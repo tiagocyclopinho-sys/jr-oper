@@ -3916,6 +3916,103 @@ function toggleGuiaGravidade() {
 }
 window.toggleGuiaGravidade = toggleGuiaGravidade;
 
+// Piloto (23/09/2026): expandir um card do Dashboard revela um mini-gráfico
+// de barras com a fila agrupada por alguma chave (pares [rótulo, contagem] em
+// data-chart-json — pode ser gestor, departamento, veículo etc, um cardId
+// diferente por card) — mesmo dado do card, outra leitura, sem duplicar
+// consulta nenhuma.
+//
+// window._cardCharts guarda a instância do Chart.js por cardId porque o
+// Dashboard pode re-renderizar (troca de filtro de período etc.) e recriar o
+// <canvas> do zero; sem isso o Chart.js reclama de "Canvas is already in
+// use" ao tentar desenhar em cima de um canvas que ele mesmo já usou antes.
+window._cardCharts = window._cardCharts || {};
+
+// Cor fixa pros rótulos mais recorrentes entre os cards (responsável da
+// tratativa e departamento de abertura) — pra quem olha todo dia associar a
+// cor ao nome de um card pro outro, em vez de reaprender a paleta a cada
+// clique. Rótulo que não está aqui cai no fallback cíclico logo abaixo.
+const CORES_NOME_CARD_CHART = {
+  'VICTOR HUGO':        '#38bdf8',
+  'TIAGO FERREIRA':     '#a78bfa',
+  'MARCOS ADRIANO':     '#fbbf24',
+  'MELQUIADES NETO':    '#34d399',
+  'GUSTAVO CAMARA':     '#f472b6',
+  'SEM RESPONSÁVEL':    '#64748b',
+  'SEM DEPARTAMENTO':   '#64748b'
+};
+const PALETA_CARD_CHART_FALLBACK = ['#38bdf8', '#a78bfa', '#fbbf24', '#34d399', '#f472b6', '#22d3ee', '#fb923c'];
+
+function toggleCardChart(cardId, evt) {
+  if (evt) evt.stopPropagation();
+  const wrap = document.getElementById('chart-wrap-' + cardId);
+  const chevron = document.getElementById('chevron-' + cardId);
+  if (!wrap) return;
+  const cardEl = wrap.closest('[data-chart-json]');
+
+  const isHidden = wrap.classList.contains('hidden');
+  if (!isHidden) {
+    wrap.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+    return;
+  }
+
+  wrap.classList.remove('hidden');
+  if (chevron) chevron.style.transform = 'rotate(180deg)';
+
+  if (typeof Chart === 'undefined' || !cardEl) return;
+
+  // Se já existe uma instância deste card (de uma expansão anterior, antes de
+  // o Dashboard re-renderizar), destrói antes de recriar em cima do canvas
+  // novo — Chart.js não deixa dois gráficos vivos no mesmo <canvas> id.
+  if (window._cardCharts[cardId]) {
+    window._cardCharts[cardId].destroy();
+    delete window._cardCharts[cardId];
+  }
+
+  let pares = [];
+  try { pares = JSON.parse(cardEl.dataset.chartJson || '[]'); } catch (e) { pares = []; }
+  const canvas = document.getElementById('chart-' + cardId);
+  if (!canvas || pares.length === 0) return;
+
+  const labels = pares.map(p => p[0]);
+  const valores = pares.map(p => p[1]);
+  const cores = labels.map((nome, i) => CORES_NOME_CARD_CHART[nome] || PALETA_CARD_CHART_FALLBACK[i % PALETA_CARD_CHART_FALLBACK.length]);
+  // Nome completo só cabe truncado no eixo — o card tem uns 260px de largura
+  // pra rótulo + barra + números. "CENTRO DE DISTRIBUIÇÃO" e "SUPERVISOR
+  // OPERAÇÃO" (departamentos reais) estouravam e saíam cortados pela ESQUERDA
+  // sem aviso nenhum. Trunca com "…" no eixo, mostra o nome inteiro no
+  // tooltip do hover.
+  const rotuloCurto = nome => nome.length > 14 ? nome.slice(0, 13) + '…' : nome;
+
+  window._cardCharts[cardId] = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: valores,
+        backgroundColor: cores,
+        borderRadius: 4,
+        maxBarThickness: 18
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: true, callbacks: { title: items => labels[items[0].dataIndex] } }
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', precision: 0 }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#cbd5e1', font: { size: 10 }, autoSkip: false, callback: (val, idx) => rotuloCurto(labels[idx]) }, grid: { display: false } }
+      }
+    }
+  });
+}
+window.toggleCardChart = toggleCardChart;
+
 function toggleDashRecRow(rowId) {
   const detailEl = document.getElementById('rec-detail-' + rowId);
   const iconEl = document.getElementById('rec-icon-' + rowId);
@@ -5081,6 +5178,19 @@ function nomesResponsaveisDaDevolucao(dev) {
   return responsaveisDaDevolucao(dev).map(r => r.nome);
 }
 
+// Departamento de quem ABRIU o registro (não de quem responde pelo erro —
+// isso é responsaveisDaDevolucao()). Usa criado_por_usuario_id, gravado na
+// abertura (js/store.js:1710), para achar o cadastro em db.data.usuarios e
+// ler o campo departamento (DEPARTAMENTOS_PADRAO). Sem usuário achado ou sem
+// departamento preenchido, cai em role — e só na falta dos dois vira "SEM
+// DEPARTAMENTO", pra não confundir com um departamento real desse nome.
+function departamentoDeQuemAbriu(dev) {
+  const uid = dev && dev.criado_por_usuario_id;
+  if (!uid) return 'SEM DEPARTAMENTO';
+  const u = (db.data.usuarios || []).find(x => String(x.id) === String(uid));
+  return (u && (u.departamento || u.role)) || 'SEM DEPARTAMENTO';
+}
+
 // Texto para a tela e para o PDF. Quando o carregamento dá dois supervisores,
 // sai "FULANO (Separador) · SICRANO (Conferente)" — quem olha precisa saber
 // por que são dois, senão parece erro do sistema.
@@ -5544,6 +5654,16 @@ function renderDashboardView() {
   });
 
   const totalValor = devs.reduce((a, d) => a + (parseFloat(d.valor_reclamado)||0), 0);
+  // Mini-gráfico do card "Devolução Total": devoluções do período agrupadas
+  // pelo departamento de quem abriu o chamado (SAC, Monitoramento, etc.) —
+  // mesma lógica de card-expansível do "Tratativas do Gestor", outra chave de
+  // agrupamento.
+  const porDepartamentoMap = {};
+  devs.forEach(d => {
+    const dep = departamentoDeQuemAbriu(d);
+    porDepartamentoMap[dep] = (porDepartamentoMap[dep] || 0) + 1;
+  });
+  const porDepartamentoArr = Object.entries(porDepartamentoMap).sort((a, b) => b[1] - a[1]);
   const pendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
   // (18/09/2026) "Parado em rota" é retrato de AGORA — não pode depender da
   // data em que o chamado abriu. Com o filtro em "Esta Semana", um caminhão
@@ -5591,6 +5711,18 @@ function renderDashboardView() {
   const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaizAlerta, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
   const maisAntigaTratativaGestor = getMaisAntigaPendente(tratativasGestorAlerta, CAMPOS_SLA_TRATATIVA_GESTOR, { atencao: 24, estourado: 48 });
   const slaTratativaGestor = getSlaBreakdown(tratativasGestorAlerta, CAMPOS_SLA_TRATATIVA_GESTOR);
+  // (23/09/2026) Mini-gráfico do card "Tratativas do Gestor": pedido para
+  // agrupar por QUEM responde pela devolução, não por faixa de SLA — usa o
+  // mesmo mapa de responsaveisDaDevolucao() que a tela de Análise já usa
+  // (ver [[responsavel-devolucao-mapa]]), então muda sozinho se o mapa mudar.
+  const porGestorTratativaMap = {};
+  tratativasGestorAlerta.forEach(d => {
+    const nomes = nomesResponsaveisDaDevolucao(d);
+    (nomes.length ? nomes : ['SEM RESPONSÁVEL']).forEach(nome => {
+      porGestorTratativaMap[nome] = (porGestorTratativaMap[nome] || 0) + 1;
+    });
+  });
+  const porGestorTratativaArr = Object.entries(porGestorTratativaMap).sort((a, b) => b[1] - a[1]);
   const maisAntigaVeicParadoRota = getMaisAntigaPendente(veicParadosAlerta, ['criado_em', 'data_chamado', 'data'], { atencao: 4, estourado: 8 });
   // A retencao de oficina passa a usar 24h/72h. A linha ACIMA - socorro em
   // rota - continua em 4h/8h de proposito: caminhao parado na estrada e outra
@@ -5826,6 +5958,89 @@ function renderDashboardView() {
       gravidade: gravItem,
       raw: itemRaw
     });
+  }
+
+  // Top 5 dos cards "Top Veículos / Prestadores / Colaboradores" — mesmos
+  // campos que pushItemRec() usa por baixo das abas da Matriz, mas
+  // INCONDICIONAIS (não dependem de qual aba está selecionada lá embaixo,
+  // porque aqui são três cards fixos, um por dimensão) e só contagem, sem
+  // valor/gravidade/itens — o card só precisa do "quantas vezes apareceu".
+  function contarPorChave(map, key) {
+    if (!key || key === 'N/A' || key === '—' || key === 'PENDENTE') return;
+    const k = String(key).toUpperCase().trim();
+    if (!k) return;
+    map[k] = (map[k] || 0) + 1;
+  }
+
+  const porVeiculoMap = {};
+  devs.forEach(d => contarPorChave(porVeiculoMap, d.veiculo_placa));
+  rotas.forEach(r => contarPorChave(porVeiculoMap, r.veiculo_placa));
+  ocViagens.forEach(o => contarPorChave(porVeiculoMap, o.veiculo_placa || o.placa));
+  reentregasPeriodo.forEach(re => contarPorChave(porVeiculoMap, re.placa));
+  const topVeiculosArr = Object.entries(porVeiculoMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const porPrestadorMap = {};
+  devs.forEach(d => {
+    const mot = (d.motorista_nome || '').toUpperCase().trim();
+    if (mot && mot !== 'N/A' && mot !== '—') contarPorChave(porPrestadorMap, `${mot} (Motorista)`);
+    const ajusRec = (Array.isArray(d.ajudantes) && d.ajudantes.length) ? d.ajudantes : [d.ajudante_nome];
+    ajusRec.forEach(a => {
+      const aju = String(a || '').toUpperCase().trim();
+      if (aju && aju !== 'N/A' && aju !== '—') contarPorChave(porPrestadorMap, `${aju} (Ajudante)`);
+    });
+  });
+  rotas.forEach(r => {
+    const mot = (r.motorista_nome || '').toUpperCase().trim();
+    if (mot && mot !== 'N/A' && mot !== '—') contarPorChave(porPrestadorMap, `${mot} (Motorista)`);
+  });
+  reentregasPeriodo.forEach(re => {
+    const motOrig = (re.motorista_original || '').toUpperCase().trim();
+    const motNovo = (re.motorista_novo || '').toUpperCase().trim();
+    if (motOrig && motOrig !== 'N/A' && motOrig !== '—') contarPorChave(porPrestadorMap, `${motOrig} (Motorista)`);
+    if (motNovo && motNovo !== 'N/A' && motNovo !== '—' && motNovo !== motOrig) contarPorChave(porPrestadorMap, `${motNovo} (Novo Motorista)`);
+  });
+  const topPrestadoresArr = Object.entries(porPrestadorMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const porColaboradorMap = {};
+  devs.forEach(d => {
+    const sep = (d.separador_apurado || d.separador_nome || '').toUpperCase().trim();
+    const conf = (d.conferente_apurado || d.conferente_nome || '').toUpperCase().trim();
+    if (sep && sep !== 'PENDENTE' && sep !== '—') contarPorChave(porColaboradorMap, `${sep} (Separador)`);
+    if (conf && conf !== 'PENDENTE' && conf !== '—') contarPorChave(porColaboradorMap, `${conf} (Conferente)`);
+  });
+  faltasColabList.forEach(f => { if (f && f.colaborador) contarPorChave(porColaboradorMap, `${f.colaborador} (Operacional CD)`); });
+  ocorrenciasCdList.forEach(o => { if (o && o.colaborador) contarPorChave(porColaboradorMap, `${o.colaborador} (Operacional CD)`); });
+  const topColaboradoresArr = Object.entries(porColaboradorMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // Markup dos três cards "Top N" acima — mesmo padrão de expandir dos cards
+  // de Gestor/Departamento, um helper só porque são três cópias idênticas na
+  // estrutura, mudando apenas o título, o ícone e a lista.
+  function cardTopN(cardId, titulo, icone, arr) {
+    const total = arr.reduce((a, par) => a + par[1], 0);
+    // Sem ocorrência no período: card fica sem clique e sem seta — não há o
+    // que expandir, e um card "clicável" que não abre nada é pior que um
+    // que nunca fingiu abrir.
+    if (arr.length === 0) {
+      return `
+          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
+            <div class="text-[10px] text-slate-400 font-bold uppercase">${icone} ${titulo}</div>
+            <div class="text-xl font-black text-white mt-1">0</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Sem ocorrência no período</div>
+          </div>`;
+    }
+    const subtitulo = `${arr[0][0]} lidera (${arr[0][1]})`;
+    return `
+          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl cursor-pointer select-none" onclick="toggleCardChart('${cardId}', event)" data-chart-json='${JSON.stringify(arr).replace(/'/g, "&#39;")}'>
+            <div class="text-[10px] text-slate-400 font-bold uppercase flex items-center justify-between">
+              <span>${icone} ${titulo}</span>
+              <span id="chevron-${cardId}" class="text-slate-600 transition-transform">▾</span>
+            </div>
+            <div class="text-xl font-black text-white mt-1">${total}</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">${subtitulo}</div>
+            <div id="chart-wrap-${cardId}" class="hidden mt-2 pt-2 border-t border-slate-800" style="height:${Math.max(90, arr.length * 32 + 24)}px">
+              <canvas id="chart-${cardId}"></canvas>
+            </div>
+          </div>`;
   }
 
   if (activeRecTab === 'veiculo') {
@@ -6210,12 +6425,20 @@ function renderDashboardView() {
 
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
           <!-- CARD DEVOLUÇÃO TOTAL -->
-          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
-            <div class="text-[10px] text-slate-400 font-bold uppercase">Valor Total Reclamado</div>
+          <!-- (23/09/2026) Mesmo padrão de expandir do card "Tratativas do
+               Gestor", agora agrupando por departamento de quem abriu. -->
+          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl cursor-pointer select-none" onclick="toggleCardChart('devolucao-departamento', event)" data-chart-json='${JSON.stringify(porDepartamentoArr).replace(/'/g, "&#39;")}'>
+            <div class="text-[10px] text-slate-400 font-bold uppercase flex items-center justify-between">
+              <span>Valor Total Reclamado</span>
+              <span id="chevron-devolucao-departamento" class="text-slate-600 transition-transform">▾</span>
+            </div>
             <div class="text-lg font-black text-emerald-400 mt-1">R$ ${totalValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">${devs.length} devolução(ões)</div>
+            <div id="chart-wrap-devolucao-departamento" class="hidden mt-2 pt-2 border-t border-slate-800" style="height:${Math.max(90, porDepartamentoArr.length * 32 + 24)}px">
+              <canvas id="chart-devolucao-departamento"></canvas>
+            </div>
           </div>
-          
+
           <!-- CARD LEAD TIME DE ABERTURA (HH:MM:SS) -->
           <div class="bg-slate-950 border border-amber-900/60 p-3 rounded-xl">
             <div class="text-[10px] text-amber-400 font-bold uppercase flex items-center gap-1">
@@ -6267,8 +6490,18 @@ function renderDashboardView() {
           </div>
 
           <!-- CARD TRATATIVAS DO GESTOR PENDENTES -->
-          <div class="bg-slate-950 border ${tratativasGestorAlerta.length > 0 ? 'border-sky-800/70' : 'border-slate-800'} p-3 rounded-xl">
-            <div class="text-[10px] text-slate-400 font-bold uppercase">Tratativas do Gestor</div>
+          <!-- (23/09/2026) Piloto de "expandir card": clique revela um mini-
+               gráfico com a fila pendente agrupada por QUEM responde (mapa de
+               responsaveisDaDevolucao(), ver [[responsavel-devolucao-mapa]]) —
+               não pela faixa de SLA, que já aparece em texto acima. Se o
+               piloto colar, replica pros outros cards; a análise "de
+               verdade" continua sendo o Power BI, isso aqui é só o efeito no
+               card. -->
+          <div class="bg-slate-950 border ${tratativasGestorAlerta.length > 0 ? 'border-sky-800/70' : 'border-slate-800'} p-3 rounded-xl cursor-pointer select-none" onclick="toggleCardChart('tratativa-gestor', event)" data-chart-json='${JSON.stringify(porGestorTratativaArr).replace(/'/g, "&#39;")}'>
+            <div class="text-[10px] text-slate-400 font-bold uppercase flex items-center justify-between">
+              <span>Tratativas do Gestor</span>
+              <span id="chevron-tratativa-gestor" class="text-slate-600 transition-transform">▾</span>
+            </div>
             <div class="text-xl font-black ${tratativasGestorAlerta.length > 0 ? 'text-sky-300' : 'text-emerald-400'} mt-1">${tratativasGestorAlerta.length}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Parecer pendente</div>
             <div class="flex items-center gap-2 mt-1.5 text-[10px] font-bold">
@@ -6280,7 +6513,20 @@ function renderDashboardView() {
             <div class="text-[10px] font-bold mt-1 ${maisAntigaTratativaGestor.horas > 48 ? 'text-red-400' : maisAntigaTratativaGestor.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}" title="Devolução ${maisAntigaTratativaGestor.item.numero_devolucao || maisAntigaTratativaGestor.item.numero_protocolo || ''}">
               ⏳ Mais antiga: ${maisAntigaTratativaGestor.texto}
             </div>` : ''}
+            <div id="chart-wrap-tratativa-gestor" class="hidden mt-2 pt-2 border-t border-slate-800" style="height:${Math.max(90, porGestorTratativaArr.length * 32 + 24)}px">
+              <canvas id="chart-tratativa-gestor"></canvas>
+            </div>
           </div>
+
+          <!-- CARDS TOP VEÍCULOS / PRESTADORES / COLABORADORES -->
+          <!-- (23/09/2026) Mesmo mecanismo de expandir dos cards acima.
+               Resumo rápido no topo — o detalhe completo (valor, gravidade,
+               clique pro registro) continua na Matriz de Recorrências logo
+               abaixo; esses cards não substituem ela, só evitam rolar a
+               página pra ver quem lidera. -->
+          ${cardTopN('top-veiculos', 'Top Veículos', '🚛', topVeiculosArr)}
+          ${cardTopN('top-prestadores', 'Top Prestadores', '👤', topPrestadoresArr)}
+          ${cardTopN('top-colaboradores', 'Top Colaboradores CD', '🏭', topColaboradoresArr)}
         </div>
       </div>
 

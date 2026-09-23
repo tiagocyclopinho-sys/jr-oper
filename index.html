@@ -886,6 +886,10 @@
 
   <script src="./js/xlsx.full.min.js"></script>
   <script src="./js/html2pdf.bundle.min.js"></script>
+  <!-- Piloto de gráficos nos cards do Dashboard (23/09/2026). Via CDN, e não
+       arquivo local, para não pesar no pacote de 9MB arrastado à mão na
+       Vercel (ver pasta viva). -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
   <script src="./js/mockData.js"></script>
   <script src="./js/config.js"></script>
   <!-- Antes de store.js e cloudStore.js: os dois chamam window.fotoStore. -->
