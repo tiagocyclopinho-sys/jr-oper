@@ -414,6 +414,7 @@ class CloudStore {
       'ocorrencias_viagens',
       'resumo_diario_cd',
       'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd',   // 6.7.0 — filhos do Resumo Diário
+      'infracoes_relatorios', 'infracoes',                        // 6.8.0 — migration 48
       'trocas_veiculos',
       'retencoes_frota',
       'reentregas',
@@ -1943,7 +1944,12 @@ class CloudStore {
       ocorrencias_devolucao: 'numero_protocolo',
       ocorrencias_rota: 'numero_protocolo',
       retencoes_frota: 'numero_retencao',
-      sinistros: 'numero_sinistro'
+      sinistros: 'numero_sinistro',
+      // 6.8.0 (migration 48): o número do auto de infração é do mundo real —
+      // não se renumera. Dois aparelhos lançando a mesma multa offline caem
+      // aqui, na aba "⚠️ Conflitos". numero_relatorio é sequência do app e
+      // vai pelo caminho da renumeração (SEQUENCIAS_RENUMERAVEIS).
+      infracoes: 'numero_infracao'
     };
     const campo = CAMPOS_UNICOS_POR_TABELA[tableName];
     if (!campo) return;
@@ -2261,7 +2267,8 @@ class CloudStore {
       'relatorios_divergencia', 'auditoria_produtividade', 'trocas_veiculos',
       'retencoes_frota', 'reentregas_rota', 'audit_logs', 'registro_versoes',
       'sinistros', 'itens_avulsos_destinacao',
-      'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd'   // 6.7.0
+      'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd',  // 6.7.0
+      'infracoes_relatorios', 'infracoes'                        // 6.8.0
     ];
     let ok = true;
     for (const t of tabelas) {
@@ -2404,7 +2411,10 @@ class CloudStore {
       { dbKey: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', tableName: 'relatorios_divergencia' },
       { dbKey: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', tableName: 'auditoria_produtividade' },
       { dbKey: 'sinistros',             localKey: 'jr_sinistros',         tableName: 'sinistros' },
-      { dbKey: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', tableName: 'itens_avulsos_destinacao' }
+      { dbKey: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', tableName: 'itens_avulsos_destinacao' },
+      // 6.8.0 — Controle de Infrações (migration 48). Texto, sem FK.
+      { dbKey: 'infracoes_relatorios',  localKey: 'jr_infracoes_relatorios', tableName: 'infracoes_relatorios' },
+      { dbKey: 'infracoes',             localKey: 'jr_infracoes',         tableName: 'infracoes' }
     ];
 
     // Independe de haver algo a enviar: é o que mantém o diagnóstico do
@@ -3311,7 +3321,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "responsavel-devolucao-6.7.9";
+CloudStore.BUILD = "controle-infracoes-6.8.0";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3352,6 +3362,23 @@ CloudStore.CATALOGO_EPOCA = '2000-01-01T00:00:00-03:00';
 // banco. Enviá-lo deixaria o relógio de um aparelho definir o cursor de
 // todos os outros.
 CloudStore.COLUNAS_POR_TABELA = {
+  // Controle de Infrações (6.8.0, migration 48) — nasce com lista branca,
+  // espelhando a migration coluna a coluna. data_infracao e valor são
+  // obrigatórios no formulário; as datas opcionais (status, impressão,
+  // exclusão) viram null em vez de "" pela projeção.
+  infracoes_relatorios: {
+    texto:    ['numero_relatorio', 'responsavel', 'observacao', 'criado_por', 'atualizado_por', 'deleted_by_nome'],
+    numero:   ['deleted_by_usuario_id'],
+    booleano: ['is_deleted'],
+    data:     ['data_lancamento', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
+  infracoes: {
+    texto:    ['numero_infracao', 'prestador_nome', 'prestador_tipo', 'veiculo_placa', 'status',
+               'status_alterado_por', 'criado_por', 'atualizado_por', 'deleted_by_nome'],
+    numero:   ['relatorio_id', 'valor', 'recibo_impresso_qtd', 'deleted_by_usuario_id'],
+    booleano: ['is_deleted'],
+    data:     ['data_infracao', 'status_alterado_em', 'recibo_impresso_em', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
   clientes: {
     texto:    ['codigo_cliente', 'razao_social', 'cnpj', 'cidade', 'uf', 'deleted_by_nome'],
     numero:   ['deleted_by_usuario_id'],
@@ -3538,10 +3565,13 @@ CloudStore.SEQUENCIAS_RENUMERAVEIS = {
   ocorrencias_devolucao: { unico: 'numero_protocolo', espelhos: ['numero_devolucao'] },
   ocorrencias_rota:      { unico: 'numero_protocolo', espelhos: [] },
   retencoes_frota:       { unico: 'numero_retencao',  espelhos: [] },
-  sinistros:             { unico: 'numero_sinistro',  espelhos: [] }
+  sinistros:             { unico: 'numero_sinistro',  espelhos: [] },
+  // 6.8.0: as multas apontam para o relatório por relatorio_id, não pelo
+  // número — renumerar o INF-AAAA-NNNN não deixa nenhuma multa órfã.
+  infracoes_relatorios:  { unico: 'numero_relatorio', espelhos: [] }
 };
 
-// As 28 tabelas que sincronizam, e onde cada uma mora neste aparelho.
+// As 30 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
 //   localKey  -> a chave ESPELHO no localStorage ('jr_ocorrencias' etc.)
 //   dbKey     -> a colecao dentro de jr_sac_db e de window.db.data
@@ -3573,7 +3603,9 @@ CloudStore.MAPA_TABELAS = [
   { tableName: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', dbKey: 'relatorios_divergencia' },
   { tableName: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', dbKey: 'auditoria_produtividade' },
   { tableName: 'sinistros',             localKey: 'jr_sinistros',         dbKey: 'sinistros' },
-  { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' }
+  { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' },
+  { tableName: 'infracoes_relatorios',  localKey: 'jr_infracoes_relatorios', dbKey: 'infracoes_relatorios' },  // 6.8.0
+  { tableName: 'infracoes',             localKey: 'jr_infracoes',         dbKey: 'infracoes' }                // 6.8.0
 ];
 
 // Tamanho do bloco de leitura paginada (item 4). Deliberadamente ABAIXO do

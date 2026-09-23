@@ -348,6 +348,9 @@ class Store {
     ensureArray('ocorrencias_cd');
     ensureArray('ocorrencias_colaborador');
     ensureArray('cortes_cd');
+    // 6.8.0 — Controle de Infrações (migration 48).
+    ensureArray('infracoes_relatorios');
+    ensureArray('infracoes');
 
     // Migração leve, roda uma única vez por dispositivo (idempotente):
     // 1) garante um 'id' único em cada item de devolução — sem isso, o
@@ -3304,6 +3307,42 @@ class Store {
     if (!this.data[collection]) return false;
     const item = this.data[collection].find(x => x.id == id);
     if (!item) return false;
+    this.ultimoErroRestauracao = null;
+
+    // INFRAÇÕES (6.8.0): o número do auto é único entre as não excluídas
+    // (índice parcial da migration 48). Restaurar uma multa cujo número foi
+    // relançado depois derrubaria o lote inteiro no envio — recusa aqui.
+    if (collection === 'infracoes' || collection === 'infracoes_relatorios') {
+      const alvo = collection === 'infracoes' ? [item]
+        : (this.data.infracoes || []).filter(i => i.relatorio_id == id && i.is_deleted && i.deleted_at === item.deleted_at);
+      const repetida = alvo.find(i => this.getInfracaoPorNumero(i.numero_infracao, i.id));
+      if (repetida) {
+        this.ultimoErroRestauracao = `A infração ${repetida.numero_infracao} já está lançada de novo em outro registro. Exclua a outra antes de restaurar esta.`;
+        return false;
+      }
+      if (collection === 'infracoes') {
+        const rel = this.getRelatorioInfracaoPorId(item.relatorio_id);
+        if (rel && rel.is_deleted) {
+          this.ultimoErroRestauracao = `Esta infração pertence ao relatório ${rel.numero_relatorio}, que está na lixeira. Restaure o relatório.`;
+          return false;
+        }
+      }
+      // O relatório volta com as multas que saíram JUNTO com ele (mesmo
+      // deleted_at). As que já estavam excluídas antes continuam excluídas.
+      if (collection === 'infracoes_relatorios') {
+        alvo.forEach(i => {
+          i.is_deleted = false;
+          i.deleted_at = null;
+          i.deleted_by_usuario_id = null;
+          i.deleted_by_nome = null;
+          this.carimbarEdicao('infracoes', i);
+          this.logAudit({ acao: 'RESTAURACAO', modulo: 'infracoes', registro_id: i.id, diff: { depois: i } });
+        });
+      }
+      item.deleted_at = null;
+      item.deleted_by_usuario_id = null;
+      item.deleted_by_nome = null;
+    }
     item.is_deleted = false;
     this.carimbarEdicao(collection, item);
     if (collection === 'clientes' || collection === 'produtos') this.marcarCatalogoSujo();
@@ -3408,6 +3447,275 @@ class Store {
     return { success: true };
   }
 
+  // ===== CONTROLE DE INFRAÇÕES (6.8.0, migration 48) =====
+  //
+  // Duas coleções: infracoes_relatorios (o lote, INF-2026-0001) e infracoes
+  // (uma linha por multa, com relatorio_id). O relatório é só o envelope do
+  // lançamento; quem vale para Dossiê, recibo e Power BI é a linha da multa.
+  //
+  // O rastro não tem tabela própria: criação, edição, troca de status,
+  // emissão de recibo e exclusão vão para audit_logs; a cópia inteira de cada
+  // versão para registro_versoes; exclusão é lógica e cai na Lixeira.
+
+  static get STATUS_INFRACAO() {
+    return { PENDENTE: 'Pendente', RECIBO_ASSINADO: 'Recibo assinado', DESCONTADO: 'Descontado' };
+  }
+
+  _normalizarNumeroInfracao(v) {
+    return String(v || '').toUpperCase().replace(/\s+/g, '').trim();
+  }
+
+  getRelatoriosInfracoes({ incluirExcluidos } = {}) {
+    let lista = this.data.infracoes_relatorios || [];
+    if (!incluirExcluidos) lista = lista.filter(r => r && !r.is_deleted);
+    return lista.slice().sort((a, b) => {
+      const d = String(b.data_lancamento || '').localeCompare(String(a.data_lancamento || ''));
+      return d !== 0 ? d : String(b.numero_relatorio || '').localeCompare(String(a.numero_relatorio || ''));
+    });
+  }
+
+  getRelatorioInfracaoPorId(id) {
+    return (this.data.infracoes_relatorios || []).find(r => r && String(r.id) === String(id)) || null;
+  }
+
+  getInfracaoPorId(id) {
+    return (this.data.infracoes || []).find(r => r && String(r.id) === String(id)) || null;
+  }
+
+  getInfracoes({ relatorioId, prestadorNome, status, dataDe, dataAte, incluirExcluidos } = {}) {
+    let lista = this.data.infracoes || [];
+    if (!incluirExcluidos) lista = lista.filter(r => r && !r.is_deleted);
+    if (relatorioId !== undefined && relatorioId !== null) lista = lista.filter(r => String(r.relatorio_id) === String(relatorioId));
+    if (prestadorNome) {
+      const alvo = String(prestadorNome).trim().toUpperCase();
+      lista = lista.filter(r => String(r.prestador_nome || '').trim().toUpperCase() === alvo);
+    }
+    if (status && status !== 'TODOS') lista = lista.filter(r => (r.status || 'PENDENTE') === status);
+    if (dataDe) lista = lista.filter(r => (r.data_infracao || '') >= dataDe);
+    if (dataAte) lista = lista.filter(r => (r.data_infracao || '') <= dataAte);
+    return lista.slice().sort((a, b) => String(b.data_infracao || '').localeCompare(String(a.data_infracao || '')));
+  }
+
+  // Outra multa ATIVA com o mesmo número (ignorando a própria).
+  getInfracaoPorNumero(numero, ignorarId) {
+    const n = this._normalizarNumeroInfracao(numero);
+    if (!n) return null;
+    return (this.data.infracoes || []).find(r => r && !r.is_deleted
+      && String(r.id) !== String(ignorarId)
+      && this._normalizarNumeroInfracao(r.numero_infracao) === n) || null;
+  }
+
+  // Salva o relatório INTEIRO de uma vez: cabeçalho + linhas. Tudo é
+  // validado antes da primeira escrita — ou entra o lote todo, ou nada.
+  //   dados = { id?, data_lancamento, responsavel, observacao,
+  //             linhas: [{ id?, data_infracao, numero_infracao, valor,
+  //                        prestador_nome, prestador_tipo, veiculo_placa }] }
+  // valor chega como número. Linha que existia no relatório e não veio
+  // em linhas é excluída (lógica). Devolve { success, relatorio, erros }.
+  salvarRelatorioInfracoes(dados) {
+    if (!Array.isArray(this.data.infracoes_relatorios)) this.data.infracoes_relatorios = [];
+    if (!Array.isArray(this.data.infracoes)) this.data.infracoes = [];
+    const usuario = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    const agora = agoraIsoBrasilia();
+    const erros = [];
+
+    const existente = dados.id ? this.getRelatorioInfracaoPorId(dados.id) : null;
+    if (dados.id && (!existente || existente.is_deleted)) {
+      return { success: false, erros: [{ linha: null, msg: 'Relatório não encontrado (pode ter sido excluído em outro aparelho).' }] };
+    }
+    if (!dados.data_lancamento) erros.push({ linha: null, msg: 'Informe a data do lançamento.' });
+
+    const linhas = (dados.linhas || []).map((l, i) => ({
+      _pos: i + 1,
+      id: l.id || null,
+      data_infracao: String(l.data_infracao || '').slice(0, 10),
+      numero_infracao: this._normalizarNumeroInfracao(l.numero_infracao),
+      valor: Math.round((parseFloat(l.valor) || 0) * 100) / 100,
+      prestador_nome: String(l.prestador_nome || '').trim().toUpperCase(),
+      prestador_tipo: String(l.prestador_tipo || '').trim().toUpperCase() || null,
+      veiculo_placa: String(l.veiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+    }));
+    if (!linhas.length) erros.push({ linha: null, msg: 'Inclua ao menos uma infração.' });
+
+    const vistos = {};
+    linhas.forEach(l => {
+      if (!l.data_infracao) erros.push({ linha: l._pos, msg: 'data da infração em branco' });
+      if (!l.numero_infracao) erros.push({ linha: l._pos, msg: 'número da infração em branco' });
+      if (!(l.valor > 0)) erros.push({ linha: l._pos, msg: 'valor precisa ser maior que zero' });
+      if (!l.prestador_nome) erros.push({ linha: l._pos, msg: 'prestador em branco' });
+      if (!l.veiculo_placa) erros.push({ linha: l._pos, msg: 'veículo em branco' });
+      if (l.numero_infracao) {
+        if (vistos[l.numero_infracao]) {
+          erros.push({ linha: l._pos, msg: `número ${l.numero_infracao} repetido na linha ${vistos[l.numero_infracao]}` });
+        } else {
+          vistos[l.numero_infracao] = l._pos;
+          const outra = this.getInfracaoPorNumero(l.numero_infracao, l.id);
+          if (outra) {
+            const rel = this.getRelatorioInfracaoPorId(outra.relatorio_id);
+            erros.push({ linha: l._pos, msg: `a infração ${l.numero_infracao} já foi lançada${rel ? ' no relatório ' + rel.numero_relatorio : ''} para ${outra.prestador_nome}` });
+          }
+        }
+      }
+    });
+    // somenteValidar: a tela chama assim quando ela mesma já achou erro
+    // (prestador ou placa fora do cadastro), para mostrar TODOS de uma vez.
+    if (erros.length || dados.somenteValidar) return { success: !erros.length && !dados.somenteValidar, erros };
+
+    // ---- a partir daqui só escrita ----
+    let rel = existente;
+    const relAntes = existente ? JSON.parse(JSON.stringify(existente)) : null;
+    if (!rel) {
+      const ano = String(dados.data_lancamento).slice(0, 4) || String(new Date().getFullYear());
+      rel = {
+        id: this.gerarIdUnico(),
+        numero_relatorio: this.getNextSequenceNumber('infracoes_relatorios', 'numero_relatorio', `INF-${ano}-`, 4),
+        criado_por: usuario,
+        criado_em: agora,
+        is_deleted: false
+      };
+      this.data.infracoes_relatorios.unshift(rel);
+    } else {
+      this.saveVersion('infracoes_relatorios', relAntes);
+    }
+    rel.data_lancamento = dados.data_lancamento;
+    rel.responsavel = String(dados.responsavel || usuario).trim().toUpperCase();
+    rel.observacao = String(dados.observacao || '').trim() || null;
+    this.carimbarEdicao('infracoes_relatorios', rel);
+    this.logAudit({
+      acao: existente ? 'EDICAO' : 'CRIACAO', modulo: 'infracoes_relatorios', registro_id: rel.id,
+      diff: existente ? { antes: relAntes, depois: rel } : { depois: rel }
+    });
+
+    const idsMantidos = new Set();
+    linhas.forEach(l => {
+      const campos = {
+        data_infracao: l.data_infracao, numero_infracao: l.numero_infracao, valor: l.valor,
+        prestador_nome: l.prestador_nome, prestador_tipo: l.prestador_tipo, veiculo_placa: l.veiculo_placa
+      };
+      const atual = l.id ? this.getInfracaoPorId(l.id) : null;
+      if (atual && String(atual.relatorio_id) === String(rel.id) && !atual.is_deleted) {
+        idsMantidos.add(String(atual.id));
+        const mudou = Object.keys(campos).some(k => String(atual[k] ?? '') !== String(campos[k] ?? ''));
+        if (!mudou) return;
+        const antes = JSON.parse(JSON.stringify(atual));
+        this.saveVersion('infracoes', antes);
+        Object.assign(atual, campos);
+        this.carimbarEdicao('infracoes', atual);
+        this.logAudit({ acao: 'EDICAO', modulo: 'infracoes', registro_id: atual.id, diff: { antes, depois: atual } });
+      } else {
+        const nova = {
+          id: this.gerarIdUnico(),
+          relatorio_id: rel.id,
+          ...campos,
+          status: 'PENDENTE',
+          recibo_impresso_qtd: 0,
+          criado_por: usuario,
+          criado_em: agora,
+          is_deleted: false
+        };
+        this.carimbarEdicao('infracoes', nova);
+        this.data.infracoes.unshift(nova);
+        idsMantidos.add(String(nova.id));
+        this.logAudit({ acao: 'CRIACAO', modulo: 'infracoes', registro_id: nova.id, diff: { depois: nova } });
+      }
+    });
+
+    // Linhas que saíram da ficha na edição: exclusão lógica.
+    if (existente) {
+      this.getInfracoes({ relatorioId: rel.id })
+        .filter(i => !idsMantidos.has(String(i.id)))
+        .forEach(i => this._excluirInfracaoLogica(i, agora));
+    }
+
+    this.save();
+    return { success: true, relatorio: rel, erros: [] };
+  }
+
+  _excluirInfracaoLogica(item, quando) {
+    item.is_deleted = true;
+    item.deleted_at = quando || agoraIsoBrasilia();
+    item.deleted_by_usuario_id = this.currentUser ? this.currentUser.id : null;
+    item.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    this.carimbarEdicao('infracoes', item);
+    this.logAudit({ acao: 'EXCLUSAO_LOGICA', modulo: 'infracoes', registro_id: item.id, diff: { antes: item } });
+  }
+
+  _excluirRelatorioLogico(rel, quando) {
+    rel.is_deleted = true;
+    rel.deleted_at = quando;
+    rel.deleted_by_usuario_id = this.currentUser ? this.currentUser.id : null;
+    rel.deleted_by_nome = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    this.carimbarEdicao('infracoes_relatorios', rel);
+    this.logAudit({ acao: 'EXCLUSAO_LOGICA', modulo: 'infracoes_relatorios', registro_id: rel.id, diff: { antes: rel } });
+  }
+
+  // Exclui UMA multa. Se era a última do relatório, o relatório vai junto
+  // (um lote vazio não tem o que imprimir).
+  excluirInfracao(id) {
+    const item = this.getInfracaoPorId(id);
+    if (!item || item.is_deleted) return { success: false, message: 'Infração não encontrada.' };
+    const agora = agoraIsoBrasilia();
+    this._excluirInfracaoLogica(item, agora);
+    const rel = this.getRelatorioInfracaoPorId(item.relatorio_id);
+    if (rel && !rel.is_deleted && this.getInfracoes({ relatorioId: rel.id }).length === 0) {
+      this._excluirRelatorioLogico(rel, agora);
+    }
+    this.save();
+    return { success: true };
+  }
+
+  // Exclui o relatório e TODAS as multas ativas dele, com o MESMO deleted_at
+  // — é por ele que a restauração do relatório sabe quais multas trazer de
+  // volta. Uma linha de log por multa.
+  excluirRelatorioInfracoes(id) {
+    const rel = this.getRelatorioInfracaoPorId(id);
+    if (!rel || rel.is_deleted) return { success: false, message: 'Relatório não encontrado.' };
+    const agora = agoraIsoBrasilia();
+    this.getInfracoes({ relatorioId: rel.id }).forEach(i => this._excluirInfracaoLogica(i, agora));
+    this._excluirRelatorioLogico(rel, agora);
+    this.save();
+    return { success: true };
+  }
+
+  alterarStatusInfracoes(ids, novoStatus) {
+    if (!Store.STATUS_INFRACAO[novoStatus]) return { success: false, message: 'Status inválido.' };
+    const usuario = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+    const agora = agoraIsoBrasilia();
+    let n = 0;
+    (ids || []).forEach(id => {
+      const item = this.getInfracaoPorId(id);
+      if (!item || item.is_deleted || (item.status || 'PENDENTE') === novoStatus) return;
+      const de = item.status || 'PENDENTE';
+      item.status = novoStatus;
+      item.status_alterado_por = usuario;
+      item.status_alterado_em = agora;
+      this.carimbarEdicao('infracoes', item);
+      this.logAudit({ acao: 'MUDANCA_STATUS', modulo: 'infracoes', registro_id: item.id, diff: { de, para: novoStatus } });
+      n++;
+    });
+    if (n) this.save();
+    return { success: true, alteradas: n };
+  }
+
+  // Chamado a cada impressão de recibo: carimba as multas que saíram e
+  // deixa um EMISSAO_RECIBO por multa no audit_logs. NÃO muda o status —
+  // folha impressa ainda não é folha assinada.
+  registrarEmissaoReciboInfracoes(ids) {
+    const agora = agoraIsoBrasilia();
+    let n = 0;
+    (ids || []).forEach(id => {
+      const item = this.getInfracaoPorId(id);
+      if (!item) return;
+      item.recibo_impresso_em = agora;
+      item.recibo_impresso_qtd = (parseInt(item.recibo_impresso_qtd, 10) || 0) + 1;
+      this.carimbarEdicao('infracoes', item);
+      this.logAudit({ acao: 'EMISSAO_RECIBO', modulo: 'infracoes', registro_id: item.id,
+        diff: { prestador: item.prestador_nome, valor: item.valor, vez: item.recibo_impresso_qtd } });
+      n++;
+    });
+    if (n) this.save();
+  }
+
   getLixeiraItems() {
     const collections = [
       { name: 'ocorrencias_devolucao', label: 'Devolução SAC' },
@@ -3421,7 +3729,9 @@ class Store {
       { name: 'ajudantes', label: 'Ajudantes' },
       { name: 'colaboradores_cd', label: 'Colaboradores CD' },
       { name: 'veiculos', label: 'Veículos' },
-      { name: 'clientes', label: 'Clientes' }
+      { name: 'clientes', label: 'Clientes' },
+      { name: 'infracoes_relatorios', label: 'Relatório de Infrações' },
+      { name: 'infracoes', label: 'Infrações de Trânsito' }
     ];
     let items = [];
     collections.forEach(col => {
@@ -3431,7 +3741,9 @@ class Store {
             collection: col.name,
             collectionLabel: col.label,
             id: item.id,
-            descricao: item.numero_protocolo || item.numero_retencao || item.carga_numero || item.carga || item.placa || item.nome || item.descricao || `ID #${item.id}`,
+            descricao: item.numero_protocolo || item.numero_retencao || item.numero_relatorio
+              || (item.numero_infracao ? `${item.numero_infracao} — ${item.prestador_nome || ''}` : '')
+              || item.carga_numero || item.carga || item.placa || item.nome || item.descricao || `ID #${item.id}`,
             deleted_at: item.deleted_at,
             deleted_by: item.deleted_by ? item.deleted_by.nome : (item.deleted_by_nome || 'N/A'),
             itemData: item
@@ -3743,6 +4055,8 @@ class Store {
     // faltavam aqui porque os módulos são mais novos que esta função.
     this.data.sinistros = [];
     this.data.itens_avulsos_destinacao = [];
+    this.data.infracoes_relatorios = [];
+    this.data.infracoes = [];
 
     // Limpa chaves e caches locais isolados no localStorage
     // jr_ocorrencias_viagens e jr_itens_devolucao entraram em 22/08/2026
@@ -3770,7 +4084,9 @@ class Store {
       'jr_relatorios_divergencia',
       'jr_auditoria_produtividade',
       'jr_sinistros',
-      'jr_itens_avulsos_destinacao'
+      'jr_itens_avulsos_destinacao',
+      'jr_infracoes_relatorios',
+      'jr_infracoes'
     ];
     chavesLimpeza.forEach(k => {
       try { localStorage.removeItem(k); } catch(e) {}
@@ -5212,9 +5528,11 @@ Store.COLECOES_COM_ATUALIZADO_EM = new Set([
   'trocas_veiculos',
   'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd',  // 6.7.0, migration 44
   'usuarios',  // 15/09/2026, migration 46 — senha redefinida perdia para cache sujo
-  'itens_avulsos_destinacao'  // 18/09/2026, migration 47 — caminho da foto perdia para cache sujo
+  'itens_avulsos_destinacao',  // 18/09/2026, migration 47 — caminho da foto perdia para cache sujo
+  'infracoes_relatorios', 'infracoes'  // 6.8.0, migration 48
 ]);
-Store.COLECOES_COM_ATUALIZADO_POR = new Set(['ocorrencias_devolucao', 'ocorrencias_rota', 'reentregas']);
+Store.COLECOES_COM_ATUALIZADO_POR = new Set(['ocorrencias_devolucao', 'ocorrencias_rota', 'reentregas',
+  'infracoes_relatorios', 'infracoes']);  // 6.8.0, migration 48
 
 // Gestor padrão de cada turno do Resumo Diário (6.7.0). Único lugar: antes
 // vivia aqui E em app.js:renderResumoDiarioCdView, com risco de divergirem.

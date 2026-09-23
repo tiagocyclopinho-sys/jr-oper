@@ -1501,6 +1501,7 @@ function renderDossieMotoristaView() {
       ${renderBlocoAusencias(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieArFormAberto')}
       ${renderBlocoDevolucoesErroMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoDeducoesPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoInfracoesPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoViagensPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoOcOperacionalMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${ehMotorista ? renderBlocoOcRotaMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte') : ''}
@@ -1540,6 +1541,9 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   const ocRota = ehMotorista ? ordenarPorDataDesc(filtrarPorData(ocRotaDoPrestador(nome), varDe, varAte)) : [];
   const sinistros = ehMotorista ? ordenarPorDataDesc(filtrarPorData(sinistrosDoPrestador(nome), varDe, varAte)) : [];
   const totalDeducoes = deducoes.reduce((acc, l) => acc + l.parte, 0);
+  // 6.8.0: infrações de trânsito em seção própria — não somam em Deduções.
+  const infracoesP = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(infracoesDoPrestador(nome), varDe, varAte)) : [];
+  const totalInfracoes = infracoesP.reduce((acc, l) => acc + (parseFloat(l.valor) || 0), 0);
   const periodoTexto = (dataDe || dataAte)
     ? `${dataDe ? 'de ' + formatarData(dataDe) : ''}${dataDe && dataAte ? ' ' : ''}${dataAte ? 'até ' + formatarData(dataAte) : ''}`
     : 'Todo o histórico';
@@ -1559,6 +1563,7 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
     ['Faltas / Condutas', ausencias.length],
     ['Devoluções (erro motorista)', devsErro.length],
     ['Deduções', brl(totalDeducoes)],
+    ['Infrações de trânsito', `${infracoesP.length} · ${brl(totalInfracoes)}`],
     ['Oc. Operacionais', ocOper.length],
     ...(ehMotorista ? [['Oc. em Rota', ocRota.length], ['Sinistros', sinistros.length]] : [])
   ] : [
@@ -1628,6 +1633,7 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   ${tipo === 'MOTORISTA' ? '' : secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td class="nowrap">${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
   ${tipo === 'MOTORISTA' ? secaoTabela('Devoluções por Erro Motorista', ['Data','Protocolo','Cliente','Motivo','Valor','Tratativa'], devsErro.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`)) : ''}
   ${tipo === 'MOTORISTA' ? secaoTabela('Deduções / Adiantamentos', ['Data','Protocolo','Valor da devolução','Equipe','Parte deste prestador','Situação'], deducoes.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${l.protocolo}</td><td class="num">${brl(l.total)}</td><td style="text-align:center;">${l.pessoas}</td><td class="num"><b>${brl(l.parte)}</b></td><td>${l.status}</td></tr>`), `<tr><td colspan="4" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalDeducoes)}</b></td><td></td></tr>`) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Infrações de Trânsito', ['Data','Nº infração','Veículo','Valor','Status','Relatório'], infracoesP.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${vgEscTxt(l.numero_infracao)}</td><td>${vgEscTxt(l.veiculo_placa || '—')}</td><td class="num">${brl(l.valor)}</td><td>${_infStatusLabel(l.status)}</td><td>${vgEscTxt(l.numero_relatorio || '—')}</td></tr>`), `<tr><td colspan="3" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalInfracoes)}</b></td><td colspan="2"></td></tr>`) : ''}
   ${tipo === 'MOTORISTA' ? secaoTabela('Ocorrências Operacionais (Oc Operacional)', ['Data','Carga','Rota','Função','Motivo','Causa','Ocorrência','Ação','Status'], ocOper.map(o => `<tr><td class="nowrap">${formatarData(o.data)}</td><td>${o.carga||'—'}</td><td>${o.rota||'—'}</td><td>${o.funcao||'—'}</td><td>${o.motivo||'—'}</td><td>${o.causa||'—'}</td><td>${o.ocorrencia||'—'}</td><td>${o.acao||'—'}</td><td>${o.status||'—'}</td></tr>`)) : ''}
   ${ehMotorista ? secaoTabela('Ocorrências em Rota (Oc em Rota)', ['Data','Protocolo','Carga','Placa','Motivo','Descrição','Local','Status'], ocRota.map(o => `<tr><td class="nowrap">${formatarData(o.data)}</td><td>${o.numero_protocolo||'—'}</td><td>${o.carga_numero||o.carga||'—'}</td><td>${o.veiculo_placa||'—'}</td><td>${o.motivo_resumido||o.tipo_ocorrencia||o.motivo||'—'}</td><td>${o.descricao||'—'}</td><td>${o.localizacao||'—'}</td><td>${String(o.status_chamado||o.status||'—').toUpperCase()}</td></tr>`)) : ''}
   ${ehMotorista ? secaoTabela('Sinistros', ['Nº','Data','Placa','Carga','Local','Responsabilidade','Desconto','Status'], sinistros.map(s => `<tr><td class="nowrap">${s.numero_sinistro||'—'}</td><td class="nowrap">${formatarData(s.data)}</td><td>${s.placa||'—'}</td><td>${s.carga||'—'}</td><td>${s.local_acidente||'—'}</td><td>${s.etapa_diretoria_completa ? (s.responsabilidade_motorista ? 'Sim' : 'Não') : 'Em apuração'}</td><td>${s.desconto_motorista ? brl(s.valor_desconto) + (s.numero_parcelas ? ` (${s.numero_parcelas}x)` : '') : '—'}</td><td>${s.status_geral === 'CONCLUIDO' ? 'Concluído' : 'Pendente'}</td></tr>`)) : ''}
@@ -1659,6 +1665,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   const medidas = tipo === 'MOTORISTA' ? [] : db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
     .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
   const deducoes = tipo === 'MOTORISTA' ? filtrarPorData(deducoesDoPrestador(nome), varDe, varAte) : [];
+  const infracoesP = tipo === 'MOTORISTA' ? filtrarPorData(infracoesDoPrestador(nome), varDe, varAte) : [];
   // 21/09/2026: mesmas fontes que a tela e o impresso — o CSV saía sem
   // devoluções, viagens, Oc Operacional, Oc em Rota e sinistros.
   const dadosMestre = tipo === 'MOTORISTA' ? getDadosPrestadorMestre(nome) : null;
@@ -1673,6 +1680,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   const csvLinha = campos => linhas.push(campos.concat(Array(Math.max(0, 10 - campos.length)).fill('')).map(v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g,'""')}"`).join(';'));
   viagens.forEach(v => csvLinha(['VIAGEM', formatarData(v.data), v.carga, v.rota, v.placa, v.papel, v.equipe, v.data_retorno ? formatarData(v.data_retorno) : '', statusViagemTexto(v)]));
   deducoes.forEach(l => csvLinha(['DEDUCAO_ADIANTAMENTO', formatarData(l.data), l.protocolo, l.total.toFixed(2), String(l.pessoas), l.parte.toFixed(2), l.status]));
+  infracoesP.forEach(l => csvLinha(['INFRACAO_TRANSITO', formatarData(l.data), l.numero_infracao, l.veiculo_placa, (parseFloat(l.valor) || 0).toFixed(2), _infStatusLabel(l.status), l.numero_relatorio]));
   devsErro.forEach(d => csvLinha(['DEVOLUCAO_ERRO_MOTORISTA', formatarData(d.data), d.numero_devolucao || d.numero_protocolo, d.cliente_nome, d.motivo_real_causa_raiz || d.motivo_reclamado, (parseFloat(d.valor_reclamado)||0).toFixed(2), d.status_gestao === 'CONCLUIDO' ? 'CONCLUIDA' : 'PENDENTE']));
   orientacoes.forEach(r => csvLinha(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao]));
   atestados.forEach(r => csvLinha(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro]));
@@ -1694,6 +1702,731 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   link.click();
   document.body.removeChild(link);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// CONTROLE DE INFRAÇÕES DE TRÂNSITO (6.8.0, migration 48)
+// ═══════════════════════════════════════════════════════════════════
+// Uma ficha (relatório) com quantas multas precisar: data, nº do auto,
+// valor, prestador e veículo — os dois últimos por busca em qualquer
+// trecho do cadastro (datalist). Motoristas E ajudantes: ajudante às vezes
+// dirige.
+//
+// Recibo: modelo do Recibo de Adiantamento, UMA FOLHA A4 POR PRESTADOR,
+// 100% dele (multa não se rateia). A folha nunca vaza para a segunda: a
+// tabela aperta conforme a quantidade e, acima de 25 multas, vira duas
+// colunas. Acima de 50 multas de um mesmo prestador o app avisa em vez de
+// cortar.
+//
+// Status (Pendente → Recibo assinado → Descontado) é trocado à mão; imprimir
+// não muda o status. Sem alertas por enquanto.
+//
+// No Dossiê as multas ficam só no bloco próprio — NÃO entram no total de
+// Deduções / Adiantamentos.
+
+const INF_MAX_POR_FOLHA = 50;
+
+function _infLinhaVazia() {
+  return { id: null, data_infracao: '', numero_infracao: '', valor: '', prestador_nome: '', veiculo_placa: '' };
+}
+
+function _infBrl(v) {
+  return 'R$ ' + (parseFloat(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _infNormPlaca(p) {
+  return String(p || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function _infStatusLabel(s) {
+  return (Store.STATUS_INFRACAO || {})[s || 'PENDENTE'] || 'Pendente';
+}
+
+function _infStatusClasse(s) {
+  if (s === 'DESCONTADO') return 'bg-emerald-950 text-emerald-300 border-emerald-800';
+  if (s === 'RECIBO_ASSINADO') return 'bg-blue-950 text-blue-300 border-blue-800';
+  return 'bg-amber-950 text-amber-300 border-amber-800';
+}
+
+function _infVeiculosCadastro() {
+  return (db.data.veiculos || []).filter(v => v && v.placa && !v.is_deleted);
+}
+
+function _infVeiculoPorPlaca(placa) {
+  const alvo = _infNormPlaca(placa);
+  return _infVeiculosCadastro().find(v => _infNormPlaca(v.placa) === alvo) || null;
+}
+
+function _infPrestadorPorNome(nome) {
+  const alvo = String(nome || '').trim().toUpperCase();
+  return listaPrestadoresDossie().find(p => String(p.nome || '').trim().toUpperCase() === alvo) || null;
+}
+
+function _infDatalists() {
+  const prest = listaPrestadoresDossie()
+    .slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+  const veic = _infVeiculosCadastro()
+    .slice().sort((a, b) => String(a.placa).localeCompare(String(b.placa), 'pt-BR'));
+  return `
+    <datalist id="inf-datalist-prestador">${prest.map(p => `<option value="${vgEscTxt(String(p.nome).toUpperCase())}">${p._tipoPrestador === 'AJUDANTE' ? 'Ajudante' : 'Motorista'}</option>`).join('')}</datalist>
+    <datalist id="inf-datalist-veiculo">${veic.map(v => `<option value="${vgEscTxt(_infNormPlaca(v.placa))}">${vgEscTxt([v.modelo, v.tipo].filter(Boolean).join(' — '))}</option>`).join('')}</datalist>`;
+}
+
+// --- filtros da lista ---
+function _infFiltros() {
+  if (window._infFiltroStatus === undefined) window._infFiltroStatus = 'PENDENTE';
+  return {
+    dataDe: window._infFiltroDe || '',
+    dataAte: window._infFiltroAte || '',
+    status: window._infFiltroStatus || 'TODOS',
+    busca: String(window._infFiltroBusca || '').trim().toUpperCase()
+  };
+}
+
+function listarInfracoesFiltradas() {
+  const f = _infFiltros();
+  let lista = db.getInfracoes({ status: f.status, dataDe: f.dataDe || undefined, dataAte: f.dataAte || undefined });
+  if (f.busca) {
+    lista = lista.filter(i => {
+      const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+      return [i.prestador_nome, i.numero_infracao, i.veiculo_placa, rel && rel.numero_relatorio]
+        .some(v => String(v || '').toUpperCase().includes(f.busca));
+    });
+  }
+  return lista;
+}
+
+// --- TELA ---
+function renderInfracoesView() {
+  const f = _infFiltros();
+  const lista = listarInfracoesFiltradas();
+  const total = lista.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0);
+  const nPrest = new Set(lista.map(i => i.prestador_nome)).size;
+  const sel = (window._infSelecionadas || []).filter(id => lista.some(i => String(i.id) === String(id)));
+  window._infSelecionadas = sel;
+  const relatorios = db.getRelatoriosInfracoes();
+  const inp = 'bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs';
+
+  return `
+    <div class="space-y-5">
+      <div class="bg-gradient-to-r from-slate-900 via-red-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-red-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+        <div class="flex items-center gap-3">
+          <div class="bg-red-600/30 p-2.5 rounded-xl border border-red-500/40 text-2xl">🚦</div>
+          <div>
+            <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+              INFRAÇÕES DE TRÂNSITO
+              <span class="bg-red-800 text-red-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">RECIBO POR PRESTADOR</span>
+            </h2>
+            <p class="text-[11px] text-slate-300 font-medium">Lance as multas em lote e imprima uma via por prestador com todas as multas dele</p>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button onclick="imprimirRecibosInfracoesFiltradas()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5">🖨️ Imprimir recibos</button>
+          <button onclick="exportarInfracoesCsv()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-2 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5">📊 Exportar CSV</button>
+          <button onclick="abrirFichaInfracoes()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">+ Novo relatório</button>
+        </div>
+      </div>
+
+      ${window._infForm ? renderFichaInfracoes() : ''}
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-end gap-3">
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Infração de</label>
+          <input type="date" value="${f.dataDe}" class="${inp}" onchange="window._infFiltroDe=this.value; renderApp()"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Até</label>
+          <input type="date" value="${f.dataAte}" class="${inp}" onchange="window._infFiltroAte=this.value; renderApp()"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status</label>
+          <select class="${inp}" onchange="window._infFiltroStatus=this.value; renderApp()">
+            <option value="TODOS" ${f.status === 'TODOS' ? 'selected' : ''}>Todos</option>
+            ${Object.entries(Store.STATUS_INFRACAO).map(([k, l]) => `<option value="${k}" ${f.status === k ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></div>
+        <div class="flex-1 min-w-[180px]"><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Busca</label>
+          <input type="text" value="${vgEscTxt(window._infFiltroBusca || '')}" placeholder="🔎 Prestador, nº, placa ou relatório" class="${inp} w-full"
+            onchange="window._infFiltroBusca=this.value; renderApp()"></div>
+        ${(f.dataDe || f.dataAte || f.busca || f.status !== 'PENDENTE') ? `<button onclick="window._infFiltroDe='';window._infFiltroAte='';window._infFiltroBusca='';window._infFiltroStatus='PENDENTE';renderApp()" class="text-[11px] text-slate-400 hover:text-white underline pb-1.5">Limpar filtros</button>` : ''}
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+          <h3 class="text-xs font-bold text-red-400 uppercase flex items-center gap-1.5"><span>🚦</span> Infrações <span class="bg-red-950 text-red-300 border border-red-800/80 text-[10px] font-black px-2 py-0.5 rounded-full">${lista.length}</span></h3>
+          <span class="bg-amber-950 text-amber-300 border border-amber-800 text-[11px] font-extrabold px-2.5 py-1 rounded">${nPrest} prestador(es) · Total ${_infBrl(total)}</span>
+        </div>
+        ${sel.length ? `
+        <div class="flex flex-wrap items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs">
+          <span class="text-slate-300 font-bold">${sel.length} selecionada(s)</span>
+          <span class="text-slate-500">Marcar como:</span>
+          ${Object.entries(Store.STATUS_INFRACAO).map(([k, l]) => `<button onclick="alterarStatusSelecionadasInfracoes('${k}')" class="px-2 py-1 rounded border ${_infStatusClasse(k)} font-bold text-[11px]">${l}</button>`).join('')}
+          <button onclick="gerarReciboInfracoesPdf(window._infSelecionadas)" class="ml-auto bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/50 px-2 py-1 rounded font-bold text-[11px]">🖨️ Recibos das selecionadas</button>
+          <button onclick="window._infSelecionadas=[]; renderApp()" class="text-slate-400 hover:text-white underline text-[11px]">limpar</button>
+        </div>` : ''}
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr>
+                <th class="p-2 w-6"><input type="checkbox" ${lista.length && sel.length === lista.length ? 'checked' : ''} onchange="window._infSelecionadas = this.checked ? listarInfracoesFiltradas().map(i => String(i.id)) : []; renderApp()"></th>
+                <th class="p-2 whitespace-nowrap">Data</th>
+                <th class="p-2 whitespace-nowrap">Nº infração</th>
+                <th class="p-2">Prestador</th>
+                <th class="p-2 whitespace-nowrap">Veículo</th>
+                <th class="p-2 text-right whitespace-nowrap">Valor</th>
+                <th class="p-2">Status</th>
+                <th class="p-2 whitespace-nowrap">Relatório</th>
+                <th class="p-2 whitespace-nowrap">Recibo</th>
+                <th class="p-2 text-center">Ações</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-slate-300">
+              ${lista.length === 0 ? '<tr><td colspan="10" class="p-4 text-center text-slate-500">Nenhuma infração com os filtros atuais.</td></tr>' :
+                lista.map(i => {
+                  const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+                  const marcado = sel.includes(String(i.id));
+                  return `<tr class="${marcado ? 'bg-slate-800/60' : ''}">
+                    <td class="p-2"><input type="checkbox" ${marcado ? 'checked' : ''} onchange="toggleSelecaoInfracao('${i.id}', this.checked)"></td>
+                    <td class="p-2 whitespace-nowrap">${formatarData(i.data_infracao)}</td>
+                    <td class="p-2 font-mono font-bold text-red-300 whitespace-nowrap">${vgEscTxt(i.numero_infracao)}</td>
+                    <td class="p-2 font-bold text-white">${vgEscTxt(i.prestador_nome)}${i.prestador_tipo === 'AJUDANTE' ? ' <span class="text-[9px] text-slate-400 font-normal">(ajudante)</span>' : ''}</td>
+                    <td class="p-2 font-mono whitespace-nowrap">${vgEscTxt(i.veiculo_placa || '—')}</td>
+                    <td class="p-2 text-right font-bold text-amber-300 whitespace-nowrap">${_infBrl(i.valor)}</td>
+                    <td class="p-2">
+                      <select onchange="alterarStatusInfracao('${i.id}', this.value)" class="border rounded px-1 py-0.5 text-[11px] font-bold ${_infStatusClasse(i.status)}">
+                        ${Object.entries(Store.STATUS_INFRACAO).map(([k, l]) => `<option value="${k}" ${(i.status || 'PENDENTE') === k ? 'selected' : ''}>${l}</option>`).join('')}
+                      </select>
+                    </td>
+                    <td class="p-2 font-mono text-[11px] whitespace-nowrap">${rel ? vgEscTxt(rel.numero_relatorio) : '—'}</td>
+                    <td class="p-2 text-[10px] text-slate-400 whitespace-nowrap">${i.recibo_impresso_em ? `${formatarData(String(i.recibo_impresso_em).slice(0, 10))} (${i.recibo_impresso_qtd || 1}x)` : 'não impresso'}</td>
+                    <td class="p-2 text-center whitespace-nowrap">
+                      <button onclick="gerarReciboInfracoesPdf(['${i.id}'])" title="Recibo só desta infração" class="text-amber-300 hover:text-amber-200 px-1">📄</button>
+                      <button onclick="abrirHistoricoRegistro('infracoes', '${i.id}', '${vgEscAttr(i.numero_infracao)}')" title="Histórico" class="text-slate-300 hover:text-white px-1">📜</button>
+                      <button onclick="excluirInfracaoUi('${i.id}')" title="Excluir" class="text-red-400 hover:text-red-300 px-1">🗑️</button>
+                    </td>
+                  </tr>`;
+                }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
+        <h3 class="text-xs font-bold text-slate-300 uppercase flex items-center gap-1.5 border-b border-slate-800 pb-2"><span>🗂️</span> Relatórios lançados <span class="bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-black px-2 py-0.5 rounded-full">${relatorios.length}</span></h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr><th class="p-2">Nº</th><th class="p-2">Lançamento</th><th class="p-2">Responsável</th><th class="p-2 text-center">Multas</th><th class="p-2 text-center">Prestadores</th><th class="p-2 text-right">Total</th><th class="p-2">Observação</th><th class="p-2 text-center">Ações</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-slate-300">
+              ${relatorios.length === 0 ? '<tr><td colspan="8" class="p-4 text-center text-slate-500">Nenhum relatório lançado ainda. Use "+ Novo relatório".</td></tr>' :
+                relatorios.map(r => {
+                  const multas = db.getInfracoes({ relatorioId: r.id });
+                  const tot = multas.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0);
+                  return `<tr>
+                    <td class="p-2 font-mono font-bold text-red-300 whitespace-nowrap">${vgEscTxt(r.numero_relatorio)}</td>
+                    <td class="p-2 whitespace-nowrap">${formatarData(r.data_lancamento)}</td>
+                    <td class="p-2">${vgEscTxt(r.responsavel || '—')}</td>
+                    <td class="p-2 text-center">${multas.length}</td>
+                    <td class="p-2 text-center">${new Set(multas.map(i => i.prestador_nome)).size}</td>
+                    <td class="p-2 text-right font-bold text-amber-300 whitespace-nowrap">${_infBrl(tot)}</td>
+                    <td class="p-2 text-slate-400">${vgEscTxt(r.observacao || '')}</td>
+                    <td class="p-2 text-center whitespace-nowrap">
+                      <button onclick="gerarReciboInfracoesPdf(db.getInfracoes({ relatorioId: '${r.id}' }).map(i => i.id))" title="Recibos deste relatório" class="text-amber-300 hover:text-amber-200 px-1">📄</button>
+                      <button onclick="abrirFichaInfracoes('${r.id}')" title="Editar" class="text-blue-300 hover:text-blue-200 px-1">✏️</button>
+                      <button onclick="abrirHistoricoRegistro('infracoes_relatorios', '${r.id}', '${vgEscAttr(r.numero_relatorio)}')" title="Histórico" class="text-slate-300 hover:text-white px-1">📜</button>
+                      <button onclick="excluirRelatorioInfracoesUi('${r.id}')" title="Excluir relatório e multas" class="text-red-400 hover:text-red-300 px-1">🗑️</button>
+                    </td>
+                  </tr>`;
+                }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+// --- FICHA (novo / editar) ---
+function abrirFichaInfracoes(relatorioId) {
+  if (relatorioId) {
+    const rel = db.getRelatorioInfracaoPorId(relatorioId);
+    if (!rel || rel.is_deleted) { alert('Relatório não encontrado.'); return; }
+    window._infForm = {
+      id: rel.id,
+      numero_relatorio: rel.numero_relatorio,
+      data_lancamento: rel.data_lancamento || hojeIsoBrasilia(),
+      responsavel: rel.responsavel || '',
+      observacao: rel.observacao || '',
+      linhas: db.getInfracoes({ relatorioId: rel.id }).slice().reverse().map(i => ({
+        id: i.id, data_infracao: i.data_infracao || '', numero_infracao: i.numero_infracao || '',
+        valor: i.valor, prestador_nome: i.prestador_nome || '', veiculo_placa: i.veiculo_placa || ''
+      })),
+      erros: []
+    };
+  } else {
+    window._infForm = {
+      id: null,
+      numero_relatorio: null,
+      data_lancamento: hojeIsoBrasilia(),
+      responsavel: (db.currentUser && db.currentUser.nome) ? String(db.currentUser.nome).toUpperCase() : '',
+      observacao: '',
+      linhas: [_infLinhaVazia(), _infLinhaVazia(), _infLinhaVazia()],
+      erros: []
+    };
+  }
+  renderApp();
+  setTimeout(() => { const el = document.getElementById('inf-ficha'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+}
+
+function fecharFichaInfracoes() {
+  const f = window._infForm;
+  const temDado = f && f.linhas.some(l => l.numero_infracao || l.valor || l.prestador_nome);
+  if (temDado && !f.id && !confirm('Descartar as infrações digitadas?')) return;
+  window._infForm = null;
+  renderApp();
+}
+
+function _infCab(campo, valor) {
+  if (window._infForm) window._infForm[campo] = valor;
+}
+
+function _infCampo(idx, campo, valor) {
+  const f = window._infForm;
+  if (!f || !f.linhas[idx]) return;
+  f.linhas[idx][campo] = valor;
+  if (campo === 'valor') {
+    const el = document.getElementById('inf-ficha-total');
+    if (el) el.textContent = _infTotalFicha();
+  }
+}
+
+function _infTotalFicha() {
+  const f = window._infForm;
+  const linhas = f ? f.linhas.filter(l => parseFloat(l.valor) > 0) : [];
+  return `${linhas.length} infração(ões) · total ${_infBrl(linhas.reduce((a, l) => a + (parseFloat(l.valor) || 0), 0))}`;
+}
+
+function adicionarLinhaFichaInfracoes() {
+  if (!window._infForm) return;
+  window._infForm.linhas.push(_infLinhaVazia());
+  renderApp();
+  setTimeout(() => {
+    const els = document.querySelectorAll('#inf-ficha input[data-inf-primeiro]');
+    if (els.length) els[els.length - 1].focus();
+  }, 30);
+}
+
+function removerLinhaFichaInfracoes(idx) {
+  const f = window._infForm;
+  if (!f) return;
+  const l = f.linhas[idx];
+  if (l && l.id && !confirm(`Remover a infração ${l.numero_infracao || ''} deste relatório? Ela vai para a Lixeira ao salvar.`)) return;
+  f.linhas.splice(idx, 1);
+  if (!f.linhas.length) f.linhas.push(_infLinhaVazia());
+  renderApp();
+}
+
+function renderFichaInfracoes() {
+  const f = window._infForm;
+  const inp = 'w-full bg-slate-800 border text-white rounded p-1.5 text-xs';
+  const errosPorLinha = {};
+  (f.erros || []).forEach(e => { if (e.linha) (errosPorLinha[e.linha] = errosPorLinha[e.linha] || []).push(e.msg); });
+  const borda = pos => errosPorLinha[pos] ? 'border-red-500' : 'border-slate-700';
+
+  return `
+    <div id="inf-ficha" class="bg-slate-900 border-2 border-red-700/60 rounded-xl p-4 shadow-2xl space-y-4">
+      ${_infDatalists()}
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+        <h3 class="text-sm font-black text-white flex items-center gap-2">🚦 ${f.id ? 'Editar relatório de infrações' : 'Novo relatório de infrações'}</h3>
+        <span class="bg-slate-800 text-slate-200 font-mono text-xs px-2.5 py-1 rounded border border-slate-700">${f.numero_relatorio ? vgEscTxt(f.numero_relatorio) : 'número gerado ao salvar'}</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data do lançamento *</label>
+          <input type="date" value="${f.data_lancamento || ''}" class="${inp} border-slate-700" onchange="_infCab('data_lancamento', this.value)"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Responsável</label>
+          <input type="text" value="${vgEscTxt(f.responsavel || '')}" class="${inp} border-slate-700" oninput="forcarMaiuscula(this); _infCab('responsavel', this.value)"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Observação (opcional)</label>
+          <input type="text" value="${vgEscTxt(f.observacao || '')}" placeholder="Ex.: lote DETRAN setembro" class="${inp} border-slate-700" oninput="_infCab('observacao', this.value)"></div>
+      </div>
+
+      ${(f.erros || []).length ? `
+      <div class="bg-red-950/60 border border-red-700 rounded-lg p-3 text-xs text-red-200 space-y-0.5">
+        <div class="font-black text-red-300 mb-1">Não foi salvo — corrija e tente de novo:</div>
+        ${f.erros.map(e => `<div>• ${e.linha ? `Linha ${e.linha}: ` : ''}${vgEscTxt(e.msg)}</div>`).join('')}
+      </div>` : ''}
+
+      <div class="space-y-1.5">
+        <div class="hidden md:grid grid-cols-[28px_130px_150px_110px_minmax(0,1fr)_150px_32px] gap-2 text-[10px] text-slate-400 font-bold uppercase px-0.5">
+          <span>#</span><span>Data *</span><span>Nº da infração *</span><span>Valor (R$) *</span><span>Prestador * <span class="normal-case font-normal">(digite parte do nome)</span></span><span>Veículo * <span class="normal-case font-normal">(parte da placa)</span></span><span></span>
+        </div>
+        ${f.linhas.map((l, idx) => {
+          const pos = idx + 1;
+          return `
+          <div class="grid grid-cols-2 md:grid-cols-[28px_130px_150px_110px_minmax(0,1fr)_150px_32px] gap-2 items-center bg-slate-950/40 md:bg-transparent p-2 md:p-0 rounded">
+            <span class="text-[11px] font-bold ${errosPorLinha[pos] ? 'text-red-400' : 'text-slate-500'}">${pos}</span>
+            <input type="date" data-inf-primeiro="1" value="${l.data_infracao || ''}" class="${inp} ${borda(pos)}" onchange="_infCampo(${idx}, 'data_infracao', this.value)">
+            <input type="text" value="${vgEscTxt(l.numero_infracao || '')}" placeholder="Nº do auto" class="${inp} ${borda(pos)} font-mono" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'numero_infracao', this.value)">
+            <input type="number" step="0.01" min="0" inputmode="decimal" value="${l.valor === '' || l.valor === null || l.valor === undefined ? '' : l.valor}" placeholder="0,00" class="${inp} ${borda(pos)} text-right" oninput="_infCampo(${idx}, 'valor', this.value)">
+            <input type="text" list="inf-datalist-prestador" value="${vgEscTxt(l.prestador_nome || '')}" placeholder="Nome do prestador" class="${inp} ${borda(pos)} col-span-2 md:col-span-1 font-bold" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'prestador_nome', this.value)">
+            <input type="text" list="inf-datalist-veiculo" value="${vgEscTxt(l.veiculo_placa || '')}" placeholder="Placa" class="${inp} ${borda(pos)} font-mono" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'veiculo_placa', this.value)">
+            <button type="button" onclick="removerLinhaFichaInfracoes(${idx})" title="Remover linha" class="text-red-400 hover:text-red-300 text-sm">🗑️</button>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <button type="button" onclick="adicionarLinhaFichaInfracoes()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">+ Adicionar infração</button>
+        <span id="inf-ficha-total" class="text-xs font-bold text-amber-300">${_infTotalFicha()}</span>
+      </div>
+
+      <div class="flex flex-wrap justify-end gap-2 border-t border-slate-800 pt-3">
+        <button type="button" onclick="fecharFichaInfracoes()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2 rounded-lg text-xs border border-slate-600">Cancelar</button>
+        <button type="button" onclick="salvarFichaInfracoes(false)" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-3 py-2 rounded-lg text-xs border border-slate-500">💾 Salvar</button>
+        <button type="button" onclick="salvarFichaInfracoes(true)" class="bg-red-600 hover:bg-red-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg">💾 Salvar e emitir recibos</button>
+      </div>
+    </div>`;
+}
+
+function salvarFichaInfracoes(emitir) {
+  const f = window._infForm;
+  if (!f) return;
+  // Linha inteiramente em branco é ignorada (a ficha abre com três).
+  const preenchidas = f.linhas
+    .map((l, idx) => ({ l, pos: idx + 1 }))
+    .filter(({ l }) => [l.data_infracao, l.numero_infracao, l.valor, l.prestador_nome, l.veiculo_placa].some(v => String(v ?? '').trim() !== ''));
+
+  // Prestador e veículo têm de existir no cadastro — é o que impede nome
+  // digitado de um jeito diferente de virar outra pessoa no Dossiê.
+  const erros = [];
+  const linhas = preenchidas.map(({ l, pos }, i) => {
+    const prest = l.prestador_nome ? _infPrestadorPorNome(l.prestador_nome) : null;
+    const veic = l.veiculo_placa ? _infVeiculoPorPlaca(l.veiculo_placa) : null;
+    if (l.prestador_nome && !prest) erros.push({ linha: pos, msg: `prestador "${String(l.prestador_nome).toUpperCase()}" não está no cadastro — escolha da lista` });
+    if (l.veiculo_placa && !veic) erros.push({ linha: pos, msg: `veículo "${_infNormPlaca(l.veiculo_placa)}" não está no cadastro — escolha da lista` });
+    return {
+      _posTela: pos,
+      id: l.id || null,
+      data_infracao: l.data_infracao,
+      numero_infracao: l.numero_infracao,
+      valor: l.valor,
+      prestador_nome: prest ? prest.nome : l.prestador_nome,
+      prestador_tipo: prest ? prest._tipoPrestador : null,
+      veiculo_placa: veic ? _infNormPlaca(veic.placa) : l.veiculo_placa
+    };
+  });
+
+  const res = db.salvarRelatorioInfracoes({
+    id: f.id, data_lancamento: f.data_lancamento, responsavel: f.responsavel, observacao: f.observacao, linhas,
+    somenteValidar: erros.length > 0
+  });
+  // O store numera as linhas que recebeu (só as preenchidas); a tela mostra
+  // a posição na ficha. Traduz de volta.
+  const todosErros = erros.concat((res.erros || []).map(e => ({
+    linha: e.linha ? (linhas[e.linha - 1] || {})._posTela : null, msg: e.msg
+  }))).sort((a, b) => (a.linha || 0) - (b.linha || 0));
+  if (!res.success) {
+    f.erros = todosErros.length ? todosErros : [{ linha: null, msg: 'Não foi possível salvar.' }];
+    renderApp();
+    setTimeout(() => { const el = document.getElementById('inf-ficha'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+    return;
+  }
+
+  const rel = res.relatorio;
+  window._infForm = null;
+  showToast(`Relatório ${rel.numero_relatorio} salvo.`);
+  renderApp();
+  if (emitir) gerarReciboInfracoesPdf(db.getInfracoes({ relatorioId: rel.id }).map(i => i.id));
+}
+
+// --- ações da lista ---
+function toggleSelecaoInfracao(id, marcado) {
+  const sel = new Set((window._infSelecionadas || []).map(String));
+  if (marcado) sel.add(String(id)); else sel.delete(String(id));
+  window._infSelecionadas = Array.from(sel);
+  renderApp();
+}
+
+function alterarStatusInfracao(id, status) {
+  const r = db.alterarStatusInfracoes([id], status);
+  if (!r.success) { alert(r.message || 'Não foi possível alterar o status.'); return; }
+  showToast(`Status alterado para "${_infStatusLabel(status)}".`);
+  renderApp();
+}
+
+function alterarStatusSelecionadasInfracoes(status) {
+  const ids = window._infSelecionadas || [];
+  if (!ids.length) return;
+  if (!confirm(`Marcar ${ids.length} infração(ões) como "${_infStatusLabel(status)}"?`)) return;
+  const r = db.alterarStatusInfracoes(ids, status);
+  window._infSelecionadas = [];
+  showToast(`${r.alteradas || 0} infração(ões) atualizada(s).`);
+  renderApp();
+}
+
+function excluirInfracaoUi(id) {
+  const i = db.getInfracaoPorId(id);
+  if (!i) return;
+  const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+  const ultima = rel && db.getInfracoes({ relatorioId: rel.id }).length === 1;
+  if (!confirm(`Excluir a infração ${i.numero_infracao} de ${i.prestador_nome} (${_infBrl(i.valor)})?${ultima ? `\n\nÉ a última do relatório ${rel.numero_relatorio}: o relatório vai junto.` : ''}\n\nO registro vai para a Governança & Lixeira.`)) return;
+  const r = db.excluirInfracao(id);
+  if (!r.success) { alert(r.message); return; }
+  window._infSelecionadas = (window._infSelecionadas || []).filter(x => String(x) !== String(id));
+  showToast('Infração excluída.');
+  renderApp();
+}
+
+function excluirRelatorioInfracoesUi(id) {
+  const rel = db.getRelatorioInfracaoPorId(id);
+  if (!rel) return;
+  const n = db.getInfracoes({ relatorioId: id }).length;
+  if (!confirm(`Excluir o relatório ${rel.numero_relatorio} e as ${n} infração(ões) dele?\n\nTudo vai para a Governança & Lixeira; restaurar o relatório traz as multas de volta.`)) return;
+  const r = db.excluirRelatorioInfracoes(id);
+  if (!r.success) { alert(r.message); return; }
+  if (window._infForm && String(window._infForm.id) === String(id)) window._infForm = null;
+  showToast(`Relatório ${rel.numero_relatorio} excluído.`);
+  renderApp();
+}
+
+function imprimirRecibosInfracoesFiltradas() {
+  const lista = listarInfracoesFiltradas();
+  if (!lista.length) { alert('Nenhuma infração com os filtros atuais.'); return; }
+  const f = _infFiltros();
+  const nPrest = new Set(lista.map(i => i.prestador_nome)).size;
+  const total = lista.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0);
+  if (!confirm(`Imprimir ${nPrest} recibo(s) — um por prestador — com ${lista.length} infração(ões), total ${_infBrl(total)}?\n\nFiltro de status: ${f.status === 'TODOS' ? 'todos' : _infStatusLabel(f.status)}.`)) return;
+  gerarReciboInfracoesPdf(lista.map(i => i.id));
+}
+
+function exportarInfracoesCsv() {
+  const lista = listarInfracoesFiltradas();
+  if (!lista.length) { alert('Nenhuma infração com os filtros atuais.'); return; }
+  const cab = ['Relatorio', 'Data infracao', 'Numero infracao', 'Valor', 'Prestador', 'Tipo', 'Placa', 'Status', 'Recibo impresso em', 'Vezes impresso', 'Lancado por', 'Lancado em'];
+  const q = v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g, '""')}"`;
+  const linhas = [cab.map(q).join(';')].concat(lista.map(i => {
+    const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+    return [rel ? rel.numero_relatorio : '', formatarData(i.data_infracao), i.numero_infracao,
+      (parseFloat(i.valor) || 0).toFixed(2).replace('.', ','), i.prestador_nome, i.prestador_tipo || '',
+      i.veiculo_placa, _infStatusLabel(i.status), i.recibo_impresso_em ? formatarDataHora(i.recibo_impresso_em) : '',
+      i.recibo_impresso_qtd || 0, i.criado_por || '', i.criado_em ? formatarDataHora(i.criado_em) : ''].map(q).join(';');
+  }));
+  baixarCsv(`infracoes_${agoraIsoBrasilia().slice(0, 10)}.csv`, linhas.join('\n'));
+}
+
+// --- RECIBO (uma folha A4 por prestador) ---
+//
+// A folha tem altura FIXA (A4 menos as margens) e a tabela ocupa o que
+// sobra entre o cabeçalho e o bloco de valor/assinaturas. A densidade
+// muda com a quantidade de multas:
+//   até 14  → normal (letra maior, linhas folgadas)
+//   15 a 25 → compacta
+//   26 a 50 → compacta em duas colunas lado a lado
+// Acima de 50 não imprime: avisa quem é, para dividir por período.
+function gerarReciboInfracoesPdf(ids) {
+  const infs = (ids || []).map(id => db.getInfracaoPorId(id)).filter(i => i && !i.is_deleted);
+  if (!infs.length) { alert('Nenhuma infração para imprimir.'); return; }
+
+  const grupos = {};
+  infs.forEach(i => { (grupos[i.prestador_nome] = grupos[i.prestador_nome] || []).push(i); });
+  const nomes = Object.keys(grupos).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const excedidos = nomes.filter(n => grupos[n].length > INF_MAX_POR_FOLHA);
+  if (excedidos.length) {
+    alert(`Estes prestadores têm mais de ${INF_MAX_POR_FOLHA} infrações e não cabem numa folha A4:\n\n${excedidos.map(n => `• ${n} (${grupos[n].length})`).join('\n')}\n\nFiltre por período e imprima em partes.`);
+    return;
+  }
+
+  const emissao = new Date().toLocaleDateString('pt-BR');
+  const folhas = nomes.map((nome, idx) => {
+    const lista = grupos[nome].slice().sort((a, b) => String(a.data_infracao || '').localeCompare(String(b.data_infracao || '')));
+    const total = lista.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0);
+    const prest = _infPrestadorPorNome(nome);
+    const tipo = (prest && prest._tipoPrestador) || lista[0].prestador_tipo || 'MOTORISTA';
+    const papelTitulo = tipo === 'AJUDANTE' ? 'Ajudante' : 'Motorista';
+    const papelAssin = tipo === 'AJUDANTE' ? 'AJUDANTE / PRESTADOR' : 'MOTORISTA / PRESTADOR';
+    const documento = prest ? (prest.cpf ? `CPF ${prest.cpf}` : (prest.cnh ? `CNH ${prest.cnh}` : '')) : '';
+    const matricula = prest ? (prest.cod_erp || prest.matricula || '') : '';
+    const placas = [...new Set(lista.map(i => i.veiculo_placa).filter(Boolean))];
+    const veiculosTxt = placas.map(p => {
+      const v = _infVeiculoPorPlaca(p);
+      return v && v.modelo ? `${p} (${v.modelo})` : p;
+    }).join(', ') || '—';
+    const relNums = [...new Set(lista.map(i => (db.getRelatorioInfracaoPorId(i.relatorio_id) || {}).numero_relatorio).filter(Boolean))];
+    const d1 = lista[0].data_infracao, d2 = lista[lista.length - 1].data_infracao;
+    const periodo = d1 === d2 ? formatarData(d1) : `${formatarData(d1)} a ${formatarData(d2)}`;
+    const dens = lista.length <= 14 ? 'normal' : (lista.length <= 25 ? 'compacta' : 'colunas');
+    const totalFmt = total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const tabela = (itens, inicio, completa) => `
+      <table class="tb">
+        <thead><tr>
+          <th style="width:${completa ? '26px' : '22px'}">#</th><th>Data</th><th>Nº da infração</th><th>Veículo</th>${completa ? '<th>Relatório</th>' : ''}<th class="r">Valor</th>
+        </tr></thead>
+        <tbody>
+          ${itens.map((i, k) => {
+            const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+            return `<tr><td class="c">${inicio + k + 1}</td><td>${formatarData(i.data_infracao)}</td><td class="b">${vgEscTxt(i.numero_infracao)}</td><td>${vgEscTxt(i.veiculo_placa || '—')}</td>${completa ? `<td>${rel ? vgEscTxt(rel.numero_relatorio) : '—'}</td>` : ''}<td class="r b">R$ ${(parseFloat(i.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+
+    let tabelasHtml;
+    if (dens === 'colunas') {
+      const meio = Math.ceil(lista.length / 2);
+      tabelasHtml = `<div class="duas">${tabela(lista.slice(0, meio), 0, false)}${tabela(lista.slice(meio), meio, false)}</div>`;
+    } else {
+      tabelasHtml = tabela(lista, 0, true);
+    }
+
+    return `
+  <div class="folha dens-${dens}">
+    <div class="topo">
+      <div class="header">
+        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+        <div class="header-title">
+          <h2>JR DISTRIBUIDORA</h2>
+          <p>Logística Corporativa • Gestão de Frotas & Operações Logísticas</p>
+        </div>
+      </div>
+      <div class="badge-via">RECIBO DE ADIANTAMENTO — INFRAÇÕES DE TRÂNSITO (VIA ${idx + 1} DE ${nomes.length})</div>
+      <div class="grid">
+        <div class="field"><div class="field-lbl">Prestador / ${papelTitulo}</div><div class="field-val">${vgEscTxt(nome)}</div></div>
+        <div class="field"><div class="field-lbl">${documento ? 'Documento' : 'Matrícula ERP'}</div><div class="field-val">${vgEscTxt(documento || matricula || '—')}</div></div>
+        <div class="field"><div class="field-lbl">Veículo(s)</div><div class="field-val">${vgEscTxt(veiculosTxt)}</div></div>
+        <div class="field"><div class="field-lbl">Período das infrações</div><div class="field-val">${periodo} — ${lista.length} infração(ões)</div></div>
+        <div class="field" style="grid-column: span 2;"><div class="field-lbl">Relatório(s) de lançamento</div><div class="field-val">${vgEscTxt(relNums.join(', ') || '—')}</div></div>
+      </div>
+      <div class="section-title">🚦 INFRAÇÕES DE TRÂNSITO DESTE PRESTADOR (${lista.length})</div>
+    </div>
+
+    <div class="meio">${tabelasHtml}</div>
+
+    <div class="base">
+      <div class="val-highlight">
+        <div class="val-lbl">VALOR DO ADIANTAMENTO — INFRAÇÕES DE TRÂNSITO (100% DO PRESTADOR):</div>
+        <div class="val-amt">R$ ${totalFmt}</div>
+      </div>
+      <div class="termo">
+        <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO:</b><br>
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${totalFmt}</b> (100% integral) referente ${lista.length === 1 ? 'à infração de trânsito relacionada acima' : `às ${lista.length} infrações de trânsito relacionadas acima`}, ocorrida(s) no período de <b>${periodo}</b> na condução de veículo da frota.
+      </div>
+      <div class="sigs">
+        <div><div class="sig-line"></div><div class="sig-lbl">${vgEscTxt(nome)}<br>(${papelAssin})</div></div>
+        <div><div class="sig-line"></div><div class="sig-lbl">SUPERVISOR LOGÍSTICO / JR<br>(JR DISTRIBUIDORA)</div></div>
+      </div>
+      <div class="rodape">Emitido em ${emissao} • JR Oper</div>
+    </div>
+  </div>`;
+  }).join('');
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>RECIBO DE ADIANTAMENTO — INFRAÇÕES DE TRÂNSITO — JR DISTRIBUIDORA</title>
+  <style>
+    @page { size: A4 portrait; margin: 10mm; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; color: #0f172a; background: #e2e8f0; }
+    /* A4 = 297mm; menos 2 x 10mm de margem = 277mm. 1mm de folga para o
+       arredondamento do Chrome não empurrar uma folha em branco. */
+    .folha { width: 190mm; height: 276mm; margin: 8mm auto; background: #fff; border: 2.5px solid #0f172a; border-radius: 10px; padding: 6mm 7mm; display: flex; flex-direction: column; overflow: hidden; }
+    @media print {
+      body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .folha { margin: 0; page-break-after: always; break-after: page; }
+      .folha:last-child { page-break-after: auto; break-after: auto; }
+    }
+    .topo, .base { flex: 0 0 auto; }
+    .meio { flex: 1 1 auto; min-height: 0; overflow: hidden; margin-bottom: 4mm; }
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 10px; }
+    .logo { height: 44px; }
+    .header-title { text-align: right; }
+    .header-title h2 { margin: 0; font-size: 18px; font-weight: 900; letter-spacing: 0.5px; }
+    .header-title p { margin: 3px 0 0; font-size: 10.5px; color: #475569; font-weight: bold; }
+    .badge-via { background: #0f172a; color: #fff; font-size: 12.5px; font-weight: 900; padding: 7px 14px; border-radius: 6px; text-align: center; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+    .section-title { font-size: 10.5px; font-weight: 900; text-transform: uppercase; margin-bottom: 5px; letter-spacing: 0.5px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 10px; }
+    .field { border: 1px solid #cbd5e1; padding: 6px 10px; border-radius: 6px; background: #f8fafc; }
+    .field-lbl { font-size: 8.5px; font-weight: 800; color: #64748b; text-transform: uppercase; }
+    .field-val { font-size: 11.5px; font-weight: bold; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tb { width: 100%; border-collapse: collapse; }
+    .tb th { background: #e2e8f0; text-transform: uppercase; border: 1px solid #cbd5e1; text-align: left; font-size: 9px; border-bottom: 1.5px solid #0f172a; }
+    .tb td { border: 1px solid #cbd5e1; }
+    .tb .r { text-align: right; } .tb .c { text-align: center; color: #64748b; } .tb .b { font-weight: bold; }
+    .tb tbody tr:nth-child(even) td { background: #f8fafc; }
+    .dens-normal .tb th { padding: 6px 8px; } .dens-normal .tb td { padding: 6px 8px; font-size: 11.5px; }
+    .dens-compacta .tb th { padding: 2px 6px; } .dens-compacta .tb td { padding: 2px 6px; font-size: 9.5px; line-height: 1.2; }
+    .dens-colunas .tb th { padding: 2px 4px; font-size: 8px; } .dens-colunas .tb td { padding: 1.5px 4px; font-size: 9px; line-height: 1.2; }
+    .duas { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; align-items: start; }
+    .val-highlight { background: #dcfce7; border: 2px solid #16a34a; padding: 10px 14px; border-radius: 8px; text-align: right; margin-bottom: 8px; }
+    .val-lbl { font-size: 10.5px; font-weight: 900; color: #15803d; text-transform: uppercase; letter-spacing: 0.5px; }
+    .val-amt { font-size: 24px; font-weight: 900; color: #166534; margin-top: 2px; }
+    .termo { font-size: 10.5px; color: #334155; line-height: 1.5; text-align: justify; border: 1px solid #cbd5e1; padding: 10px 14px; background: #f8fafc; border-radius: 6px; margin-bottom: 8px; }
+    .sigs { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 13mm; text-align: center; }
+    .sig-line { border-top: 1.5px solid #0f172a; margin-bottom: 6px; }
+    .sig-lbl { font-size: 9.5px; font-weight: bold; text-transform: uppercase; line-height: 1.35; }
+    .rodape { margin-top: 3mm; font-size: 8px; color: #94a3b8; text-align: right; }
+  </style>
+</head>
+<body>
+  ${folhas}
+  <script>window.onload = function() { setTimeout(function() { window.print(); }, 400); };</script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=900,height=950');
+  if (!win) { alert('Bloqueador de pop-up detectado. Permita pop-ups para visualizar o recibo.'); return; }
+  win.document.write(htmlContent);
+  win.document.close();
+  db.registrarEmissaoReciboInfracoes(infs.map(i => i.id));
+  if (typeof activeTab !== 'undefined' && activeTab === 'infracoes') renderApp();
+}
+
+// --- DOSSIÊ PRESTADOR: bloco próprio (não soma em Deduções) ---
+function infracoesDoPrestador(nome) {
+  return db.getInfracoes({ prestadorNome: nome }).map(i => {
+    const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+    return { ...i, data: i.data_infracao, numero_relatorio: rel ? rel.numero_relatorio : '' };
+  });
+}
+
+function renderBlocoInfracoesPrestador(nome, varDe, varAte) {
+  const linhas = ordenarPorDataDesc(filtrarPorData(infracoesDoPrestador(nome), varDe, varAte));
+  const total = linhas.reduce((a, l) => a + (parseFloat(l.valor) || 0), 0);
+  const pendentes = linhas.filter(l => (l.status || 'PENDENTE') === 'PENDENTE');
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <h3 class="text-xs font-black text-red-400 uppercase flex items-center gap-2"><span>🚦</span> Infrações de Trânsito — ${linhas.length}</h3>
+        <div class="flex items-center gap-2 flex-wrap">
+          ${pendentes.length ? `<button onclick="gerarReciboInfracoesPdf([${pendentes.map(l => `'${l.id}'`).join(',')}])" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 px-2 py-1 rounded font-bold">📄 Recibo das pendentes (${pendentes.length})</button>` : ''}
+          <span class="bg-red-950 text-red-300 border border-red-800 text-[11px] font-extrabold px-2.5 py-1 rounded">Total no período: ${_infBrl(total)}</span>
+        </div>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Nº infração</th><th class="p-2">Veículo</th><th class="p-2 text-right">Valor</th><th class="p-2">Status</th><th class="p-2">Relatório</th><th class="p-2"></th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${linhas.length === 0 ? '<tr><td colspan="7" class="p-3 text-center text-slate-500">Nenhuma infração no período.</td></tr>' :
+              linhas.map(l => `<tr><td class="p-2">${formatarData(l.data)}</td><td class="p-2 font-mono font-bold text-red-300">${vgEscTxt(l.numero_infracao)}</td><td class="p-2 font-mono">${vgEscTxt(l.veiculo_placa || '—')}</td><td class="p-2 text-right font-bold text-amber-300">${_infBrl(l.valor)}</td><td class="p-2"><span class="border rounded px-1.5 py-0.5 text-[10px] font-bold ${_infStatusClasse(l.status)}">${_infStatusLabel(l.status)}</span></td><td class="p-2 font-mono">${vgEscTxt(l.numero_relatorio || '—')}</td><td class="p-2 text-right"><button onclick="gerarReciboInfracoesPdf(['${l.id}'])" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 px-2 py-0.5 rounded font-bold" title="Recibo desta infração (PDF)">📄 Recibo</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+window.renderInfracoesView = renderInfracoesView;
+window.abrirFichaInfracoes = abrirFichaInfracoes;
+window.fecharFichaInfracoes = fecharFichaInfracoes;
+window.salvarFichaInfracoes = salvarFichaInfracoes;
+window.adicionarLinhaFichaInfracoes = adicionarLinhaFichaInfracoes;
+window.removerLinhaFichaInfracoes = removerLinhaFichaInfracoes;
+window._infCab = _infCab;
+window._infCampo = _infCampo;
+window.toggleSelecaoInfracao = toggleSelecaoInfracao;
+window.alterarStatusInfracao = alterarStatusInfracao;
+window.alterarStatusSelecionadasInfracoes = alterarStatusSelecionadasInfracoes;
+window.excluirInfracaoUi = excluirInfracaoUi;
+window.excluirRelatorioInfracoesUi = excluirRelatorioInfracoesUi;
+window.imprimirRecibosInfracoesFiltradas = imprimirRecibosInfracoesFiltradas;
+window.exportarInfracoesCsv = exportarInfracoesCsv;
+window.gerarReciboInfracoesPdf = gerarReciboInfracoesPdf;
+window.listarInfracoesFiltradas = listarInfracoesFiltradas;
 
 // ═══════════════════════════════════════════════════════════════════
 // INVESTIGAÇÃO DE SINISTRO (baseado em Formulário_Investigação_de_
@@ -2920,6 +3653,8 @@ function restaurarItemLixeira(collection, id) {
   if (db.restoreItem(collection, id)) {
     showToast('Registro restaurado com sucesso!');
     renderApp();
+  } else if (db.ultimoErroRestauracao) {
+    alert(db.ultimoErroRestauracao);
   }
 }
 
@@ -3067,7 +3802,11 @@ const NAV_GRUPOS = [
       { tab: 'reentregas', icon: '🔁', label: 'Reentregas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'troca_veiculos', icon: '🔄', label: 'Troca de Veículos', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'disponibilidade_frota', icon: '🚛', label: 'Disponibilidade da Frota', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] },
-      { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] }
+      { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      // 6.8.0 (migration 48). Papéis declarados só como matéria-prima da
+      // futura tela de Admin: o filtro por papel está desligado e todo mundo
+      // vê todas as telas (NAV_FILTRO_POR_PAPEL).
+      { tab: 'infracoes', icon: '🚦', label: 'Infrações de Trânsito', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] }
     ]
   },
   {
@@ -3366,6 +4105,9 @@ function renderApp() {
         break;
       case 'sinistros':
         html = renderSinistrosView();
+        break;
+      case 'infracoes':
+        html = renderInfracoesView();
         break;
       case 'resumo_diario_cd':
         html = renderResumoDiarioCdView();

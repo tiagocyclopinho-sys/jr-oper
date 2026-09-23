@@ -1517,3 +1517,61 @@ CREATE TABLE IF NOT EXISTS cortes_cd (
 ALTER TABLE cortes_cd ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "acesso_total_anon" ON cortes_cd;
 CREATE POLICY "acesso_total_anon" ON cortes_cd FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- =============================================================================
+-- CONTROLE DE INFRAÇÕES (6.8.0) — espelho da migration_48_infracoes.sql
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS infracoes_relatorios (
+    id                    BIGINT PRIMARY KEY,
+    numero_relatorio      VARCHAR(20) NOT NULL,
+    data_lancamento       DATE NOT NULL,
+    responsavel           VARCHAR(120),
+    observacao            TEXT,
+    criado_por            VARCHAR(120),
+    criado_em             TIMESTAMP,
+    atualizado_por        VARCHAR(120),
+    atualizado_em         TIMESTAMP,
+    is_deleted            BOOLEAN DEFAULT FALSE,
+    deleted_at            TIMESTAMP,
+    deleted_by_usuario_id BIGINT,
+    deleted_by_nome       VARCHAR(120)
+);
+ALTER TABLE infracoes_relatorios ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON infracoes_relatorios;
+CREATE POLICY "acesso_total_anon" ON infracoes_relatorios FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_infracoes_relatorios_numero ON infracoes_relatorios (numero_relatorio);
+CREATE INDEX IF NOT EXISTS idx_infracoes_relatorios_data ON infracoes_relatorios (data_lancamento);
+
+CREATE TABLE IF NOT EXISTS infracoes (
+    id                    BIGINT PRIMARY KEY,
+    relatorio_id          BIGINT,
+    data_infracao         DATE NOT NULL,
+    numero_infracao       VARCHAR(30) NOT NULL,
+    valor                 NUMERIC(12,2) NOT NULL DEFAULT 0,
+    prestador_nome        VARCHAR(120) NOT NULL,
+    prestador_tipo        VARCHAR(20),
+    veiculo_placa         VARCHAR(10),
+    status                VARCHAR(20) NOT NULL DEFAULT 'PENDENTE',
+    status_alterado_por   VARCHAR(120),
+    status_alterado_em    TIMESTAMP,
+    recibo_impresso_em    TIMESTAMP,
+    recibo_impresso_qtd   INT DEFAULT 0,
+    criado_por            VARCHAR(120),
+    criado_em             TIMESTAMP,
+    atualizado_por        VARCHAR(120),
+    atualizado_em         TIMESTAMP,
+    is_deleted            BOOLEAN DEFAULT FALSE,
+    deleted_at            TIMESTAMP,
+    deleted_by_usuario_id BIGINT,
+    deleted_by_nome       VARCHAR(120),
+    CONSTRAINT ck_infracoes_status CHECK (status IN ('PENDENTE', 'RECIBO_ASSINADO', 'DESCONTADO'))
+);
+ALTER TABLE infracoes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "acesso_total_anon" ON infracoes;
+CREATE POLICY "acesso_total_anon" ON infracoes FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_infracoes_numero_ativo
+  ON infracoes (numero_infracao) WHERE is_deleted IS NOT TRUE;
+CREATE INDEX IF NOT EXISTS idx_infracoes_relatorio ON infracoes (relatorio_id);
+CREATE INDEX IF NOT EXISTS idx_infracoes_prestador ON infracoes (prestador_nome);
+CREATE INDEX IF NOT EXISTS idx_infracoes_data ON infracoes (data_infracao);
+CREATE INDEX IF NOT EXISTS idx_infracoes_status ON infracoes (status) WHERE is_deleted IS NOT TRUE;
