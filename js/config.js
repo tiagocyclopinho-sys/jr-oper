@@ -7,7 +7,7 @@
 window.JR_CONFIG = {
   // Nome da Aplicação e Versão
   appName: "JR Oper - Gestão Logística Integrada",
-  appVersion: "6.8.0",
+  appVersion: "6.8.1",
   
   // Modo de Operação: 'local' (LocalStorage no navegador) ou 'cloud' (Supabase/Postgres)
   mode: "cloud",
@@ -27,7 +27,12 @@ window.JR_CONFIG = {
   supabase: {
     url: "https://qxipgnkdbzxtfvuyupow.supabase.co",
     anonKey: "sb_publishable_oX9VhXUCTJYqGJ-9MgusuQ_eKF-B0KN",
-    syncIntervalMs: 30000 // Sincronização automática a cada 30 segundos
+    // 6.8.1 (24/09/2026): era 30000. Cada ciclo baixa as tabelas inteiras
+    // (~1,4 MB) e, a cada 30s por aparelho de tela aberta, isso levou o
+    // egress da organização a 321 GB para uma cota de 250 GB. O envio do que
+    // se lança NÃO depende deste número (sai 1,5s depois do save), e voltar
+    // para a tela / focar a janela / recarregar já puxa na hora.
+    syncIntervalMs: 120000 // Sincronização automática a cada 2 minutos
   },
 
   // Opções do campo "Requisito / Falha" das Ocorrências de Colaborador no

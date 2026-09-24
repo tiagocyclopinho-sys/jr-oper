@@ -371,7 +371,7 @@ class CloudStore {
     this.config = {
       url: saved.url || base.url || '',
       anonKey: saved.anonKey || base.anonKey || '',
-      syncIntervalMs: base.syncIntervalMs || 30000
+      syncIntervalMs: base.syncIntervalMs || 120000
     };
 
     // Atualiza o modo global baseado na configuração disponível
@@ -1803,7 +1803,7 @@ class CloudStore {
       return { nivel: 'CRITICO', texto: 'O mapa de sincronizacao diz que a nuvem ja confirmou este registro, mas ele nao esta la. Nunca mais sera reenviado sozinho, e o proximo pull o trata como apagado.' };
     }
     if (ausente('nuvem')) {
-      return { nivel: 'ATENCAO', texto: 'So existe neste aparelho. Ainda nao subiu: normal por alguns segundos, problema se persistir depois de um ciclo de 30s.' };
+      return { nivel: 'ATENCAO', texto: 'So existe neste aparelho. Ainda nao subiu: normal por alguns segundos, problema se persistir depois de um ciclo de sincronizacao (2 min).' };
     }
     if (presente('nuvem') && ausente('sacDb') && ausente('memoria')) {
       return { nivel: 'ATENCAO', texto: 'Esta na nuvem e nao neste aparelho. Pode ser a janela operacional (90 dias) ou um pull que ainda nao rodou.' };
@@ -2882,7 +2882,7 @@ class CloudStore {
     if (!this.isConfigured()) return;
     this.stopAutoSync(); // cancela qualquer timer anterior
     
-    const interval = this.config.syncIntervalMs || 30000;
+    const interval = this.config.syncIntervalMs || 120000;
     console.log(`[CloudStore] Sincronização automática iniciada (a cada ${interval/1000}s)`);
 
     // Fase 5 (21/08/2026): esta função tinha um ramo que empurrava (push) o
@@ -3015,11 +3015,13 @@ class CloudStore {
     // outra: "o que estou vendo é de quando?". Sem isso, um aparelho que
     // parou de sincronizar (aba em segundo plano, celular que dormiu) é
     // visualmente idêntico a um em dia — e a única saída era desconfiar do
-    // sistema. Acima de 60s o número entra no rótulo; abaixo disso ele só
-    // polui, porque o ciclo normal é de 30s.
+    // sistema. Acima de dois ciclos o número entra no rótulo; abaixo disso
+    // ele só polui. Era 60s fixo quando o ciclo era de 30s — com o ciclo de
+    // 2 min da 6.8.1, o 60s fixo acenderia "há 1min" em todo aparelho em dia.
     const idadeMs = this._ultimoPullOkMs ? Date.now() - this._ultimoPullOkMs : null;
+    const limiteIdadeMs = Math.max(60000, 2 * (this.config.syncIntervalMs || 120000));
     let sufixo = '';
-    if (status === 'online' && idadeMs !== null && idadeMs > 60000) {
+    if (status === 'online' && idadeMs !== null && idadeMs > limiteIdadeMs) {
       const min = Math.floor(idadeMs / 60000);
       sufixo = ` <span style="color:#fbbf24;font-size:10px;">· há ${min}min</span>`;
     }
@@ -3321,7 +3323,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "controle-infracoes-6.8.0";
+CloudStore.BUILD = "sync-2min-6.8.1";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS

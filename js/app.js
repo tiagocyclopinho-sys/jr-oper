@@ -3175,7 +3175,7 @@ function renderAparelhosContent() {
           Rode a <b>ETAPA 2b</b> do roteiro de implantação — o arquivo
           <code class="text-slate-200">database/migration_25a_dispositivos.sql</code>, colado no SQL Editor do
           Supabase. É uma consulta só, e não altera nenhum dado existente.<br>
-          Depois disso, cada aparelho passa a aparecer aqui sozinho, em até 30 segundos.
+          Depois disso, cada aparelho passa a aparecer aqui sozinho, em até 2 minutos.
         </div>
       </div>`;
   } else if (cache.lista.length === 0) {
@@ -3422,7 +3422,7 @@ function renderResquiciosDesteAparelho() {
       <div class="text-[11px] ${r.totalEmRisco > 0 ? 'text-red-300' : 'text-amber-300'}">
         ⚠️ <b>${r.totalDivergentes}</b> registro(s) com cópias que não batem entre si.
         ${r.totalEmRisco > 0
-          ? `<b class="text-red-400">${r.totalEmRisco} some(m) no próximo ciclo de 30s se não subirem antes</b> — não feche o app e toque em "Ver o motivo" acima para forçar o envio.`
+          ? `<b class="text-red-400">${r.totalEmRisco} some(m) no próximo ciclo de sincronização (até 2 min) se não subirem antes</b> — não feche o app e toque em "Ver o motivo" acima para forçar o envio.`
           : 'Nenhum em risco de sumir: é atraso de espelho, e o próximo ciclo resolve.'}
       </div>
       <div class="overflow-x-auto rounded-xl border border-slate-800">
