@@ -1726,7 +1726,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
 const INF_MAX_POR_FOLHA = 50;
 
 function _infLinhaVazia() {
-  return { id: null, data_infracao: '', numero_infracao: '', valor: '', prestador_nome: '', veiculo_placa: '', parcelas: '1', data_primeira_parcela: '' };
+  return { id: null, data_infracao: '', numero_infracao: '', valor: '', prestador_nome: '', veiculo_placa: '' };
 }
 
 // PARCELAMENTO (6.8.2, migration 49). O status continua sendo da multa
@@ -1761,26 +1761,33 @@ function _infCronograma(i) {
   }));
 }
 
-// Uma linha por multa no recibo. Até 3 parcelas lista cada uma; acima
-// disso resume, para 25 multas em 12x ainda caberem na folha:
-// "12x mensais de 10/10/2026 a 10/09/2027: 5 × R$ 83,37 + 7 × R$ 83,36".
-function _infParcelasTextoRecibo(i) {
-  const cr = _infCronograma(i);
+// 6.8.3: O PARCELAMENTO É DO CONDUTOR, NÃO DA MULTA. Divide-se o TOTAL do
+// prestador (R$ 1.925,05 em 6x), não cada multa. O banco continua guardando
+// parcelas/data_primeira_parcela em cada multa (sem migration): a ficha
+// grava o MESMO plano em todas as multas do prestador, e o recibo agrupa
+// por plano. Multas de relatórios diferentes com planos diferentes saem
+// como grupos separados na mesma folha.
+function _infChavePlano(i) {
+  const n = _infParcelas(i);
+  return n + '|' + (i.data_primeira_parcela || '');
+}
+
+// "1 × R$ 320,85 + 5 × R$ 320,84"
+function _infResumoValores(cr) {
   const fmt = v => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (cr.length <= 3) return ': ' + cr.map(p => `${fmt(p.valor)} em ${formatarData(p.data)}`).join(' · ');
   const grupos = [];
   cr.forEach(p => {
     const g = grupos.find(x => x.valor === p.valor);
     if (g) g.qtd++; else grupos.push({ valor: p.valor, qtd: 1 });
   });
-  return `mensais de ${formatarData(cr[0].data)} a ${formatarData(cr[cr.length - 1].data)}: ${grupos.map(g => `${g.qtd} × ${fmt(g.valor)}`).join(' + ')}`;
+  return grupos.map(g => `${g.qtd} × ${fmt(g.valor)}`).join(' + ');
 }
 
-// Texto curto para tela, Dossiê e CSV: "3x · 1ª em 10/10/2026".
+// Texto curto para tela, Dossiê e CSV: a multa entra no plano do prestador.
 function _infParcelaResumo(i) {
   const n = _infParcelas(i);
   if (n === 1) return i.data_primeira_parcela ? `1x · em ${formatarData(i.data_primeira_parcela)}` : '1x';
-  return `${n}x · 1ª em ${formatarData(i.data_primeira_parcela)}`;
+  return `plano ${n}x · 1ª em ${formatarData(i.data_primeira_parcela)}`;
 }
 
 function _infBrl(v) {
@@ -2006,9 +2013,13 @@ function abrirFichaInfracoes(relatorioId) {
       observacao: rel.observacao || '',
       linhas: db.getInfracoes({ relatorioId: rel.id }).slice().reverse().map(i => ({
         id: i.id, data_infracao: i.data_infracao || '', numero_infracao: i.numero_infracao || '',
-        valor: i.valor, prestador_nome: i.prestador_nome || '', veiculo_placa: i.veiculo_placa || '',
-        parcelas: String(_infParcelas(i)), data_primeira_parcela: i.data_primeira_parcela || ''
+        valor: i.valor, prestador_nome: i.prestador_nome || '', veiculo_placa: i.veiculo_placa || ''
       })),
+      // Plano de cada prestador = o da primeira multa dele no relatório.
+      planos: db.getInfracoes({ relatorioId: rel.id }).reduce((acc, i) => {
+        if (!acc[i.prestador_nome]) acc[i.prestador_nome] = { parcelas: String(_infParcelas(i)), data_primeira_parcela: i.data_primeira_parcela || '' };
+        return acc;
+      }, {}),
       erros: []
     };
   } else {
@@ -2019,6 +2030,7 @@ function abrirFichaInfracoes(relatorioId) {
       responsavel: (db.currentUser && db.currentUser.nome) ? String(db.currentUser.nome).toUpperCase() : '',
       observacao: '',
       linhas: [_infLinhaVazia(), _infLinhaVazia(), _infLinhaVazia()],
+      planos: {},
       erros: []
     };
   }
@@ -2046,6 +2058,65 @@ function _infCampo(idx, campo, valor) {
     const el = document.getElementById('inf-ficha-total');
     if (el) el.textContent = _infTotalFicha();
   }
+  if (campo === 'valor' || campo === 'prestador_nome') _infAtualizarPlanos();
+}
+
+// --- Parcelamento por prestador (6.8.3) ---
+function _infPlano(nome) {
+  const f = window._infForm;
+  if (!f.planos) f.planos = {};
+  if (!f.planos[nome]) f.planos[nome] = { parcelas: '1', data_primeira_parcela: '' };
+  return f.planos[nome];
+}
+
+// Prestadores (já reconhecidos no cadastro) que aparecem na ficha, com o
+// total e a quantidade de multas de cada um.
+function _infPrestadoresDaFicha() {
+  const f = window._infForm;
+  const mapa = {};
+  (f ? f.linhas : []).forEach(l => {
+    const p = l.prestador_nome ? _infPrestadorPorNome(l.prestador_nome) : null;
+    if (!p) return;
+    const m = mapa[p.nome] = mapa[p.nome] || { nome: p.nome, total: 0, qtd: 0 };
+    m.total += parseFloat(l.valor) || 0;
+    m.qtd++;
+  });
+  return Object.values(mapa).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
+function _infPlanoCampo(nome, campo, valor) {
+  _infPlano(nome)[campo] = valor;
+  _infAtualizarPlanos();
+}
+
+function _infAtualizarPlanos() {
+  const el = document.getElementById('inf-planos');
+  if (el) el.innerHTML = renderPlanosInfracoes();
+}
+
+function renderPlanosInfracoes() {
+  const lista = _infPrestadoresDaFicha();
+  if (!lista.length) return '<div class="text-[11px] text-slate-500">Escolha o prestador nas linhas acima para definir o parcelamento dele.</div>';
+  const inp = 'bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs';
+  return lista.map(p => {
+    const plano = _infPlano(p.nome);
+    const n = parseInt(plano.parcelas, 10) || 1;
+    const cr = _infCronograma({ valor: p.total, parcelas: n, data_primeira_parcela: plano.data_primeira_parcela });
+    const faltaData = n > 1 && !plano.data_primeira_parcela;
+    const previa = n === 1 ? `à vista: ${_infBrl(p.total)}`
+      : `${_infResumoValores(cr)}${plano.data_primeira_parcela ? ` · de ${formatarData(cr[0].data)} a ${formatarData(cr[cr.length - 1].data)}` : ''}`;
+    const nomeAttr = vgEscAttr(p.nome);
+    return `
+      <div class="grid grid-cols-2 md:grid-cols-[minmax(0,1fr)_120px_80px_135px_minmax(0,1.2fr)] gap-2 items-center py-1 border-b border-slate-800 last:border-b-0">
+        <span class="text-xs font-bold text-white col-span-2 md:col-span-1">${vgEscTxt(p.nome)} <span class="text-[10px] text-slate-400 font-normal">(${p.qtd} multa${p.qtd > 1 ? 's' : ''})</span></span>
+        <span class="text-xs font-bold text-amber-300 md:text-right">${_infBrl(p.total)}</span>
+        <select class="${inp}" onchange="_infPlanoCampo('${nomeAttr}', 'parcelas', this.value)">
+          ${Array.from({ length: 12 }, (_, k) => k + 1).map(k => `<option value="${k}" ${n === k ? 'selected' : ''}>${k}x</option>`).join('')}
+        </select>
+        <input type="date" title="Data da 1ª parcela" value="${plano.data_primeira_parcela || ''}" class="${inp} ${faltaData ? 'border-red-500' : ''}" onchange="_infPlanoCampo('${nomeAttr}', 'data_primeira_parcela', this.value)">
+        <span class="text-[11px] ${faltaData ? 'text-red-400 font-bold' : 'text-slate-300'} col-span-2 md:col-span-1">${faltaData ? 'informe a data da 1ª parcela' : previa}</span>
+      </div>`;
+  }).join('');
 }
 
 function _infTotalFicha() {
@@ -2105,23 +2176,19 @@ function renderFichaInfracoes() {
       </div>` : ''}
 
       <div class="space-y-1.5">
-        <div class="hidden md:grid grid-cols-[28px_125px_135px_100px_minmax(0,1fr)_115px_70px_125px_28px] gap-2 text-[10px] text-slate-400 font-bold uppercase px-0.5">
-          <span>#</span><span>Data *</span><span>Nº da infração *</span><span>Valor (R$) *</span><span>Prestador * <span class="normal-case font-normal">(digite parte do nome)</span></span><span>Veículo * <span class="normal-case font-normal">(placa)</span></span><span>Parcelas</span><span>1ª parcela</span><span></span>
+        <div class="hidden md:grid grid-cols-[28px_130px_150px_110px_minmax(0,1fr)_150px_32px] gap-2 text-[10px] text-slate-400 font-bold uppercase px-0.5">
+          <span>#</span><span>Data *</span><span>Nº da infração *</span><span>Valor (R$) *</span><span>Prestador * <span class="normal-case font-normal">(digite parte do nome)</span></span><span>Veículo * <span class="normal-case font-normal">(parte da placa)</span></span><span></span>
         </div>
         ${f.linhas.map((l, idx) => {
           const pos = idx + 1;
           return `
-          <div class="grid grid-cols-2 md:grid-cols-[28px_125px_135px_100px_minmax(0,1fr)_115px_70px_125px_28px] gap-2 items-center bg-slate-950/40 md:bg-transparent p-2 md:p-0 rounded">
+          <div class="grid grid-cols-2 md:grid-cols-[28px_130px_150px_110px_minmax(0,1fr)_150px_32px] gap-2 items-center bg-slate-950/40 md:bg-transparent p-2 md:p-0 rounded">
             <span class="text-[11px] font-bold ${errosPorLinha[pos] ? 'text-red-400' : 'text-slate-500'}">${pos}</span>
             <input type="date" data-inf-primeiro="1" value="${l.data_infracao || ''}" class="${inp} ${borda(pos)}" onchange="_infCampo(${idx}, 'data_infracao', this.value)">
             <input type="text" value="${vgEscTxt(l.numero_infracao || '')}" placeholder="Nº do auto" class="${inp} ${borda(pos)} font-mono" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'numero_infracao', this.value)">
             <input type="number" step="0.01" min="0" inputmode="decimal" value="${l.valor === '' || l.valor === null || l.valor === undefined ? '' : l.valor}" placeholder="0,00" class="${inp} ${borda(pos)} text-right" oninput="_infCampo(${idx}, 'valor', this.value)">
             <input type="text" list="inf-datalist-prestador" value="${vgEscTxt(l.prestador_nome || '')}" placeholder="Nome do prestador" class="${inp} ${borda(pos)} col-span-2 md:col-span-1 font-bold" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'prestador_nome', this.value)">
             <input type="text" list="inf-datalist-veiculo" value="${vgEscTxt(l.veiculo_placa || '')}" placeholder="Placa" class="${inp} ${borda(pos)} font-mono" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'veiculo_placa', this.value)">
-            <select title="Parcelas" class="${inp} ${borda(pos)}" onchange="_infCampo(${idx}, 'parcelas', this.value)">
-              ${Array.from({ length: 12 }, (_, k) => k + 1).map(n => `<option value="${n}" ${String(l.parcelas || '1') === String(n) ? 'selected' : ''}>${n}x</option>`).join('')}
-            </select>
-            <input type="date" title="Data da 1ª parcela (obrigatória acima de 1x)" value="${l.data_primeira_parcela || ''}" class="${inp} ${borda(pos)}" onchange="_infCampo(${idx}, 'data_primeira_parcela', this.value)">
             <button type="button" onclick="removerLinhaFichaInfracoes(${idx})" title="Remover linha" class="text-red-400 hover:text-red-300 text-sm">🗑️</button>
           </div>`;
         }).join('')}
@@ -2130,6 +2197,11 @@ function renderFichaInfracoes() {
       <div class="flex flex-wrap items-center justify-between gap-2">
         <button type="button" onclick="adicionarLinhaFichaInfracoes()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">+ Adicionar infração</button>
         <span id="inf-ficha-total" class="text-xs font-bold text-amber-300">${_infTotalFicha()}</span>
+      </div>
+
+      <div class="bg-slate-950/60 border border-emerald-800/50 rounded-lg p-3 space-y-1">
+        <div class="text-[10px] font-black text-emerald-400 uppercase">💳 Parcelamento por prestador <span class="normal-case font-normal text-slate-400">— divide o TOTAL de cada condutor; parcelas mensais a partir da 1ª</span></div>
+        <div id="inf-planos">${renderPlanosInfracoes()}</div>
       </div>
 
       <div class="flex flex-wrap justify-end gap-2 border-t border-slate-800 pt-3">
@@ -2165,10 +2237,18 @@ function salvarFichaInfracoes(emitir) {
       prestador_nome: prest ? prest.nome : l.prestador_nome,
       prestador_tipo: prest ? prest._tipoPrestador : null,
       veiculo_placa: veic ? _infNormPlaca(veic.placa) : l.veiculo_placa,
-      parcelas: l.parcelas,
-      data_primeira_parcela: l.data_primeira_parcela
+      parcelas: prest ? _infPlano(prest.nome).parcelas : '1',
+      data_primeira_parcela: prest ? _infPlano(prest.nome).data_primeira_parcela : ''
     };
   });
+  // O plano é do prestador: o erro sai uma vez por prestador, não por linha.
+  _infPrestadoresDaFicha().forEach(p => {
+    const pl = _infPlano(p.nome);
+    if ((parseInt(pl.parcelas, 10) || 1) > 1 && !pl.data_primeira_parcela) {
+      erros.push({ linha: null, msg: `${p.nome}: informe a data da 1ª parcela no parcelamento` });
+    }
+  });
+  const ERROS_DE_PLANO = ['informe a data da 1ª parcela', 'parcelas precisa ser de 1 a 12'];
 
   const res = db.salvarRelatorioInfracoes({
     id: f.id, data_lancamento: f.data_lancamento, responsavel: f.responsavel, observacao: f.observacao, linhas,
@@ -2176,7 +2256,7 @@ function salvarFichaInfracoes(emitir) {
   });
   // O store numera as linhas que recebeu (só as preenchidas); a tela mostra
   // a posição na ficha. Traduz de volta.
-  const todosErros = erros.concat((res.erros || []).map(e => ({
+  const todosErros = erros.concat((res.erros || []).filter(e => !ERROS_DE_PLANO.includes(e.msg)).map(e => ({
     linha: e.linha ? (linhas[e.linha - 1] || {})._posTela : null, msg: e.msg
   }))).sort((a, b) => (a.linha || 0) - (b.linha || 0));
   if (!res.success) {
@@ -2311,30 +2391,43 @@ function gerarReciboInfracoesPdf(ids) {
     const periodo = d1 === d2 ? formatarData(d1) : `${formatarData(d1)} a ${formatarData(d2)}`;
     const dens = lista.length <= 14 ? 'normal' : (lista.length <= 25 ? 'compacta' : 'colunas');
     const totalFmt = total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    // 6.8.2: parcelamento. Sem nenhuma multa parcelada, a folha sai igual à
-    // 6.8.0 — sem coluna nova e sem quadro.
-    const parceladas = lista.filter(i => _infParcelas(i) > 1);
-    const temParc = parceladas.length > 0;
+    // 6.8.3: o parcelamento é do CONDUTOR — divide o total, não cada multa.
+    // Agrupa por plano (parcelas + 1ª data); no caso normal há um só, e o
+    // quadro mostra o total dividido com a data e o valor de cada parcela.
+    // Sem nenhuma multa parcelada, a folha sai igual à 6.8.0.
     const brl2 = v => 'R$ ' + (parseFloat(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const aVista = lista.filter(i => _infParcelas(i) === 1);
+    const planos = [];
+    lista.forEach(i => {
+      const k = _infChavePlano(i);
+      let g = planos.find(x => x.chave === k);
+      if (!g) planos.push(g = { chave: k, parcelas: _infParcelas(i), data: i.data_primeira_parcela || '', itens: [] });
+      g.itens.push(i);
+    });
+    planos.forEach(g => { g.total = Math.round(g.itens.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0) * 100) / 100; });
+    planos.sort((a, b) => b.parcelas - a.parcelas);
+    const temParc = planos.some(g => g.parcelas > 1);
+    const umPlanoSo = planos.length === 1;
     const parcHtml = !temParc ? '' : `
-      <div class="parc${parceladas.length + (aVista.length ? 1 : 0) > 6 ? ' muitas' : ''}">
-        <div class="parc-tit">PARCELAMENTO DO DESCONTO</div>
-        <div class="parc-corpo">
-        ${parceladas.map(i => `<div class="parc-lin"><b>${vgEscTxt(i.numero_infracao)}</b> (${brl2(i.valor)}) em <b>${_infParcelas(i)}x</b> ${_infParcelasTextoRecibo(i)}</div>`).join('')}
-        ${aVista.length ? `<div class="parc-lin">Demais infrações em <b>1x</b> (${aVista.length}): ${brl2(aVista.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0))}</div>` : ''}
-        </div>
+      <div class="parc">
+        <div class="parc-tit">PARCELAMENTO DO DESCONTO${umPlanoSo ? ` — ${brl2(planos[0].total)} EM ${planos[0].parcelas}x` : ''}</div>
+        ${planos.map(g => {
+          const rotulo = umPlanoSo ? ''
+            : `<div class="parc-lin"><b>${g.itens.length} infração(ões) — ${brl2(g.total)} em ${g.parcelas}x</b>${g.parcelas === 1 && g.data ? ` em ${formatarData(g.data)}` : ''}${g.parcelas > 1 ? ':' : ''}</div>`;
+          if (g.parcelas === 1) return rotulo;
+          const cr = _infCronograma({ valor: g.total, parcelas: g.parcelas, data_primeira_parcela: g.data });
+          return rotulo + `<div class="parc-grid">${cr.map(p => `<div class="parc-cel"><span>${p.n}ª · ${formatarData(p.data)}</span><b>${brl2(p.valor)}</b></div>`).join('')}</div>`;
+        }).join('')}
       </div>`;
 
     const tabela = (itens, inicio, completa) => `
       <table class="tb">
         <thead><tr>
-          <th style="width:${completa ? '26px' : '22px'}">#</th><th>Data</th><th>Nº da infração</th><th>Veículo</th>${completa ? '<th>Relatório</th>' : ''}${temParc ? '<th class="c">Parc.</th>' : ''}<th class="r">Valor</th>
+          <th style="width:${completa ? '26px' : '22px'}">#</th><th>Data</th><th>Nº da infração</th><th>Veículo</th>${completa ? '<th>Relatório</th>' : ''}<th class="r">Valor</th>
         </tr></thead>
         <tbody>
           ${itens.map((i, k) => {
             const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
-            return `<tr><td class="c">${inicio + k + 1}</td><td>${formatarData(i.data_infracao)}</td><td class="b">${vgEscTxt(i.numero_infracao)}</td><td>${vgEscTxt(i.veiculo_placa || '—')}</td>${completa ? `<td>${rel ? vgEscTxt(rel.numero_relatorio) : '—'}</td>` : ''}${temParc ? `<td class="c b">${_infParcelas(i)}x</td>` : ''}<td class="r b">R$ ${(parseFloat(i.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>`;
+            return `<tr><td class="c">${inicio + k + 1}</td><td>${formatarData(i.data_infracao)}</td><td class="b">${vgEscTxt(i.numero_infracao)}</td><td>${vgEscTxt(i.veiculo_placa || '—')}</td>${completa ? `<td>${rel ? vgEscTxt(rel.numero_relatorio) : '—'}</td>` : ''}<td class="r b">R$ ${(parseFloat(i.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>`;
           }).join('')}
         </tbody>
       </table>`;
@@ -2434,9 +2527,12 @@ function gerarReciboInfracoesPdf(ids) {
     .parc { border: 1.5px solid #16a34a; background: #f0fdf4; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
     .parc-tit { font-size: 9px; font-weight: 900; color: #15803d; letter-spacing: 0.5px; margin-bottom: 2px; }
     .parc-lin { font-size: 9.5px; color: #14532d; line-height: 1.35; break-inside: avoid; }
-    .parc.muitas .parc-corpo { column-count: 2; column-gap: 5mm; }
-    .parc.muitas .parc-lin { font-size: 8.5px; line-height: 1.25; }
-    .aperto .parc-lin, .aperto .parc.muitas .parc-lin { font-size: 7.5px; line-height: 1.2; }
+    .parc-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; margin: 3px 0 4px; }
+    .parc-cel { border: 1px solid #bbf7d0; background: #fff; border-radius: 4px; padding: 3px 4px; text-align: center; line-height: 1.25; }
+    .parc-cel span { display: block; font-size: 8.5px; color: #15803d; }
+    .parc-cel b { display: block; font-size: 10.5px; color: #14532d; }
+    .aperto .parc-lin { font-size: 8px; line-height: 1.2; }
+    .aperto .parc-cel { padding: 1px 3px; } .aperto .parc-cel span { font-size: 7.5px; } .aperto .parc-cel b { font-size: 9px; }
     .aperto .termo { font-size: 9px; line-height: 1.35; padding: 6px 10px; }
     .aperto .val-highlight { padding: 6px 12px; } .aperto .val-amt { font-size: 20px; }
     .aperto .sigs { margin-top: 10mm; }
