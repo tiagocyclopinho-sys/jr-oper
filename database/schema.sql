@@ -1575,3 +1575,9 @@ CREATE INDEX IF NOT EXISTS idx_infracoes_relatorio ON infracoes (relatorio_id);
 CREATE INDEX IF NOT EXISTS idx_infracoes_prestador ON infracoes (prestador_nome);
 CREATE INDEX IF NOT EXISTS idx_infracoes_data ON infracoes (data_infracao);
 CREATE INDEX IF NOT EXISTS idx_infracoes_status ON infracoes (status) WHERE is_deleted IS NOT TRUE;
+
+-- 6.8.2 — parcelamento de infração (espelho da migration_49_parcelas_infracao.sql)
+ALTER TABLE infracoes ADD COLUMN IF NOT EXISTS parcelas INT DEFAULT 1;
+ALTER TABLE infracoes ADD COLUMN IF NOT EXISTS data_primeira_parcela DATE;
+ALTER TABLE infracoes DROP CONSTRAINT IF EXISTS ck_infracoes_parcelas;
+ALTER TABLE infracoes ADD CONSTRAINT ck_infracoes_parcelas CHECK (parcelas BETWEEN 1 AND 12);

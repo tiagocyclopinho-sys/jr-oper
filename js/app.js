@@ -1633,7 +1633,7 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   ${tipo === 'MOTORISTA' ? '' : secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td class="nowrap">${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
   ${tipo === 'MOTORISTA' ? secaoTabela('Devoluções por Erro Motorista', ['Data','Protocolo','Cliente','Motivo','Valor','Tratativa'], devsErro.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`)) : ''}
   ${tipo === 'MOTORISTA' ? secaoTabela('Deduções / Adiantamentos', ['Data','Protocolo','Valor da devolução','Equipe','Parte deste prestador','Situação'], deducoes.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${l.protocolo}</td><td class="num">${brl(l.total)}</td><td style="text-align:center;">${l.pessoas}</td><td class="num"><b>${brl(l.parte)}</b></td><td>${l.status}</td></tr>`), `<tr><td colspan="4" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalDeducoes)}</b></td><td></td></tr>`) : ''}
-  ${tipo === 'MOTORISTA' ? secaoTabela('Infrações de Trânsito', ['Data','Nº infração','Veículo','Valor','Status','Relatório'], infracoesP.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${vgEscTxt(l.numero_infracao)}</td><td>${vgEscTxt(l.veiculo_placa || '—')}</td><td class="num">${brl(l.valor)}</td><td>${_infStatusLabel(l.status)}</td><td>${vgEscTxt(l.numero_relatorio || '—')}</td></tr>`), `<tr><td colspan="3" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalInfracoes)}</b></td><td colspan="2"></td></tr>`) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Infrações de Trânsito', ['Data','Nº infração','Veículo','Valor','Parcelamento','Status','Relatório'], infracoesP.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${vgEscTxt(l.numero_infracao)}</td><td>${vgEscTxt(l.veiculo_placa || '—')}</td><td class="num">${brl(l.valor)}</td><td>${_infParcelaResumo(l)}</td><td>${_infStatusLabel(l.status)}</td><td>${vgEscTxt(l.numero_relatorio || '—')}</td></tr>`), `<tr><td colspan="3" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalInfracoes)}</b></td><td colspan="3"></td></tr>`) : ''}
   ${tipo === 'MOTORISTA' ? secaoTabela('Ocorrências Operacionais (Oc Operacional)', ['Data','Carga','Rota','Função','Motivo','Causa','Ocorrência','Ação','Status'], ocOper.map(o => `<tr><td class="nowrap">${formatarData(o.data)}</td><td>${o.carga||'—'}</td><td>${o.rota||'—'}</td><td>${o.funcao||'—'}</td><td>${o.motivo||'—'}</td><td>${o.causa||'—'}</td><td>${o.ocorrencia||'—'}</td><td>${o.acao||'—'}</td><td>${o.status||'—'}</td></tr>`)) : ''}
   ${ehMotorista ? secaoTabela('Ocorrências em Rota (Oc em Rota)', ['Data','Protocolo','Carga','Placa','Motivo','Descrição','Local','Status'], ocRota.map(o => `<tr><td class="nowrap">${formatarData(o.data)}</td><td>${o.numero_protocolo||'—'}</td><td>${o.carga_numero||o.carga||'—'}</td><td>${o.veiculo_placa||'—'}</td><td>${o.motivo_resumido||o.tipo_ocorrencia||o.motivo||'—'}</td><td>${o.descricao||'—'}</td><td>${o.localizacao||'—'}</td><td>${String(o.status_chamado||o.status||'—').toUpperCase()}</td></tr>`)) : ''}
   ${ehMotorista ? secaoTabela('Sinistros', ['Nº','Data','Placa','Carga','Local','Responsabilidade','Desconto','Status'], sinistros.map(s => `<tr><td class="nowrap">${s.numero_sinistro||'—'}</td><td class="nowrap">${formatarData(s.data)}</td><td>${s.placa||'—'}</td><td>${s.carga||'—'}</td><td>${s.local_acidente||'—'}</td><td>${s.etapa_diretoria_completa ? (s.responsabilidade_motorista ? 'Sim' : 'Não') : 'Em apuração'}</td><td>${s.desconto_motorista ? brl(s.valor_desconto) + (s.numero_parcelas ? ` (${s.numero_parcelas}x)` : '') : '—'}</td><td>${s.status_geral === 'CONCLUIDO' ? 'Concluído' : 'Pendente'}</td></tr>`)) : ''}
@@ -1680,7 +1680,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   const csvLinha = campos => linhas.push(campos.concat(Array(Math.max(0, 10 - campos.length)).fill('')).map(v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g,'""')}"`).join(';'));
   viagens.forEach(v => csvLinha(['VIAGEM', formatarData(v.data), v.carga, v.rota, v.placa, v.papel, v.equipe, v.data_retorno ? formatarData(v.data_retorno) : '', statusViagemTexto(v)]));
   deducoes.forEach(l => csvLinha(['DEDUCAO_ADIANTAMENTO', formatarData(l.data), l.protocolo, l.total.toFixed(2), String(l.pessoas), l.parte.toFixed(2), l.status]));
-  infracoesP.forEach(l => csvLinha(['INFRACAO_TRANSITO', formatarData(l.data), l.numero_infracao, l.veiculo_placa, (parseFloat(l.valor) || 0).toFixed(2), _infStatusLabel(l.status), l.numero_relatorio]));
+  infracoesP.forEach(l => csvLinha(['INFRACAO_TRANSITO', formatarData(l.data), l.numero_infracao, l.veiculo_placa, (parseFloat(l.valor) || 0).toFixed(2), _infStatusLabel(l.status), l.numero_relatorio, _infParcelaResumo(l)]));
   devsErro.forEach(d => csvLinha(['DEVOLUCAO_ERRO_MOTORISTA', formatarData(d.data), d.numero_devolucao || d.numero_protocolo, d.cliente_nome, d.motivo_real_causa_raiz || d.motivo_reclamado, (parseFloat(d.valor_reclamado)||0).toFixed(2), d.status_gestao === 'CONCLUIDO' ? 'CONCLUIDA' : 'PENDENTE']));
   orientacoes.forEach(r => csvLinha(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao]));
   atestados.forEach(r => csvLinha(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro]));
@@ -1726,7 +1726,61 @@ function exportarAcompanhamentoCsv(nome, tipo) {
 const INF_MAX_POR_FOLHA = 50;
 
 function _infLinhaVazia() {
-  return { id: null, data_infracao: '', numero_infracao: '', valor: '', prestador_nome: '', veiculo_placa: '' };
+  return { id: null, data_infracao: '', numero_infracao: '', valor: '', prestador_nome: '', veiculo_placa: '', parcelas: '1', data_primeira_parcela: '' };
+}
+
+// PARCELAMENTO (6.8.2, migration 49). O status continua sendo da multa
+// inteira: depois da assinatura o financeiro agenda o desconto mensal.
+// Aqui só se calcula o que o recibo descreve — nada disso é gravado.
+function _infParcelas(i) {
+  const n = parseInt(i && i.parcelas, 10);
+  return n >= 1 && n <= 12 ? n : 1;
+}
+
+// Mesmo dia nos meses seguintes; dia que o mês não tem vira o último dia
+// dele (31/01 → 28/02 → 31/03).
+function _infSomarMeses(iso, meses) {
+  const [a, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  if (!a || !m || !d) return '';
+  const alvo = new Date(Date.UTC(a, m - 1 + meses, 1));
+  const ultimo = new Date(Date.UTC(alvo.getUTCFullYear(), alvo.getUTCMonth() + 1, 0)).getUTCDate();
+  alvo.setUTCDate(Math.min(d, ultimo));
+  return alvo.toISOString().slice(0, 10);
+}
+
+// [{ n, data, valor }] — valores em centavos pela mesma regra do rateio do
+// adiantamento (ratearValor): parcelas iguais, o centavo que sobra vai nas
+// primeiras, e a soma fecha com o valor da multa.
+function _infCronograma(i) {
+  const n = _infParcelas(i);
+  const valores = ratearValor(i.valor, n);
+  return valores.map((v, k) => ({
+    n: k + 1,
+    data: i.data_primeira_parcela ? _infSomarMeses(i.data_primeira_parcela, k) : '',
+    valor: v
+  }));
+}
+
+// Uma linha por multa no recibo. Até 3 parcelas lista cada uma; acima
+// disso resume, para 25 multas em 12x ainda caberem na folha:
+// "12x mensais de 10/10/2026 a 10/09/2027: 5 × R$ 83,37 + 7 × R$ 83,36".
+function _infParcelasTextoRecibo(i) {
+  const cr = _infCronograma(i);
+  const fmt = v => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (cr.length <= 3) return ': ' + cr.map(p => `${fmt(p.valor)} em ${formatarData(p.data)}`).join(' · ');
+  const grupos = [];
+  cr.forEach(p => {
+    const g = grupos.find(x => x.valor === p.valor);
+    if (g) g.qtd++; else grupos.push({ valor: p.valor, qtd: 1 });
+  });
+  return `mensais de ${formatarData(cr[0].data)} a ${formatarData(cr[cr.length - 1].data)}: ${grupos.map(g => `${g.qtd} × ${fmt(g.valor)}`).join(' + ')}`;
+}
+
+// Texto curto para tela, Dossiê e CSV: "3x · 1ª em 10/10/2026".
+function _infParcelaResumo(i) {
+  const n = _infParcelas(i);
+  if (n === 1) return i.data_primeira_parcela ? `1x · em ${formatarData(i.data_primeira_parcela)}` : '1x';
+  return `${n}x · 1ª em ${formatarData(i.data_primeira_parcela)}`;
 }
 
 function _infBrl(v) {
@@ -1884,7 +1938,7 @@ function renderInfracoesView() {
                     <td class="p-2 font-mono font-bold text-red-300 whitespace-nowrap">${vgEscTxt(i.numero_infracao)}</td>
                     <td class="p-2 font-bold text-white">${vgEscTxt(i.prestador_nome)}${i.prestador_tipo === 'AJUDANTE' ? ' <span class="text-[9px] text-slate-400 font-normal">(ajudante)</span>' : ''}</td>
                     <td class="p-2 font-mono whitespace-nowrap">${vgEscTxt(i.veiculo_placa || '—')}</td>
-                    <td class="p-2 text-right font-bold text-amber-300 whitespace-nowrap">${_infBrl(i.valor)}</td>
+                    <td class="p-2 text-right font-bold text-amber-300 whitespace-nowrap">${_infBrl(i.valor)}${_infParcelas(i) > 1 ? `<div class="text-[10px] font-normal text-slate-400">${_infParcelaResumo(i)}</div>` : ''}</td>
                     <td class="p-2">
                       <select onchange="alterarStatusInfracao('${i.id}', this.value)" class="border rounded px-1 py-0.5 text-[11px] font-bold ${_infStatusClasse(i.status)}">
                         ${Object.entries(Store.STATUS_INFRACAO).map(([k, l]) => `<option value="${k}" ${(i.status || 'PENDENTE') === k ? 'selected' : ''}>${l}</option>`).join('')}
@@ -1952,7 +2006,8 @@ function abrirFichaInfracoes(relatorioId) {
       observacao: rel.observacao || '',
       linhas: db.getInfracoes({ relatorioId: rel.id }).slice().reverse().map(i => ({
         id: i.id, data_infracao: i.data_infracao || '', numero_infracao: i.numero_infracao || '',
-        valor: i.valor, prestador_nome: i.prestador_nome || '', veiculo_placa: i.veiculo_placa || ''
+        valor: i.valor, prestador_nome: i.prestador_nome || '', veiculo_placa: i.veiculo_placa || '',
+        parcelas: String(_infParcelas(i)), data_primeira_parcela: i.data_primeira_parcela || ''
       })),
       erros: []
     };
@@ -2050,19 +2105,23 @@ function renderFichaInfracoes() {
       </div>` : ''}
 
       <div class="space-y-1.5">
-        <div class="hidden md:grid grid-cols-[28px_130px_150px_110px_minmax(0,1fr)_150px_32px] gap-2 text-[10px] text-slate-400 font-bold uppercase px-0.5">
-          <span>#</span><span>Data *</span><span>Nº da infração *</span><span>Valor (R$) *</span><span>Prestador * <span class="normal-case font-normal">(digite parte do nome)</span></span><span>Veículo * <span class="normal-case font-normal">(parte da placa)</span></span><span></span>
+        <div class="hidden md:grid grid-cols-[28px_125px_135px_100px_minmax(0,1fr)_115px_70px_125px_28px] gap-2 text-[10px] text-slate-400 font-bold uppercase px-0.5">
+          <span>#</span><span>Data *</span><span>Nº da infração *</span><span>Valor (R$) *</span><span>Prestador * <span class="normal-case font-normal">(digite parte do nome)</span></span><span>Veículo * <span class="normal-case font-normal">(placa)</span></span><span>Parcelas</span><span>1ª parcela</span><span></span>
         </div>
         ${f.linhas.map((l, idx) => {
           const pos = idx + 1;
           return `
-          <div class="grid grid-cols-2 md:grid-cols-[28px_130px_150px_110px_minmax(0,1fr)_150px_32px] gap-2 items-center bg-slate-950/40 md:bg-transparent p-2 md:p-0 rounded">
+          <div class="grid grid-cols-2 md:grid-cols-[28px_125px_135px_100px_minmax(0,1fr)_115px_70px_125px_28px] gap-2 items-center bg-slate-950/40 md:bg-transparent p-2 md:p-0 rounded">
             <span class="text-[11px] font-bold ${errosPorLinha[pos] ? 'text-red-400' : 'text-slate-500'}">${pos}</span>
             <input type="date" data-inf-primeiro="1" value="${l.data_infracao || ''}" class="${inp} ${borda(pos)}" onchange="_infCampo(${idx}, 'data_infracao', this.value)">
             <input type="text" value="${vgEscTxt(l.numero_infracao || '')}" placeholder="Nº do auto" class="${inp} ${borda(pos)} font-mono" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'numero_infracao', this.value)">
             <input type="number" step="0.01" min="0" inputmode="decimal" value="${l.valor === '' || l.valor === null || l.valor === undefined ? '' : l.valor}" placeholder="0,00" class="${inp} ${borda(pos)} text-right" oninput="_infCampo(${idx}, 'valor', this.value)">
             <input type="text" list="inf-datalist-prestador" value="${vgEscTxt(l.prestador_nome || '')}" placeholder="Nome do prestador" class="${inp} ${borda(pos)} col-span-2 md:col-span-1 font-bold" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'prestador_nome', this.value)">
             <input type="text" list="inf-datalist-veiculo" value="${vgEscTxt(l.veiculo_placa || '')}" placeholder="Placa" class="${inp} ${borda(pos)} font-mono" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'veiculo_placa', this.value)">
+            <select title="Parcelas" class="${inp} ${borda(pos)}" onchange="_infCampo(${idx}, 'parcelas', this.value)">
+              ${Array.from({ length: 12 }, (_, k) => k + 1).map(n => `<option value="${n}" ${String(l.parcelas || '1') === String(n) ? 'selected' : ''}>${n}x</option>`).join('')}
+            </select>
+            <input type="date" title="Data da 1ª parcela (obrigatória acima de 1x)" value="${l.data_primeira_parcela || ''}" class="${inp} ${borda(pos)}" onchange="_infCampo(${idx}, 'data_primeira_parcela', this.value)">
             <button type="button" onclick="removerLinhaFichaInfracoes(${idx})" title="Remover linha" class="text-red-400 hover:text-red-300 text-sm">🗑️</button>
           </div>`;
         }).join('')}
@@ -2105,7 +2164,9 @@ function salvarFichaInfracoes(emitir) {
       valor: l.valor,
       prestador_nome: prest ? prest.nome : l.prestador_nome,
       prestador_tipo: prest ? prest._tipoPrestador : null,
-      veiculo_placa: veic ? _infNormPlaca(veic.placa) : l.veiculo_placa
+      veiculo_placa: veic ? _infNormPlaca(veic.placa) : l.veiculo_placa,
+      parcelas: l.parcelas,
+      data_primeira_parcela: l.data_primeira_parcela
     };
   });
 
@@ -2195,12 +2256,13 @@ function imprimirRecibosInfracoesFiltradas() {
 function exportarInfracoesCsv() {
   const lista = listarInfracoesFiltradas();
   if (!lista.length) { alert('Nenhuma infração com os filtros atuais.'); return; }
-  const cab = ['Relatorio', 'Data infracao', 'Numero infracao', 'Valor', 'Prestador', 'Tipo', 'Placa', 'Status', 'Recibo impresso em', 'Vezes impresso', 'Lancado por', 'Lancado em'];
+  const cab = ['Relatorio', 'Data infracao', 'Numero infracao', 'Valor', 'Parcelas', '1a parcela', 'Prestador', 'Tipo', 'Placa', 'Status', 'Recibo impresso em', 'Vezes impresso', 'Lancado por', 'Lancado em'];
   const q = v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g, '""')}"`;
   const linhas = [cab.map(q).join(';')].concat(lista.map(i => {
     const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
     return [rel ? rel.numero_relatorio : '', formatarData(i.data_infracao), i.numero_infracao,
-      (parseFloat(i.valor) || 0).toFixed(2).replace('.', ','), i.prestador_nome, i.prestador_tipo || '',
+      (parseFloat(i.valor) || 0).toFixed(2).replace('.', ','), _infParcelas(i), i.data_primeira_parcela ? formatarData(i.data_primeira_parcela) : '',
+      i.prestador_nome, i.prestador_tipo || '',
       i.veiculo_placa, _infStatusLabel(i.status), i.recibo_impresso_em ? formatarDataHora(i.recibo_impresso_em) : '',
       i.recibo_impresso_qtd || 0, i.criado_por || '', i.criado_em ? formatarDataHora(i.criado_em) : ''].map(q).join(';');
   }));
@@ -2249,27 +2311,40 @@ function gerarReciboInfracoesPdf(ids) {
     const periodo = d1 === d2 ? formatarData(d1) : `${formatarData(d1)} a ${formatarData(d2)}`;
     const dens = lista.length <= 14 ? 'normal' : (lista.length <= 25 ? 'compacta' : 'colunas');
     const totalFmt = total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // 6.8.2: parcelamento. Sem nenhuma multa parcelada, a folha sai igual à
+    // 6.8.0 — sem coluna nova e sem quadro.
+    const parceladas = lista.filter(i => _infParcelas(i) > 1);
+    const temParc = parceladas.length > 0;
+    const brl2 = v => 'R$ ' + (parseFloat(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const aVista = lista.filter(i => _infParcelas(i) === 1);
+    const parcHtml = !temParc ? '' : `
+      <div class="parc${parceladas.length + (aVista.length ? 1 : 0) > 6 ? ' muitas' : ''}">
+        <div class="parc-tit">PARCELAMENTO DO DESCONTO</div>
+        <div class="parc-corpo">
+        ${parceladas.map(i => `<div class="parc-lin"><b>${vgEscTxt(i.numero_infracao)}</b> (${brl2(i.valor)}) em <b>${_infParcelas(i)}x</b> ${_infParcelasTextoRecibo(i)}</div>`).join('')}
+        ${aVista.length ? `<div class="parc-lin">Demais infrações em <b>1x</b> (${aVista.length}): ${brl2(aVista.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0))}</div>` : ''}
+        </div>
+      </div>`;
 
     const tabela = (itens, inicio, completa) => `
       <table class="tb">
         <thead><tr>
-          <th style="width:${completa ? '26px' : '22px'}">#</th><th>Data</th><th>Nº da infração</th><th>Veículo</th>${completa ? '<th>Relatório</th>' : ''}<th class="r">Valor</th>
+          <th style="width:${completa ? '26px' : '22px'}">#</th><th>Data</th><th>Nº da infração</th><th>Veículo</th>${completa ? '<th>Relatório</th>' : ''}${temParc ? '<th class="c">Parc.</th>' : ''}<th class="r">Valor</th>
         </tr></thead>
         <tbody>
           ${itens.map((i, k) => {
             const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
-            return `<tr><td class="c">${inicio + k + 1}</td><td>${formatarData(i.data_infracao)}</td><td class="b">${vgEscTxt(i.numero_infracao)}</td><td>${vgEscTxt(i.veiculo_placa || '—')}</td>${completa ? `<td>${rel ? vgEscTxt(rel.numero_relatorio) : '—'}</td>` : ''}<td class="r b">R$ ${(parseFloat(i.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>`;
+            return `<tr><td class="c">${inicio + k + 1}</td><td>${formatarData(i.data_infracao)}</td><td class="b">${vgEscTxt(i.numero_infracao)}</td><td>${vgEscTxt(i.veiculo_placa || '—')}</td>${completa ? `<td>${rel ? vgEscTxt(rel.numero_relatorio) : '—'}</td>` : ''}${temParc ? `<td class="c b">${_infParcelas(i)}x</td>` : ''}<td class="r b">R$ ${(parseFloat(i.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>`;
           }).join('')}
         </tbody>
       </table>`;
 
-    let tabelasHtml;
-    if (dens === 'colunas') {
-      const meio = Math.ceil(lista.length / 2);
-      tabelasHtml = `<div class="duas">${tabela(lista.slice(0, meio), 0, false)}${tabela(lista.slice(meio), meio, false)}</div>`;
-    } else {
-      tabelasHtml = tabela(lista, 0, true);
-    }
+    // As DUAS formas vão na folha e o CSS mostra uma: a densidade inicial
+    // sai da contagem, e o ajuste no load (ajustarFolhas, lá embaixo) sobe
+    // de degrau se o quadro de parcelamento tiver comido espaço da tabela.
+    const meioIdx = Math.ceil(lista.length / 2);
+    const tabelasHtml = `<div class="v-uma">${tabela(lista, 0, true)}</div>`
+      + `<div class="v-duas"><div class="duas">${tabela(lista.slice(0, meioIdx), 0, false)}${tabela(lista.slice(meioIdx), meioIdx, false)}</div></div>`;
 
     return `
   <div class="folha dens-${dens}">
@@ -2299,9 +2374,10 @@ function gerarReciboInfracoesPdf(ids) {
         <div class="val-lbl">VALOR DO ADIANTAMENTO — INFRAÇÕES DE TRÂNSITO (100% DO PRESTADOR):</div>
         <div class="val-amt">R$ ${totalFmt}</div>
       </div>
+      ${parcHtml}
       <div class="termo">
         <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${totalFmt}</b> (100% integral) referente ${lista.length === 1 ? 'à infração de trânsito relacionada acima' : `às ${lista.length} infrações de trânsito relacionadas acima`}, ocorrida(s) no período de <b>${periodo}</b> na condução de veículo da frota.
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${totalFmt}</b> (100% integral) referente ${lista.length === 1 ? 'à infração de trânsito relacionada acima' : `às ${lista.length} infrações de trânsito relacionadas acima`}, ocorrida(s) no período de <b>${periodo}</b> na condução de veículo da frota.${temParc ? ' O desconto seguirá o parcelamento descrito acima.' : ''}
       </div>
       <div class="sigs">
         <div><div class="sig-line"></div><div class="sig-lbl">${vgEscTxt(nome)}<br>(${papelAssin})</div></div>
@@ -2353,6 +2429,18 @@ function gerarReciboInfracoesPdf(ids) {
     .dens-compacta .tb th { padding: 2px 6px; } .dens-compacta .tb td { padding: 2px 6px; font-size: 9.5px; line-height: 1.2; }
     .dens-colunas .tb th { padding: 2px 4px; font-size: 8px; } .dens-colunas .tb td { padding: 1.5px 4px; font-size: 9px; line-height: 1.2; }
     .duas { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; align-items: start; }
+    .v-duas { display: none; }
+    .dens-colunas .v-uma { display: none; } .dens-colunas .v-duas { display: block; }
+    .parc { border: 1.5px solid #16a34a; background: #f0fdf4; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
+    .parc-tit { font-size: 9px; font-weight: 900; color: #15803d; letter-spacing: 0.5px; margin-bottom: 2px; }
+    .parc-lin { font-size: 9.5px; color: #14532d; line-height: 1.35; break-inside: avoid; }
+    .parc.muitas .parc-corpo { column-count: 2; column-gap: 5mm; }
+    .parc.muitas .parc-lin { font-size: 8.5px; line-height: 1.25; }
+    .aperto .parc-lin, .aperto .parc.muitas .parc-lin { font-size: 7.5px; line-height: 1.2; }
+    .aperto .termo { font-size: 9px; line-height: 1.35; padding: 6px 10px; }
+    .aperto .val-highlight { padding: 6px 12px; } .aperto .val-amt { font-size: 20px; }
+    .aperto .sigs { margin-top: 10mm; }
+    .aperto .tb td { font-size: 8px !important; padding-top: 1px !important; padding-bottom: 1px !important; }
     .val-highlight { background: #dcfce7; border: 2px solid #16a34a; padding: 10px 14px; border-radius: 8px; text-align: right; margin-bottom: 8px; }
     .val-lbl { font-size: 10.5px; font-weight: 900; color: #15803d; text-transform: uppercase; letter-spacing: 0.5px; }
     .val-amt { font-size: 24px; font-weight: 900; color: #166534; margin-top: 2px; }
@@ -2365,7 +2453,23 @@ function gerarReciboInfracoesPdf(ids) {
 </head>
 <body>
   ${folhas}
-  <script>window.onload = function() { setTimeout(function() { window.print(); }, 400); };</script>
+  <script>
+    // Garante UMA folha por prestador: se a tabela não coube no espaço que
+    // sobrou (o quadro de parcelamento come espaço), sobe um degrau —
+    // normal → compacta → duas colunas → aperto — até caber.
+    function ajustarFolhas() {
+      var degraus = ['dens-normal', 'dens-compacta', 'dens-colunas'];
+      var folhas = document.querySelectorAll('.folha');
+      for (var f = 0; f < folhas.length; f++) {
+        var fl = folhas[f], meio = fl.querySelector('.meio');
+        var cabe = function() { return meio.scrollHeight <= meio.clientHeight + 1; };
+        var i = degraus.findIndex(function(c) { return fl.classList.contains(c); });
+        while (!cabe() && i < degraus.length - 1) { fl.classList.remove(degraus[i]); i++; fl.classList.add(degraus[i]); }
+        if (!cabe()) fl.classList.add('aperto');
+      }
+    }
+    window.onload = function() { ajustarFolhas(); setTimeout(function() { window.print(); }, 400); };
+  </script>
 </body>
 </html>`;
 
@@ -2403,7 +2507,7 @@ function renderBlocoInfracoesPrestador(nome, varDe, varAte) {
           <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Nº infração</th><th class="p-2">Veículo</th><th class="p-2 text-right">Valor</th><th class="p-2">Status</th><th class="p-2">Relatório</th><th class="p-2"></th></tr></thead>
           <tbody class="divide-y divide-slate-800">
             ${linhas.length === 0 ? '<tr><td colspan="7" class="p-3 text-center text-slate-500">Nenhuma infração no período.</td></tr>' :
-              linhas.map(l => `<tr><td class="p-2">${formatarData(l.data)}</td><td class="p-2 font-mono font-bold text-red-300">${vgEscTxt(l.numero_infracao)}</td><td class="p-2 font-mono">${vgEscTxt(l.veiculo_placa || '—')}</td><td class="p-2 text-right font-bold text-amber-300">${_infBrl(l.valor)}</td><td class="p-2"><span class="border rounded px-1.5 py-0.5 text-[10px] font-bold ${_infStatusClasse(l.status)}">${_infStatusLabel(l.status)}</span></td><td class="p-2 font-mono">${vgEscTxt(l.numero_relatorio || '—')}</td><td class="p-2 text-right"><button onclick="gerarReciboInfracoesPdf(['${l.id}'])" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 px-2 py-0.5 rounded font-bold" title="Recibo desta infração (PDF)">📄 Recibo</button></td></tr>`).join('')}
+              linhas.map(l => `<tr><td class="p-2">${formatarData(l.data)}</td><td class="p-2 font-mono font-bold text-red-300">${vgEscTxt(l.numero_infracao)}</td><td class="p-2 font-mono">${vgEscTxt(l.veiculo_placa || '—')}</td><td class="p-2 text-right font-bold text-amber-300">${_infBrl(l.valor)}${_infParcelas(l) > 1 ? `<div class="text-[10px] font-normal text-slate-400">${_infParcelaResumo(l)}</div>` : ''}</td><td class="p-2"><span class="border rounded px-1.5 py-0.5 text-[10px] font-bold ${_infStatusClasse(l.status)}">${_infStatusLabel(l.status)}</span></td><td class="p-2 font-mono">${vgEscTxt(l.numero_relatorio || '—')}</td><td class="p-2 text-right"><button onclick="gerarReciboInfracoesPdf(['${l.id}'])" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 px-2 py-0.5 rounded font-bold" title="Recibo desta infração (PDF)">📄 Recibo</button></td></tr>`).join('')}
           </tbody>
         </table>
       </div>

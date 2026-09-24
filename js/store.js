@@ -3533,7 +3533,12 @@ class Store {
       valor: Math.round((parseFloat(l.valor) || 0) * 100) / 100,
       prestador_nome: String(l.prestador_nome || '').trim().toUpperCase(),
       prestador_tipo: String(l.prestador_tipo || '').trim().toUpperCase() || null,
-      veiculo_placa: String(l.veiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+      veiculo_placa: String(l.veiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, ''),
+      // 6.8.2 (migration 49): parcelamento. Em branco = 1x. As datas e os
+      // valores de cada parcela são calculados na hora (app.js,
+      // _infCronograma), não gravados.
+      parcelas: (l.parcelas === '' || l.parcelas === null || l.parcelas === undefined) ? 1 : Number(l.parcelas),
+      data_primeira_parcela: String(l.data_primeira_parcela || '').slice(0, 10) || null
     }));
     if (!linhas.length) erros.push({ linha: null, msg: 'Inclua ao menos uma infração.' });
 
@@ -3544,6 +3549,8 @@ class Store {
       if (!(l.valor > 0)) erros.push({ linha: l._pos, msg: 'valor precisa ser maior que zero' });
       if (!l.prestador_nome) erros.push({ linha: l._pos, msg: 'prestador em branco' });
       if (!l.veiculo_placa) erros.push({ linha: l._pos, msg: 'veículo em branco' });
+      if (!Number.isInteger(l.parcelas) || l.parcelas < 1 || l.parcelas > 12) erros.push({ linha: l._pos, msg: 'parcelas precisa ser de 1 a 12' });
+      else if (l.parcelas > 1 && !l.data_primeira_parcela) erros.push({ linha: l._pos, msg: 'informe a data da 1ª parcela' });
       if (l.numero_infracao) {
         if (vistos[l.numero_infracao]) {
           erros.push({ linha: l._pos, msg: `número ${l.numero_infracao} repetido na linha ${vistos[l.numero_infracao]}` });
@@ -3590,7 +3597,8 @@ class Store {
     linhas.forEach(l => {
       const campos = {
         data_infracao: l.data_infracao, numero_infracao: l.numero_infracao, valor: l.valor,
-        prestador_nome: l.prestador_nome, prestador_tipo: l.prestador_tipo, veiculo_placa: l.veiculo_placa
+        prestador_nome: l.prestador_nome, prestador_tipo: l.prestador_tipo, veiculo_placa: l.veiculo_placa,
+        parcelas: l.parcelas, data_primeira_parcela: l.data_primeira_parcela
       };
       const atual = l.id ? this.getInfracaoPorId(l.id) : null;
       if (atual && String(atual.relatorio_id) === String(rel.id) && !atual.is_deleted) {

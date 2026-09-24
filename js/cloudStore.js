@@ -3323,7 +3323,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "sync-2min-6.8.1";
+CloudStore.BUILD = "parcelas-infracao-6.8.2";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3377,9 +3377,11 @@ CloudStore.COLUNAS_POR_TABELA = {
   infracoes: {
     texto:    ['numero_infracao', 'prestador_nome', 'prestador_tipo', 'veiculo_placa', 'status',
                'status_alterado_por', 'criado_por', 'atualizado_por', 'deleted_by_nome'],
-    numero:   ['relatorio_id', 'valor', 'recibo_impresso_qtd', 'deleted_by_usuario_id'],
+    // parcelas e data_primeira_parcela: 6.8.2, migration 49.
+    numero:   ['relatorio_id', 'valor', 'recibo_impresso_qtd', 'deleted_by_usuario_id', 'parcelas'],
     booleano: ['is_deleted'],
-    data:     ['data_infracao', 'status_alterado_em', 'recibo_impresso_em', 'criado_em', 'atualizado_em', 'deleted_at']
+    data:     ['data_infracao', 'status_alterado_em', 'recibo_impresso_em', 'criado_em', 'atualizado_em', 'deleted_at',
+               'data_primeira_parcela']
   },
   clientes: {
     texto:    ['codigo_cliente', 'razao_social', 'cnpj', 'cidade', 'uf', 'deleted_by_nome'],
