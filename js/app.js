@@ -11034,7 +11034,8 @@ function renderCdRecepcaoView() {
                  <button onclick="gerarAdiantamentoDivergenciaPdf('${d.id}')" class="bg-amber-500 hover:bg-amber-400 text-slate-950 px-2.5 py-1 rounded font-bold text-[11px] shadow inline-flex items-center gap-1" title="Emitir Adiantamento (PDF)">
                    <span>📄</span> Adiantamento (PDF)
                  </button>` : ''}
-               <span class="text-[10px] text-slate-500">${(d.data_entrada_cd||d.criado_em||'').split('T')[0]}</span>`}
+               <span class="text-[10px] text-slate-500">${(d.data_entrada_cd||d.criado_em||'').split('T')[0]}</span>
+               <button onclick="openCdModal('${d.id}', { edicao: true })" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-2 py-1 rounded border border-slate-600 text-[11px] shadow-sm transition shrink-0" title="Corrigir a conferência (destino, validade, divergência)">✏️</button>`}
           <button onclick="deleteDevolucaoSac('${d.id}')" class="bg-red-950/60 hover:bg-red-900/80 text-red-300 font-bold px-2 py-1 rounded border border-red-800 text-[11px] shadow-sm transition shrink-0" title="Mover para a Lixeira (Soft Delete)">
             🗑️
           </button>
@@ -12226,7 +12227,7 @@ function exportarMedidasDisciplinaresCsv() {
   document.body.removeChild(link);
 }
 
-function openCdModal(devId) {
+function openCdModal(devId, { edicao = false } = {}) {
   const devs = db.getDevolucoes();
   const dev = devs.find(d => d.id == devId);
   if (!dev) return;
@@ -12235,10 +12236,37 @@ function openCdModal(devId) {
 
   const temItens = dev.itens && dev.itens.length > 0;
 
+  // MODO EDIÇÃO (25/09/2026): a conferência já foi confirmada e alguém
+  // errou um campo (o caso que trouxe isto: quantidade recebida errada na
+  // divergência). O modal reabre com o que está gravado — destino, validade
+  // e observação de cada item, e a divergência do último relatório — e o
+  // submit corrige o relatório existente em vez de criar outro.
+  const relAtual = edicao ? relatorioDivergenciaDaDevolucao(devId) : null;
+  const escAttr = v => String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const pre = (item) => {
+    if (!edicao) return { destino: 'ESTOQUE_REUTILIZACAO', validade: '', obs: '', div: null };
+    return {
+      destino: item.destino_item || dev.destino_cd || 'ESTOQUE_REUTILIZACAO',
+      validade: String(item.data_validade || '').split('T')[0],
+      obs: item.observacao || '',
+      div: relAtual ? itemDivergenteCorrespondente(relAtual, item) : null
+    };
+  };
+  const semValidade = d => d === 'AVARIA_DESCARTE' || d === 'RENEGOCIADO_ROTA' || d === 'FALTA_SEM_RETORNO';
+  const opcoesDestino = [
+    ['ESTOQUE_REUTILIZACAO',   '🟢 Reutilização / Estoque'],
+    ['AVARIA_DESCARTE',        '🔴 Avaria / Descarte'],
+    ['DEVOLUCAO_FORNECEDOR',   '🔵 Devolução ao Fornecedor'],
+    ['RETRABALHO_REEMBALAGEM', '🟠 Retrabalho / Reembalagem'],
+    ['PRODUTOS_NEGOCIACAO',    '🟡 Produtos para Negociação'],
+    ['RENEGOCIADO_ROTA',       '🚚 Renegociado em Rota (Não retorna CD)'],
+    ['FALTA_SEM_RETORNO',      '📭 Falta — Não Retorna Produto']
+  ];
+
   const itensHtml = temItens ? `
     <div class="bg-slate-950 p-3 rounded-lg border border-slate-700 space-y-3">
       <div class="font-bold text-emerald-400 text-xs mb-1 uppercase tracking-wider">📦 Defina o destino de cada produto individualmente:</div>
-      ${dev.itens.map((item, idx) => `
+      ${dev.itens.map((item, idx) => { const p = pre(item); return `
         <div class="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-2" id="item-card-${idx}">
           <div class="flex items-center justify-between gap-3 border-b border-slate-800 pb-2">
             <div class="flex-1 text-xs">
@@ -12247,10 +12275,10 @@ function openCdModal(devId) {
             </div>
             <div class="flex gap-2 shrink-0">
               <label class="flex items-center gap-1 text-[11px] cursor-pointer">
-                <input type="radio" name="item-status-${idx}" value="ok" checked class="text-emerald-500" onchange="toggleItemDivergenciaInputs(${idx})"> <span class="text-emerald-300 font-bold">OK</span>
+                <input type="radio" name="item-status-${idx}" value="ok" ${p.div ? '' : 'checked'} class="text-emerald-500" onchange="toggleItemDivergenciaInputs(${idx})"> <span class="text-emerald-300 font-bold">OK</span>
               </label>
               <label class="flex items-center gap-1 text-[11px] cursor-pointer">
-                <input type="radio" name="item-status-${idx}" value="divergente" class="text-red-500" onchange="toggleItemDivergenciaInputs(${idx})"> <span class="text-red-400 font-bold">Divergência</span>
+                <input type="radio" name="item-status-${idx}" value="divergente" ${p.div ? 'checked' : ''} class="text-red-500" onchange="toggleItemDivergenciaInputs(${idx})"> <span class="text-red-400 font-bold">Divergência</span>
               </label>
             </div>
           </div>
@@ -12260,45 +12288,39 @@ function openCdModal(devId) {
             <div>
               <label class="block text-[10px] text-amber-400 font-bold mb-1">Destino do Produto *</label>
               <select id="item-destino-${idx}" onchange="toggleValidadeExigencia(${idx})" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs font-bold">
-                <option value="ESTOQUE_REUTILIZACAO" selected>🟢 Reutilização / Estoque</option>
-                <option value="AVARIA_DESCARTE">🔴 Avaria / Descarte</option>
-                <option value="DEVOLUCAO_FORNECEDOR">🔵 Devolução ao Fornecedor</option>
-                <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
-                <option value="PRODUTOS_NEGOCIACAO">🟡 Produtos para Negociação</option>
-                <option value="RENEGOCIADO_ROTA">🚚 Renegociado em Rota (Não retorna CD)</option>
-                <option value="FALTA_SEM_RETORNO">📭 Falta — Não Retorna Produto</option>
+                ${opcoesDestino.map(([v, l]) => `<option value="${v}" ${p.destino === v ? 'selected' : ''}>${l}</option>`).join('')}
               </select>
             </div>
 
-            <div id="validade-box-${idx}">
+            <div id="validade-box-${idx}" class="${semValidade(p.destino) ? 'opacity-50' : ''}">
               <label class="block text-[10px] text-emerald-400 font-bold mb-1">Data de Validade *</label>
-              <input type="date" id="item-validade-${idx}" required class="w-full bg-slate-800 border border-emerald-600 text-white font-bold rounded p-1.5 text-xs">
+              <input type="date" id="item-validade-${idx}" value="${escAttr(p.validade)}" ${semValidade(p.destino) ? '' : 'required'} class="w-full bg-slate-800 border border-emerald-600 text-white font-bold rounded p-1.5 text-xs">
             </div>
           </div>
 
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Observação do Item (opcional)</label>
-            <input type="text" id="item-obs-geral-${idx}" placeholder="Ex: Lote 45B - Embalagem amassada" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
+            <input type="text" id="item-obs-geral-${idx}" value="${escAttr(p.obs)}" placeholder="Ex: Lote 45B - Embalagem amassada" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
           </div>
 
           <!-- Área expandida de Divergência FÍSICA -->
-          <div id="item-div-box-${idx}" class="hidden pt-2 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950 p-2 rounded">
+          <div id="item-div-box-${idx}" class="${p.div ? '' : 'hidden '}pt-2 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950 p-2 rounded">
             <div>
               <label class="block text-[10px] text-slate-400 font-bold mb-0.5">Qtd Recebida (Esperado: ${item.quantidade})</label>
-              <input type="number" id="item-qtd-rec-${idx}" min="0" max="${item.quantidade}" step="0.01" value="0" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1 text-xs">
+              <input type="number" id="item-qtd-rec-${idx}" min="0" max="${item.quantidade}" step="0.01" value="${p.div ? escAttr(p.div.quantidade_recebida ?? 0) : 0}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1 text-xs">
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 font-bold mb-0.5">Observação da Falta</label>
-              <input type="text" id="item-obs-${idx}" placeholder="Ex: Produto faltante na carga" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
+              <input type="text" id="item-obs-${idx}" value="${escAttr(p.div ? p.div.observacao : '')}" placeholder="Ex: Produto faltante na carga" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
             </div>
           </div>
-        </div>`).join('')}
+        </div>`; }).join('')}
     </div>` : (dev.sem_itens ? `<div class="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 text-xs text-amber-300">⚠️ Sem itens: ${dev.observacao_sem_itens}</div>` : '<div class="text-slate-500 text-xs">Nenhum item para validar.</div>');
 
   modalContainer.innerHTML = `
     <div onclick="event.stopPropagation()" class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-2xl w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
       <div class="flex justify-between items-center border-b border-slate-800 pb-3">
-        <h3 class="font-bold text-white text-base">Recepção no CD • Conferência Item a Item — ${dev.numero_devolucao||dev.numero_protocolo}</h3>
+        <h3 class="font-bold text-white text-base">${edicao ? '✏️ Corrigir Conferência' : 'Recepção no CD • Conferência Item a Item'} — ${dev.numero_devolucao||dev.numero_protocolo}</h3>
         <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-xl leading-none">✕</button>
       </div>
 
@@ -12318,12 +12340,16 @@ function openCdModal(devId) {
         ${renderGaleriaMidia(dev, { titulo: '📎 Histórico de Mídia da Ocorrência (Abertura + Investigação)' })}
       </div>
 
-      <form onsubmit="handleCdModalSubmit(event, '${dev.id}')" class="space-y-4 text-xs">
+      ${edicao ? `<div class="bg-amber-950/40 border border-amber-700/60 rounded-lg p-3 text-[11px] text-amber-200">
+        ✏️ Você está corrigindo uma conferência já confirmada${dev.data_entrada_cd ? ` em ${new Date(dev.data_entrada_cd).toLocaleDateString('pt-BR')}` : ''}. A data de entrada no CD não muda${relAtual ? ', e o relatório de divergência existente é corrigido (não sai um segundo)' : ''}.
+      </div>` : ''}
+
+      <form onsubmit="handleCdModalSubmit(event, '${dev.id}', ${edicao ? 'true' : 'false'})" class="space-y-4 text-xs">
         ${itensHtml}
 
         <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
           <button type="button" onclick="closeModal()" class="bg-slate-800 text-slate-300 font-bold px-4 py-2 rounded">Cancelar</button>
-          <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-2 rounded shadow text-xs">Confirmar Entrada no CD</button>
+          <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-2 rounded shadow text-xs">${edicao ? 'Salvar Correção' : 'Confirmar Entrada no CD'}</button>
         </div>
       </form>
     </div>`;
@@ -12405,7 +12431,26 @@ function getValorUnitarioProduto(item, dev = null) {
   return 0;
 }
 
-function handleCdModalSubmit(e, devId) {
+// Último relatório de divergência da devolução — o mesmo critério que
+// gerarAdiantamentoDivergenciaPdf usa para achar os itens do recibo.
+function relatorioDivergenciaDaDevolucao(devId) {
+  const rels = db.data.relatorios_divergencia || [];
+  return rels.slice().reverse().find(r => String(r.ocorrencia_id) === String(devId)) || null;
+}
+
+// O relatório guarda cópia do item, não o id de itens_devolucao: casa por
+// produto_id e, na falta dele, por código ou descrição.
+function itemDivergenteCorrespondente(rel, item) {
+  const lista = Array.isArray(rel?.itens_divergentes) ? rel.itens_divergentes : [];
+  const cod  = String(item.produto_codigo || item.codigo_produto || '');
+  const desc = String(item.produto_descricao || item.descricao || '').toUpperCase();
+  return lista.find(i => item.produto_id != null && String(i.produto_id) === String(item.produto_id))
+      || lista.find(i => cod && String(i.codigo_produto) === cod)
+      || lista.find(i => desc && String(i.descricao_produto || '').toUpperCase() === desc)
+      || null;
+}
+
+function handleCdModalSubmit(e, devId, edicao = false) {
   e.preventDefault();
   const devs = db.getDevolucoes ? db.getDevolucoes() : [];
   const dev = devs.find(d => d.id == devId) || (db.data.ocorrencias_devolucao || []).find(d => d.id == devId);
@@ -12463,6 +12508,11 @@ function handleCdModalSubmit(e, devId) {
     }
   }
 
+  if (edicao) {
+    salvarCorrecaoConferenciaCd(devId, dev, destinoPrincipal, itensDestinos, itensDivergentes);
+    return;
+  }
+
   db.updateDestinoCd(devId, destinoPrincipal, 'RECEBIDO_CD', itensDestinos);
 
   if (itensDivergentes.length > 0) {
@@ -12492,6 +12542,72 @@ function handleCdModalSubmit(e, devId) {
     alert(`✅ Entrada confirmada no CD!\nDestinação registrada item a item com sucesso.`);
   }
   renderApp();
+}
+
+// Correção de uma conferência já confirmada (botão ✏️ do Histórico de
+// Entradas). Diferenças para a primeira conferência:
+//  - data_entrada_cd fica como está (updateDestinoCd com { edicao: true });
+//  - o relatório de divergência existente é CORRIGIDO no mesmo id, senão o
+//    Financeiro passaria a ver dois relatórios da mesma devolução;
+//  - se a divergência deixou de existir, o relatório sai dos dois lados
+//    (local e nuvem), do mesmo jeito que a exclusão definitiva faz;
+//  - o recibo/relatório só é reemitido se o usuário pedir.
+async function salvarCorrecaoConferenciaCd(devId, dev, destinoPrincipal, itensDestinos, itensDivergentes) {
+  db.data.relatorios_divergencia = db.data.relatorios_divergencia || [];
+  const relAtual = relatorioDivergenciaDaDevolucao(devId);
+  const valorTotalDivergencia = itensDivergentes.reduce((acc, i) => acc + (parseFloat(i.valor_total) || 0), 0);
+  let relFinal = null;
+
+  // Nuvem primeiro, como no hardDelete (store.js): apagar só aqui faria o
+  // pull seguinte trazer o relatório de volta. Se a nuvem recusar, nada é
+  // gravado e o modal continua aberto para tentar de novo.
+  if (itensDivergentes.length === 0 && relAtual
+      && window.cloudStore && typeof window.cloudStore.apagarRegistro === 'function') {
+    const r = await window.cloudStore.apagarRegistro('relatorios_divergencia', relAtual.id);
+    if (!r || !r.success) {
+      alert(`⚠️ A correção NÃO foi salva.\n\nPara retirar a divergência é preciso apagar o relatório antigo na nuvem, e ela não confirmou.\n${(r && r.message) || ''}\n\nTente de novo com o aparelho conectado.`);
+      return;
+    }
+  }
+
+  db.updateDestinoCd(devId, destinoPrincipal, dev?.status_fechamento || 'RECEBIDO_CD', itensDestinos, { edicao: true });
+
+  if (itensDivergentes.length > 0) {
+    if (relAtual) {
+      relAtual.itens_divergentes = itensDivergentes;
+      relAtual.valor_total_divergencia = valorTotalDivergencia;
+      relFinal = relAtual;
+    } else {
+      relFinal = gerarRelatorioDivergencia(devId, itensDivergentes, dev, valorTotalDivergencia);
+      db.data.relatorios_divergencia.push(relFinal);
+    }
+  } else if (relAtual) {
+    db.data.relatorios_divergencia = db.data.relatorios_divergencia.filter(r => r !== relAtual);
+  }
+
+  if (typeof db.logAudit === 'function') {
+    db.logAudit({
+      acao: 'CORRECAO_CONFERENCIA_CD', modulo: 'RETORNO_CD', registro_id: devId,
+      diff: { destinos: itensDestinos, divergencias: itensDivergentes }
+    });
+  }
+  db.save();
+  closeModal();
+  renderApp();
+
+  if (!relFinal) {
+    alert(relAtual
+      ? '✅ Conferência corrigida.\nA divergência foi retirada e o relatório antigo apagado.'
+      : '✅ Conferência corrigida.');
+    return;
+  }
+
+  const valorFmt = valorTotalDivergencia.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  const ehMotorista = String(dev?.tipo_erro || '').toUpperCase().includes('MOTORISTA');
+  const reemitir = confirm(`✅ Conferência corrigida.\n${itensDivergentes.length} item(ns) com divergência — valor apurado: R$ ${valorFmt}.\n\nDeseja reemitir ${ehMotorista ? 'o Recibo de Adiantamento (PDF)' : 'o relatório de divergência'} com os valores corrigidos?`);
+  if (!reemitir) return;
+  if (ehMotorista) gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes, valorTotalDivergencia);
+  else baixarRelatorioDivergencia(relFinal);
 }
 
 function gerarRelatorioDivergencia(devId, itensDivergentes, dev, valorTotalDivergencia = 0) {

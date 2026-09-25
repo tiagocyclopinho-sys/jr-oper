@@ -2253,12 +2253,14 @@ class Store {
     }
   }
 
-  updateDestinoCd(id, destino_cd, status_fechamento, itensDestinos = []) {
+  updateDestinoCd(id, destino_cd, status_fechamento, itensDestinos = [], { edicao = false } = {}) {
     const dev = this.data.ocorrencias_devolucao.find(d => d.id == id);
     if (dev) {
       dev.destino_cd = destino_cd;
       dev.status_fechamento = status_fechamento;
-      dev.data_entrada_cd = agoraIsoBrasilia();
+      // Na correção de uma conferência já feita, a data de entrada é a da
+      // entrada de verdade — mexer nela jogaria a devolução em outro período.
+      if (!edicao || !dev.data_entrada_cd) dev.data_entrada_cd = agoraIsoBrasilia();
       // Mesma classe do bug da ação do gestor (11/09/2026): sem carimbo, a
       // recepção no CD perdia para qualquer edição concorrente da devolução.
       this.carimbarEdicao('ocorrencias_devolucao', dev);
