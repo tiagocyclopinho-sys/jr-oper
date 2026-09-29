@@ -7725,6 +7725,7 @@ function renderSacAberturaView() {
   uploadedVideosBase64 = [];
   uploadedFotoBase64 = '';
   uploadedVideoBase64 = '';
+  window._sacCargaAvisada = '';  // formulário novo: a mesma carga volta a avisar
 
   // Consolida cargas da Largada (Controle de Viagens) + Cadastros Mestre
   const cargasViagens = (db.getControleViagens && db.getControleViagens()) || [];
@@ -7776,7 +7777,7 @@ function renderSacAberturaView() {
             <div>
               <label class="block text-xs font-semibold text-slate-300 mb-1">Número da Carga (Validação da Largada) *</label>
               <input type="text" id="sac-carga-numero" list="cargas-list" required placeholder="Digite ou selecione o Nº da Carga (Ex: 43111)" 
-                oninput="forcarMaiuscula(this); onSacCargaSelect(this.value)" onchange="onSacCargaSelect(this.value)"
+                oninput="forcarMaiuscula(this); onSacCargaSelect(this.value)" onchange="onSacCargaSelect(this.value); avisarDevolucoesMesmaCarga(this.value)"
                 class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded-lg p-2 text-xs focus:border-emerald-500 focus:outline-none">
               <datalist id="cargas-list">
                 ${listaCargasValidadas.map(c => `<option value="${c.carga}">Carga Nº ${c.carga} | Rota: ${c.rota || 'Sem Rota'}${c.placa ? ` | ${c.placa}` : ''}</option>`).join('')}
@@ -9305,6 +9306,75 @@ function checkCargaExistente(val) {
   } else {
     if (hint) hint.classList.add('hidden');
   }
+}
+
+// DEVOLUÇÃO JÁ ABERTA PARA A MESMA CARGA (6.8.4, 29/09/2026).
+// Caso real: abriram uma devolução de FALTA e, quando apareceu a SOBRA da mesma
+// carga, abriram outra em vez de corrigir a primeira — e o colaborador levou
+// dois erros por um erro de atendimento. A separação é POR CARGA (5cx de um
+// cliente + 4cx de outro saem como 9cx), então o aviso é pela carga, com
+// devoluções de TODOS os clientes e em QUALQUER status, inclusive concluídas.
+// É só aviso: quem decide entre corrigir a existente ou abrir outra é a pessoa.
+// Mostra uma vez por número digitado (window._sacCargaAvisada) para não
+// reabrir o modal a cada blur no mesmo campo.
+function avisarDevolucoesMesmaCarga(cargaNum) {
+  const cNum = String(cargaNum || '').trim().toUpperCase();
+  if (!cNum || window._sacCargaAvisada === cNum) return;
+
+  const devs = ((db.getDevolucoes && db.getDevolucoes()) || (db.data && db.data.ocorrencias_devolucao) || [])
+    .filter(d => String(d.carga_numero || d.carga || '').trim().toUpperCase() === cNum)
+    .sort((a, b) => String(b.criado_em || '').localeCompare(String(a.criado_em || '')));
+  if (!devs.length) return;
+
+  const container = document.getElementById('modal-container');
+  if (!container) return;
+  window._sacCargaAvisada = cNum;
+
+  const esc = v => String(v === undefined || v === null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const statusDev = d => {
+    if (d.status_gestao === 'CONCLUIDO' || d.status_fechamento === 'CONCLUIDO') return { txt: 'CONCLUÍDA', cls: 'text-emerald-400 border-emerald-700' };
+    if ((d.status_fechamento || 'PENDENTE_FISICO') === 'PENDENTE_FISICO') return { txt: 'AGUARDANDO CD', cls: 'text-amber-400 border-amber-700' };
+    return { txt: 'EM ANÁLISE', cls: 'text-sky-400 border-sky-700' };
+  };
+  const todosItens = (db.data && db.data.itens_devolucao) || [];
+
+  const cards = devs.map(d => {
+    const st = statusDev(d);
+    const itens = (d.itens && d.itens.length) ? d.itens : todosItens.filter(i => i.ocorrencia_devolucao_id == d.id);
+    const listaItens = itens.slice(0, 5).map(i => {
+      const p = getDadosProduto(i);
+      return `<li>${esc(p.codigo)} — ${esc(p.descricao)} · <b>${esc(i.quantidade)}</b>${i.motivo_item ? ` · ${esc(i.motivo_item)}` : ''}</li>`;
+    }).join('');
+    const maisItens = itens.length > 5 ? `<li class="text-slate-500">+ ${itens.length - 5} item(ns)</li>` : '';
+    return `
+      <div class="bg-slate-800/60 border border-slate-700 rounded-lg p-3 space-y-1.5">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <span class="font-black text-emerald-400 text-xs">${esc(d.numero_devolucao || d.numero_protocolo)}</span>
+          <span class="text-[10px] font-bold border rounded px-1.5 py-0.5 ${st.cls}">${st.txt}</span>
+        </div>
+        <div class="text-[11px] text-slate-200"><b>${esc(d.cliente_nome || 'CLIENTE NÃO INFORMADO')}</b>${d.nota_fiscal ? ` · NF ${esc(d.nota_fiscal)}` : ''}</div>
+        <div class="text-[11px] text-slate-400">Motivo: <b class="text-slate-200">${esc(d.motivo_reclamado || '—')}</b> · aberta em ${formatarData(d.criado_em || d.data)}</div>
+        ${listaItens ? `<ul class="text-[10px] text-slate-400 list-disc pl-4 space-y-0.5">${listaItens}${maisItens}</ul>` : ''}
+        <div class="flex justify-end pt-1">
+          <button type="button" onclick="closeModal(); editarDevolucaoSacModal('${esc(d.id)}')" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1 rounded text-[11px] shadow">✏️ Editar esta devolução</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="bg-slate-900 border border-amber-700/70 rounded-2xl max-w-2xl w-full p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-extrabold text-amber-300 flex items-center gap-2">⚠️ Carga ${esc(cNum)} já tem ${devs.length} devolução(ões)</h3>
+        <button type="button" onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+      </div>
+      <p class="text-xs text-slate-300">A separação é conferida por carga. Se esta ocorrência completa uma das abaixo (ex.: uma <b>Falta</b> que depois virou <b>Sobra</b>), corrija a existente em vez de abrir outra — duas devoluções para o mesmo erro geram dois erros para o colaborador.</p>
+      <div class="space-y-2">${cards}</div>
+      <div class="flex justify-end pt-1 border-t border-slate-800">
+        <button type="button" onclick="closeModal()" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-1.5 rounded text-xs mt-3">➕ Seguir abrindo uma nova</button>
+      </div>
+    </div>`;
+  container.classList.remove('hidden');
 }
 
 function onSacCargaSelect(cargaNum) {
