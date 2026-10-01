@@ -3323,7 +3323,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "aviso-devolucao-mesma-carga-6.8.4";
+CloudStore.BUILD = "baixa-destinacao-6.8.5";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3501,8 +3501,10 @@ CloudStore.COLUNAS_POR_TABELA = {
   // a tabela depois do deploy. Espelha o banco coluna a coluna (schema.sql +
   // migration 47).
   itens_avulsos_destinacao: {
+    // baixa_*: 6.8.5, migration 50 — todas VARCHAR/TEXT de propósito.
     texto:    ['produto_codigo', 'produto_descricao', 'destino_item', 'observacao',
-               'status_negociacao', 'motivo_avulso', 'criado_por'],
+               'status_negociacao', 'motivo_avulso', 'criado_por',
+               'baixa_acao', 'baixa_data', 'baixa_em', 'baixa_por', 'baixa_obs'],
     numero:   ['quantidade', 'fotos_pendentes'],
     booleano: ['is_deleted'],
     data:     ['data_validade', 'data_negociacao', 'criado_em', 'atualizado_em', 'deleted_at'],

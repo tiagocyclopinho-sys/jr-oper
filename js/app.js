@@ -10909,20 +10909,325 @@ function getItensDestinadosFiltrados() {
     });
   });
 
+  // BAIXA (6.8.5). A destinação diz para onde o item vai dentro do CD; a
+  // baixa diz que a ação foi feita. Cada item vira uma ou mais "partes"
+  // (o item inteiro, ou cada divisão + o que sobrou sem dividir), e o item
+  // só sai da fila quando TODAS as partes têm baixa.
+  todosItensDestinados.forEach(item => {
+    item._partes = partesDoItemDestino(item);
+    item._pendente = item._partes.some(p => !p.baixa);
+  });
+  const pendentes = todosItensDestinados.filter(i => i._pendente);
+
+  const casaProduto = (item, termoBruto) => {
+    if (!termoBruto) return true;
+    const termo = termoBruto.toUpperCase();
+    const cod = String(item.produto_codigo || item.codigo || '').toUpperCase();
+    const desc = String(item.produto_descricao || item.descricao || '').toUpperCase();
+    return cod.includes(termo) || desc.includes(termo);
+  };
+
   const fCdDestinoProduto = window._cdDestinoFiltroProduto || '';
   const fCdDestinoTipo    = window._cdDestinoFiltroTipo    || '';
-  const itensDestinadosFiltrados = todosItensDestinados.filter(item => {
-    if (fCdDestinoProduto) {
-      const termo = fCdDestinoProduto.toUpperCase();
-      const cod = String(item.produto_codigo || item.codigo || '').toUpperCase();
-      const desc = String(item.produto_descricao || item.descricao || '').toUpperCase();
-      if (!cod.includes(termo) && !desc.includes(termo)) return false;
-    }
+  const itensDestinadosFiltrados = pendentes.filter(item => {
+    if (!casaProduto(item, fCdDestinoProduto)) return false;
     if (fCdDestinoTipo && item.destino !== fCdDestinoTipo) return false;
     return true;
   });
 
-  return { todosItensDestinados, itensDestinadosFiltrados };
+  // Lista de baixas: uma linha por PARTE baixada (um item dividido pode ter
+  // metade descartada hoje e metade ainda na fila).
+  const baixasTodas = [];
+  todosItensDestinados.forEach(item => {
+    item._partes.filter(p => p.baixa).forEach(p => baixasTodas.push({ item, parte: p }));
+  });
+  baixasTodas.sort((a, b) => String(b.parte.baixa.data || '').localeCompare(String(a.parte.baixa.data || '')));
+
+  const fBxBusca = window._cdBaixaBusca   || '';
+  const fBxAcao  = window._cdBaixaAcao    || '';
+  const fBxDe    = window._cdBaixaDataDe  || '';
+  const fBxAte   = window._cdBaixaDataAte || '';
+  const baixasFiltradas = baixasTodas.filter(({ item, parte }) => {
+    if (!casaProduto(item, fBxBusca) && !String(item.protocolo || '').toUpperCase().includes(fBxBusca.toUpperCase())) return false;
+    if (fBxAcao && parte.baixa.acao !== fBxAcao) return false;
+    const dt = parte.baixa.data || '';
+    if (fBxDe && (!dt || dt < fBxDe)) return false;
+    if (fBxAte && (!dt || dt > fBxAte)) return false;
+    return true;
+  });
+
+  // todosItensDestinados = só a FILA (pendentes). É o que o contador da
+  // subaba, a tabela e as exportações da Destinação sempre quiseram dizer.
+  return { todosItensDestinados: pendentes, itensDestinadosFiltrados, baixasTodas, baixasFiltradas };
+}
+
+// ===== BAIXA DA DESTINAÇÃO (6.8.5, migration 50) =====
+const ACOES_BAIXA_DESTINO = {
+  DESCARTADO:           '🗑️ Descartado',
+  VENDIDO:              '💰 Vendido',
+  CONSUMO_INTERNO:      '🍴 Consumo interno',
+  REINTEGRADO_ESTOQUE:  '📦 Reintegrado ao estoque',
+  REEMBALADO_ESTOQUE:   '♻️ Reembalado e reintegrado',
+  DEVOLVIDO_FORNECEDOR: '🔵 Devolvido ao fornecedor',
+  NAO_RETORNOU:         '📭 Não retornou ao CD'
+};
+
+function formatarAcaoBaixaLabel(acao) {
+  return ACOES_BAIXA_DESTINO[acao] || acao || '—';
+}
+
+// Ação que o modal já traz marcada, conforme o destino da parte.
+function acaoBaixaSugerida(destino) {
+  switch (destino) {
+    case 'AVARIA_DESCARTE':        return 'DESCARTADO';
+    case 'VENDIDO':
+    case 'PRODUTOS_NEGOCIACAO':    return 'VENDIDO';
+    case 'RETRABALHO_REEMBALAGEM': return 'REEMBALADO_ESTOQUE';
+    case 'DEVOLUCAO_FORNECEDOR':   return 'DEVOLVIDO_FORNECEDOR';
+    default:                       return 'REINTEGRADO_ESTOQUE';
+  }
+}
+
+// A baixa de uma parte (item inteiro ou divisão), ou null se ainda está na
+// fila. Além da baixa registrada pelo botão, alguns estados JÁ SÃO a ação
+// concluída e saem da fila sozinhos, sem ninguém precisar clicar de novo:
+//   - negociação marcada como Descartado / Vendido / Consumo interno;
+//   - destino Vendido;
+//   - Falta sem retorno e Renegociado em rota (o produto nunca entrou no
+//     CD — não há o que destinar).
+// Essas baixas "automáticas" não têm autor; a data é a da negociação.
+function baixaDaParte(parte, destino) {
+  if (parte.baixa_acao) {
+    return { acao: parte.baixa_acao, data: parte.baixa_data || String(parte.baixa_em || '').slice(0, 10) || null,
+             por: parte.baixa_por || null, obs: parte.baixa_obs || '', automatica: false };
+  }
+  const dataNeg = String(parte.data_negociacao || '').slice(0, 10) || null;
+  const auto = acao => ({ acao, data: dataNeg, por: null, obs: '', automatica: true });
+  switch (parte.status_negociacao) {
+    case 'DESCARTADO':      return auto('DESCARTADO');
+    case 'VENDA_NEGOCIADA': return auto('VENDIDO');
+    case 'ENVIADO_CONSUMO': return auto('CONSUMO_INTERNO');
+  }
+  if (destino === 'VENDIDO') return auto('VENDIDO');
+  if (destino === 'FALTA_SEM_RETORNO' || destino === 'RENEGOCIADO_ROTA') {
+    return { acao: 'NAO_RETORNOU', data: null, por: null, obs: '', automatica: true };
+  }
+  return null;
+}
+
+// Item sem divisão = uma parte (o próprio item). Item dividido = cada
+// divisão + o restante não dividido, que segue o destino do item e usa os
+// campos de baixa do próprio item.
+function partesDoItemDestino(item) {
+  const divs = Array.isArray(item.divisoes_destino) ? item.divisoes_destino : [];
+  const qtdTotal = parseFloat(item.quantidade) || 0;
+  if (divs.length === 0) {
+    return [{ tipo: 'item', divId: '', quantidade: qtdTotal, destino: item.destino, baixa: baixaDaParte(item, item.destino) }];
+  }
+  const partes = divs.map(dv => ({
+    tipo: 'divisao', divId: dv.id, quantidade: parseFloat(dv.quantidade) || 0, destino: dv.destino,
+    observacao: dv.observacao || '', baixa: baixaDaParte(dv, dv.destino)
+  }));
+  const restante = qtdTotal - divs.reduce((s, d) => s + (parseFloat(d.quantidade) || 0), 0);
+  if (restante > 0.0001) {
+    // O restante não herda o status de negociação do item: quem dividiu
+    // decidiu o desfecho por divisão. Só a baixa explícita do item conta.
+    const baixaRest = item.baixa_acao ? baixaDaParte({ ...item, status_negociacao: null }, item.destino)
+                                      : baixaDaParte({ status_negociacao: null }, item.destino);
+    partes.push({ tipo: 'restante', divId: '', quantidade: restante, destino: item.destino, baixa: baixaRest });
+  }
+  return partes;
+}
+
+// Onde gravar a baixa: no registro real do item, ou dentro da divisão.
+function _alvoDaBaixa(ref, divId) {
+  if (!divId) return ref.raw;
+  return (Array.isArray(ref.raw.divisoes_destino) ? ref.raw.divisoes_destino : [])
+    .find(dv => String(dv.id) === String(divId)) || null;
+}
+
+function abrirModalBaixaItem(itemId, devId, divId) {
+  const ref = resolverItemDestino(itemId, devId);
+  if (!ref) { alert('Item não encontrado.'); return; }
+  const alvo = _alvoDaBaixa(ref, divId);
+  if (!alvo) { alert('Divisão não encontrada.'); return; }
+  const destino = divId ? alvo.destino : (ref.raw.destino_item || ref.dev?.destino_cd || 'ESTOQUE_REUTILIZACAO');
+  let qtd = divId ? alvo.quantidade : ref.raw.quantidade;
+  if (!divId && Array.isArray(ref.raw.divisoes_destino) && ref.raw.divisoes_destino.length) {
+    qtd = (parseFloat(ref.raw.quantidade) || 0) - ref.raw.divisoes_destino.reduce((s, d) => s + (parseFloat(d.quantidade) || 0), 0);
+  }
+  _renderModalBaixa({
+    titulo: `${ref.item.produto_codigo ? `[${ref.item.produto_codigo}] ` : ''}${ref.item.produto_descricao || 'Produto'}`,
+    subtitulo: `${qtd} un · ${formatarDestinoLabel(destino)}${divId ? ' · parte de item dividido' : ''}`,
+    sugerida: acaoBaixaSugerida(destino),
+    onsubmit: `handleSalvarBaixaItem(event, '${itemId}', '${devId}', '${divId || ''}')`
+  });
+}
+
+function _renderModalBaixa({ titulo, subtitulo, sugerida, onsubmit }) {
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+  const opcoes = Object.entries(ACOES_BAIXA_DESTINO).filter(([k]) => k !== 'NAO_RETORNOU');
+  modal.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-emerald-800/70 rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4 animate-fadeIn">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-sm font-extrabold text-white flex items-center gap-2">✅ Dar Baixa</h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+        </div>
+        <div class="p-2 bg-slate-950 border border-slate-800 rounded text-xs">
+          <div class="font-bold text-emerald-400">${titulo}</div>
+          <div class="text-slate-400 mt-0.5">${subtitulo}</div>
+        </div>
+        <p class="text-[11px] text-slate-400 -mt-1">A baixa registra que a ação foi feita. O item sai da Destinação de Itens e passa para <b>Baixas Realizadas</b>, onde pode ser consultado ou desfeito.</p>
+        <form onsubmit="${onsubmit}" class="space-y-3 text-xs">
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Ação realizada *</label>
+            <select id="baixa-acao" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+              ${opcoes.map(([k, v]) => `<option value="${k}" ${k === sugerida ? 'selected' : ''}>${v}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Data da ação *</label>
+            <input type="date" id="baixa-data" required value="${hojeIsoBrasilia()}" max="${hojeIsoBrasilia()}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+          </div>
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Observação</label>
+            <input type="text" id="baixa-obs" placeholder="Ex: Vendido para funcionário, descarte com coleta..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
+          </div>
+          <div class="pt-2 flex gap-2">
+            <button type="button" onclick="closeModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg">Cancelar</button>
+            <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg shadow">✅ Confirmar Baixa</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+
+function _lerFormBaixa() {
+  const acao = document.getElementById('baixa-acao')?.value || '';
+  const data = document.getElementById('baixa-data')?.value || '';
+  const obs = (document.getElementById('baixa-obs')?.value || '').trim();
+  if (!acao || !/^\d{4}-\d{2}-\d{2}$/.test(data)) { alert('⚠️ Informe a ação e a data.'); return null; }
+  return { acao, data, obs };
+}
+
+function _gravarBaixa(alvo, { acao, data, obs }) {
+  alvo.baixa_acao = acao;
+  alvo.baixa_data = data;
+  alvo.baixa_em = agoraIsoBrasilia();
+  alvo.baixa_por = db.currentUser ? db.currentUser.nome : 'SISTEMA';
+  alvo.baixa_obs = obs;
+}
+
+function handleSalvarBaixaItem(e, itemId, devId, divId) {
+  e.preventDefault();
+  const form = _lerFormBaixa();
+  if (!form) return;
+  const ref = resolverItemDestino(itemId, devId);
+  const alvo = ref && _alvoDaBaixa(ref, divId);
+  if (!alvo) { alert('Item não encontrado para dar baixa.'); return; }
+  _gravarBaixa(alvo, form);
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
+  const salvou = db.save();
+  closeModal();
+  showToast(salvou ? `✅ Baixa registrada: ${formatarAcaoBaixaLabel(form.acao)}` : 'Não foi possível salvar a baixa neste dispositivo.', salvou ? 'success' : 'error');
+  renderApp();
+}
+
+// ---- Baixa em lote (checkbox da tabela) ----
+window._cdBaixaSelecao = window._cdBaixaSelecao || new Set();
+function _chaveSelecaoBaixa(itemId, devId) { return `${devId}|${itemId}`; }
+
+function toggleSelecaoBaixa(itemId, devId, marcado) {
+  const k = _chaveSelecaoBaixa(itemId, devId);
+  if (marcado) window._cdBaixaSelecao.add(k); else window._cdBaixaSelecao.delete(k);
+  renderApp();
+}
+
+function toggleSelecaoBaixaTodos(marcado) {
+  const { itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+  itensDestinadosFiltrados
+    .filter(i => !(Array.isArray(i.divisoes_destino) && i.divisoes_destino.length))
+    .forEach(i => {
+      const k = _chaveSelecaoBaixa(i.id, i.devId);
+      if (marcado) window._cdBaixaSelecao.add(k); else window._cdBaixaSelecao.delete(k);
+    });
+  renderApp();
+}
+
+// A seleção só vale para o que ainda está na fila e visível no filtro.
+function _selecaoBaixaValida() {
+  const { itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+  return itensDestinadosFiltrados.filter(i =>
+    !(Array.isArray(i.divisoes_destino) && i.divisoes_destino.length) &&
+    window._cdBaixaSelecao.has(_chaveSelecaoBaixa(i.id, i.devId)));
+}
+
+function abrirModalBaixaLote() {
+  const sel = _selecaoBaixaValida();
+  if (sel.length === 0) { alert('Selecione ao menos um item na lista.'); return; }
+  const destinos = [...new Set(sel.map(i => i.destino))];
+  _renderModalBaixa({
+    titulo: `${sel.length} item(ns) selecionado(s)`,
+    subtitulo: destinos.map(formatarDestinoLabel).join(' · '),
+    sugerida: destinos.length === 1 ? acaoBaixaSugerida(destinos[0]) : 'DESCARTADO',
+    onsubmit: 'handleSalvarBaixaLote(event)'
+  });
+}
+
+function handleSalvarBaixaLote(e) {
+  e.preventDefault();
+  const form = _lerFormBaixa();
+  if (!form) return;
+  const sel = _selecaoBaixaValida();
+  let n = 0;
+  sel.forEach(i => {
+    const ref = resolverItemDestino(i.id, i.devId);
+    if (!ref) return;
+    _gravarBaixa(ref.raw, form);
+    db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
+    n++;
+  });
+  window._cdBaixaSelecao.clear();
+  const salvou = db.save();
+  closeModal();
+  showToast(salvou ? `✅ Baixa registrada em ${n} item(ns): ${formatarAcaoBaixaLabel(form.acao)}` : 'Não foi possível salvar as baixas neste dispositivo.', salvou ? 'success' : 'error');
+  renderApp();
+}
+
+// Desfazer: o item volta para a fila. Baixa automática (pelo status de
+// negociação) volta o status para "Em Negociação" — e o destino Vendido,
+// que a graduação criou, volta a ser Produtos para Negociação.
+function desfazerBaixaItem(itemId, devId, divId) {
+  if (!confirm('Desfazer a baixa? O item volta para a Destinação de Itens.')) return;
+  const ref = resolverItemDestino(itemId, devId);
+  const alvo = ref && _alvoDaBaixa(ref, divId);
+  if (!alvo) { alert('Item não encontrado.'); return; }
+  if (alvo.baixa_acao) {
+    alvo.baixa_acao = null;
+    alvo.baixa_data = null;
+    alvo.baixa_em = null;
+    alvo.baixa_por = null;
+    alvo.baixa_obs = null;
+  } else {
+    if (['DESCARTADO', 'VENDA_NEGOCIADA', 'ENVIADO_CONSUMO'].includes(alvo.status_negociacao)) alvo.status_negociacao = 'EM_NEGOCIACAO';
+    if (divId) { if (alvo.destino === 'VENDIDO') alvo.destino = 'PRODUTOS_NEGOCIACAO'; }
+    else if (alvo.destino_item === 'VENDIDO') alvo.destino_item = 'PRODUTOS_NEGOCIACAO';
+  }
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
+  const salvou = db.save();
+  showToast(salvou ? '↩️ Baixa desfeita — item de volta à Destinação.' : 'Não foi possível salvar neste dispositivo.', salvou ? 'success' : 'error');
+  renderApp();
+}
+
+function limparFiltrosBaixaCd() {
+  window._cdBaixaBusca = '';
+  window._cdBaixaAcao = '';
+  window._cdBaixaDataDe = '';
+  window._cdBaixaDataAte = '';
+  renderApp();
 }
 
 // ===== MÓDULO: RECEPÇÃO NO CD =====
@@ -11035,7 +11340,11 @@ function renderCdRecepcaoView() {
   if (fRota)    historico = historico.filter(d => (d.carga_rota||'').toLowerCase().includes(fRota.toLowerCase()));
   if (fCarga)   historico = historico.filter(d => String(d.carga_numero||'').includes(fCarga));
 
-  const { todosItensDestinados, itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+  const { todosItensDestinados, itensDestinadosFiltrados, baixasTodas, baixasFiltradas } = getItensDestinadosFiltrados();
+  // Seleção do lote: só conta o que ainda está na fila e visível no filtro.
+  const selecionaveis = itensDestinadosFiltrados.filter(i => !(Array.isArray(i.divisoes_destino) && i.divisoes_destino.length));
+  const qtdSelecionados = selecionaveis.filter(i => window._cdBaixaSelecao.has(_chaveSelecaoBaixa(i.id, i.devId))).length;
+  const todosSelecionados = selecionaveis.length > 0 && qtdSelecionados === selecionaveis.length;
   const fCdDestinoProduto = window._cdDestinoFiltroProduto || '';
   const fCdDestinoTipo    = window._cdDestinoFiltroTipo    || '';
 
@@ -11131,6 +11440,9 @@ function renderCdRecepcaoView() {
           </button>
           <button onclick="switchCdSubTab('destinacao')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeCdSubTab === 'destinacao' ? 'bg-emerald-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
             <span>📋</span> Destinação de Itens (${todosItensDestinados.length})
+          </button>
+          <button onclick="switchCdSubTab('baixas')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeCdSubTab === 'baixas' ? 'bg-sky-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+            <span>✅</span> Baixas Realizadas (${baixasTodas.length})
           </button>
         </div>
       </div>
@@ -11242,7 +11554,7 @@ function renderCdRecepcaoView() {
             </table>
           </div>
         </div>`
-      : `
+      : activeCdSubTab === 'baixas' ? renderCdBaixasPainel(baixasTodas, baixasFiltradas) : `
         <!-- SUBABA 2: EVIDENCIAÇÃO DE DESTINAÇÃO DE PRODUTOS POR ITEM -->
         <div class="bg-slate-900 border border-emerald-900/60 rounded-xl overflow-hidden shadow-2xl space-y-4 p-5">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
@@ -11250,7 +11562,7 @@ function renderCdRecepcaoView() {
               <h3 class="font-bold text-white text-sm flex items-center gap-2">
                 <span>📋</span> Quadro Geral de Destinação dos Produtos (Item a Item)
               </h3>
-              <p class="text-xs text-slate-400">Listagem completa dos itens recebidos com data de validade, observações e marcações de negociação</p>
+              <p class="text-xs text-slate-400">Itens aguardando a ação no CD. Concluída a ação (descarte, venda, reintegração), dê <b>baixa</b>: o item sai daqui e vai para <b>Baixas Realizadas</b>.</p>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
               <button onclick="abrirModalItemAvulso()" class="bg-violet-700 hover:bg-violet-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Adicionar item sem devolução associada (outras formas de avaria)">
@@ -11282,10 +11594,20 @@ function renderCdRecepcaoView() {
             </select>
           </div>
 
+          ${qtdSelecionados > 0 ? `
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-950/50 border border-emerald-700 rounded-lg px-3 py-2">
+            <span class="text-xs text-emerald-200 font-bold">${qtdSelecionados} item(ns) selecionado(s)</span>
+            <div class="flex gap-2">
+              <button onclick="window._cdBaixaSelecao.clear(); renderApp()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold px-3 py-1.5 rounded-lg text-xs">Limpar seleção</button>
+              <button onclick="abrirModalBaixaLote()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow">✅ Dar baixa nos selecionados</button>
+            </div>
+          </div>` : ''}
+
           <div class="overflow-x-auto rounded-xl border border-slate-800">
             <table class="w-full text-left text-xs text-slate-300 border-collapse">
               <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] border-b border-slate-800">
                 <tr>
+                  <th class="p-3 w-8"><input type="checkbox" ${todosSelecionados ? 'checked' : ''} ${selecionaveis.length ? '' : 'disabled'} onchange="toggleSelecaoBaixaTodos(this.checked)" title="Selecionar todos os itens visíveis (itens divididos ficam de fora: a baixa deles é por parte)" class="accent-emerald-500"></th>
                   <th class="p-3">Produto</th>
                   <th class="p-3 text-center">Quantidade</th>
                   <th class="p-3">Destino do Produto</th>
@@ -11297,7 +11619,7 @@ function renderCdRecepcaoView() {
               </thead>
               <tbody class="divide-y divide-slate-800 text-xs">
                 ${itensDestinadosFiltrados.length === 0
-                  ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">${todosItensDestinados.length === 0 ? 'Nenhum item destinado até o momento.' : 'Nenhum item encontrado para o filtro aplicado.'}</td></tr>`
+                  ? `<tr><td colspan="8" class="p-6 text-center text-slate-500">${todosItensDestinados.length === 0 ? '✅ Nenhum item aguardando destinação.' : 'Nenhum item encontrado para o filtro aplicado.'}</td></tr>`
                   : itensDestinadosFiltrados.map(item => {
                     const isNegociacao = item.destino === 'PRODUTOS_NEGOCIACAO';
                     const negociacaoBadges = {
@@ -11325,6 +11647,7 @@ function renderCdRecepcaoView() {
 
                     return `
                       <tr class="hover:bg-slate-800/40">
+                        <td class="p-3 w-8">${temDivisoes ? '' : `<input type="checkbox" ${window._cdBaixaSelecao.has(_chaveSelecaoBaixa(item.id, item.devId)) ? 'checked' : ''} onchange="toggleSelecaoBaixa('${item.id}', '${item.devId}', this.checked)" class="accent-emerald-500">`}</td>
                         <td class="p-3">
                           <div class="font-bold text-white">${item.produto_codigo ? `<span class="text-emerald-400 font-mono">[${item.produto_codigo}]</span> ` : ''}${item.produto_descricao || 'Produto'}</div>
                           <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}</div>${fotosHtml}
@@ -11334,7 +11657,12 @@ function renderCdRecepcaoView() {
                           ${temDivisoes
                             ? `<div class="space-y-0.5">
                                  <span class="inline-block bg-violet-950 text-violet-300 border border-violet-700 px-1.5 py-0.5 rounded text-[9px] font-bold mb-0.5">🔀 Dividido</span>
-                                 ${item.divisoes_destino.map(dv => `<div class="text-[10px] text-slate-300">${dv.quantidade} → ${formatarDestinoLabel(dv.destino)}</div>`).join('')}
+                                 ${item._partes.map(pt => `<div class="text-[10px] ${pt.baixa ? 'text-slate-500' : 'text-slate-300'} flex items-center gap-1 flex-wrap">
+                                   <span>${pt.quantidade} → ${formatarDestinoLabel(pt.destino)}${pt.tipo === 'restante' ? ' <i>(não dividido)</i>' : ''}</span>
+                                   ${pt.baixa
+                                     ? `<span class="text-sky-300 font-bold">✔ ${formatarAcaoBaixaLabel(pt.baixa.acao)}</span>`
+                                     : `<button onclick="abrirModalBaixaItem('${item.id}', '${item.devId}', '${pt.divId}')" class="bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Dar baixa nesta parte">✅ Baixa</button>`}
+                                 </div>`).join('')}
                                </div>`
                             : formatarDestinoLabel(item.destino)}
                         </td>
@@ -11355,6 +11683,7 @@ function renderCdRecepcaoView() {
                         </td>
                         <td class="p-3 text-center">
                           <div class="flex items-center justify-center gap-1.5 flex-wrap">
+                            ${temDivisoes ? '' : `<button onclick="abrirModalBaixaItem('${item.id}', '${item.devId}', '')" class="bg-emerald-800/70 hover:bg-emerald-700 text-emerald-100 border border-emerald-600 px-2 py-1 rounded text-[10px] font-bold transition" title="Registrar que a ação foi feita e tirar o item da fila">✅ Dar baixa</button>`}
                             <button onclick="openEditarItemDestinoModal('${item.id}', '${item.devId}')" class="bg-blue-900/60 hover:bg-blue-800 text-blue-200 border border-blue-700 px-2 py-1 rounded text-[10px] font-bold transition">✏️ Editar</button>
                             <button onclick="abrirModalDivisaoDestino('${item.id}', '${item.devId}')" class="bg-violet-900/60 hover:bg-violet-800 text-violet-200 border border-violet-700 px-2 py-1 rounded text-[10px] font-bold transition">🔀 Dividir</button>
                             ${isAvulso ? `<button onclick="adicionarFotoItemAvulso('${item.id}')" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 px-2 py-1 rounded text-[10px] font-bold transition" title="Anexar foto da avaria a este item">📷 Foto</button>` : ''}
@@ -11368,6 +11697,179 @@ function renderCdRecepcaoView() {
           </div>
         </div>`}
     </div>`;
+}
+
+// Subaba 3 (6.8.5): o que já saiu da Destinação — descartado, vendido,
+// consumido, reintegrado. Uma linha por parte baixada.
+function renderCdBaixasPainel(baixasTodas, baixasFiltradas) {
+  const fBxBusca = window._cdBaixaBusca   || '';
+  const fBxAcao  = window._cdBaixaAcao    || '';
+  const fBxDe    = window._cdBaixaDataDe  || '';
+  const fBxAte   = window._cdBaixaDataAte || '';
+  const filtroAtivo = !!(fBxBusca || fBxAcao || fBxDe || fBxAte);
+
+  const totais = {};
+  baixasFiltradas.forEach(({ parte }) => {
+    const t = totais[parte.baixa.acao] || (totais[parte.baixa.acao] = { linhas: 0, qtd: 0 });
+    t.linhas++;
+    t.qtd += parte.quantidade || 0;
+  });
+  const fmtQtd = n => (Math.round(n * 100) / 100).toLocaleString('pt-BR');
+  const fmtData = iso => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso)) ? iso.slice(0, 10).split('-').reverse().join('/') : '—';
+
+  return `
+    <div class="bg-slate-900 border border-sky-900/60 rounded-xl overflow-hidden shadow-2xl space-y-4 p-5">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="font-bold text-white text-sm flex items-center gap-2"><span>✅</span> Baixas Realizadas</h3>
+          <p class="text-xs text-slate-400">Itens que já saíram da Destinação: descartados, vendidos, consumidos, reintegrados ou devolvidos ao fornecedor.</p>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <button onclick="gerarRelatorioBaixasPdf()" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Imprimir (respeitando os filtros)"><span>🖨️</span> Imprimir</button>
+          <button onclick="exportarBaixasCsv()" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Exportar CSV (respeitando os filtros)"><span>⬇️</span> CSV</button>
+          <span class="bg-sky-950 text-sky-300 border border-sky-700 px-3 py-1 rounded-full text-xs font-black">${baixasFiltradas.length} de ${baixasTodas.length} baixa(s)</span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-5 gap-2">
+        <input type="text" value="${fBxBusca}" placeholder="🔎 Produto, código ou Nº DEV..."
+          class="sm:col-span-2 bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs"
+          onchange="forcarMaiuscula(this); window._cdBaixaBusca=this.value; renderApp()">
+        <select onchange="window._cdBaixaAcao=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-sky-300 font-bold rounded-lg p-2 text-xs">
+          <option value="">Todas as ações</option>
+          ${Object.entries(ACOES_BAIXA_DESTINO).map(([k, v]) => `<option value="${k}" ${fBxAcao === k ? 'selected' : ''}>${v}</option>`).join('')}
+        </select>
+        <input type="date" value="${fBxDe}" title="Data da ação — de" onchange="window._cdBaixaDataDe=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+        <input type="date" value="${fBxAte}" title="Data da ação — até" onchange="window._cdBaixaDataAte=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+      </div>
+      ${filtroAtivo ? `<div class="-mt-2"><button onclick="limparFiltrosBaixaCd()" class="text-[11px] underline text-sky-400 font-bold">✖ Limpar filtros</button> <span class="text-[10px] text-slate-500">· baixa sem data (automática, de registro antigo) não entra no filtro de período</span></div>` : ''}
+
+      ${Object.keys(totais).length ? `
+      <div class="flex flex-wrap gap-2">
+        ${Object.entries(totais).map(([acao, t]) => `
+          <div class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs">
+            <div class="font-bold text-white">${formatarAcaoBaixaLabel(acao)}</div>
+            <div class="text-slate-400">${t.linhas} linha(s) · <span class="text-amber-400 font-bold">${fmtQtd(t.qtd)} un</span></div>
+          </div>`).join('')}
+      </div>` : ''}
+
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-xs text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+            <tr>
+              <th class="p-3">Produto</th>
+              <th class="p-3 text-center">Qtd</th>
+              <th class="p-3">Destino</th>
+              <th class="p-3">Ação</th>
+              <th class="p-3 text-center">Data</th>
+              <th class="p-3">Responsável / Obs.</th>
+              <th class="p-3 text-center"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            ${baixasFiltradas.length === 0
+              ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">${baixasTodas.length === 0 ? 'Nenhuma baixa registrada ainda.' : 'Nenhuma baixa encontrada para o filtro aplicado.'}</td></tr>`
+              : baixasFiltradas.map(({ item, parte }) => {
+                  const b = parte.baixa;
+                  const podeDesfazer = b.acao !== 'NAO_RETORNOU';
+                  return `
+                  <tr class="hover:bg-slate-800/40">
+                    <td class="p-3">
+                      <div class="font-bold text-white">${item.produto_codigo ? `<span class="text-emerald-400 font-mono">[${item.produto_codigo}]</span> ` : ''}${item.produto_descricao || 'Produto'}</div>
+                      <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}${parte.tipo !== 'item' ? ' • <span class="text-violet-300">parte de item dividido</span>' : ''}</div>
+                    </td>
+                    <td class="p-3 text-center font-bold text-amber-400">${fmtQtd(parte.quantidade)}</td>
+                    <td class="p-3 text-[11px] text-slate-300">${formatarDestinoLabel(parte.destino)}</td>
+                    <td class="p-3 font-bold text-sky-300">${formatarAcaoBaixaLabel(b.acao)}${b.automatica ? '<div class="text-[9px] text-slate-500 font-normal" title="Saiu da fila pelo status de negociação ou pelo destino, sem baixa manual">automática</div>' : ''}</td>
+                    <td class="p-3 text-center font-mono text-slate-200">${fmtData(b.data)}</td>
+                    <td class="p-3 text-[11px]">
+                      <div class="text-slate-200">${b.por || '—'}</div>
+                      ${b.obs ? `<div class="text-[10px] text-slate-400 italic">${b.obs}</div>` : ''}
+                    </td>
+                    <td class="p-3 text-center">
+                      ${podeDesfazer ? `<button onclick="desfazerBaixaItem('${item.id}', '${item.devId}', '${parte.divId}')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-600 px-2 py-1 rounded text-[10px] font-bold transition" title="Devolver o item para a Destinação de Itens">↩️ Desfazer</button>` : ''}
+                    </td>
+                  </tr>`;
+                }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function _linhasBaixasExport() {
+  const { baixasFiltradas } = getItensDestinadosFiltrados();
+  return baixasFiltradas.map(({ item, parte }) => ({
+    protocolo: item.devId === '__AVULSO__' ? 'AVULSO' : (item.protocolo || ''),
+    codigo: item.produto_codigo || '',
+    descricao: item.produto_descricao || item.descricao || '',
+    quantidade: parte.quantidade,
+    destino: formatarDestinoLabel(parte.destino),
+    acao: formatarAcaoBaixaLabel(parte.baixa.acao),
+    data: parte.baixa.data ? parte.baixa.data.split('-').reverse().join('/') : '',
+    por: parte.baixa.por || (parte.baixa.automatica ? 'AUTOMÁTICA' : ''),
+    obs: parte.baixa.obs || '',
+    cliente: item.cliente_nome || ''
+  }));
+}
+
+function exportarBaixasCsv() {
+  const linhas = _linhasBaixasExport();
+  if (linhas.length === 0) { alert('Nenhuma baixa encontrada para exportar com os filtros atuais.'); return; }
+  const headers = ['Protocolo', 'Cod Produto', 'Descricao Produto', 'Quantidade', 'Destino', 'Acao', 'Data Acao', 'Responsavel', 'Observacao', 'Cliente/Motivo'];
+  const csvRows = [headers.map(h => `"${h}"`).join(';')];
+  linhas.forEach(l => {
+    csvRows.push([l.protocolo, l.codigo, l.descricao, String(l.quantidade).replace('.', ','), l.destino, l.acao, l.data, l.por, l.obs, l.cliente]
+      .map(v => `"${String(v).replace(/"/g, '""')}"`).join(';'));
+  });
+  const blob = new Blob(['﻿' + csvRows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `JR_Baixas_Destinacao_${agoraIsoBrasilia().slice(0,10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function gerarRelatorioBaixasPdf() {
+  const linhas = _linhasBaixasExport();
+  const qtdTotal = linhas.reduce((s, l) => s + (parseFloat(l.quantidade) || 0), 0);
+  const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8"><title>BAIXAS DA DESTINAÇÃO — JR DISTRIBUIDORA</title>
+<style>
+  @media print { @page { margin: 10mm; size: A4 landscape; } body { -webkit-print-color-adjust: exact; } }
+  body { font-family: Arial, sans-serif; padding: 20px; color: #0f172a; background: #fff; }
+  .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #0369a1; padding-bottom: 10px; margin-bottom: 15px; }
+  .logo { height: 60px; }
+  .title-area { text-align: right; }
+  .title-area h1 { margin: 0; font-size: 20px; color: #0c4a6e; text-transform: uppercase; }
+  .title-area p { margin: 2px 0 0; font-size: 11px; color: #64748b; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 10px; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
+  th { background: #0c4a6e; color: #fff; text-transform: uppercase; font-size: 9px; }
+  tr:nth-child(even) { background: #f8fafc; }
+</style></head><body>
+  <div class="header">
+    <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+    <div class="title-area">
+      <h1>Baixas da Destinação — Retorno Físico CD</h1>
+      <p>JR Distribuidora • ${linhas.length} linha(s) • ${qtdTotal.toLocaleString('pt-BR')} un • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Protocolo</th><th>Produto</th><th>Qtd</th><th>Destino</th><th>Ação</th><th>Data</th><th>Responsável</th><th>Observação</th></tr></thead>
+    <tbody>
+      ${linhas.length === 0 ? '<tr><td colspan="8" style="text-align:center;">Nenhuma baixa encontrada.</td></tr>'
+        : linhas.map(l => `<tr><td>${esc(l.protocolo)}</td><td>${l.codigo ? `[${esc(l.codigo)}] ` : ''}${esc(l.descricao)}</td><td>${esc(l.quantidade)}</td><td>${esc(l.destino)}</td><td>${esc(l.acao)}</td><td>${esc(l.data || '—')}</td><td>${esc(l.por || '—')}</td><td>${esc(l.obs || '—')}</td></tr>`).join('')}
+    </tbody>
+  </table>
+  <script>window.onload = function() { setTimeout(function(){ window.print(); }, 500); }<\/script>
+</body></html>`;
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (win) { win.document.write(html); win.document.close(); }
+  else alert('Permita pop-ups no navegador para visualizar o relatório de Baixas.');
 }
 
 function formatarDestinoLabel(val) {
@@ -11410,7 +11912,11 @@ function atualizarStatusNegociacaoItem(itemId, devId, novoStatus) {
 
   const salvou = db.save();
   if (salvou) {
-    showToast('✅ Status de negociação do item atualizado!');
+    // Vendido / Descartado / Consumo já são a ação concluída: o item sai da
+    // fila sozinho (baixaDaParte) — o aviso diz para onde ele foi.
+    showToast(['VENDA_NEGOCIADA', 'DESCARTADO', 'ENVIADO_CONSUMO'].includes(novoStatus)
+      ? '✅ Item concluído — movido para Baixas Realizadas.'
+      : '✅ Status de negociação do item atualizado!');
     renderApp();
   } else {
     showToast('Não foi possível salvar a alteração neste dispositivo.', 'error');
