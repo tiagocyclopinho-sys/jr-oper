@@ -1,0 +1,2 @@
+wa_webhook_chave=rabYJG5mDV0Kc5L4YSa3UCCn4ewO29XD
+wa_verify_token=o1hkI5f3TLtveifYYrA0mAIC

@@ -1,0 +1,31 @@
+Para: contact@dualhook.com
+Assunto: Coexistence for a Brazilian (+55) number - questions before starting the trial
+
+Hello Dualhook team,
+
+We are a distribution company in Brazil. We plan to use your Developer plan to run a WhatsApp bot (our own webhook) on our customer-service number with Coexistence, so our team keeps using the WhatsApp Business app on the same number.
+
+Our plan is to use the 14-day free trial first with a test number (my own Brazilian number), and, if it works, move to our real customer-service number. Before starting the trial, could you please confirm:
+
+1. Do you support Coexistence onboarding for Brazilian (+55) numbers?
+
+2. After the trial, can we disconnect the test number and connect a different number (our customer-service number) within the same Developer plan (1 connection)? Or would we need a new subscription/trial?
+
+3. Our customer-service team uses WhatsApp on a desktop computer. Your docs say WhatsApp for Windows is not supported as a companion and may not generate smb_message_echoes. Does WhatsApp Web (in the browser) work as a companion after Coexistence onboarding, and does it generate smb_message_echoes?
+
+Expected volume: about 120-150 conversations per month, with peaks of around 15 per day.
+
+Thank you!
+
+Tiago Ferreira
+JR Distribuidora
+Brazil
+
+----------------------------------------------------------------------
+TRADUCAO (so para conferencia, nao enviar)
+1. Voces ativam coexistencia para numeros do Brasil (+55)?
+2. Depois do teste, da para desconectar o numero de teste e conectar o numero do SAC no mesmo plano Developer, ou precisa de outra assinatura?
+3. O SAC usa o WhatsApp no computador. A documentacao diz que o WhatsApp para Windows nao e suportado e pode nao avisar o bot das respostas. O WhatsApp Web (no navegador) funciona depois da coexistencia e avisa o bot das respostas?
+Volume: 120 a 150 conversas por mes, pico de 15 por dia.
+
+(As perguntas sobre cobranca da Meta e verificacao da empresa ja foram respondidas na documentacao deles; ver PLANO_BOT_WHATSAPP.md.)

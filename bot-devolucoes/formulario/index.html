@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Devolução - JR Distribuidora</title>
+<style>
+  :root {
+    --verde: #0f7a3d; --verde-claro: #e6f4ec; --texto: #1d2329; --cinza: #5f6b76;
+    --borda: #d5dbe0; --fundo: #f3f5f7; --erro: #c62828; --erro-claro: #fdecea; --branco: #fff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--texto); background: var(--fundo); }
+  header { background: var(--verde); color: #fff; padding: 14px 16px; position: sticky; top: 0; z-index: 5; }
+  header h1 { margin: 0; font-size: 1.1rem; }
+  header p { margin: 2px 0 0; font-size: .85rem; opacity: .9; }
+  main { max-width: 640px; margin: 0 auto; padding: 12px 16px 120px; }
+  .card { background: var(--branco); border: 1px solid var(--borda); border-radius: 12px; padding: 14px; margin: 12px 0; }
+  .card h2 { margin: 0 0 10px; font-size: 1rem; display: flex; gap: 8px; align-items: center; }
+  .num { background: var(--verde); color: #fff; border-radius: 50%; width: 24px; height: 24px; display: inline-grid; place-items: center; font-size: .8rem; flex: none; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: .92rem; }
+  .dica { color: var(--cinza); font-size: .85rem; margin: 4px 0 0; }
+  input[type=text], input[type=tel], input[type=search], textarea {
+    width: 100%; font: inherit; padding: 12px; border: 1px solid var(--borda); border-radius: 10px; background: #fff; color: var(--texto);
+  }
+  input:focus, textarea:focus { outline: 2px solid var(--verde); border-color: var(--verde); }
+  textarea { min-height: 84px; resize: vertical; }
+  button { font: inherit; cursor: pointer; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--verde); background: #fff; color: var(--verde); font-weight: 600; min-height: 46px; }
+  .btn.cheio { background: var(--verde); color: #fff; }
+  .btn.largo { width: 100%; }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .lista { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid var(--borda); border-radius: 10px; overflow: hidden; }
+  .lista:empty { display: none; }
+  .lista li button { width: 100%; text-align: left; background: #fff; border: 0; border-bottom: 1px solid var(--borda); padding: 12px; }
+  .lista li:last-child button { border-bottom: 0; }
+  .lista li button small { display: block; color: var(--cinza); }
+  .escolhido { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--verde-claro); border: 1px solid var(--verde); border-radius: 10px; padding: 10px 12px; font-weight: 600; }
+  .escolhido small { display: block; font-weight: 400; color: var(--cinza); }
+  .link { background: none; border: 0; color: var(--verde); text-decoration: underline; padding: 6px 0; font-size: .9rem; }
+  .opcoes { display: grid; gap: 8px; }
+  .opcoes.duas { grid-template-columns: 1fr 1fr; }
+  .opcao { position: relative; }
+  .opcao input { position: absolute; opacity: 0; }
+  .opcao span { display: block; padding: 12px; border: 1px solid var(--borda); border-radius: 10px; background: #fff; text-align: center; font-weight: 600; }
+  .opcao input:checked + span { border-color: var(--verde); background: var(--verde-claro); color: var(--verde); }
+  .opcao input:focus-visible + span { outline: 2px solid var(--verde); }
+  .item { display: grid; grid-template-columns: 1fr 88px 44px; gap: 6px; margin-bottom: 6px; }
+  .item button { border: 1px solid var(--borda); background: #fff; border-radius: 10px; color: var(--erro); font-size: 1.2rem; }
+  .fotos { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; margin-top: 10px; }
+  .fotos:empty { display: none; }
+  .foto { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--borda); background: #eee; }
+  .foto img { width: 100%; height: 100%; object-fit: cover; }
+  .foto button { position: absolute; top: 4px; right: 4px; width: 28px; height: 28px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; }
+  .aviso { background: var(--verde-claro); border-radius: 10px; padding: 10px 12px; font-size: .9rem; margin-top: 8px; }
+  .ok { color: var(--verde); font-weight: 600; }
+  .erro-box { background: var(--erro-claro); color: var(--erro); border: 1px solid var(--erro); border-radius: 10px; padding: 12px; margin: 12px 0; font-weight: 600; }
+  .check { display: flex; gap: 8px; align-items: center; font-weight: 500; margin-top: 10px; }
+  .check input { width: 20px; height: 20px; accent-color: var(--verde); }
+  .rodape { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--borda); padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
+  .rodape .btn { max-width: 640px; margin: 0 auto; display: flex; }
+  .oculto { display: none !important; }
+  .sucesso { text-align: center; padding: 28px 16px; }
+  .sucesso .protocolo { font-size: 1.6rem; font-weight: 800; color: var(--verde); letter-spacing: .5px; margin: 8px 0 16px; }
+  .armadilha { position: absolute; left: -9999px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Solicitação de devolução</h1>
+  <p>JR Distribuidora · SAC</p>
+</header>
+
+<main>
+  <div id="carregando" class="card">Carregando…</div>
+
+  <form id="form" class="oculto" novalidate>
+    <input class="armadilha" type="text" name="site" tabindex="-1" autocomplete="off" aria-hidden="true">
+
+    <!-- 1. Motorista -->
+    <section class="card">
+      <h2><span class="num">1</span> Motorista</h2>
+      <div id="motEscolhido" class="escolhido oculto"></div>
+      <div id="motBusca">
+        <label for="motQ">Digite o seu nome</label>
+        <input id="motQ" type="search" autocomplete="off" placeholder="Ex.: João Silva">
+        <ul id="motLista" class="lista"></ul>
+      </div>
+      <label for="telefone">Seu celular (opcional)</label>
+      <input id="telefone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(63) 99999-9999">
+    </section>
+
+    <!-- 2. Nota fiscal -->
+    <section class="card">
+      <h2><span class="num">2</span> Nota fiscal</h2>
+      <label for="nf">Número da NF</label>
+      <input id="nf" type="text" inputmode="numeric" autocomplete="off" placeholder="Ex.: 123456">
+    </section>
+
+    <!-- 3. Cliente -->
+    <section class="card">
+      <h2><span class="num">3</span> Cliente</h2>
+      <div id="cliEscolhido" class="escolhido oculto"></div>
+      <div id="cliBusca">
+        <label for="cliQ">Nome ou código do cliente</label>
+        <input id="cliQ" type="search" autocomplete="off" placeholder="Ex.: Supermercado Aurora">
+        <ul id="cliLista" class="lista"></ul>
+        <button type="button" id="cliManual" class="link">Não achei o cliente na lista</button>
+      </div>
+      <div id="cliTextoBox" class="oculto">
+        <label for="cliTexto">Nome do cliente</label>
+        <input id="cliTexto" type="text" autocomplete="off">
+        <button type="button" id="cliVoltar" class="link">Voltar para a busca</button>
+      </div>
+    </section>
+
+    <!-- 4. Motivo -->
+    <section class="card">
+      <h2><span class="num">4</span> Motivo</h2>
+      <div id="motivos" class="opcoes"></div>
+    </section>
+
+    <!-- 5. Total ou parcial -->
+    <section class="card">
+      <h2><span class="num">5</span> A devolução é</h2>
+      <div class="opcoes duas">
+        <label class="opcao"><input type="radio" name="tipo" value="total"><span>Total</span></label>
+        <label class="opcao"><input type="radio" name="tipo" value="parcial"><span>Parcial</span></label>
+      </div>
+      <div id="itensBox" class="oculto">
+        <label>Itens devolvidos</label>
+        <div id="itens"></div>
+        <button type="button" id="addItem" class="btn largo">+ Adicionar item</button>
+      </div>
+    </section>
+
+    <!-- 6. Fotos -->
+    <section class="card">
+      <h2><span class="num">6</span> Fotos do produto</h2>
+      <p id="fotoDica" class="dica">Tire fotos que mostrem o problema.</p>
+      <input id="fotoInput" type="file" accept="image/*" multiple class="oculto">
+      <button type="button" class="btn largo" onclick="document.getElementById('fotoInput').click()">📷 Adicionar fotos</button>
+      <div id="fotos" class="fotos"></div>
+    </section>
+
+    <!-- 7. Canhoto -->
+    <section class="card">
+      <h2><span class="num">7</span> Canhoto da nota</h2>
+      <input id="canhotoInput" type="file" accept="image/*" multiple class="oculto">
+      <button type="button" id="canhotoBtn" class="btn largo" onclick="document.getElementById('canhotoInput').click()">📄 Foto do canhoto</button>
+      <div id="canhotos" class="fotos"></div>
+      <label class="check"><input type="checkbox" id="semCanhoto"> Não tenho o canhoto</label>
+      <div id="canhotoJustBox" class="oculto">
+        <label for="canhotoJust">Por quê?</label>
+        <input id="canhotoJust" type="text" autocomplete="off">
+      </div>
+    </section>
+
+    <!-- 8. Localizacao -->
+    <section class="card">
+      <h2><span class="num">8</span> Localização</h2>
+      <button type="button" id="localBtn" class="btn largo">📍 Enviar minha localização</button>
+      <p id="localStatus" class="dica"></p>
+      <label class="check"><input type="checkbox" id="semLocal"> Não consegui enviar a localização</label>
+      <div id="localJustBox" class="oculto">
+        <label for="localJust">Por quê?</label>
+        <input id="localJust" type="text" autocomplete="off">
+      </div>
+    </section>
+
+    <!-- 9. Observacoes -->
+    <section class="card">
+      <h2><span class="num">9</span> Observações</h2>
+      <textarea id="obs" placeholder="Algo mais que o SAC precise saber (opcional)"></textarea>
+    </section>
+
+    <div id="erro" class="erro-box oculto" role="alert"></div>
+  </form>
+
+  <section id="sucesso" class="card sucesso oculto">
+    <div style="font-size:2.4rem">✅</div>
+    <h2 style="justify-content:center">Solicitação enviada</h2>
+    <p>Número da solicitação:</p>
+    <div id="protocolo" class="protocolo"></div>
+    <p class="dica">O SAC vai analisar e responder pelo WhatsApp.</p>
+    <a id="avisarSac" class="btn cheio largo oculto" target="_blank" rel="noopener">Avisar o SAC no WhatsApp</a>
+    <p><button type="button" class="link" onclick="location.reload()">Enviar outra devolução</button></p>
+  </section>
+</main>
+
+<div id="rodape" class="rodape oculto">
+  <button type="button" id="enviar" class="btn cheio">Enviar para o SAC</button>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Configuracao
+// ---------------------------------------------------------------------------
+const API = "https://ywsjvxlasbaytvmwpsbd.supabase.co/functions/v1/formulario-devolucao";
+// Numero do SAC no formato internacional, so digitos (ex.: "5563999999999").
+// Vazio = o botao "Avisar o SAC no WhatsApp" nao aparece.
+const SAC_WHATSAPP = "";
+const MAX_LADO = 1600;      // px do maior lado depois de reduzir a foto
+const QUALIDADE = 0.8;
+
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const estado = { motorista: null, cliente: null, motivos: [], fotos: [], canhotos: [], local: null };
+
+const ls = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (_) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} },
+};
+
+async function api(acao, params = {}) {
+  const q = new URLSearchParams({ acao, ...params });
+  const r = await fetch(`${API}?${q}`);
+  const j = await r.json().catch(() => ({ ok: false, erro: "Falha de comunicação." }));
+  if (!j.ok) throw new Error(j.erro || "Erro.");
+  return j;
+}
+
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+function mostrarErro(msg) {
+  const e = $("erro");
+  e.textContent = msg; e.classList.remove("oculto");
+  e.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function limparErro() { $("erro").classList.add("oculto"); }
+
+// ---------------------------------------------------------------------------
+// Motorista
+// ---------------------------------------------------------------------------
+function escolherMotorista(m) {
+  estado.motorista = m;
+  ls.set("jr_dev_motorista", m);
+  const box = $("motEscolhido");
+  box.innerHTML = "";
+  const nome = document.createElement("span"); nome.textContent = m.nome;
+  const trocar = document.createElement("button");
+  trocar.type = "button"; trocar.className = "link"; trocar.textContent = "Trocar";
+  trocar.onclick = () => { estado.motorista = null; box.classList.add("oculto"); $("motBusca").classList.remove("oculto"); $("motQ").focus(); };
+  box.append(nome, trocar);
+  box.classList.remove("oculto");
+  $("motBusca").classList.add("oculto");
+  $("motLista").innerHTML = "";
+}
+
+$("motQ").addEventListener("input", debounce(async (e) => {
+  const q = e.target.value.trim();
+  const ul = $("motLista"); ul.innerHTML = "";
+  if (q.length < 2) return;
+  try {
+    const { itens } = await api("motoristas", { q });
+    if (!itens.length) { ul.innerHTML = '<li><button type="button" disabled>Nenhum motorista encontrado</button></li>'; return; }
+    for (const m of itens) {
+      const li = document.createElement("li"), b = document.createElement("button");
+      b.type = "button"; b.textContent = m.nome; b.onclick = () => escolherMotorista(m);
+      li.append(b); ul.append(li);
+    }
+  } catch (err) { mostrarErro(err.message); }
+}, 300));
+
+// ---------------------------------------------------------------------------
+// Cliente
+// ---------------------------------------------------------------------------
+function escolherCliente(c) {
+  estado.cliente = c;
+  const box = $("cliEscolhido");
+  box.innerHTML = "";
+  const t = document.createElement("span");
+  t.textContent = c.razao_social;
+  const s = document.createElement("small");
+  s.textContent = `Cód. ${c.codigo_cliente}${c.cidade ? " · " + c.cidade : ""}`;
+  t.append(s);
+  const trocar = document.createElement("button");
+  trocar.type = "button"; trocar.className = "link"; trocar.textContent = "Trocar";
+  trocar.onclick = () => { estado.cliente = null; box.classList.add("oculto"); $("cliBusca").classList.remove("oculto"); $("cliQ").focus(); };
+  box.append(t, trocar);
+  box.classList.remove("oculto");
+  $("cliBusca").classList.add("oculto");
+  $("cliLista").innerHTML = "";
+}
+
+$("cliQ").addEventListener("input", debounce(async (e) => {
+  const q = e.target.value.trim();
+  const ul = $("cliLista"); ul.innerHTML = "";
+  if (q.length < 2) return;
+  try {
+    const { itens } = await api("clientes", { q });
+    if (!itens.length) { ul.innerHTML = '<li><button type="button" disabled>Nenhum cliente encontrado</button></li>'; return; }
+    for (const c of itens) {
+      const li = document.createElement("li"), b = document.createElement("button");
+      b.type = "button"; b.textContent = c.razao_social;
+      const s = document.createElement("small"); s.textContent = `Cód. ${c.codigo_cliente}${c.cidade ? " · " + c.cidade : ""}`;
+      b.append(s); b.onclick = () => escolherCliente(c);
+      li.append(b); ul.append(li);
+    }
+  } catch (err) { mostrarErro(err.message); }
+}, 300));
+
+$("cliManual").onclick = () => {
+  estado.cliente = null;
+  $("cliBusca").classList.add("oculto"); $("cliTextoBox").classList.remove("oculto");
+  $("cliTexto").value = $("cliQ").value; $("cliTexto").focus();
+};
+$("cliVoltar").onclick = () => {
+  $("cliTextoBox").classList.add("oculto"); $("cliBusca").classList.remove("oculto"); $("cliTexto").value = "";
+};
+
+// ---------------------------------------------------------------------------
+// Motivo
+// ---------------------------------------------------------------------------
+function motivoAtual() {
+  const r = document.querySelector('input[name=motivo]:checked');
+  return r ? estado.motivos.find((m) => m.codigo === r.value) : null;
+}
+
+function atualizarMotivo() {
+  const m = motivoAtual();
+  if (!m) return;
+  const min = m.min_fotos || 0;
+  let t = min ? `Envie pelo menos ${min} foto${min > 1 ? "s" : ""}` : "Fotos opcionais";
+  t += m.orientacao_fotos ? ` ${m.orientacao_fotos}.` : ".";
+  $("fotoDica").textContent = t;
+}
+
+function montarMotivos() {
+  const box = $("motivos");
+  for (const m of estado.motivos) {
+    const l = document.createElement("label"); l.className = "opcao";
+    const i = document.createElement("input"); i.type = "radio"; i.name = "motivo"; i.value = m.codigo;
+    i.onchange = atualizarMotivo;
+    const s = document.createElement("span"); s.textContent = m.nome;
+    l.append(i, s); box.append(l);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Total / parcial e itens
+// ---------------------------------------------------------------------------
+function addItem() {
+  const d = document.createElement("div"); d.className = "item";
+  d.innerHTML = '<input type="text" placeholder="Produto" aria-label="Produto"><input type="text" inputmode="decimal" placeholder="Qtd" aria-label="Quantidade"><button type="button" aria-label="Remover item">×</button>';
+  d.querySelector("button").onclick = () => { d.remove(); if (!$("itens").children.length) addItem(); };
+  $("itens").append(d);
+  return d;
+}
+document.querySelectorAll('input[name=tipo]').forEach((r) => r.onchange = () => {
+  const parcial = r.value === "parcial" && r.checked;
+  $("itensBox").classList.toggle("oculto", !parcial);
+  if (parcial && !$("itens").children.length) addItem().querySelector("input").focus();
+});
+$("addItem").onclick = () => addItem().querySelector("input").focus();
+
+// ---------------------------------------------------------------------------
+// Fotos (reduz no proprio celular antes de enviar)
+// ---------------------------------------------------------------------------
+async function reduzir(arquivo) {
+  try {
+    const bmp = await createImageBitmap(arquivo, { imageOrientation: "from-image" });
+    const escala = Math.min(1, MAX_LADO / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(bmp.width * escala); c.height = Math.round(bmp.height * escala);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close && bmp.close();
+    const blob = await new Promise((ok) => c.toBlob(ok, "image/jpeg", QUALIDADE));
+    if (!blob) throw new Error("toBlob");
+    return new File([blob], (arquivo.name || "foto").replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
+  } catch (_) {
+    return arquivo; // navegador nao conseguiu reduzir: manda o original
+  }
+}
+
+function desenharFotos(lista, alvo) {
+  const box = $(alvo); box.innerHTML = "";
+  lista.forEach((f, i) => {
+    const d = document.createElement("div"); d.className = "foto";
+    const img = document.createElement("img"); img.alt = `Foto ${i + 1}`;
+    img.src = URL.createObjectURL(f); img.onload = () => URL.revokeObjectURL(img.src);
+    const x = document.createElement("button"); x.type = "button"; x.textContent = "×"; x.setAttribute("aria-label", "Remover foto");
+    x.onclick = () => { lista.splice(i, 1); desenharFotos(lista, alvo); };
+    d.append(img, x); box.append(d);
+  });
+}
+
+function ligarFotos(inputId, lista, alvo, max) {
+  $(inputId).addEventListener("change", async (e) => {
+    const arqs = [...e.target.files].filter((f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name));
+    e.target.value = "";
+    for (const a of arqs) {
+      if (lista.length >= max) { mostrarErro(`No máximo ${max} fotos.`); break; }
+      lista.push(await reduzir(a));
+    }
+    desenharFotos(lista, alvo);
+  });
+}
+ligarFotos("fotoInput", estado.fotos, "fotos", 10);
+ligarFotos("canhotoInput", estado.canhotos, "canhotos", 3);
+
+$("semCanhoto").onchange = (e) => $("canhotoJustBox").classList.toggle("oculto", !e.target.checked);
+$("semLocal").onchange = (e) => $("localJustBox").classList.toggle("oculto", !e.target.checked);
+
+// ---------------------------------------------------------------------------
+// Localizacao
+// ---------------------------------------------------------------------------
+$("localBtn").onclick = () => {
+  const st = $("localStatus");
+  if (!navigator.geolocation) { st.textContent = "Este celular não permite enviar a localização."; return; }
+  st.textContent = "Buscando localização…";
+  navigator.geolocation.getCurrentPosition(
+    (p) => {
+      estado.local = { lat: p.coords.latitude, lon: p.coords.longitude };
+      st.innerHTML = '<span class="ok">✓ Localização registrada</span>';
+      $("localBtn").textContent = "📍 Atualizar localização";
+    },
+    (err) => {
+      st.textContent = err.code === 1
+        ? "Você não permitiu o acesso à localização. Libere nas configurações do navegador ou marque a opção abaixo."
+        : "Não foi possível pegar a localização. Tente de novo ou marque a opção abaixo.";
+    },
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 }
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Envio
+// ---------------------------------------------------------------------------
+function validar() {
+  const m = motivoAtual();
+  if (!estado.motorista) return "Escolha o seu nome na lista (item 1).";
+  if (!$("nf").value.replace(/\D/g, "")) return "Informe o número da nota fiscal (item 2).";
+  if (!estado.cliente && !$("cliTexto").value.trim()) return "Informe o cliente (item 3).";
+  if (!m) return "Escolha o motivo (item 4).";
+  const tipo = document.querySelector('input[name=tipo]:checked');
+  if (!tipo) return "Informe se a devolução é total ou parcial (item 5).";
+  if (tipo.value === "parcial" && !itensPreenchidos().length) return "Informe os itens devolvidos (item 5).";
+  if (estado.fotos.length < (m.min_fotos || 0)) return `Esse motivo pede pelo menos ${m.min_fotos} foto(s) do produto (item 6).`;
+  if (m.exige_canhoto && !estado.canhotos.length && !($("semCanhoto").checked && $("canhotoJust").value.trim()))
+    return "Envie a foto do canhoto ou marque que não tem e explique (item 7).";
+  if (m.exige_localizacao && !estado.local && !($("semLocal").checked && $("localJust").value.trim()))
+    return "Envie a localização ou marque que não conseguiu e explique (item 8).";
+  return null;
+}
+
+function itensPreenchidos() {
+  return [...$("itens").querySelectorAll(".item")].map((d) => {
+    const [p, q] = d.querySelectorAll("input");
+    const prod = p.value.trim(), qtd = q.value.trim();
+    return prod ? (qtd ? `${prod} - QTD ${qtd}` : prod) : "";
+  }).filter(Boolean);
+}
+
+$("enviar").onclick = async () => {
+  limparErro();
+  const problema = validar();
+  if (problema) { mostrarErro(problema); return; }
+
+  const tipo = document.querySelector('input[name=tipo]:checked').value;
+  const dados = {
+    motorista_id: estado.motorista.id,
+    telefone: $("telefone").value,
+    nota_fiscal: $("nf").value,
+    cliente_id: estado.cliente ? estado.cliente.id : null,
+    cliente_texto: estado.cliente ? "" : $("cliTexto").value,
+    motivo_codigo: motivoAtual().codigo,
+    tipo_devolucao: tipo,
+    itens: tipo === "parcial" ? itensPreenchidos() : [],
+    canhoto_justificativa: $("semCanhoto").checked ? $("canhotoJust").value : "",
+    latitude: estado.local ? estado.local.lat : null,
+    longitude: estado.local ? estado.local.lon : null,
+    localizacao_justificativa: $("semLocal").checked ? $("localJust").value : "",
+    observacoes: $("obs").value,
+  };
+  ls.set("jr_dev_telefone", $("telefone").value);
+
+  const fd = new FormData();
+  fd.append("dados", JSON.stringify(dados));
+  fd.append("site", document.querySelector("input[name=site]").value);
+  estado.fotos.forEach((f) => fd.append("foto_produto", f, f.name));
+  estado.canhotos.forEach((f) => fd.append("canhoto", f, f.name));
+
+  const b = $("enviar");
+  b.disabled = true; b.textContent = "Enviando…";
+  try {
+    const r = await fetch(`${API}?acao=enviar`, { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({ ok: false, erro: "Falha de comunicação." }));
+    if (!j.ok) throw new Error(j.erro || "Erro ao enviar.");
+    concluir(j.protocolo, dados);
+  } catch (err) {
+    mostrarErro(err.message + " Seus dados continuam aqui; tente enviar de novo.");
+    b.disabled = false; b.textContent = "Enviar para o SAC";
+  }
+};
+
+function concluir(protocolo, dados) {
+  $("form").classList.add("oculto"); $("rodape").classList.add("oculto");
+  $("protocolo").textContent = protocolo;
+  if (SAC_WHATSAPP) {
+    const msg = `Enviei a solicitação de devolução ${protocolo} (NF ${dados.nota_fiscal}).`;
+    const a = $("avisarSac");
+    a.href = `https://wa.me/${SAC_WHATSAPP}?text=${encodeURIComponent(msg)}`;
+    a.classList.remove("oculto");
+  }
+  $("sucesso").classList.remove("oculto");
+  window.scrollTo(0, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Inicio
+// ---------------------------------------------------------------------------
+(async () => {
+  try {
+    const { motivos } = await api("dados");
+    estado.motivos = motivos;
+    montarMotivos();
+    const salvo = ls.get("jr_dev_motorista");
+    if (salvo && salvo.id) escolherMotorista(salvo);
+    const tel = ls.get("jr_dev_telefone");
+    if (tel) $("telefone").value = tel;
+    $("carregando").classList.add("oculto");
+    $("form").classList.remove("oculto");
+    $("rodape").classList.remove("oculto");
+  } catch (err) {
+    $("carregando").textContent = "Não foi possível abrir o formulário. Verifique a internet e recarregue a página.";
+  }
+})();
+</script>
+</body>
+</html>

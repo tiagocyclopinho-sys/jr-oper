@@ -1377,6 +1377,42 @@ function renderBlocoOcRotaMotorista(nomeMotorista, varDe, varAte) {
     </div>`;
 }
 
+// --- Bloco 5: Devoluções por Erro Carregamento (06/10/2026) — só consulta.
+// Só ERRO CARREGAMENTO, em que o colaborador foi apontado como separador
+// e/ou conferente na apuração da devolução. Mesmo fallback do formulário da
+// Análise (separador_apurado || separador_nome). A data vem de
+// data_abertura || criado_em, como em devolucoesErroMotoristaDoPrestador().
+function devolucoesErroCarregamentoDoColaborador(nome) {
+  const alvo = normalizeStr(nome);
+  return db.getDevolucoes()
+    .filter(d => String(d.tipo_erro || '').trim().toUpperCase() === 'ERRO CARREGAMENTO')
+    .map(d => {
+      const sep = normalizeStr(d.separador_apurado || d.separador_nome || '') === alvo;
+      const conf = normalizeStr(d.conferente_apurado || d.conferente_nome || '') === alvo;
+      if (!sep && !conf) return null;
+      const papel = sep && conf ? 'Separador e Conferente' : (sep ? 'Separador' : 'Conferente');
+      return { ...d, papel, data: String(d.data_abertura || d.criado_em || '').slice(0, 10) };
+    })
+    .filter(Boolean);
+}
+
+function renderBlocoDevolucoesErroCarregamento(nome, varDe, varAte) {
+  const devs = ordenarPorDataDesc(filtrarPorData(devolucoesErroCarregamentoDoColaborador(nome), varDe, varAte));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 class="text-xs font-black text-red-400 uppercase flex items-center gap-2"><span>📦</span> Devoluções por Erro Carregamento — ${devs.length}</h3>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Protocolo</th><th class="p-2">Papel</th><th class="p-2">Cliente</th><th class="p-2">Motivo</th><th class="p-2 text-right">Valor</th><th class="p-2">Tratativa</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${devs.length === 0 ? '<tr><td colspan="7" class="p-3 text-center text-slate-500">Nenhuma devolução encontrada.</td></tr>' :
+              devs.map(d => `<tr><td class="p-2">${formatarData(d.data)}</td><td class="p-2 font-bold text-emerald-400">${d.numero_devolucao || d.numero_protocolo || '—'}</td><td class="p-2">${d.papel}</td><td class="p-2">${d.cliente_nome || '—'}</td><td class="p-2">${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="p-2 text-right font-bold">R$ ${(parseFloat(d.valor_reclamado)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td class="p-2">${d.status_gestao === 'CONCLUIDO' ? '<span class="text-emerald-400 font-bold">Concluída</span>' : '<span class="text-amber-400 font-bold">Pendente</span>'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 // --- TELA: Acompanhamento de Funcionário CD ---
 function renderAcompanhamentoFuncionarioView() {
   const nomeSelecionado = window._acompFuncSelecionado || '';
@@ -1398,6 +1434,7 @@ function renderAcompanhamentoFuncionarioView() {
       ${renderBlocoAtestadosMedicos(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte', '_acompAmFormAberto')}
       ${renderBlocoAusencias(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte', '_acompArFormAberto')}
       ${renderBlocoMedidasAdministrativas(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte')}
+      ${renderBlocoDevolucoesErroCarregamento(nomeSelecionado, '_acompFiltroDataDe', '_acompFiltroDataAte')}
     </div>`;
 }
 
@@ -1531,6 +1568,7 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   const medidas = tipo === 'MOTORISTA' ? [] : db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
     .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
   const devsErro = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte)) : [];
+  const devsCarreg = tipo === 'MOTORISTA' ? [] : ordenarPorDataDesc(filtrarPorData(devolucoesErroCarregamentoDoColaborador(nome), varDe, varAte));
   const deducoes = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(deducoesDoPrestador(nome), varDe, varAte)) : [];
   // 21/09/2026: o impresso saía sem Viagens, Oc Operacional, Oc em Rota e
   // Sinistros — tudo que a tela do Dossiê Prestador mostra. Mesmas
@@ -1570,7 +1608,8 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
     ['Orientações', orientacoes.length],
     ['Atestados', atestados.length],
     ['Faltas / Condutas', ausencias.length],
-    ['Medidas Administrativas', medidas.length]
+    ['Medidas Administrativas', medidas.length],
+    ['Devoluções (erro carregamento)', devsCarreg.length]
   ];
 
   const htmlContent = `
@@ -1631,6 +1670,7 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   ${secaoTabela('Atestados Médicos', ['Data','Parcial/Integral','Motivo','CID','Médico','CRM/CRO'], atestados.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.tipo_afastamento==='INTEGRAL'?'Integral':'Parcial'}</td><td>${r.motivo||'—'}</td><td>${r.cid||'—'}</td><td>${r.medico||'—'}</td><td>${r.crm_cro||'—'}</td></tr>`))}
   ${secaoTabela('Faltas, Condutas & Ausências', ['Data','Turno','Conduta / Ausência','Avisado?','Período','Compensar?'], ausencias.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.turno||'—'}</td><td>${r.conduta||'—'}</td><td>${r.avisado||'—'}</td><td>${r.periodo||'Integral'}</td><td>${r.compensar||'NÃO'}</td></tr>`))}
   ${tipo === 'MOTORISTA' ? '' : secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td class="nowrap">${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? '' : secaoTabela('Devoluções por Erro Carregamento', ['Data','Protocolo','Papel','Cliente','Motivo','Valor','Tratativa'], devsCarreg.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.papel}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`))}
   ${tipo === 'MOTORISTA' ? secaoTabela('Devoluções por Erro Motorista', ['Data','Protocolo','Cliente','Motivo','Valor','Tratativa'], devsErro.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`)) : ''}
   ${tipo === 'MOTORISTA' ? secaoTabela('Deduções / Adiantamentos', ['Data','Protocolo','Valor da devolução','Equipe','Parte deste prestador','Situação'], deducoes.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${l.protocolo}</td><td class="num">${brl(l.total)}</td><td style="text-align:center;">${l.pessoas}</td><td class="num"><b>${brl(l.parte)}</b></td><td>${l.status}</td></tr>`), `<tr><td colspan="4" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalDeducoes)}</b></td><td></td></tr>`) : ''}
   ${tipo === 'MOTORISTA' ? secaoTabela('Infrações de Trânsito', ['Data','Nº infração','Veículo','Valor','Parcelamento','Status','Relatório'], infracoesP.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${vgEscTxt(l.numero_infracao)}</td><td>${vgEscTxt(l.veiculo_placa || '—')}</td><td class="num">${brl(l.valor)}</td><td>${_infParcelaResumo(l)}</td><td>${_infStatusLabel(l.status)}</td><td>${vgEscTxt(l.numero_relatorio || '—')}</td></tr>`), `<tr><td colspan="3" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalInfracoes)}</b></td><td colspan="3"></td></tr>`) : ''}
@@ -1671,6 +1711,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   const dadosMestre = tipo === 'MOTORISTA' ? getDadosPrestadorMestre(nome) : null;
   const ehMotorista = tipo === 'MOTORISTA' && (!dadosMestre || dadosMestre.tipo !== 'AJUDANTE');
   const devsErro = tipo === 'MOTORISTA' ? filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte) : [];
+  const devsCarreg = tipo === 'MOTORISTA' ? [] : filtrarPorData(devolucoesErroCarregamentoDoColaborador(nome), varDe, varAte);
   const viagens = tipo === 'MOTORISTA' ? filtrarPorData(viagensDoPrestador(nome), varDe, varAte) : [];
   const ocOper = tipo === 'MOTORISTA' ? filtrarPorData(ocOperacionaisDoPrestador(nome), varDe, varAte) : [];
   const ocRota = ehMotorista ? filtrarPorData(ocRotaDoPrestador(nome), varDe, varAte) : [];
@@ -1682,6 +1723,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   deducoes.forEach(l => csvLinha(['DEDUCAO_ADIANTAMENTO', formatarData(l.data), l.protocolo, l.total.toFixed(2), String(l.pessoas), l.parte.toFixed(2), l.status]));
   infracoesP.forEach(l => csvLinha(['INFRACAO_TRANSITO', formatarData(l.data), l.numero_infracao, l.veiculo_placa, (parseFloat(l.valor) || 0).toFixed(2), _infStatusLabel(l.status), l.numero_relatorio, _infParcelaResumo(l)]));
   devsErro.forEach(d => csvLinha(['DEVOLUCAO_ERRO_MOTORISTA', formatarData(d.data), d.numero_devolucao || d.numero_protocolo, d.cliente_nome, d.motivo_real_causa_raiz || d.motivo_reclamado, (parseFloat(d.valor_reclamado)||0).toFixed(2), d.status_gestao === 'CONCLUIDO' ? 'CONCLUIDA' : 'PENDENTE']));
+  devsCarreg.forEach(d => csvLinha(['DEVOLUCAO_ERRO_CARREGAMENTO', formatarData(d.data), d.numero_devolucao || d.numero_protocolo, d.papel, d.cliente_nome, d.motivo_real_causa_raiz || d.motivo_reclamado, (parseFloat(d.valor_reclamado)||0).toFixed(2), d.status_gestao === 'CONCLUIDO' ? 'CONCLUIDA' : 'PENDENTE']));
   orientacoes.forEach(r => csvLinha(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao]));
   atestados.forEach(r => csvLinha(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro]));
   ausencias.forEach(r => csvLinha(['FALTA_CONDUTA', formatarData(r.data), r.turno, r.conduta, r.avisado, r.periodo || 'Integral', r.compensar || 'NÃO']));
@@ -6239,13 +6281,18 @@ function exigeSeparadorConferente(tipoErro, separador, conferente) {
 // normalizeStr e não toLowerCase: é a mesma regra do resto do app desde a
 // 6.6.0 (colapsa acento e espaço repetido), e "EDSON  DOS  SANTOS", gravado
 // com espaço duplo, precisa casar com o que a pessoa digita.
+//
+// 6.8.6: motorista e ajudantes também entram (pedido de 06/10/2026), pela
+// mesma equipeDaDevolucao() do recibo — motorista_nome, ajudantes[] e
+// ajudante_nome.
 function devolucaoCasaBusca(dev, termo) {
   const q = normalizeStr(termo);
   if (!q) return true;
   return normalizeStr(dev.numero_devolucao).includes(q)
       || normalizeStr(dev.numero_protocolo).includes(q)
       || normalizeStr(dev.cliente_nome).includes(q)
-      || normalizeStr(dev.nota_fiscal).includes(q);
+      || normalizeStr(dev.nota_fiscal).includes(q)
+      || equipeDaDevolucao(dev).some(n => normalizeStr(n).includes(q));
 }
 
 // O aviso de aba (22/09/2026). Buscar "42" numa aba que não tem a DEV-042
@@ -9810,7 +9857,7 @@ function renderSacInvestigacaoView() {
           <!-- Busca por Protocolo/Cliente/NF -->
           <div class="flex items-center gap-2 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
             <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">🔎 Buscar:</span>
-            <input type="text" id="inv-busca-texto" value="${fTexto}" placeholder="Protocolo, cliente ou NF"
+            <input type="text" id="inv-busca-texto" value="${fTexto}" placeholder="Protocolo, cliente, NF ou motorista"
               oninput="window._invFiltroTexto=this.value; renderApp(); setTimeout(()=>{ const el=document.getElementById('inv-busca-texto'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0);"
               class="bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs w-40 sm:w-56">
             ${fTexto ? `<button onclick="window._invFiltroTexto=''; renderApp()" class="text-slate-400 hover:text-white text-xs font-bold" title="Limpar busca">✕</button>` : ''}
@@ -10627,7 +10674,7 @@ function renderGestaoGestorView() {
           <div class="sm:col-span-2">
             <label class="block text-[10px] text-sky-400 font-bold mb-1">🔎 Nº da Devolução / Cliente / NF</label>
             <div class="flex items-center gap-1.5">
-              <input type="text" id="filtro-gestor-busca" value="${filtroBusca}" placeholder="Ex: 42, DEV-042, cliente..."
+              <input type="text" id="filtro-gestor-busca" value="${filtroBusca}" placeholder="Ex: 42, DEV-042, cliente, NF, motorista..."
                 oninput="window._filtroGestorBusca=this.value; renderApp(); setTimeout(()=>{ const el=document.getElementById('filtro-gestor-busca'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0);"
                 class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs placeholder:text-slate-600 focus:border-sky-500 focus:outline-none">
               ${filtroBusca ? `<button onclick="window._filtroGestorBusca=''; renderApp()" class="text-slate-400 hover:text-white text-xs font-bold px-1 shrink-0" title="Limpar busca">✕</button>` : ''}
