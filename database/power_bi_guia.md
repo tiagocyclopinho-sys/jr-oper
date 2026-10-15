@@ -48,3 +48,13 @@ O banco de dados disponibiliza 5 Views SQL otimizadas em 3FN:
 3. **`vw_bi_frota_veiculos_parados`**: Tempo total de inatividade (horas paradas) e custos de socorro mecânico em rota.
 4. **`vw_bi_controle_cd_pendencias`**: Auditoria de devoluções físicas pendentes de chegada no Centro de Distribuição.
 5. **`vw_bi_trocas_veiculos`**: Rastreamento de substituição de veículos escalados por motivo (peso excedido, manutenção) e autorizador.
+
+### Views da migration 51 (14/10/2026)
+
+Só leem com o usuário `postgres` (ficam fora da API pública do app).
+
+6. **`vw_bi_devolucoes_completa`**: uma linha por devolução com Abertura, recebimento no CD, Monitoramento e Tratativa do gestor, mais a quantidade e o valor dos itens. Fotos e vídeos saem só como quantidade.
+7. **`vw_bi_controle_viagens`**: viagens com saída, entrega e retorno como data/hora de verdade, mais as horas de viagem.
+8. **`vw_bi_ocorrencias_viagem`**: Oc. Operacional e Oc. em Rota juntas; a coluna `origem` separa as duas.
+9. **`vw_bi_resumo_diario_cd`**: uma linha por data + turno com a movimentação de expedição/recebimento e a contagem de faltas, ocorrências e cortes.
+10. **`vw_bi_ocorrencias_cd`**: ocorrências do CD por data, turno e gestor.

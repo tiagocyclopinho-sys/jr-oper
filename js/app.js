@@ -9638,9 +9638,33 @@ function calcTotalValores() {
   if (inp) inp.value = total.toFixed(2);
 }
 
+// TRAVA DE DUPLO ENVIO - 15/10/2026
+//
+// DEV-189/190 (14/10) e DEV-195/196 (15/10) nasceram no mesmo segundo, com
+// ids a ~30 ms um do outro, mesmo usuario e conteudo identico. A submissao
+// abaixo espera o syncCloudToLocal() ANTES de gravar, e durante essa espera
+// o botao continuava ativo: um segundo toque rodava o handler inteiro de
+// novo e cada execucao pegava o proximo numero. A trava vale ate o fim da
+// gravacao (inclusive o alert), e o botao fica desabilitado para quem toca
+// ver que o primeiro envio esta em andamento.
+let _sacAberturaEnviando = false;
+
 async function handleSacAberturaSubmit(e) {
   e.preventDefault();
+  if (_sacAberturaEnviando) return;
+  _sacAberturaEnviando = true;
+  const btn = e.submitter || e.target?.querySelector('button[type="submit"]');
+  const btnTexto = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Salvando...'; }
+  try {
+    await _handleSacAberturaSubmitInterno(e);
+  } finally {
+    _sacAberturaEnviando = false;
+    if (btn && btn.isConnected) { btn.disabled = false; btn.innerHTML = btnTexto; }
+  }
+}
 
+async function _handleSacAberturaSubmitInterno(e) {
   // PRIORIDADE 2e: bloquear submissão com carga inexistente na Largada
   const cargaNumeroDigitada = document.getElementById('sac-carga-numero')?.value || '';
   if (!buscarCargaInfo(cargaNumeroDigitada).found) {
