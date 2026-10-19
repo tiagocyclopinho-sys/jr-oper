@@ -11347,12 +11347,62 @@ function diasParadoNoCd(d, viagemJaResolvida) {
 // Busca única sobre a fila: nº DEV, placa, rota, carga, motorista, cliente, NF
 // e descrição dos itens. Termos separados por espaço somam (E), então
 // "colinas truck" filtra as duas coisas ao mesmo tempo.
+// Causa vigente da devolução para a grade do Retorno Físico (19/10/2026).
+//
+// Pedido do Tiago: algumas causas (falta, qualidade, erro da indústria) pedem
+// análise antes da conferência física, e o CD precisa saber se a causa que
+// está vendo é a palavra do cliente/motorista ou já passou pelo monitoramento.
+//
+// Não há coluna nova: a abertura grava motivo_reclamado e o monitoramento
+// grava motivo_real_causa_raiz (+ responsavel_analise) por updateInvestigacao.
+// "Confirmada" é o monitoramento ter apurado a MESMA causa da abertura;
+// "alterada" é ter apurado outra. A data sai do audit_logs
+// (EDICAO_INVESTIGACAO), e não de atualizado_em, porque atualizado_em muda a
+// cada edição de qualquer pessoa — inclusive a entrada no CD. O audit_logs
+// local guarda só os 1000 mais recentes: sem a linha, a data fica de fora em
+// vez de ser inventada.
+function causaVigenteDevolucao(d) {
+  const abertura = String(d.motivo_reclamado || '').trim();
+  const apurada  = String(d.motivo_real_causa_raiz || '').trim();
+  if (!apurada || apurada.toUpperCase() === 'PENDENTE') {
+    return { origem: 'ABERTURA', causa: abertura, abertura };
+  }
+  const norm = s => s.toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+  const log = (db.data.audit_logs || []).find(l =>
+    l.acao === 'EDICAO_INVESTIGACAO' && l.modulo === 'ocorrencias_devolucao' && String(l.registro_id) === String(d.id));
+  return {
+    origem: norm(apurada) === norm(abertura) ? 'CONFIRMADA' : 'ALTERADA',
+    causa: apurada,
+    abertura,
+    quem: d.responsavel_analise || log?.usuario_nome || '',
+    quando: log?.data_hora || ''
+  };
+}
+
+function renderCausaDevolucaoCd(d) {
+  const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const c = causaVigenteDevolucao(d);
+  if (!c.causa) return '<span class="text-slate-500 text-[10px] italic">Sem causa informada</span>';
+  const rodape = [c.quem, c.quando ? formatarDataHora(c.quando, '') : ''].filter(Boolean).join(' · ');
+  const selo = c.origem === 'ABERTURA'
+    ? '<span class="inline-block mt-1 bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Causa informada na abertura (cliente/motorista). O monitoramento ainda não apurou.">📝 Da abertura · sem análise</span>'
+    : c.origem === 'CONFIRMADA'
+      ? `<span class="inline-block mt-1 bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="O monitoramento apurou a mesma causa da abertura">✅ Confirmada pelo monitoramento</span>`
+      : `<span class="inline-block mt-1 bg-sky-950 text-sky-300 border border-sky-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="O monitoramento apurou uma causa diferente da abertura">🔄 Alterada pelo monitoramento</span>`;
+  return `
+    <div class="font-bold text-white text-[11px]">${esc(c.causa)}</div>
+    ${selo}
+    ${c.origem === 'ALTERADA' && c.abertura ? `<div class="text-[9px] text-slate-500 mt-0.5">Abertura: <s>${esc(c.abertura)}</s></div>` : ''}
+    ${rodape ? `<div class="text-[9px] text-slate-500 mt-0.5">👤 ${esc(rodape)}</div>` : ''}`;
+}
+
 function pendenteCasaComBusca(d, termo) {
   const t = String(termo || '').trim().toLowerCase();
   if (!t) return true;
   const alvo = [
     d.numero_devolucao, d.numero_protocolo, d.veiculo_placa, d.veiculo_modelo,
     d.carga_rota, d.carga_numero, d.motorista_nome, d.cliente_nome, d.nota_fiscal,
+    d.motivo_reclamado, d.motivo_real_causa_raiz,
     ...(Array.isArray(d.itens) ? d.itens.map(i => `${i.produto_codigo || ''} ${i.produto_descricao || ''}`) : [])
   ].join(' ').toLowerCase();
   return t.split(/\s+/).filter(Boolean).every(p => alvo.includes(p));
@@ -11421,6 +11471,7 @@ function renderCdRecepcaoView() {
 
   const rowCols = `<th class="p-3">Nº Dev / Placa / Rota / Motorista</th>
                    <th class="p-3 hidden sm:table-cell">NF & Cliente</th>
+                   <th class="p-3 hidden sm:table-cell" title="Causa vigente: a da abertura, ou a apurada pelo monitoramento">Causa</th>
                    <th class="p-3 hidden md:table-cell">Itens</th>`;
 
   const buildRow = (d, showBtn) => {
@@ -11450,6 +11501,7 @@ function renderCdRecepcaoView() {
           ? `<span class="block mt-1 bg-orange-950 text-orange-300 border border-orange-800 px-2 py-0.5 rounded text-[9px] font-bold">⏱ parado há ${diasParado} dias</span>`
           : `<span class="block mt-1 text-slate-500 text-[9px] font-semibold">⏱ ${diasParado === 0 ? 'voltou hoje' : 'há 1 dia'}</span>`
     );
+    const causaHtml = renderCausaDevolucaoCd(d);
     return `
     <tr class="hover:bg-slate-800/40">
       <td class="p-3">
@@ -11458,11 +11510,13 @@ function renderCdRecepcaoView() {
         <div class="text-[10px] text-slate-400">📍 ${d.carga_rota} | ${d.carga_numero}</div>
         <div class="text-[10px] text-slate-400">👤 ${d.motorista_nome}</div>
         ${statusViagemBadge}
+        <div class="sm:hidden mt-1.5">${causaHtml}</div>
       </td>
       <td class="p-3 hidden sm:table-cell">
         <div class="font-bold text-white text-[11px]">${d.cliente_nome}</div>
         ${d.nota_fiscal ? `<div class="text-emerald-400 font-semibold">NF: ${d.nota_fiscal}</div>` : '<div class="text-slate-500 text-[10px]">Sem NF</div>'}
       </td>
+      <td class="p-3 hidden sm:table-cell max-w-[220px]">${causaHtml}</td>
       <td class="p-3 hidden md:table-cell text-[11px]">
         ${d.sem_itens
           ? `<span class="text-amber-300 italic">Sem itens: ${d.observacao_sem_itens||''}</span>`
@@ -11573,7 +11627,7 @@ function renderCdRecepcaoView() {
               </thead>
               <tbody class="divide-y divide-slate-800">
                 ${pendentesFiltrados.length === 0
-                  ? `<tr><td colspan="6" class="p-6 text-center text-slate-500">${pendentes.length === 0
+                  ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">${pendentes.length === 0
                       ? '✅ Nenhum retorno pendente.'
                       : 'Nenhum pendente encontrado para o filtro aplicado. <button onclick="limparFiltrosPendCd()" class="underline text-amber-400 font-bold">Limpar filtros</button>'}</td></tr>`
                   : pendentesFiltrados.map(d => buildRow(d, true)).join('')}
@@ -11619,7 +11673,7 @@ function renderCdRecepcaoView() {
               </thead>
               <tbody class="divide-y divide-slate-800">
                 ${historico.length === 0
-                  ? `<tr><td colspan="6" class="p-6 text-center text-slate-500">Nenhum registro encontrado.</td></tr>`
+                  ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">Nenhum registro encontrado.</td></tr>`
                   : historico.map(d => buildRow(d, false)).join('')}
               </tbody>
             </table>
