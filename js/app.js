@@ -10591,7 +10591,13 @@ function renderGestaoGestorView() {
   const filtroResp = window._filtroGestorResponsavel || '';
 
   const filtroSort = window._filtroGestorSort || 'data_desc';
-  const todosPendentes = todosDevs.filter(d => d.status_gestao !== 'CONCLUIDO');
+  // 19/10/2026: "Pendentes" era tudo que não está CONCLUIDO — e aí entravam
+  // as devoluções que ainda estão na Análise (status_gestao = 'PENDENTE', o
+  // default do banco), contadas ao mesmo tempo como pendência do analista e
+  // do gestor. A fila do gestor começa na apuração da causa raiz; usa o mesmo
+  // corte do card do Dashboard (tratativasPendentesGestor) para que os dois
+  // números batam e o SLA de cada área conte só o que é dela.
+  const todosPendentes = tratativasPendentesGestor(todosDevs);
   const todosConcluidos = todosDevs.filter(d => d.status_gestao === 'CONCLUIDO');
 
   // 6.7.0 (Bloco F): o predicado dos filtros vira função e é aplicado ao
@@ -10608,7 +10614,7 @@ function renderGestaoGestorView() {
     return true;
   };
   const devsFiltrados = todosDevs.filter(passaFiltros);
-  const pendentesFiltrados = devsFiltrados.filter(d => d.status_gestao !== 'CONCLUIDO');
+  const pendentesFiltrados = tratativasPendentesGestor(devsFiltrados);
   const concluidosFiltrados = devsFiltrados.filter(d => d.status_gestao === 'CONCLUIDO');
 
   let devsExibidos = activeGestorTab === 'pendentes' ? pendentesFiltrados : concluidosFiltrados;
@@ -10846,8 +10852,11 @@ function renderGestaoGestorView() {
                 </label>
                 <div>
                   <label class="block text-[10px] text-slate-400 mb-1">Status da Gestão</label>
+                  <!-- "Pendente" grava PENDENTE_GESTOR, não PENDENTE: PENDENTE é o
+                       status da abertura (chamado na Análise). Gravar PENDENTE aqui
+                       tirava o chamado da fila do gestor (DEV-075/100, 26/09/2026). -->
                   <select id="gestor-status-${d.id}" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs font-bold">
-                    <option value="PENDENTE" ${d.status_gestao!=='CONCLUIDO'?'selected':''}>⏳ Pendente</option>
+                    <option value="PENDENTE_GESTOR" ${d.status_gestao!=='CONCLUIDO'?'selected':''}>⏳ Pendente</option>
                     <option value="CONCLUIDO" ${d.status_gestao==='CONCLUIDO'?'selected':''}>✅ Concluído</option>
                   </select>
                 </div>
@@ -11344,9 +11353,6 @@ function diasParadoNoCd(d, viagemJaResolvida) {
   return Math.max(0, Math.round(ms / 86400000));
 }
 
-// Busca única sobre a fila: nº DEV, placa, rota, carga, motorista, cliente, NF
-// e descrição dos itens. Termos separados por espaço somam (E), então
-// "colinas truck" filtra as duas coisas ao mesmo tempo.
 // Causa vigente da devolução para a grade do Retorno Físico (19/10/2026).
 //
 // Pedido do Tiago: algumas causas (falta, qualidade, erro da indústria) pedem
@@ -11396,6 +11402,9 @@ function renderCausaDevolucaoCd(d) {
     ${rodape ? `<div class="text-[9px] text-slate-500 mt-0.5">👤 ${esc(rodape)}</div>` : ''}`;
 }
 
+// Busca única sobre a fila: nº DEV, placa, rota, carga, motorista, cliente, NF,
+// causa (abertura e apurada) e descrição dos itens. Termos separados por espaço somam (E), então
+// "colinas truck" filtra as duas coisas ao mesmo tempo.
 function pendenteCasaComBusca(d, termo) {
   const t = String(termo || '').trim().toLowerCase();
   if (!t) return true;
