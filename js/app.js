@@ -4029,7 +4029,9 @@ const NAV_GRUPOS = [
       { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário', papeis: ['CD', 'GESTOR', 'ADMIN'] },
       { tab: 'ocorrencia_colaborador', icon: '👤', label: 'Ocorrência Colaborador', papeis: ['CD', 'GESTOR', 'ADMIN'] },
       { tab: 'ocorrencia_cd', icon: '📢', label: 'Ocorrência CD', papeis: ['CD', 'GESTOR', 'ADMIN'] },
-      { tab: 'corte_cd', icon: '✂️', label: 'Corte', papeis: ['CD', 'GESTOR', 'ADMIN'] }
+      { tab: 'corte_cd', icon: '✂️', label: 'Corte', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      // 6.9.0: visao geral de pontos (Power BI) x ocorrencias, por mes de fechamento (26 a 25).
+      { tab: 'produtividade_cd', icon: '🏆', label: 'Produtividade', papeis: ['CD', 'GESTOR', 'ADMIN'] }
     ]
   },
   {
@@ -4363,6 +4365,9 @@ function renderApp() {
         break;
       case 'corte_cd':
         html = renderCorteCDView();
+        break;
+      case 'produtividade_cd':
+        html = renderProdutividadeCDView();
         break;
       // 6.7.0: as três subabas do Boletim no menu — mesma tela, subaba
       // decidida pelo activeTab (ver renderBoletimGerencialView).
@@ -29596,3 +29601,399 @@ ${dados.motivo}
 }
 
 
+
+// ===== TELA: PRODUTIVIDADE CD (6.9.0) =====
+// Visao geral, linha a linha, por colaborador e por mes de fechamento.
+// - Pontos e producao: Power BI (modelo "Produtividade"), gravados na nuvem
+//   pela Edge Function sync-produtividade em prod_pontuacao (06h e 13h). Sao
+//   lidos direto da nuvem quando a tela abre; NAO entram no armazenamento
+//   local nem na sincronizacao do app (a tabela e somente leitura para o app).
+// - Ocorrencias: as do proprio Jr-Oper — devolucoes ERRO CARREGAMENTO em que
+//   a pessoa foi apontada como separador/conferente (mesma regra da aba
+//   Ocorrencia da planilha de produtividade e do Acompanhamento do
+//   Funcionario; separador/conferente vem preenchido em TODA devolucao, ate
+//   nas de erro de motorista ou industria, entao nao da para contar todas),
+//   Ocorrencia Colaborador e Medidas Disciplinares.
+// - Mes de fechamento: 26 do mes anterior a 25 do mes (o corte e no dia 25).
+//   Mes 'aberto' e previa e muda a cada sincronizacao; 'fechado' fica
+//   congelado (o Power BI recalcula o passado com o cadastro de hoje).
+// - Por decisao do gestor (20/10/2026) esta tela NUNCA mostra valores em R$.
+// - Ligacao pontos x ocorrencias e pelo NOME (normalizeStr): a chapa do
+//   cadastro do Jr-Oper nao e a matricula do WMS. Ocorrencia cujo nome nao
+//   casa com ninguem dos pontos aparece no quadro "sem correspondencia".
+window._prodCD = window._prodCD || {
+  periodos: null, pontos: {}, ultimaSync: null,
+  carregando: false, erro: '', mes: null,
+  busca: '', setor: 'TODOS', ordem: 'pontuacao', aberto: {}
+};
+
+function prodEsc(v) {
+  return String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function prodNum(v, casas = 0) {
+  if (v === null || v === undefined || v === '' || isNaN(Number(v))) return '—';
+  return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
+}
+
+async function carregarProdutividadeCD(forcar = false) {
+  const st = window._prodCD;
+  if (st.carregando) return;
+  if (!window.cloudStore || !window.cloudStore.isConfigured()) {
+    st.erro = 'Sem conexão com a nuvem configurada neste aparelho.';
+    renderApp();
+    return;
+  }
+  st.carregando = true; st.erro = '';
+  try {
+    if (forcar || !st.periodos) {
+      const per = await window.cloudStore._getPagina('prod_periodos_resumo', 'order=ano_mes.desc');
+      if (!per) throw new Error('Não foi possível ler os períodos de fechamento.');
+      st.periodos = per.filter(p => p.status === 'aberto' || Number(p.colaboradores) > 0);
+      const log = await window.cloudStore._getPagina('prod_sync_log', 'status=eq.ok&order=id.desc&limit=1');
+      st.ultimaSync = log && log[0] ? log[0].finalizado_em : null;
+      if (!st.mes || !st.periodos.some(p => p.ano_mes === st.mes)) {
+        st.mes = st.periodos.length ? st.periodos[0].ano_mes : null;
+      }
+    }
+    if (st.mes && (forcar || !st.pontos[st.mes])) {
+      const linhas = await window.cloudStore._getPagina('prod_pontuacao', `ano_mes=eq.${st.mes}&order=nome.asc`);
+      if (!linhas) throw new Error('Não foi possível ler os pontos do mês.');
+      st.pontos[st.mes] = linhas;
+    }
+  } catch (e) {
+    st.erro = e.message || String(e);
+  } finally {
+    st.carregando = false;
+    renderApp();
+  }
+}
+window.carregarProdutividadeCD = carregarProdutividadeCD;
+
+function prodSelecionarMes(valor) {
+  window._prodCD.mes = Number(valor);
+  window._prodCD.aberto = {};
+  if (!window._prodCD.pontos[window._prodCD.mes]) carregarProdutividadeCD();
+  else renderApp();
+}
+window.prodSelecionarMes = prodSelecionarMes;
+
+function prodAlternarLinha(chave) {
+  window._prodCD.aberto[chave] = !window._prodCD.aberto[chave];
+  renderApp();
+}
+window.prodAlternarLinha = prodAlternarLinha;
+
+// A busca re-renderiza a tela inteira; devolve o foco ao campo para dar
+// para continuar digitando.
+function prodBuscar(valor) {
+  window._prodCD.busca = valor;
+  renderApp();
+  const el = document.getElementById('prod-busca');
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+window.prodBuscar = prodBuscar;
+
+// Ocorrencias do periodo [inicio, fim], agrupadas pelo nome normalizado.
+function prodOcorrenciasDoPeriodo(inicio, fim) {
+  const dentro = d => d && d >= inicio && d <= fim;
+  const porNome = {};
+  const pegar = nome => {
+    const k = normalizeStr(nome);
+    if (!k) return null;
+    if (!porNome[k]) porNome[k] = { nome: String(nome).trim(), sac: [], colab: [], medidas: [] };
+    return porNome[k];
+  };
+
+  db.getDevolucoes().forEach(d => {
+    if (String(d.tipo_erro || "").trim().toUpperCase() !== "ERRO CARREGAMENTO") return;
+    const data = String(d.data_abertura || d.criado_em || '').slice(0, 10);
+    if (!dentro(data)) return;
+    const sep = (d.separador_apurado || d.separador_nome || '').trim();
+    const conf = (d.conferente_apurado || d.conferente_nome || '').trim();
+    const reg = papel => ({
+      data, papel,
+      protocolo: d.numero_devolucao || d.numero_protocolo || '—',
+      cliente: d.cliente_nome || '—',
+      motivo: d.motivo_real_causa_raiz || d.motivo_reclamado || '—',
+      tipo_erro: d.tipo_erro || '—',
+      tratativa: d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'
+    });
+    if (sep && conf && normalizeStr(sep) === normalizeStr(conf)) {
+      const p = pegar(sep); if (p) p.sac.push(reg('Separador e Conferente'));
+      return;
+    }
+    if (sep) { const p = pegar(sep); if (p) p.sac.push(reg('Separador')); }
+    if (conf) { const p = pegar(conf); if (p) p.sac.push(reg('Conferente')); }
+  });
+
+  db.getOcorrenciasColaborador().forEach(o => {
+    if (o.is_deleted || !dentro(o.data)) return;
+    const p = pegar(o.funcionario || '');
+    if (p) p.colab.push({ data: o.data, requisito: o.requisito || '—', detalhamento: o.detalhamento || '', status: o.status || 'PENDENTE' });
+  });
+
+  db.getMedidasDisciplinares().forEach(m => {
+    const data = String(m.data_ocorrencia || '').slice(0, 10);
+    if (!dentro(data)) return;
+    const p = pegar(m.colaborador_nome || '');
+    if (p) p.medidas.push({ data, tipo: m.tipo || '—', numero: m.numero_medida || '—', motivo: m.motivo || '', dias: m.dias_suspensao || '' });
+  });
+
+  return porNome;
+}
+
+function prodMontarLinhas(periodo) {
+  const st = window._prodCD;
+  const pontos = st.pontos[periodo.ano_mes] || [];
+  const ocs = prodOcorrenciasDoPeriodo(String(periodo.inicio).slice(0, 10), String(periodo.fim).slice(0, 10));
+  const usados = {};
+  const linhas = pontos.map(p => {
+    const k = normalizeStr(p.nome);
+    const o = ocs[k] || { sac: [], colab: [], medidas: [] };
+    usados[k] = true;
+    return { ...p, chave: 'm' + p.matricula, sac: o.sac, colab: o.colab, medidas: o.medidas };
+  });
+  const semCorrespondencia = Object.keys(ocs).filter(k => !usados[k]).map(k => ocs[k]);
+  return { linhas, semCorrespondencia };
+}
+
+function prodDetalheHtml(l) {
+  const vazio = txt => `<div class="text-[11px] text-slate-500 italic">${txt}</div>`;
+  const sac = l.sac.length === 0 ? vazio('Nenhuma devolução por erro de carregamento no período.') : `
+    <table class="w-full text-[11px] text-slate-300"><thead class="text-[9px] uppercase text-slate-500"><tr>
+      <th class="p-1 text-left">Data</th><th class="p-1 text-left">Protocolo</th><th class="p-1 text-left">Papel</th>
+      <th class="p-1 text-left">Tipo de erro</th><th class="p-1 text-left">Motivo</th><th class="p-1 text-left">Cliente</th><th class="p-1 text-left">Tratativa</th></tr></thead>
+      <tbody>${l.sac.map(s => `<tr class="border-t border-slate-800">
+        <td class="p-1 whitespace-nowrap">${formatarData(s.data)}</td><td class="p-1 font-bold text-emerald-400">${prodEsc(s.protocolo)}</td>
+        <td class="p-1">${prodEsc(s.papel)}</td><td class="p-1">${prodEsc(s.tipo_erro)}</td><td class="p-1">${prodEsc(s.motivo)}</td>
+        <td class="p-1">${prodEsc(s.cliente)}</td><td class="p-1 ${s.tratativa === 'Concluída' ? 'text-emerald-400' : 'text-amber-400'} font-bold">${s.tratativa}</td></tr>`).join('')}</tbody></table>`;
+  const colab = l.colab.length === 0 ? vazio('Nenhuma ocorrência de colaborador no período.') : l.colab.map(c => `
+    <div class="text-[11px] text-slate-300 border-t border-slate-800 py-1"><span class="font-bold">${formatarData(c.data)}</span> · <span class="text-amber-300 font-bold">${prodEsc(c.requisito)}</span> · ${prodEsc(c.status)}${c.detalhamento ? `<div class="text-slate-400">${prodEsc(c.detalhamento)}</div>` : ''}</div>`).join('');
+  const med = l.medidas.length === 0 ? vazio('Nenhuma medida disciplinar no período.') : l.medidas.map(m => `
+    <div class="text-[11px] text-slate-300 border-t border-slate-800 py-1"><span class="font-bold">${formatarData(m.data)}</span> · <span class="text-red-300 font-bold">${prodEsc(m.tipo)}${m.dias ? ` (${prodEsc(m.dias)}d)` : ''}</span> · ${prodEsc(m.numero)}${m.motivo ? `<div class="text-slate-400">${prodEsc(m.motivo)}</div>` : ''}</div>`).join('');
+  const prod = l.matricula !== undefined ? `
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
+      ${[['OS', prodNum(l.qtd_os)], ['Apanhos', prodNum(l.qtd_apanhos)], ['Kg Expedição', prodNum(l.kg_total, 2)], ['Kg Entrada', prodNum(l.kg_entrada, 2)], ['Kg Carne', prodNum(l.kg_carne, 2)]]
+        .map(([r, v]) => `<div class="bg-slate-900 border border-slate-800 rounded-lg p-2"><div class="text-[9px] uppercase text-slate-500 font-bold">${r}</div><div class="font-bold text-white">${v}</div></div>`).join('')}
+    </div>` : '';
+  return `
+    <div class="space-y-3 p-3 bg-slate-950/60">
+      ${prod}
+      <div><div class="text-[10px] font-black text-red-400 uppercase mb-1">📦 Ocorrências SAC — ${l.sac.length}</div>${sac}</div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div><div class="text-[10px] font-black text-amber-400 uppercase mb-1">👤 Ocorrência Colaborador — ${l.colab.length}</div>${colab}</div>
+        <div><div class="text-[10px] font-black text-purple-400 uppercase mb-1">⚖️ Medidas Disciplinares — ${l.medidas.length}</div>${med}</div>
+      </div>
+    </div>`;
+}
+
+function exportarProdutividadeCDCsv() {
+  const st = window._prodCD;
+  const periodo = (st.periodos || []).find(p => p.ano_mes === st.mes);
+  if (!periodo) return;
+  const { linhas } = prodMontarLinhas(periodo);
+  const cab = ['MES', 'MATRICULA', 'NOME', 'FUNCAO', 'SETOR', 'PONTUACAO', 'QTD_OS', 'QTD_APANHOS', 'KG_EXPEDICAO', 'KG_ENTRADA', 'KG_CARNE', 'OC_SAC', 'OC_COLABORADOR', 'MEDIDAS_DISCIPLINARES'];
+  const n = v => (v === null || v === undefined || v === '') ? '' : String(v).replace('.', ',');
+  const cel = v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g, '""')}"`;
+  const csv = [cab.join(';')].concat(linhas.map(l => [periodo.rotulo, l.matricula, l.nome, l.cargo, l.setor,
+    n(l.pontuacao), n(l.qtd_os), n(l.qtd_apanhos), n(l.kg_total), n(l.kg_entrada), n(l.kg_carne),
+    l.sac.length, l.colab.length, l.medidas.length].map(cel).join(';'))).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `produtividade_cd_${periodo.ano_mes}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+window.exportarProdutividadeCDCsv = exportarProdutividadeCDCsv;
+
+function renderProdutividadeCDView() {
+  const st = window._prodCD;
+  const cabecalhoTela = (extra = '') => `
+    <div class="bg-gradient-to-r from-slate-900 via-emerald-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-emerald-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+      <div class="flex items-center gap-3">
+        <div class="bg-emerald-600/30 p-2.5 rounded-xl border border-emerald-500/40 text-2xl">🏆</div>
+        <div>
+          <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+            PRODUTIVIDADE
+            <span class="bg-emerald-800 text-emerald-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">CENTRO DE DISTRIBUIÇÃO</span>
+          </h2>
+          <p class="text-[11px] text-slate-300 font-medium">Pontos (Power BI), ocorrências SAC, ocorrência colaborador e medidas disciplinares — período de 26 a 25</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">${extra}</div>
+    </div>`;
+
+  if (!st.periodos) {
+    if (!st.carregando && !st.erro) setTimeout(() => carregarProdutividadeCD(), 0);
+    return `<div class="space-y-5">${cabecalhoTela()}
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">
+        ${st.erro ? `<div class="text-red-400 font-bold mb-3">⚠️ ${prodEsc(st.erro)}</div><button onclick="carregarProdutividadeCD(true)" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">Tentar de novo</button>` : '⏳ Carregando pontos da nuvem...'}
+      </div></div>`;
+  }
+
+  const periodo = st.periodos.find(p => p.ano_mes === st.mes);
+  const botoes = `
+    <button onclick="carregarProdutividadeCD(true)" class="bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/40 shadow" ${st.carregando ? 'disabled' : ''}>${st.carregando ? '⏳ Atualizando...' : '🔄 Atualizar'}</button>
+    <button onclick="exportarProdutividadeCDCsv()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/50 shadow">📊 Exportar Excel</button>`;
+
+  if (!periodo) {
+    return `<div class="space-y-5">${cabecalhoTela(botoes)}
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">Nenhum período com pontos disponível.</div></div>`;
+  }
+  if (!st.pontos[periodo.ano_mes] && !st.carregando && !st.erro) setTimeout(() => carregarProdutividadeCD(), 0);
+
+  const { linhas: todas, semCorrespondencia } = prodMontarLinhas(periodo);
+  const busca = normalizeStr(st.busca || '');
+  const setores = Array.from(new Set(todas.map(l => (l.setor || '').trim()).filter(Boolean))).sort();
+  const totalOc = l => l.sac.length + l.colab.length + l.medidas.length;
+  const linhas = todas
+    .filter(l => st.setor === 'TODOS' || (l.setor || '').trim() === st.setor)
+    .filter(l => !busca || normalizeStr(`${l.nome} ${l.matricula} ${l.cargo}`).includes(busca))
+    .sort((a, b) => {
+      if (st.ordem === 'nome') return String(a.nome).localeCompare(String(b.nome));
+      if (st.ordem === 'ocorrencias') return (totalOc(b) - totalOc(a)) || String(a.nome).localeCompare(String(b.nome));
+      const pa = a.pontuacao === null ? -1 : Number(a.pontuacao);
+      const pb = b.pontuacao === null ? -1 : Number(b.pontuacao);
+      return pb - pa;
+    });
+
+  const comPontos = linhas.filter(l => l.pontuacao !== null && l.pontuacao !== undefined);
+  const media = comPontos.length ? comPontos.reduce((s, l) => s + Number(l.pontuacao), 0) / comPontos.length : null;
+  const soma = campo => linhas.reduce((s, l) => s + l[campo].length, 0);
+  const aberto = periodo.status === 'aberto';
+  const ultima = st.ultimaSync ? new Date(st.ultimaSync).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
+  const card = (rotulo, valor, cor) => `
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+      <div class="text-[9px] uppercase font-bold text-slate-500">${rotulo}</div>
+      <div class="text-xl font-black ${cor}">${valor}</div>
+    </div>`;
+
+  const badge = (n, cor) => n === 0 ? '<span class="text-slate-600">0</span>' : `<span class="${cor} font-black">${n}</span>`;
+
+  const linhaHtml = l => {
+    const aberta = !!st.aberto[l.chave];
+    return `
+      <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="prodAlternarLinha('${prodEsc(l.chave)}')">
+        <td class="p-2 border-r border-slate-800 text-slate-500">${aberta ? '▾' : '▸'}</td>
+        <td class="p-2 border-r border-slate-800 font-bold text-slate-300">${prodEsc(l.matricula)}</td>
+        <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${prodEsc(l.nome)}</td>
+        <td class="p-2 border-r border-slate-800 text-slate-300 text-[11px]">${prodEsc(l.cargo)}</td>
+        <td class="p-2 border-r border-slate-800 text-slate-300 text-center">${prodEsc(l.setor)}</td>
+        <td class="p-2 border-r border-slate-800 text-right font-black text-emerald-300">${prodNum(l.pontuacao, 2)}</td>
+        <td class="p-2 border-r border-slate-800 text-right text-slate-300">${prodNum(l.qtd_os)}</td>
+        <td class="p-2 border-r border-slate-800 text-right text-slate-300">${prodNum(l.qtd_apanhos)}</td>
+        <td class="p-2 border-r border-slate-800 text-right text-slate-300">${prodNum(l.kg_total)}</td>
+        <td class="p-2 border-r border-slate-800 text-right text-slate-300">${prodNum(l.kg_entrada)}</td>
+        <td class="p-2 border-r border-slate-800 text-center">${badge(l.sac.length, 'text-red-400')}</td>
+        <td class="p-2 border-r border-slate-800 text-center">${badge(l.colab.length, 'text-amber-400')}</td>
+        <td class="p-2 text-center">${badge(l.medidas.length, 'text-purple-400')}</td>
+      </tr>
+      ${aberta ? `<tr><td colspan="13" class="p-0 border-b border-slate-800">${prodDetalheHtml(l)}</td></tr>` : ''}`;
+  };
+
+  const semCorrHtml = semCorrespondencia.length === 0 ? '' : `
+    <div class="bg-slate-900 border border-amber-800/60 rounded-xl p-4 shadow-xl space-y-2">
+      <h3 class="text-xs font-extrabold text-amber-400 uppercase">⚠️ Ocorrências sem correspondência nos pontos — ${semCorrespondencia.length}</h3>
+      <p class="text-[10px] text-slate-400">Nomes apontados em ocorrências do período que não batem com nenhum colaborador da lista de pontos (nome escrito diferente, ou pessoa fora do cadastro do Power BI). Clique para ver.</p>
+      <div class="divide-y divide-slate-800">
+        ${semCorrespondencia.map((o, i) => {
+          const chave = 'x' + i;
+          const aberta = !!st.aberto[chave];
+          return `<div>
+            <div class="flex items-center justify-between py-1.5 cursor-pointer text-xs" onclick="prodAlternarLinha('${chave}')">
+              <span class="font-bold text-white uppercase">${aberta ? '▾' : '▸'} ${prodEsc(o.nome)}</span>
+              <span class="space-x-3"><span>SAC ${badge(o.sac.length, 'text-red-400')}</span><span>Colab. ${badge(o.colab.length, 'text-amber-400')}</span><span>Medidas ${badge(o.medidas.length, 'text-purple-400')}</span></span>
+            </div>
+            ${aberta ? prodDetalheHtml(o) : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  return `
+    <div class="space-y-5">
+      ${cabecalhoTela(botoes)}
+
+      <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+        <div>
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Mês de fechamento</label>
+          <select onchange="prodSelecionarMes(this.value)" class="w-full bg-slate-900 border border-slate-700 text-emerald-300 text-xs rounded-lg p-2 font-bold">
+            ${st.periodos.map(p => `<option value="${p.ano_mes}" ${p.ano_mes === st.mes ? 'selected' : ''}>${prodEsc(p.rotulo)}${p.status === 'aberto' ? ' — EM ANDAMENTO' : ''}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Setor</label>
+          <select onchange="window._prodCD.setor=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-amber-300 text-xs rounded-lg p-2 font-bold">
+            <option value="TODOS" ${st.setor === 'TODOS' ? 'selected' : ''}>TODOS</option>
+            ${setores.map(s => `<option value="${prodEsc(s)}" ${st.setor === s ? 'selected' : ''}>${prodEsc(s)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Ordenar por</label>
+          <select onchange="window._prodCD.ordem=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-bold">
+            <option value="pontuacao" ${st.ordem === 'pontuacao' ? 'selected' : ''}>Maior pontuação</option>
+            <option value="ocorrencias" ${st.ordem === 'ocorrencias' ? 'selected' : ''}>Mais ocorrências</option>
+            <option value="nome" ${st.ordem === 'nome' ? 'selected' : ''}>Nome</option>
+          </select>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Pesquisar (nome, matrícula ou função)</label>
+          <input id="prod-busca" type="text" placeholder="🔎 Digite para pesquisar..." value="${prodEsc(st.busca)}" oninput="prodBuscar(this.value)" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-medium focus:border-emerald-500 focus:outline-none">
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 text-[11px]">
+        <span class="${aberto ? 'bg-amber-950 text-amber-300 border-amber-700/80' : 'bg-emerald-950 text-emerald-300 border-emerald-700/80'} border px-2 py-0.5 rounded font-extrabold uppercase">${aberto ? '⏳ Em andamento — prévia' : '🔒 Fechado'}</span>
+        <span class="text-slate-400">Período: <b class="text-white">${formatarData(periodo.inicio)} a ${formatarData(periodo.fim)}</b></span>
+        ${aberto ? `<span class="text-slate-500">· Pontos atualizados em ${ultima} (sincroniza às 06h e 13h)</span>` : ''}
+        ${st.erro ? `<span class="text-red-400 font-bold">⚠️ ${prodEsc(st.erro)}</span>` : ''}
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        ${card('Colaboradores', linhas.length, 'text-white')}
+        ${card('Pontuação média', prodNum(media, 2), 'text-emerald-300')}
+        ${card('Ocorrências SAC', soma('sac'), 'text-red-400')}
+        ${card('Ocorrência Colaborador', soma('colab'), 'text-amber-400')}
+        ${card('Medidas Disciplinares', soma('medidas'), 'text-purple-400')}
+      </div>
+
+      <div class="bg-slate-900 border border-emerald-800/60 rounded-xl p-4 shadow-xl">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr>
+                <th class="p-2 border-r border-slate-800"></th>
+                <th class="p-2 border-r border-slate-800">Matrícula</th>
+                <th class="p-2 border-r border-slate-800 min-w-[180px]">Colaborador</th>
+                <th class="p-2 border-r border-slate-800 min-w-[140px]">Função</th>
+                <th class="p-2 border-r border-slate-800 text-center">Setor</th>
+                <th class="p-2 border-r border-slate-800 text-right text-emerald-400">Pontuação</th>
+                <th class="p-2 border-r border-slate-800 text-right">OS</th>
+                <th class="p-2 border-r border-slate-800 text-right">Apanhos</th>
+                <th class="p-2 border-r border-slate-800 text-right">Kg Expedição</th>
+                <th class="p-2 border-r border-slate-800 text-right">Kg Entrada</th>
+                <th class="p-2 border-r border-slate-800 text-center text-red-400">Oc. SAC</th>
+                <th class="p-2 border-r border-slate-800 text-center text-amber-400">Oc. Colab.</th>
+                <th class="p-2 text-center text-purple-400">Medidas</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+              ${!st.pontos[periodo.ano_mes]
+                ? '<tr><td colspan="13" class="p-6 text-center text-slate-500">⏳ Carregando pontos do mês...</td></tr>'
+                : linhas.length === 0
+                  ? '<tr><td colspan="13" class="p-6 text-center text-slate-500">Nenhum colaborador encontrado com esses filtros.</td></tr>'
+                  : linhas.map(linhaHtml).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-[10px] text-slate-500 mt-2">Clique numa linha para ver a produção e cada ocorrência do período. Ocorrências SAC: devoluções ERRO CARREGAMENTO em que a pessoa foi apontada como separador e/ou conferente.</p>
+      </div>
+
+      ${semCorrHtml}
+    </div>`;
+}
