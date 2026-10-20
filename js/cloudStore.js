@@ -1211,6 +1211,58 @@ class CloudStore {
   }
 
   // =================================================================
+  // EDIÇÃO FEITA NO MEIO DO PULL (20/10/2026)
+  //
+  // O pull lê as ~25 tabelas uma a uma e cada mesclagem acontece na hora
+  // em que a tabela chega — mas o resultado só é aplicado em db.data no FIM
+  // do laço, segundos depois. Uma edição salva nesse intervalo era
+  // atropelada pela cópia mesclada antes dela.
+  //
+  // Caso real: baixa da reentrega da carga 44730. O modal grava duas
+  // edições seguidas (novo motorista, depois REALIZADA); o pull mesclou
+  // reentregas entre elas e, ao terminar, devolveu a linha a DESPACHADO na
+  // tela. O banco ficou certo porque o envio já tinha serializado a baixa —
+  // se não tivesse, a baixa teria sumido sem aviso.
+  //
+  // Conserto: o que mudou em memória desde o retrato usado na mesclagem
+  // (registro editado ou criado no intervalo) fica como está. O mapa de
+  // hashes não precisa de ajuste: o registro mantido difere do hash anotado,
+  // então é tratado como sujo e sobe no próximo envio.
+  // =================================================================
+  _preservarEdicoesDuranteOPull(retratoRaw, mesclado, atual) {
+    if (!Array.isArray(atual) || !Array.isArray(mesclado) || !retratoRaw) return mesclado;
+    let retrato;
+    try { retrato = JSON.parse(retratoRaw); } catch(e) { return mesclado; }
+    if (!Array.isArray(retrato)) return mesclado;
+
+    const antes = new Map();
+    for (const r of retrato) {
+      if (r && r.id !== undefined && r.id !== null) antes.set(String(r.id), JSON.stringify(r));
+    }
+
+    const manter = new Map();
+    for (const r of atual) {
+      if (!r || r.id === undefined || r.id === null) continue;
+      const id = String(r.id);
+      if (antes.get(id) !== JSON.stringify(r)) manter.set(id, r);
+    }
+    if (manter.size === 0) return mesclado;
+
+    console.log(`[CloudStore] ${manter.size} registro(s) editado(s) durante o pull foram preservados.`);
+    const saida = mesclado.map(r => {
+      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+      if (id !== null && manter.has(id)) {
+        const local = manter.get(id);
+        manter.delete(id);
+        return local;
+      }
+      return r;
+    });
+    for (const r of manter.values()) saida.push(r);
+    return saida;
+  }
+
+  // =================================================================
   // JANELA OPERACIONAL — Onda 1, item 5 (22/08/2026)
   //
   // Teto 2: o catálogo estático já ocupa 2,9 MB de uma cota de ~5 MB, e
@@ -2580,6 +2632,10 @@ class CloudStore {
     // aviso: o dado simplesmente sumia. Agora só relemos e mesclamos por
     // cima do jr_sac_db mais atual no final, não do snapshot do início.
     const pulledUpdates = {};
+    // O "local" que cada tabela usou na mesclagem (dbKey -> JSON). Serve para
+    // descobrir, na hora de aplicar, o que foi editado DEPOIS da mesclagem —
+    // ver _preservarEdicoesDuranteOPull().
+    const retratosDoMerge = {};
 
     // Relê jr_sac_db a CADA chamada, e não uma vez no início, pelo mesmo
     // motivo do comentário acima: o laço leva segundos e um save() no meio
@@ -2727,6 +2783,7 @@ class CloudStore {
         // depender de a segunda cópia ter cabido.
         if (localRaw !== mescladoStr) {
           pulledUpdates[m.dbKey] = mesclado;
+          retratosDoMerge[m.dbKey] = localRaw;
           anyChange = true;
         }
       } catch(e) {
@@ -2767,6 +2824,10 @@ class CloudStore {
       // a tela é a operação.
       // =============================================================
       if (window.db && window.db.data) {
+        for (const dbKey of Object.keys(pulledUpdates)) {
+          pulledUpdates[dbKey] = this._preservarEdicoesDuranteOPull(
+            retratosDoMerge[dbKey], pulledUpdates[dbKey], window.db.data[dbKey]);
+        }
         Object.assign(window.db.data, pulledUpdates);
       }
 
@@ -3323,7 +3384,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "produtividade-cd-6.9.0";
+CloudStore.BUILD = "pull-preserva-edicao-6.9.1";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
