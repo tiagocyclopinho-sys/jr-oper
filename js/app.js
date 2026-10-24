@@ -29624,7 +29624,7 @@ ${dados.motivo}
 window._prodCD = window._prodCD || {
   periodos: null, pontos: {}, ultimaSync: null,
   carregando: false, erro: '', mes: null,
-  busca: '', setor: 'TODOS', ordem: 'pontuacao', aberto: {}
+  busca: '', setor: 'TODOS', funcao: 'TODAS', ordem: 'pontuacao', aberto: {}
 };
 
 function prodEsc(v) {
@@ -29849,9 +29849,13 @@ function renderProdutividadeCDView() {
   const { linhas: todas, semCorrespondencia } = prodMontarLinhas(periodo);
   const busca = normalizeStr(st.busca || '');
   const setores = Array.from(new Set(todas.map(l => (l.setor || '').trim()).filter(Boolean))).sort();
+  // Funcao = cargo que vem do Power BI junto com os pontos.
+  const funcoes = Array.from(new Set(todas.map(l => (l.cargo || '').trim()).filter(Boolean))).sort();
+  if (!st.funcao) st.funcao = 'TODAS';
   const totalOc = l => l.sac.length + l.colab.length + l.medidas.length;
   const linhas = todas
     .filter(l => st.setor === 'TODOS' || (l.setor || '').trim() === st.setor)
+    .filter(l => st.funcao === 'TODAS' || (l.cargo || '').trim() === st.funcao)
     .filter(l => !busca || normalizeStr(`${l.nome} ${l.matricula} ${l.cargo}`).includes(busca))
     .sort((a, b) => {
       if (st.ordem === 'nome') return String(a.nome).localeCompare(String(b.nome));
@@ -29919,7 +29923,7 @@ function renderProdutividadeCDView() {
     <div class="space-y-5">
       ${cabecalhoTela(botoes)}
 
-      <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+      <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
         <div>
           <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Mês de fechamento</label>
           <select onchange="prodSelecionarMes(this.value)" class="w-full bg-slate-900 border border-slate-700 text-emerald-300 text-xs rounded-lg p-2 font-bold">
@@ -29931,6 +29935,13 @@ function renderProdutividadeCDView() {
           <select onchange="window._prodCD.setor=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-amber-300 text-xs rounded-lg p-2 font-bold">
             <option value="TODOS" ${st.setor === 'TODOS' ? 'selected' : ''}>TODOS</option>
             ${setores.map(s => `<option value="${prodEsc(s)}" ${st.setor === s ? 'selected' : ''}>${prodEsc(s)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Função</label>
+          <select onchange="window._prodCD.funcao=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-amber-300 text-xs rounded-lg p-2 font-bold">
+            <option value="TODAS" ${st.funcao === 'TODAS' ? 'selected' : ''}>TODAS</option>
+            ${funcoes.map(f => `<option value="${prodEsc(f)}" ${st.funcao === f ? 'selected' : ''}>${prodEsc(f)}</option>`).join('')}
           </select>
         </div>
         <div>
