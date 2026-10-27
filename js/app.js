@@ -24382,6 +24382,8 @@ function fecharModalResumo() {
   }
 }
 
+const CONDUTAS_RESUMO = ['FALTA INJUSTIFICADA', 'FALTA COM ATESTADO', 'FÉRIAS', 'SAÍDA ANTECIPADA', 'ATRASO NA CHEGADA'];
+
 function adicionarFaltaResumo(data, turno) {
   if (!turno) { alert('Selecione o turno antes de lançar uma falta.'); return; }
   const colabs = getListaTodosColaboradores();
@@ -24409,10 +24411,9 @@ function adicionarFaltaResumo(data, turno) {
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência *</label>
           <select id="md-fl-conduta" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
-            <option value="FALTA INJUSTIFICADA">FALTA INJUSTIFICADA</option>
-            <option value="SAÍDA ANTECIPADA">SAÍDA ANTECIPADA</option>
-            <option value="ATRASO NA CHEGADA">ATRASO NA CHEGADA</option>
+            ${CONDUTAS_RESUMO.map(c => `<option value="${c}">${c}</option>`).join('')}
           </select>
+          <p class="text-[9px] text-blue-300 mt-1">Falta com atestado: ao salvar, abre o atestado médico, que vai para o Acompanhamento de Funcionário.</p>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -24456,17 +24457,119 @@ function confirmarSalvarFaltaResumo(data, turno) {
   const periodo = document.getElementById('md-fl-periodo')?.value || 'Integral';
   const compensar = document.getElementById('md-fl-compensar')?.value || 'SIM';
 
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (!resumo.faltas_condutas) resumo.faltas_condutas = [];
-  resumo.faltas_condutas.push({
+  const falta = {
     id: db.gerarIdUnico(),
     nome: nome.toUpperCase().trim(),
     conduta: conduta.toUpperCase().trim(),
     avisado: avisado.toUpperCase().trim(),
     periodo: periodo.trim(),
     compensar: compensar.toUpperCase().trim()
-  });
+  };
+
+  // Falta com atestado: nada é gravado ainda — o pop-up do atestado grava a
+  // falta e o atestado juntos, para não sobrar um sem o outro se cancelar.
+  if (falta.conduta === 'FALTA COM ATESTADO') {
+    window._faltaAtestadoPendente = { data, turno, falta };
+    abrirModalAtestadoFaltaResumo();
+    return;
+  }
+
+  gravarFaltaResumo(data, turno, falta);
+  fecharModalResumo();
+  renderApp();
+}
+
+function gravarFaltaResumo(data, turno, falta) {
+  const resumo = db.getResumoDiarioCD(data, turno);
+  if (!resumo.faltas_condutas) resumo.faltas_condutas = [];
+  resumo.faltas_condutas.push(falta);
   db.saveResumoDiarioCD(resumo);
+}
+
+// Mesmos campos do bloco "Atestados Médicos" do Acompanhamento de Funcionário
+// (renderBlocoAtestadosMedicos), com a data do Resumo Diário já preenchida.
+function abrirModalAtestadoFaltaResumo() {
+  const p = window._faltaAtestadoPendente;
+  const container = document.getElementById('modal-container');
+  if (!p || !container) return;
+  const integral = String(p.falta.periodo || '').toUpperCase() === 'INTEGRAL';
+
+  container.innerHTML = `
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-bold text-blue-400 uppercase flex items-center gap-2">
+          <span>🏥</span> Atestado Médico
+        </h3>
+        <button onclick="cancelarAtestadoFaltaResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
+      </div>
+      <p class="text-[10px] text-slate-400">${p.falta.nome} — o atestado entra no Acompanhamento de Funcionário.</p>
+
+      <div class="grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
+          <input type="date" id="md-am-data" value="${p.data}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+        </div>
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Parcial/Integral</label>
+          <select id="md-am-tipo" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+            <option value="PARCIAL" ${integral ? '' : 'selected'}>Parcial</option>
+            <option value="INTEGRAL" ${integral ? 'selected' : ''}>Integral</option>
+          </select>
+        </div>
+        <div class="col-span-2">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Motivo</label>
+          <input type="text" id="md-am-motivo" placeholder="Motivo do atestado" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+        </div>
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">CID</label>
+          <input type="text" id="md-am-cid" placeholder="Ex: M54" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+        </div>
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">CRM/CRO</label>
+          <input type="text" id="md-am-crm" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+        </div>
+        <div class="col-span-2">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Médico</label>
+          <input type="text" id="md-am-medico" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+        <button onclick="cancelarAtestadoFaltaResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
+        <button onclick="confirmarAtestadoFaltaResumo()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Lançar Atestado</button>
+      </div>
+    </div>
+  `;
+  container.classList.remove('hidden');
+}
+
+function cancelarAtestadoFaltaResumo() {
+  window._faltaAtestadoPendente = null;
+  fecharModalResumo();
+}
+
+function confirmarAtestadoFaltaResumo() {
+  const p = window._faltaAtestadoPendente;
+  if (!p) { fecharModalResumo(); return; }
+  const dataAtestado = document.getElementById('md-am-data')?.value;
+  if (!dataAtestado) { alert('Informe a data do atestado!'); return; }
+
+  const res = db.addAtestadoMedico({
+    colaborador_tipo: 'CD',
+    colaborador_nome: p.falta.nome,
+    data: dataAtestado,
+    tipo_afastamento: document.getElementById('md-am-tipo')?.value,
+    motivo: document.getElementById('md-am-motivo')?.value,
+    cid: document.getElementById('md-am-cid')?.value,
+    medico: document.getElementById('md-am-medico')?.value,
+    crm_cro: document.getElementById('md-am-crm')?.value
+  });
+  if (!res.success) { showToast(res.message, 'error'); return; }
+
+  p.falta.atestado_id = res.registro.id;
+  gravarFaltaResumo(p.data, p.turno, p.falta);
+  window._faltaAtestadoPendente = null;
+  showToast('✅ Falta e atestado registrados!');
   fecharModalResumo();
   renderApp();
 }
@@ -24475,6 +24578,9 @@ function removerFaltaResumo(data, turno, index) {
   if (!confirm('Excluir esta falta/conduta registrada?')) return;
   const resumo = db.getResumoDiarioCD(data, turno);
   if (resumo.faltas_condutas) {
+    // O atestado lançado junto com a falta sai com ela do Acompanhamento.
+    const atestadoId = resumo.faltas_condutas[index]?.atestado_id;
+    if (atestadoId) db.excluirAtestadoMedico(atestadoId);
     resumo.faltas_condutas.splice(index, 1);
     db.saveResumoDiarioCD(resumo);
     renderApp();
@@ -24511,10 +24617,8 @@ function editarFaltaResumoModal(data, turno, index) {
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência *</label>
           <select id="md-fl-conduta" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase">
-            <option value="FALTA INJUSTIFICADA" ${item.conduta === 'FALTA INJUSTIFICADA' ? 'selected' : ''}>FALTA INJUSTIFICADA</option>
-            <option value="SAÍDA ANTECIPADA" ${item.conduta === 'SAÍDA ANTECIPADA' ? 'selected' : ''}>SAÍDA ANTECIPADA</option>
-            <option value="ATRASO NA CHEGADA" ${item.conduta === 'ATRASO NA CHEGADA' ? 'selected' : ''}>ATRASO NA CHEGADA</option>
-            ${!['FALTA INJUSTIFICADA', 'SAÍDA ANTECIPADA', 'ATRASO NA CHEGADA'].includes(item.conduta) && item.conduta ? `<option value="${item.conduta}" selected>${item.conduta}</option>` : ''}
+            ${CONDUTAS_RESUMO.map(c => `<option value="${c}" ${item.conduta === c ? 'selected' : ''}>${c}</option>`).join('')}
+            ${!CONDUTAS_RESUMO.includes(item.conduta) && item.conduta ? `<option value="${item.conduta}" selected>${item.conduta}</option>` : ''}
           </select>
         </div>
 

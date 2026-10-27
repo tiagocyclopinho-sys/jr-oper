@@ -3384,7 +3384,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "produtividade-filtro-funcao-6.9.2";
+CloudStore.BUILD = "falta-atestado-ferias-6.9.3";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
