@@ -21,6 +21,7 @@
 //   node tools/gerar_visao_operacao.js [AAAAMM] [pasta_de_saida]
 //   AAAAMM ...... mes da apresentacao (ex.: 202609). Sem ele, o ultimo mes
 //                 congelado na nuvem.
+//   Gera tambem "... - resumo.txt" (e-mail) e a versao corporativa em .html.
 //   pasta ....... sem ela, "06 - VISAO OPERACAO\AAAA - VISAO OPERACAO".
 //                 Nunca sobrescreve: se o arquivo ja existe, grava "(2)", "(3)"...
 // =============================================================================
@@ -28,11 +29,12 @@
 const fs = require('fs');
 const path = require('path');
 const pptxgen = require('pptxgenjs');
+// Formatos, carga dos dados, analise e pagina HTML: parte comum com o app
+const VO = require('../js/visaoOperacao.js');
+const { MESES, MES_ABREV, num, reais, mil, pct, dataBr, diaMes, iso, nomeMes, abrev, titulo, variacao, comparar, media, mediana, hhmm, analisar, gerarHtml } = VO;
 
 const PASTA_PADRAO = 'S:\\Logistica\\01 - LOGISTICA INFORMATIVO\\06 - VISÃO OPERAÇÃO';
 const MODELO = path.join(__dirname, 'visao_operacao');
-const MESES = ['JANEIRO', 'FEVEREIRO', 'MARÇO', 'ABRIL', 'MAIO', 'JUNHO', 'JULHO', 'AGOSTO', 'SETEMBRO', 'OUTUBRO', 'NOVEMBRO', 'DEZEMBRO'];
-const MES_ABREV = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
 
 // Cores: as mesmas dos slides de S.A.C. ja usados na apresentacao
 const COR = {
@@ -59,23 +61,6 @@ async function rest(cfg, tabela, query) {
   if (!r.ok) throw new Error(`Erro ao ler ${tabela}: ${r.status} ${await r.text()}`);
   return r.json();
 }
-
-// ---------------------------------------------------------------- formatos
-const nf = (casas) => new Intl.NumberFormat('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
-const num = (v, casas = 0) => (v === null || v === undefined || isNaN(v) ? '—' : nf(casas).format(v));
-const reais = (v, casas = 0) => (v === null || v === undefined ? '—' : `${v < 0 ? '−' : ''}R$ ${num(Math.abs(v), casas)}`);
-const mil = (v, casas = 1) => (v === null || v === undefined ? '—' : `${num(v / 1000, casas)} mil`);
-const pct = (v, casas = 1) => (v === null || v === undefined || !isFinite(v) ? '—' : `${num(v * 100, casas)}%`);
-const dataBr = (iso) => iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '';
-const diaMes = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
-const iso = (a, m, d) => new Date(Date.UTC(a, m - 1, d)).toISOString().slice(0, 10);
-const mesAnterior = (am) => (am % 100 === 1 ? am - 89 : am - 1);
-const nomeMes = (am) => `${MESES[(am % 100) - 1]}/${Math.floor(am / 100)}`;
-const abrev = (am) => `${MES_ABREV[(am % 100) - 1]}/${String(Math.floor(am / 100)).slice(2)}`;
-const titulo = (s) => String(s ?? '').toLowerCase().replace(/(^|\s|\/|\()\S/g, (c) => c.toUpperCase()).replace(/\b(De|Da|Do|Dos|Das|E)\b/g, (c) => c.toLowerCase())
-  .replace(/\b(Rca|Cd|Jr|Ma|Pa|To)\b/g, (c) => c.toUpperCase());
-// % so faz sentido sobre base positiva (saldo de inventario troca de sinal)
-const variacao = (atual, base) => (atual === null || base === null || base === undefined || base <= 0 ? null : atual / base - 1);
 
 // ---------------------------------------------------------------- slides base
 const W = 13.333, H = 7.5;
@@ -109,16 +94,6 @@ function cartao(s, x, y, w, h, valor, rotulo, comp, corValor = COR.texto) {
     const cor = comp.bom === true ? COR.bom : comp.bom === false ? COR.ruim : COR.suave;
     s.addText(comp.texto, { x: x + 0.18, y: y + h * 0.52 + 0.3, w: w - 0.3, h: 0.3, fontFace: FONTE, fontSize: 9, color: cor, margin: 0, isTextBox: true });
   }
-}
-
-// Texto de comparacao: "▲ 2,7% vs ano anterior". menorMelhor = custo/devolucao;
-// null = so informativo (sem verde/vermelho).
-function comparar(atual, base, rotuloBase, menorMelhor = true) {
-  const v = variacao(atual, base);
-  if (v === null) return null;
-  const seta = v > 0 ? '▲' : v < 0 ? '▼' : '=';
-  const bom = v === 0 || menorMelhor === null ? null : menorMelhor ? v < 0 : v > 0;
-  return { texto: `${seta} ${num(Math.abs(v) * 100, 1)}% vs ${rotuloBase}`, bom };
 }
 
 function nota(s, texto, y = 6.42) {
@@ -201,42 +176,6 @@ function tabela(s, x, y, colunas, linhas, { fonte = 9, alturaLinha = 0.25, desta
 
 const fatias = (lista, n) => { const out = []; for (let i = 0; i < lista.length; i += n) out.push(lista.slice(i, i + n)); return out.length ? out : [[]]; };
 
-// ---------------------------------------------------------------- dados
-async function carregar(cfg, am) {
-  const a = Math.floor(am / 100), m = am % 100;
-  const ant = mesAnterior(am);
-  const desde = (a - 1) * 100 + 1;
-  const [periodos, ind, quad, pontos, sac, trocas] = await Promise.all([
-    rest(cfg, 'vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes'),
-    rest(cfg, 'vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=gte.${desde}&ano_mes=lte.${am}`),
-    rest(cfg, 'vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
-    rest(cfg, 'prod_pontuacao', `select=nome,cargo,setor,pontuacao,qtd_os,qtd_apanhos,kg_total,kg_entrada&ano_mes=eq.${am}`),
-    rest(cfg, 'ocorrencias_devolucao', `select=tipo_erro,status_gestao,valor_reclamado,forma_acerto,data_entrada_cd,sem_itens&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
-    rest(cfg, 'trocas_veiculos', `select=data,veiculo_escalado,veiculo_trocado,motivo_resumido,motivo_outro,detalhamento,autorizado_por&or=(is_deleted.is.null,is_deleted.is.false)&data=gte.${iso(a, m, 1)}&data=lte.${iso(a, m + 1, 0)}&order=data.desc`),
-  ]);
-  const I = {}; // I[secao][indicador][ano_mes] = { valor, valor_atual }
-  for (const r of ind) {
-    ((I[r.secao] ||= {})[r.indicador] ||= {})[r.ano_mes] = { valor: num0(r.valor), valor_atual: num0(r.valor_atual) };
-  }
-  const Q = {}; // Q[secao][quadro] = [linhas]
-  for (const r of quad) ((Q[r.secao] ||= {})[r.quadro] ||= []).push({ ...r, valor: num0(r.valor), valor2: num0(r.valor2), valor3: num0(r.valor3) });
-  const per = periodos.find((p) => p.ano_mes === am);
-  return {
-    am, ant, ano: a, periodo: per, previa: !per || per.status !== 'fechado',
-    statusAnt: (periodos.find((p) => p.ano_mes === ant) || {}).status,
-    // valor do mes; v(secao, ind, mes = am)
-    v: (sec, k, mes = am) => ((I[sec] || {})[k] || {})[mes]?.valor ?? null,
-    atual: (sec, k, mes) => ((I[sec] || {})[k] || {})[mes]?.valor_atual ?? null,
-    // meses do ano com valor (para medias)
-    serie: (sec, k) => Object.entries((I[sec] || {})[k] || {}).filter(([mes]) => Math.floor(mes / 100) === a && Number(mes) <= am)
-      .sort(([x], [y]) => x - y).map(([mes, o]) => ({ mes: Number(mes), valor: o.valor })),
-    q: (sec, quadro) => (Q[sec] || {})[quadro] || [],
-    pontos, sac, trocas,
-  };
-}
-const num0 = (v) => (v === null || v === undefined ? null : Number(v));
-const media = (lista) => { const vs = lista.map((l) => l.valor).filter((v) => v !== null); return vs.length ? vs.reduce((t, v) => t + v, 0) / vs.length : null; };
-
 // ---------------------------------------------------------------- secoes
 function capa(pres, d) {
   const s = slideImagem(pres, 'capa.jpg');
@@ -282,14 +221,6 @@ function painel(pres, d) {
   ], linhas, { fonte: 11, alturaLinha: 0.38 });
   nota(s, 'Verde = melhor que a referência; vermelho = pior. Média do ano inclui o mês atual.');
 }
-
-// Horas decimais -> "399:00"
-const hhmm = (h) => {
-  if (h === null || h === undefined) return '—';
-  // trunca os segundos, como o Power BI mostra (56:28:48 -> 56:28)
-  const tot = Math.floor(h * 60 + 1e-6);
-  return `${num(Math.floor(tot / 60))}:${String(tot % 60).padStart(2, '0')}`;
-};
 
 function horasExtras(pres, d) {
   slideImagem(pres, 'divisor_horas_extras.jpg');
@@ -559,142 +490,6 @@ function sac(pres, d) {
   nota(s2, 'Valor reclamado é o valor informado na abertura. Erro industrial e comercial são tratados por outra gerência; desconto de produtividade só cabe a motorista e carregamento.');
 }
 
-// ---------------------------------------------------------------- analise
-// Regras fixas e explicaveis (nada de "IA" aqui): cada frase cita o numero e a
-// referencia usada.
-const mediana = (vs) => {
-  const x = vs.filter((v) => v !== null && v !== undefined).sort((a, b) => a - b);
-  if (!x.length) return null;
-  const m = Math.floor(x.length / 2);
-  return x.length % 2 ? x[m] : (x[m - 1] + x[m]) / 2;
-};
-
-function analisar(d) {
-  const positivos = [], melhorias = [], custos = [], metas = [];
-  const v = (sec, k, mes) => d.v(sec, k, mes);
-  const hist = (sec, k) => d.serie(sec, k).map((x) => x.valor);
-  const mesAnt = nomeMes(d.ant).toLowerCase(), doAno = `a média de ${d.ano}`;
-
-  // Compara o mes com o anterior e com a media do ano; vira ponto positivo ou de melhoria.
-  const tendencia = (rot, sec, k, fmt, menorMelhor = true) => {
-    const atual = v(sec, k), ant = v(sec, k, d.ant), med = media(d.serie(sec, k));
-    const vAnt = variacao(atual, ant), vMed = variacao(atual, med);
-    if (vAnt === null || vMed === null) return;
-    const melhorAnt = menorMelhor ? vAnt < 0 : vAnt > 0, melhorMed = menorMelhor ? vMed < 0 : vMed > 0;
-    const txtAnt = `${vAnt > 0 ? '+' : '−'}${num(Math.abs(vAnt) * 100, 1)}% vs ${mesAnt}`;
-    const txtMed = `${vMed > 0 ? '+' : '−'}${num(Math.abs(vMed) * 100, 1)}% vs ${doAno}`;
-    if (melhorAnt && melhorMed) positivos.push({ peso: Math.abs(vMed), texto: `${rot}: ${fmt(atual)} (${txtAnt}; ${txtMed}).` });
-    else if (!melhorMed && Math.abs(vMed) >= 0.1) melhorias.push({ peso: Math.abs(vMed), texto: `${rot}: ${fmt(atual)}, ${txtMed}${melhorAnt ? '' : ` e ${txtAnt}`}.` });
-  };
-  tendencia('Hora extra (55%)', 'horas_extras', 'valor', (x) => reais(x));
-  tendencia('Valor de cortes', 'cortes', 'valor', (x) => reais(x));
-  tendencia('Pedidos cortados', 'cortes', 'pedidos', (x) => num(x));
-  tendencia('Devolução', 'devolucao', 'valor', (x) => reais(x));
-  tendencia('% devolução sobre faturamento', 'devolucao', 'pct_dev_fat', (x) => pct(x, 2));
-  tendencia('Despesas de cartão', 'despesa', 'valor', (x) => reais(x));
-  tendencia('Preço médio do combustível', 'abastecimento', 'preco_medio', (x) => `${reais(x, 2)}/L`);
-  tendencia('Peso entregue pelos motoristas', 'motoristas', 'peso', (x) => `${num(x)} kg`, false);
-
-  // Despesa e devolucao contra o mesmo mes do ano anterior
-  const despLy = variacao(v('despesa', 'valor'), v('despesa', 'valor_ly'));
-  const jaTemDespesa = positivos.some((p) => p.texto.startsWith('Despesas de cartão'));
-  if (despLy !== null && despLy < 0 && !jaTemDespesa) positivos.push({ peso: Math.abs(despLy), texto: `Despesas ${num(Math.abs(despLy) * 100, 1)}% abaixo do mesmo mês de ${d.ano - 1} (${reais(v('despesa', 'valor'))} contra ${reais(v('despesa', 'valor_ly'))}).` });
-
-  // Inventario: saldo do mes e do ano
-  const invMes = (d.q('inventario', 'mes').find((x) => x.rotulo === `${d.ano}-${String(d.am % 100).padStart(2, '0')}`) || {}).valor ?? null;
-  const sdAno = v('inventario', 'saldo'), sdLy = v('inventario', 'saldo_ly');
-  if (invMes !== null) (invMes >= 0 ? positivos : melhorias).push({ peso: 0.5, texto: `Inventário do mês ${invMes >= 0 ? 'com rendimento' : 'com perda'} de ${reais(Math.abs(invMes))}; saldo no ano em ${reais(sdAno)}${sdLy !== null ? ` (${d.ano - 1}: ${reais(sdLy)} no mesmo período)` : ''}.` });
-
-  // Cortes: dia fora da curva e produto que concentra
-  const dias = d.q('cortes', 'dia'), totCorte = v('cortes', 'valor');
-  const medDia = mediana(dias.map((x) => x.valor));
-  const pico = dias.reduce((b, x) => (x.valor > (b?.valor ?? -1) ? x : b), null);
-  if (pico && medDia && pico.valor >= 3 * medDia && totCorte) {
-    melhorias.push({ peso: pico.valor / totCorte, texto: `Cortes: só o dia ${diaMes(pico.rotulo)} somou ${reais(pico.valor)} (${pct(pico.valor / totCorte, 0)} do período, ${num(pico.valor / medDia, 0)}× um dia típico). Vale apurar a causa.` });
-  }
-  const prod = d.q('cortes', 'produto')[0];
-  if (prod && totCorte && prod.valor / totCorte >= 0.15) melhorias.push({ peso: prod.valor / totCorte, texto: `Cortes: ${titulo(prod.rotulo)} sozinho respondeu por ${pct(prod.valor / totCorte, 0)} do valor cortado (${reais(prod.valor)}).` });
-
-  // Devolucao: parte que a logistica controla (motorista + carregamento)
-  const resp = d.q('devolucao', 'responsavel'), totDev = resp.reduce((t, x) => t + (x.valor || 0), 0);
-  const controlavel = resp.filter((x) => /MOTORISTA|CARREGAMENTO/i.test(x.rotulo)).reduce((t, x) => t + (x.valor || 0), 0);
-  if (controlavel && totDev) {
-    melhorias.push({ peso: controlavel / totDev, texto: `Devolução: ${reais(controlavel)} (${pct(controlavel / totDev, 0)} do valor) é de motorista ou carregamento, a parte que a logística controla.` });
-    custos.push({ valor: controlavel / 2, titulo: 'Devolução controlável', texto: `Reduzir pela metade as devoluções de motorista e carregamento (${reais(controlavel)} no mês).` });
-  }
-  const mot = d.q('devolucao', 'motivo')[0];
-  if (mot && totDev) melhorias.push({ peso: mot.valor / totDev * 0.8, texto: `Principal motivo de devolução: ${titulo(mot.rotulo)}, ${reais(mot.valor)} (${pct(mot.valor / totDev, 0)}).` });
-
-  // Abastecimento: posto externo x interno e postos acima da media
-  const ie = d.q('abastecimento', 'interno_externo');
-  const ext = ie.find((x) => /EXTERNO/i.test(x.rotulo)), int = ie.find((x) => /INTERNO/i.test(x.rotulo));
-  const pExt = ext && ext.valor2 ? ext.valor / ext.valor2 : null, pInt = int && int.valor2 ? int.valor / int.valor2 : null;
-  if (pExt && pInt && pExt > pInt) {
-    custos.push({ valor: (pExt - pInt) * ext.valor2 * 0.3, titulo: 'Abastecer mais no posto interno',
-      texto: `Externo saiu a ${reais(pExt, 2)}/L contra ${reais(pInt, 2)}/L no interno (${num(ext.valor2)} L fora). Levar 30% desse volume para o interno.` });
-  }
-  // Postos externos caros: comparados com a media dos proprios externos (o interno nao serve de regua)
-  const caros = pExt ? d.q('abastecimento', 'fornecedor').filter((x) => x.valor3 && x.valor2 >= 300 && x.valor3 > pExt + 0.3 && !/INTERNO/i.test(x.rotulo)) : [];
-  if (caros.length) {
-    const economia = caros.reduce((t, x) => t + (x.valor3 - pExt) * x.valor2, 0);
-    custos.push({ valor: economia, titulo: 'Postos externos mais caros', texto: `${caros.length} posto(s) mais de R$ 0,30/L acima da média dos externos (${reais(pExt, 2)}/L): ${caros.slice(0, 3).map((x) => `${titulo(x.rotulo)} ${reais(x.valor3, 2)}`).join('; ')}. Negociar ou trocar de posto.` });
-  }
-  const minimo = v('abastecimento', 'preco_min');
-  if (minimo !== null && minimo < 3) melhorias.push({ peso: 0.3, texto: `Abastecimento com preço de ${reais(minimo, 2)}/L no mês: quase certamente erro de lançamento, que distorce o preço médio.` });
-
-  // Cortes: o que passou da mediana do ano
-  const medCorte = mediana(hist('cortes', 'valor'));
-  if (totCorte && medCorte && totCorte > medCorte) custos.push({ valor: totCorte - medCorte, titulo: 'Cortes acima do normal', texto: `Voltar o valor cortado à mediana do ano (${reais(medCorte)}).` });
-
-  // Hora extra: setor que concentra e quanto passou da mediana do ano
-  const heSetor = d.q('horas_extras', 'setor'), heTot = v('horas_extras', 'valor');
-  if (heSetor[0] && heTot && heSetor[0].valor / heTot >= 0.35) melhorias.push({ peso: heSetor[0].valor / heTot * 0.8, texto: `Hora extra: ${titulo(heSetor[0].rotulo)} concentrou ${pct(heSetor[0].valor / heTot, 0)} do valor (${reais(heSetor[0].valor)}).` });
-  const heMed = mediana(hist('horas_extras', 'valor'));
-  if (heTot && heMed && heTot > heMed) custos.push({ valor: heTot - heMed, titulo: 'Hora extra acima do normal', texto: `Voltar a hora extra 55% à mediana do ano (${reais(heMed)}).` });
-
-  // Despesa acima do ano anterior
-  if (despLy !== null && despLy > 0) custos.push({ valor: v('despesa', 'valor') - v('despesa', 'valor_ly'), titulo: 'Despesa de cartão', texto: `Voltar ao gasto do mesmo mês de ${d.ano - 1} (${reais(v('despesa', 'valor_ly'))}).` });
-
-  // MOOV e motoristas
-  const oc = v('rastreamento', 'ocorrencias'), sv = v('rastreamento', 'sem_vinculo');
-  if (oc && sv / oc > 0.15) melhorias.push({ peso: sv / oc, texto: `MOOV: ${pct(sv / oc, 0)} das ocorrências estão sem vínculo com viagem (meta ≤ 15%). Sem o vínculo não dá para cobrar o motorista.` });
-  const motQ = d.q('motoristas', 'motorista');
-  const abaixo = motQ.filter((x) => x.valor3 !== null && x.valor3 < 0.7);
-  if (abaixo.length) melhorias.push({ peso: abaixo.length / Math.max(motQ.length, 1), texto: `${abaixo.length} de ${motQ.length} motoristas ficaram abaixo de 70% do garantido de ${num(v('motoristas', 'garantido'))} kg.` });
-
-  // S.A.C.
-  const conclu = d.sac.filter((o) => o.status_gestao === 'CONCLUIDO').length;
-  if (d.sac.length) {
-    const tx = conclu / d.sac.length;
-    (tx >= 0.9 ? positivos : melhorias).push({ peso: 0.4, texto: `S.A.C.: ${conclu} de ${d.sac.length} ocorrências concluídas (${pct(tx, 0)}); ${d.sac.length - conclu} ainda aguardam o gestor.` });
-  }
-
-  // Metas: mediana dos meses do ano com 5% de melhora, nunca melhor que o melhor mes ja feito
-  const meta = (rot, sec, k, fmt, menorMelhor = true, base = null) => {
-    const vs = base || hist(sec, k);
-    const med = mediana(vs);
-    if (med === null) return;
-    const melhor = menorMelhor ? Math.min(...vs.filter((x) => x !== null)) : Math.max(...vs.filter((x) => x !== null));
-    let alvo = med * (menorMelhor ? 0.95 : 1.05);
-    alvo = menorMelhor ? Math.max(alvo, melhor) : Math.min(alvo, melhor);
-    const atual = base ? vs[vs.length - 1] : v(sec, k);
-    const ok = atual !== null && (menorMelhor ? atual <= alvo : atual >= alvo);
-    metas.push([rot, { text: fmt(atual), bold: true }, fmt(med), fmt(melhor), { text: `${menorMelhor ? '≤' : '≥'} ${fmt(alvo)}`, bold: true }, ok ? { text: 'Atingida', cor: COR.bom } : { text: 'Não atingida', cor: COR.ruim }]);
-  };
-  meta('Hora extra 55% (R$)', 'horas_extras', 'valor', (x) => reais(x));
-  meta('Valor de cortes (R$)', 'cortes', 'valor', (x) => reais(x));
-  meta('Pedidos cortados', 'cortes', 'pedidos', (x) => num(x));
-  meta('Devolução (R$)', 'devolucao', 'valor', (x) => reais(x));
-  meta('% devolução / faturamento', 'devolucao', 'pct_dev_fat', (x) => pct(x, 2));
-  meta('Despesas de cartão (R$)', 'despesa', 'valor', (x) => reais(x));
-  meta('Preço médio combustível (R$/L)', 'abastecimento', 'preco_medio', (x) => reais(x, 2));
-  meta('Ocorrências MOOV', 'rastreamento', 'ocorrencias', (x) => num(x));
-  if (oc) metas.push(['MOOV sem vínculo', { text: pct(sv / oc, 0), bold: true }, '—', '—', { text: '≤ 15%', bold: true }, sv / oc <= 0.15 ? { text: 'Atingida', cor: COR.bom } : { text: 'Não atingida', cor: COR.ruim }]);
-
-  const ordena = (l) => l.sort((a, b) => b.peso - a.peso).slice(0, 6).map((x) => x.texto);
-  return { positivos: ordena(positivos), melhorias: ordena(melhorias), custos: custos.filter((c) => c.valor > 1).sort((a, b) => b.valor - a.valor), metas };
-}
-
 function listaCard(s, x, y, w, h, tituloL, cor, itens) {
   caixa(s, x, y, w, h);
   s.addText(tituloL, { x: x + 0.25, y: y + 0.15, w: w - 0.5, h: 0.4, fontFace: FONTE, fontSize: 15, bold: true, color: cor, margin: 0, isTextBox: true });
@@ -748,7 +543,7 @@ async function main() {
   if (!(am > 202000 && am % 100 >= 1 && am % 100 <= 12)) throw new Error(`Mes invalido: ${arg1} (use AAAAMM, ex.: 202609)`);
 
   console.log(`Lendo os dados de ${nomeMes(am)}...`);
-  const d = await carregar(cfg, am);
+  const d = await VO.carregarDados((tabela, query) => rest(cfg, tabela, query), am);
   if (!d.periodo) throw new Error(`${nomeMes(am)} ainda nao tem foto na nuvem (vo_periodos). A sincronizacao roda todo dia as 06h20.`);
 
   const pres = new pptxgen();
@@ -784,6 +579,10 @@ async function main() {
   fs.writeFileSync(txt, '﻿' + resumoTexto(d, analise), 'utf8');
   console.log(`\nPronto: ${saida}`);
   console.log(`Resumo para o e-mail: ${txt}`);
+  // Versao corporativa em HTML (mesmos dados; abre no navegador, sem internet)
+  const html = saida.replace(/.pptx$/, '.html');
+  fs.writeFileSync(html, gerarHtml(d, analise, { logo: `data:image/png;base64,${fs.readFileSync(path.join(MODELO, 'logo.png')).toString('base64')}` }), 'utf8');
+  console.log(`Versão HTML: ${html}`);
   if (d.previa) console.log('ATENCAO: o mes ainda nao foi congelado (congela no dia 3 do mes seguinte). Os numeros podem mudar.');
 }
 
