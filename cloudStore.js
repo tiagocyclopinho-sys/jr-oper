@@ -187,6 +187,88 @@ class CloudStore {
     }
   }
 
+  // ---------------------------------------------------------------
+  // CHAVES ORFAS: O TERCEIRO OCUPANTE DA COTA (04/09/2026)
+  //
+  // Medido num aparelho de producao que estava perdendo lancamento:
+  //
+  //   jr_sac_db .......... 3.666 KB   o dado real
+  //   jr_produtos ........... 874 KB   <- ninguem escreve, ninguem le
+  //   jr_sync_hashes ......... 82 KB   o mapa de sincronia (util)
+  //   jr_rotas ................ 6 KB   <- idem
+  //   jr_departamentos ........ 3 KB   <- idem
+  //   ... 45 chaves no total
+  //
+  // As tres marcadas sao restos de builds anteriores a 31/08/2026, quando o
+  // catalogo saiu do localStorage e foi para o IndexedDB. Nenhuma linha do
+  // codigo atual as escreve ou le, e nenhuma delas esta no MAPA_TABELAS - ou
+  // seja, _purgarEspelhos() nunca as tocou. Ficaram 883 KB parados, quase
+  // exatamente o que os 25 espelhos valiam, e a escada de cota do save()
+  // sacrificava as COPIAS UTEIS enquanto isso continuava intocado.
+  //
+  // Por que uma LISTA DO QUE E CONHECIDO em vez de uma lista do que e lixo:
+  // lista de lixo so pega o lixo que ja conhecemos hoje, e a proxima chave
+  // abandonada voltaria a passar despercebida por meses. Toda chave que o app
+  // usa de verdade esta escrita aqui; o que nao estiver e, por definicao,
+  // resto - e aparece em jrChavesOrfas() para conferencia antes de sumir.
+  //
+  // NAO limpa sozinha na abertura, de proposito: rodar so quando falta espaco
+  // (degrau da escada em store.js:save) mantem o efeito colateral perto do
+  // problema que ele resolve, e deixa a conferencia possivel enquanto nao ha
+  // aperto nenhum.
+  // ---------------------------------------------------------------
+  static chavesConhecidas() {
+    const exatas = new Set([
+      // o dado e a identidade
+      'jr_sac_db', 'jr_sac_version', 'jr_sac_user', 'jr_sac_theme',
+      // catalogo: espelho sincrono do IndexedDB, e o formato legado que a
+      // migracao de 31/08 esvazia sozinha
+      'jr_sac_static_delta', 'jr_sac_static', 'jr_catalogo_cursor',
+      // sincronia
+      'jr_cloud_config', 'jr_reset_epoch', 'jr_sync_hashes', 'jr_faxina_fantasmas',
+      // aparelho
+      'jr_device_id', 'jr_device_apelido', 'jr_visto_em',
+      // fila de fotos (a posse; as fotos moram no IndexedDB)
+      'jr_fotos_posse',
+      // semente de cadastro, roda uma vez por aparelho
+      'jr_seed_cadastros_v1',
+      // sonda do medidor de espaco; some sozinha, mas pode sobrar se o
+      // navegador matar a aba no meio
+      '__jr_prova_espaco__'
+    ]);
+    for (const m of CloudStore.MAPA_TABELAS) exatas.add(m.localKey);
+    return { exatas, prefixos: ['jr_sync_ok_'] };
+  }
+
+  /** Chaves que ocupam cota e nao pertencem a nenhum caminho vivo do app. */
+  static listarChavesOrfas() {
+    const { exatas, prefixos } = CloudStore.chavesConhecidas();
+    const orfas = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        if (exatas.has(k)) continue;
+        if (prefixos.some(p => k.startsWith(p))) continue;
+        orfas.push({ chave: k, KB: Math.round(((localStorage.getItem(k) || '').length + k.length) / 1024) });
+      }
+    } catch (e) { return []; }
+    return orfas.sort((a, b) => b.KB - a.KB);
+  }
+
+  /** Remove as orfas. Devolve quantos KB foram devolvidos a cota. */
+  _purgarChavesOrfas() {
+    const orfas = CloudStore.listarChavesOrfas();
+    if (!orfas.length) return 0;
+    let kb = 0;
+    for (const o of orfas) {
+      try { localStorage.removeItem(o.chave); kb += o.KB; } catch (e) {}
+    }
+    console.info('[CloudStore] Faxina: ' + orfas.length + ' chave(s) sem dono removida(s), '
+      + kb + ' KB devolvidos. ' + orfas.map(o => o.chave + ' (' + o.KB + ' KB)').join(', '));
+    return kb;
+  }
+
   _purgarEspelhos() {
     let removidos = 0;
     try {
@@ -246,6 +328,10 @@ class CloudStore {
       // dado real caber nos ~5 MB de localStorage. Não é perda de dado;
       // é o sinal de que a cota está no limite neste aparelho.
       espelhosSuspensos: !!this._espelhosSuspensos,
+      // 04/09/2026 - chaves que ocupam cota e nao pertencem a nenhum caminho
+      // vivo. Enquanto vier vazio, os ~5 MB estao todos com quem devia. Se
+      // vier com item, e espaco parado: jrFaxinarChaves() devolve.
+      chavesOrfas: CloudStore.listarChavesOrfas(),
       // 31/08/2026 — cadastro de cliente/produto. Se `indisponivel` vier
       // preenchido, a migration_36 não está aplicada NESTE banco e nenhum
       // cadastro novo viaja entre aparelhos. `cursor` é até onde este
@@ -285,7 +371,7 @@ class CloudStore {
     this.config = {
       url: saved.url || base.url || '',
       anonKey: saved.anonKey || base.anonKey || '',
-      syncIntervalMs: base.syncIntervalMs || 30000
+      syncIntervalMs: base.syncIntervalMs || 120000
     };
 
     // Atualiza o modo global baseado na configuração disponível
@@ -327,6 +413,8 @@ class CloudStore {
       'controle_viagens',
       'ocorrencias_viagens',
       'resumo_diario_cd',
+      'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd',   // 6.7.0 — filhos do Resumo Diário
+      'infracoes_relatorios', 'infracoes',                        // 6.8.0 — migration 48
       'trocas_veiculos',
       'retencoes_frota',
       'reentregas',
@@ -539,6 +627,13 @@ class CloudStore {
 
     let data = Array.isArray(records) ? records : [records];
 
+    // A lista COMO ELA VEIO de syncLocalToCloud. É esta que _confirmarEnvio()
+    // vai transformar em hash depois do POST — as etapas abaixo (projeção e
+    // igualador de chaves) criam objetos NOVOS, então uma correção feita só
+    // na cópia não chegaria ao mapa de sync e o registro voltaria "sujo" no
+    // ciclo seguinte. Quem precisa disso é _resolverColisaoDeSequencia().
+    const originais = data;
+
     // -------------------------------------------------------------
     // GUARDA NA ESCRITA (decisão 7 de 22/08/2026) — Onda 1, item 7
     //
@@ -589,34 +684,53 @@ class CloudStore {
       });
     }
 
-    try {
-      const response = await fetch(`${this.config.url}/rest/v1/${tableName}`, {
-        method: 'POST',
-        headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
-        body: JSON.stringify(data)
-      });
-      if (!response.ok) {
-        const errBody = await response.text();
-        this._registrarFalhaSync(tableName, response.status, errBody);
-        this._checkConflitoUnicidade(tableName, errBody, data).catch(() => {});
+    // DUAS TENTATIVAS, NÃO MAIS (02/09/2026). A segunda só acontece quando a
+    // primeira voltou 23505 e _resolverColisaoDeSequencia() conseguiu
+    // renumerar alguém — ou seja, quando o lote MUDOU e vale reenviar. Sem
+    // esse teto, um 23505 que a renumeração não resolve viraria laço infinito
+    // dentro de um ciclo de sync.
+    for (let tentativa = 1; tentativa <= 2; tentativa++) {
+      try {
+        const response = await fetch(`${this.config.url}/rest/v1/${tableName}`, {
+          method: 'POST',
+          headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+          body: JSON.stringify(data)
+        });
+        if (!response.ok) {
+          const errBody = await response.text();
+          if (tentativa === 1) {
+            let renumerados = 0;
+            try {
+              renumerados = await this._resolverColisaoDeSequencia(tableName, errBody, data, originais);
+            } catch(e) {
+              // Renumerar é conserto oportunista: se ele próprio falhar, o
+              // erro original é que tem de chegar ao operador, não este.
+              console.warn(`[CloudStore] Não foi possível renumerar ${tableName}:`, e.message);
+            }
+            if (renumerados > 0) continue;
+          }
+          this._registrarFalhaSync(tableName, response.status, errBody);
+          this._checkConflitoUnicidade(tableName, errBody, data).catch(() => {});
+          return false;
+        }
+        this._tabelasPendentesDeEnvio.delete(tableName);
+        // Marca que esta tabela JÁ conseguiu subir deste aparelho. É o que
+        // permite ao pull diferenciar "a nuvem está vazia porque o envio
+        // nunca funcionou" de "a nuvem está vazia porque alguém apagou".
+        try { localStorage.setItem('jr_sync_ok_' + tableName, String(Date.now())); } catch(e) {}
+        // Sincronizou com sucesso — se havia um conflito de unicidade pendente
+        // registrado para essa tabela (ver _checkConflitoUnicidade), foi
+        // corrigido: limpa da fila de revisão (Fase 4, 20/08/2026).
+        if (window.db && typeof window.db.limparConflitosDaTabela === 'function') {
+          window.db.limparConflitosDaTabela(tableName);
+        }
+        return true;
+      } catch(err) {
+        console.warn(`[CloudStore] Falha na rede ao salvar em ${tableName}:`, err.message);
         return false;
       }
-      this._tabelasPendentesDeEnvio.delete(tableName);
-      // Marca que esta tabela JÁ conseguiu subir deste aparelho. É o que
-      // permite ao pull diferenciar "a nuvem está vazia porque o envio
-      // nunca funcionou" de "a nuvem está vazia porque alguém apagou".
-      try { localStorage.setItem('jr_sync_ok_' + tableName, String(Date.now())); } catch(e) {}
-      // Sincronizou com sucesso — se havia um conflito de unicidade pendente
-      // registrado para essa tabela (ver _checkConflitoUnicidade), foi
-      // corrigido: limpa da fila de revisão (Fase 4, 20/08/2026).
-      if (window.db && typeof window.db.limparConflitosDaTabela === 'function') {
-        window.db.limparConflitosDaTabela(tableName);
-      }
-      return true;
-    } catch(err) {
-      console.warn(`[CloudStore] Falha na rede ao salvar em ${tableName}:`, err.message);
-      return false;
     }
+    return false;
   }
 
   // Guarda na escrita — decisão 7 de 22/08/2026 (Onda 1, item 7).
@@ -631,10 +745,30 @@ class CloudStore {
     if (tableName === 'usuarios') return this._guardaDeUsuarios(registros);
     if (tableName !== 'controle_viagens') return registros;
 
+    // is_deleted PASSA — correção de 01/09/2026, e ela conserta um defeito
+    // que estava aqui desde 22/08.
+    //
+    // A guarda existe para impedir que fantasma de build antiga ENTRE no
+    // banco. Um registro já marcado como excluído não entra em lugar nenhum:
+    // ele já ESTÁ no banco, e o que este POST carrega é a exclusão dele.
+    // Barrá-lo por causa do data_saida não impede fantasma nenhum — impede
+    // a EXCLUSÃO de viajar. Duas consequências, e as duas foram vistas:
+    //
+    //   1. Quem apagar aqui uma viagem cujo data_saida esteja ilegível vê a
+    //      linha sumir da própria tela e reaparecer nos outros aparelhos,
+    //      para sempre. A exclusão nunca sai desta máquina, e nada avisa.
+    //   2. Os 247 que a migration_25 marcou is_deleted descem no pull (o
+    //      getAll faz select=* sem filtrar a flag), viram "mudança" no mapa
+    //      de hashes e voltam a esta guarda no ciclo seguinte — acendendo o
+    //      contador "Recusados" logo depois de a faxina o ter zerado, que é
+    //      exatamente o ruído que a faxina existe para acabar.
+    //
+    // É a mesma regra que _auditarCacheLocal() e _faxinaDeFantasmas() já
+    // seguem: para a máquina de fantasma, registro excluído não existe.
     const aprovados = [];
     const recusados = [];
     for (const r of registros) {
-      if (r && !this._dataSaidaEhValida(r.data_saida)) recusados.push(r);
+      if (r && !r.is_deleted && !this._dataSaidaEhValida(r.data_saida)) recusados.push(r);
       else aprovados.push(r);
     }
 
@@ -840,6 +974,13 @@ class CloudStore {
     // Sem mapa ainda (primeira execução desta build, ou cota estourada):
     // manda tudo, como antes. A partir do primeiro ciclo o mapa existe.
     if (!conhecidos) return registros.slice();
+    // Lista branca mudou nesta build: os hashes guardados não servem para
+    // dizer o que mudou. Não manda nada até o pull rebasear a tabela (ver
+    // _assinaturaProjecao) — mandar seria repetir o 11/09.
+    if (this._projecaoMudou(tableName, mapa)) {
+      console.log(`[CloudStore] ${tableName}: lista branca mudou nesta build; envio adiado até o próximo pull rebasear os hashes.`);
+      return [];
+    }
 
     const mudados = [];
     for (const r of registros) {
@@ -850,13 +991,52 @@ class CloudStore {
     return mudados;
   }
 
-  _confirmarEnvio(tableName, enviados) {
+  // O HASH DO QUE FOI ENVIADO, NÃO DO QUE O OBJETO É AGORA (18/09/2026).
+  //
+  // `enviados` são os objetos VIVOS de db.data — os mesmos que a tela edita.
+  // Entre o JSON.stringify do POST e a resposta há uma janela de rede, e
+  // qualquer gravação nessa janela (uma edição, o caminho de uma foto que
+  // acabou de subir) muda o objeto DEPOIS de ele ter sido serializado.
+  // Hashear o objeto aqui, depois da resposta, anotava como "a nuvem tem
+  // isto" um estado que a nuvem NUNCA recebeu. No pull seguinte o registro
+  // parecia limpo (hash == conhecido), a nuvem ganhava, e a edição da
+  // janela era desfeita em silêncio — sem nunca ter subido.
+  //
+  // Foi exatamente assim que a primeira foto de item avulso sumiu em
+  // 18/09/2026: o arquivo subiu para o Storage às 13:15:10.72, o POST da
+  // tabela chegou às 13:15:10.84 já serializado com fotos_pendentes = 1, o
+  // caminho foi gravado no objeto no meio, e o mapa anotou o hash do objeto
+  // com caminho. Pull seguinte: nuvem (sem caminho) por cima. O arquivo
+  // ficou órfão num bucket que nega DELETE e a linha, com "1 a enviar" para
+  // sempre. A fila de fotos torna a janela quase certa, porque
+  // processarFila() anda no mesmo tick do sync — mas a janela sempre esteve
+  // aí para toda tabela e toda edição.
+  //
+  // `hashesAntes` é o hash de cada registro calculado ANTES do POST, pelo
+  // id de então. Um registro que a resolução de colisão de sequência tenha
+  // renumerado durante o envio não bate pelo id e cai no hash do objeto
+  // vivo, que é o comportamento anterior — nesse caso o que subiu na 2ª
+  // tentativa É o objeto renumerado.
+  _hashesAntesDoEnvio(tableName, registros) {
+    const m = {};
+    for (const r of registros) {
+      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+      if (id !== null) m[id] = this._hashParaSync(tableName, r);
+    }
+    return m;
+  }
+
+  _confirmarEnvio(tableName, enviados, hashesAntes) {
     const mapa = this._lerMapaSync();
     if (!mapa[tableName]) mapa[tableName] = {};
     for (const r of enviados) {
       const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
-      if (id !== null) mapa[tableName][id] = this._hashParaSync(tableName, r);
+      if (id === null) continue;
+      mapa[tableName][id] = (hashesAntes && hashesAntes[id] !== undefined)
+        ? hashesAntes[id]
+        : this._hashParaSync(tableName, r);
     }
+    this._anotarProjecao(tableName, mapa);
     this._mapaSync = mapa;
     this._gravarMapaSync();
   }
@@ -876,6 +1056,10 @@ class CloudStore {
     const mapa = this._lerMapaSync();
     const conhecidos = mapa[tableName];
     const primeiraVez = !conhecidos;
+    // Lista branca mudou nesta build (ver _assinaturaProjecao): todo hash
+    // local vai divergir de `conhecidos`, e isso NÃO significa edição.
+    const rebaseando = !primeiraVez && this._projecaoMudou(tableName, mapa);
+    if (rebaseando) console.log(`[CloudStore] ${tableName}: lista branca mudou nesta build; rebaseando pelos dados da nuvem.`);
 
     const porId = new Map();
     for (const r of locais) {
@@ -953,12 +1137,30 @@ class CloudStore {
       // (motoristas, veículos, cargas, usuários...) nada muda, continua a
       // regra antiga. Editar offline continua protegido: quem editou de
       // verdade tem o carimbo mais novo.
+      //
+      // CARIMBO AUSENTE DE UM LADO SÓ (14/09/2026). "Só quando os DOIS lados
+      // têm data legível" deixava passar o caso de 11/09: local RETIDO sem
+      // carimbo nenhum (nunca editado aqui) contra nuvem com carimbo (editada
+      // de verdade em outro aparelho) — empatava, e o local ganhava. Agora um
+      // local SEM carimbo perde para uma nuvem COM carimbo: desde a 6.6.3
+      // toda edição de verdade carimba, então local sem carimbo é, no
+      // máximo, mutação incidental (caso 2). O inverso (local carimbado,
+      // nuvem sem) continua com o local, como antes. Tabelas sem a coluna
+      // seguem intocadas: nulo dos dois lados cai na regra antiga.
+      //
+      // REBASEAMENTO (lista branca mudou de build): não dá para saber se o
+      // registro é sujo, então o ônus inverte — o local só fica se estiver
+      // carimbado e for ESTRITAMENTE mais novo que a nuvem.
       // =============================================================
       let nuvemMaisNova = false;
       if (sujo) {
         const tLocal = this._instanteDeAtualizacao(local);
         const tNuvem = this._instanteDeAtualizacao(nuvem);
-        nuvemMaisNova = (tLocal !== null && tNuvem !== null && tNuvem > tLocal);
+        if (rebaseando) {
+          nuvemMaisNova = !(tLocal !== null && (tNuvem === null || tLocal > tNuvem));
+        } else {
+          nuvemMaisNova = (tNuvem !== null) && (tLocal === null || tNuvem > tLocal);
+        }
       }
 
       if (sujo && !nuvemMaisNova) {
@@ -1002,9 +1204,62 @@ class CloudStore {
     const final = this._aplicarJanelaOperacional(tableName, resultado, novosHashes, idsSeguros);
 
     mapa[tableName] = novosHashes;   // ids que sumiram dos dois lados saem do mapa
+    this._anotarProjecao(tableName, mapa);   // hashes acima já são da lista branca atual
     this._mapaSync = mapa;
     this._gravarMapaSync();
     return final;
+  }
+
+  // =================================================================
+  // EDIÇÃO FEITA NO MEIO DO PULL (20/10/2026)
+  //
+  // O pull lê as ~25 tabelas uma a uma e cada mesclagem acontece na hora
+  // em que a tabela chega — mas o resultado só é aplicado em db.data no FIM
+  // do laço, segundos depois. Uma edição salva nesse intervalo era
+  // atropelada pela cópia mesclada antes dela.
+  //
+  // Caso real: baixa da reentrega da carga 44730. O modal grava duas
+  // edições seguidas (novo motorista, depois REALIZADA); o pull mesclou
+  // reentregas entre elas e, ao terminar, devolveu a linha a DESPACHADO na
+  // tela. O banco ficou certo porque o envio já tinha serializado a baixa —
+  // se não tivesse, a baixa teria sumido sem aviso.
+  //
+  // Conserto: o que mudou em memória desde o retrato usado na mesclagem
+  // (registro editado ou criado no intervalo) fica como está. O mapa de
+  // hashes não precisa de ajuste: o registro mantido difere do hash anotado,
+  // então é tratado como sujo e sobe no próximo envio.
+  // =================================================================
+  _preservarEdicoesDuranteOPull(retratoRaw, mesclado, atual) {
+    if (!Array.isArray(atual) || !Array.isArray(mesclado) || !retratoRaw) return mesclado;
+    let retrato;
+    try { retrato = JSON.parse(retratoRaw); } catch(e) { return mesclado; }
+    if (!Array.isArray(retrato)) return mesclado;
+
+    const antes = new Map();
+    for (const r of retrato) {
+      if (r && r.id !== undefined && r.id !== null) antes.set(String(r.id), JSON.stringify(r));
+    }
+
+    const manter = new Map();
+    for (const r of atual) {
+      if (!r || r.id === undefined || r.id === null) continue;
+      const id = String(r.id);
+      if (antes.get(id) !== JSON.stringify(r)) manter.set(id, r);
+    }
+    if (manter.size === 0) return mesclado;
+
+    console.log(`[CloudStore] ${manter.size} registro(s) editado(s) durante o pull foram preservados.`);
+    const saida = mesclado.map(r => {
+      const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+      if (id !== null && manter.has(id)) {
+        const local = manter.get(id);
+        manter.delete(id);
+        return local;
+      }
+      return r;
+    });
+    for (const r of manter.values()) saida.push(r);
+    return saida;
   }
 
   // =================================================================
@@ -1080,6 +1335,197 @@ class CloudStore {
   // para empurrar — e um aparelho contaminado que já tivesse sido marcado
   // como "em dia" mostraria `null`, escondendo justamente o que a ETAPA 3
   // precisa achar. Ver CONFERIR_APARELHO.md.
+  // =================================================================
+  // FAXINA DE FANTASMA NO CACHE DESTE APARELHO — 01/09/2026
+  //
+  // O QUE ISTO FECHA, e por que a guarda de escrita sozinha nunca fechou.
+  //
+  // _aplicarGuardaDeEscrita() impede o fantasma de SUBIR — é o que tornou
+  // definitiva a faxina do banco (migration_25). Só que ela nunca tirou
+  // nada do APARELHO: o registro recusado continua no localStorage, e as
+  // duas pontas do ciclo o seguram lá para sempre.
+  //
+  //   ENVIO    a guarda recusa, então a nuvem nunca confirma aquele id, e
+  //            ele nunca entra em `conhecidos` (_mapaSync).
+  //   LEITURA  _mesclarPorRegistro vê um id que a nuvem nunca confirmou e
+  //            o classifica como "nunca subiu: é trabalho local pendente".
+  //            Fica. E quando o id EXISTE na nuvem — os 247 que a
+  //            migration_25 marcou is_deleted — ele bate como "sujo", e o
+  //            desempate por atualizado_em não salva: o fantasma vem de uma
+  //            build que nem gravava essa coluna, então tLocal é null e a
+  //            nuvem nunca é "estritamente mais nova". O local ganha.
+  //
+  // Ou seja: os dois caminhos do merge preservam. O ciclo se fecha em si
+  // mesmo, e é por isso que UM aparelho da frota voltava a marcar os mesmos
+  // 247 recusados DEPOIS DE CADA atualização — atualizar troca o código, e
+  // quem segurava os 247 era o localStorage, que a atualização não toca.
+  //
+  // A REGRA AQUI, e ela é curta: registro que a guarda de escrita recusa
+  // não pode ser enviado nunca; logo não é trabalho de ninguém, é lixo de
+  // build antiga, e sai do aparelho. Duas saídas, conforme o que está
+  // guardado em data_saida:
+  //
+  //   FANTASMA  data_saida com vocabulário de CHECKLIST ("INICIADO",
+  //             "NÃO INICIADO"...). É a impressão digital medida na ETAPA 0
+  //             e expurgada pela migration_25: build antiga gravando com o
+  //             mapeamento de coluna trocado. Sai do cache.
+  //
+  //   ILEGÍVEL  data_saida com qualquer outra coisa que não seja data.
+  //             Aqui não dá para afirmar que a LINHA é lixo — só o campo é.
+  //             Zera o campo (vazio é viagem lançada que ainda não saiu, e
+  //             a guarda aceita) e a linha finalmente sobe, em vez de ficar
+  //             bloqueando o lote para sempre.
+  //
+  // IGNORA is_deleted, e isso não é detalhe: a migration_25 marcou os 247
+  // no banco mas NÃO mudou o data_saida deles, e getAll() faz select=* sem
+  // filtrar a flag — eles continuam descendo no pull. Se a faxina os
+  // varresse, ela os apagaria a cada 30 segundos e o pull os traria de
+  // volta a cada 30 segundos, reescrevendo o localStorage inteiro no meio.
+  // Um registro já marcado como excluído não aparece em tela nenhuma e a
+  // guarda o recusaria de qualquer forma: para esta faxina, ele não existe.
+  //
+  // NÃO É DESTRUTIVO NA PRÁTICA: o que sai daqui já está no banco marcado
+  // com is_deleted pela migration_25 (reversível com um UPDATE), e a ficha
+  // de cada linha removida — id, carga e o valor recusado — fica em
+  // localStorage['jr_faxina_fantasmas']. Guardamos a ficha, não a linha: o
+  // objetivo é liberar cota, não trocá-la de lugar.
+  // =================================================================
+
+  // O vocabulário de checklist/fusion que a build antiga gravava dentro de
+  // data_saida. Sem acento e em maiúsculas porque a mesma coluna já chegou
+  // como "NÃO INICIADO", "NAO INICIADO" e "Não iniciado" — a mesma
+  // normalização que checklistFoiRealizado() faz em app.js.
+  _ehVocabularioDeChecklist(valor) {
+    const v = String(valor === null || valor === undefined ? '' : valor)
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .toUpperCase().trim();
+    return v === 'INICIADO' || v === 'NAO INICIADO'
+        || v === 'REALIZADO' || v === 'NAO REALIZADO'
+        || v === 'FINALIZADO' || v === 'EM ANDAMENTO'
+        || v === 'PENDENTE' || v === 'OK' || v === 'SIM' || v === 'NAO';
+  }
+
+  _faxinaDeFantasmas() {
+    const decisao = new Map();   // id -> 'remover' | 'reparar'
+    const fichas = [];
+
+    // As TRÊS cópias que o aparelho mantém de controle_viagens, e a faxina
+    // precisa passar nas três: a memória é o que a tela desenha, jr_sac_db
+    // é o que sobrevive ao reload e é lido pelo envio, e o espelho é o que
+    // o diagnóstico compara. Limpar só uma faz o fantasma voltar pela outra
+    // no ciclo seguinte — a forma de falhar mais fácil deste app.
+    const memoria = (window.db && window.db.data && Array.isArray(window.db.data.controle_viagens))
+      ? window.db.data.controle_viagens : null;
+
+    let sacDb = null, fatia = null;
+    try {
+      sacDb = JSON.parse(localStorage.getItem('jr_sac_db') || 'null');
+      if (sacDb && Array.isArray(sacDb.controle_viagens)) fatia = sacDb.controle_viagens;
+    } catch (e) {}
+
+    let espelho = null;
+    try {
+      const bruto = localStorage.getItem('jr_controle_viagens');
+      if (bruto) {
+        const parsed = JSON.parse(bruto);
+        espelho = Array.isArray(parsed) ? parsed : Object.values(parsed);
+      }
+    } catch (e) {}
+
+    const examinar = (lista) => {
+      if (!Array.isArray(lista)) return;
+      for (const r of lista) {
+        if (!r || r.id === undefined || r.id === null) continue;
+        if (r.is_deleted) continue;                     // já morto: ver o comentário acima
+        if (this._dataSaidaEhValida(r.data_saida)) continue;
+        const id = String(r.id);
+        if (decisao.has(id)) continue;
+        const fantasma = this._ehVocabularioDeChecklist(r.data_saida);
+        decisao.set(id, fantasma ? 'remover' : 'reparar');
+        fichas.push({
+          id: r.id,
+          carga: r.carga || null,
+          data_saida: String(r.data_saida).slice(0, 40),
+          acao: fantasma ? 'removido' : 'data_saida zerada'
+        });
+      }
+    };
+
+    examinar(memoria);
+    examinar(fatia);
+    examinar(espelho);
+    if (decisao.size === 0) return 0;
+
+    const aplicar = (lista) => {
+      const saida = [];
+      for (const r of lista) {
+        const id = (r && r.id !== undefined && r.id !== null) ? String(r.id) : null;
+        const acao = (id !== null && !(r && r.is_deleted)) ? decisao.get(id) : undefined;
+        if (acao === 'remover') continue;
+        if (acao === 'reparar') { saida.push(Object.assign({}, r, { data_saida: null })); continue; }
+        saida.push(r);
+      }
+      return saida;
+    };
+
+    // MEMÓRIA PRIMEIRO, e NO MESMO ARRAY. Primeiro porque é de graça e não
+    // falha por cota (mesma razão do _pullDaNuvem). No mesmo array porque a
+    // tela desenha de window.db.data.controle_viagens: trocar a referência
+    // deixaria para trás qualquer lugar que já tenha guardado a lista.
+    if (memoria) {
+      const limpa = aplicar(memoria);
+      memoria.length = 0;
+      Array.prototype.push.apply(memoria, limpa);
+    }
+
+    if (sacDb && fatia) {
+      sacDb.controle_viagens = aplicar(fatia);
+      this._gravarCacheDoPull(sacDb);
+    }
+
+    if (espelho) {
+      this._gravarEspelho('jr_controle_viagens', JSON.stringify(aplicar(espelho)));
+    }
+
+    // Tira os ids expurgados do mapa de hashes. Sem isto, o id removido
+    // continuaria em `conhecidos` e o pull seguinte o contaria como "a
+    // nuvem já confirmou e agora sumiu" — ruído no contador de descartados,
+    // justamente na tabela que menos precisa de ruído.
+    try {
+      const mapa = this._lerMapaSync();
+      const conhecidos = mapa['controle_viagens'];
+      if (conhecidos) {
+        let mexeu = false;
+        for (const [id, acao] of decisao) {
+          if (acao === 'remover' && conhecidos[id] !== undefined) { delete conhecidos[id]; mexeu = true; }
+        }
+        if (mexeu) { this._mapaSync = mapa; this._gravarMapaSync(); }
+      }
+    } catch (e) {}
+
+    // Ficha do que saiu. Best-effort e limitada de propósito: esta faxina
+    // existe para LIBERAR cota, e não pode falhar por falta de cota.
+    try {
+      const anterior = JSON.parse(localStorage.getItem('jr_faxina_fantasmas') || 'null');
+      localStorage.setItem('jr_faxina_fantasmas', JSON.stringify({
+        quando: (typeof agoraIsoBrasilia === 'function') ? agoraIsoBrasilia() : new Date().toISOString(),
+        build: CloudStore.BUILD,
+        total: fichas.length,
+        total_acumulado: ((anterior && anterior.total_acumulado) || 0) + fichas.length,
+        amostra: fichas.slice(0, 50)
+      }));
+    } catch (e) {}
+
+    const removidos = fichas.filter(f => f.acao === 'removido').length;
+    console.warn(
+      `[CloudStore] FAXINA DE FANTASMA: ${removidos} registro(s) de controle_viagens removido(s) do cache deste ` +
+      `aparelho (data_saida guardava estado de checklist — assinatura de build antiga) e ${fichas.length - removidos} ` +
+      `com data_saida ilegível zerada para poder sincronizar. É definitivo: eles não voltam, e o contador "Recusados" ` +
+      `do painel Aparelhos vai a zero no próximo ciclo. Ficha do que saiu em localStorage['jr_faxina_fantasmas'].`
+    );
+    return fichas.length;
+  }
+
   _auditarCacheLocal() {
     // Lia 'jr_controle_viagens' — o espelho — e o espelho só é escrito pelo
     // pull. Entre um ciclo e outro ele não reflete o que o aparelho guarda,
@@ -1088,6 +1534,18 @@ class CloudStore {
     // a autoridade do pull). É este número que decide se uma máquina pode
     // operar antes do Reset Global — ele precisa contar o que ela realmente
     // tem, na mesma ordem de confiança usada no pull.
+
+    // TIRA O FANTASMA DO APARELHO ANTES DE CONTÁ-LO (01/09/2026).
+    //
+    // Até aqui este método só MEDIA. Medir sozinho nunca teve como zerar o
+    // contador: quem segurava as 247 linhas era o localStorage, e nem a
+    // guarda de escrita nem a atualização do app mexem nele. A faxina roda
+    // primeiro, no mesmo ponto do ciclo, para que a contagem abaixo já veja
+    // o cache limpo — e o número que sobe para o painel Aparelhos passe a
+    // significar "sobrou fantasma que a faxina não soube tratar", que é a
+    // única coisa que ainda vale um alarme.
+    this._faxinaDeFantasmas();
+
     let viagens = null;
     if (window.db && window.db.data && Array.isArray(window.db.data.controle_viagens)) {
       viagens = window.db.data.controle_viagens;
@@ -1397,7 +1855,7 @@ class CloudStore {
       return { nivel: 'CRITICO', texto: 'O mapa de sincronizacao diz que a nuvem ja confirmou este registro, mas ele nao esta la. Nunca mais sera reenviado sozinho, e o proximo pull o trata como apagado.' };
     }
     if (ausente('nuvem')) {
-      return { nivel: 'ATENCAO', texto: 'So existe neste aparelho. Ainda nao subiu: normal por alguns segundos, problema se persistir depois de um ciclo de 30s.' };
+      return { nivel: 'ATENCAO', texto: 'So existe neste aparelho. Ainda nao subiu: normal por alguns segundos, problema se persistir depois de um ciclo de sincronizacao (2 min).' };
     }
     if (presente('nuvem') && ausente('sacDb') && ausente('memoria')) {
       return { nivel: 'ATENCAO', texto: 'Esta na nuvem e nao neste aparelho. Pode ser a janela operacional (90 dias) ou um pull que ainda nao rodou.' };
@@ -1538,7 +1996,12 @@ class CloudStore {
       ocorrencias_devolucao: 'numero_protocolo',
       ocorrencias_rota: 'numero_protocolo',
       retencoes_frota: 'numero_retencao',
-      sinistros: 'numero_sinistro'
+      sinistros: 'numero_sinistro',
+      // 6.8.0 (migration 48): o número do auto de infração é do mundo real —
+      // não se renumera. Dois aparelhos lançando a mesma multa offline caem
+      // aqui, na aba "⚠️ Conflitos". numero_relatorio é sequência do app e
+      // vai pelo caminho da renumeração (SEQUENCIAS_RENUMERAVEIS).
+      infracoes: 'numero_infracao'
     };
     const campo = CAMPOS_UNICOS_POR_TABELA[tableName];
     if (!campo) return;
@@ -1567,6 +2030,173 @@ class CloudStore {
         // esse conflito agora; ele será detectado de novo no próximo ciclo.
       }
     }
+  }
+
+  // ---------------------------------------------------------------
+  // COLISÃO DE NÚMERO SEQUENCIAL: RENUMERA E REENVIA (02/09/2026)
+  //
+  // O QUE ISTO CONSERTA. Em 31/08 dois aparelhos geraram DEV-2026-016 na
+  // mesma tarde: o do SAC às 15:33, o da bancada às 15:59. O segundo chegou
+  // primeiro, e a partir dali TODO envio de ocorrencias_devolucao daquele
+  // aparelho voltou 409/23505 em uq_devolucao_protocolo. Como o POST é um
+  // lote só, o registro colidido levou junto as seis devoluções abertas
+  // depois dele: DEV-017 a DEV-022 ficaram DOIS DIAS presas no PC do SAC,
+  // com o indicador da nuvem verde e ninguém sabendo. A unidade da falha é
+  // o lote, não o registro — é isso que transforma um número repetido numa
+  // fila inteira parada.
+  //
+  // POR QUE A COLISÃO EXISTE. getNextSequenceNumber() (store.js) gera o
+  // número olhando só o estado LOCAL. O syncCloudToLocal() que a abertura
+  // faz antes de gerar (app.js:7443) resolve metade do problema — o
+  // aparelho atrasado — mas não protege contra o número ser criado por
+  // OUTRO aparelho DEPOIS. Enquanto a numeração nascer no cliente contra
+  // uma coluna UNIQUE, a colisão volta; o que dá para garantir aqui é que
+  // ela pare de travar a fila.
+  //
+  // SÓ RENUMERA NÚMERO DE PROTOCOLO. motoristas.cnh, usuarios.email e
+  // controle_viagens.carga também são UNIQUE, e ali o valor é do mundo real:
+  // renumerar seria inventar dado. Esses continuam no caminho antigo —
+  // conflito registrado para a aba "⚠️ Conflitos" e envio recusado.
+  //
+  // SÓ MEXE EM QUEM COLIDE DE VERDADE. Consulta a nuvem e renumera apenas o
+  // registro cujo número já está lá sob OUTRO id. Se o 23505 vier de um
+  // índice diferente, nada colide, nada é renumerado, e a falha segue
+  // inteira para o caminho antigo. É a diferença entre consertar a colisão e
+  // trocá-la por um número inventado.
+  //
+  // O NÚMERO NOVO É REGISTRADO. Protocolo é documento: vai para audit_logs
+  // como RENUMERACAO_AUTOMATICA, que é o que o "📜 Ver histórico" do card lê.
+  // Trocar um protocolo em silêncio seria repetir o defeito que esta função
+  // existe para acabar.
+  // ---------------------------------------------------------------
+  async _resolverColisaoDeSequencia(tableName, errBody, payload, originais) {
+    const spec = CloudStore.SEQUENCIAS_RENUMERAVEIS[tableName];
+    if (!spec) return 0;
+
+    let code = null;
+    try { code = JSON.parse(errBody).code; } catch(e) {}
+    if (code !== '23505') return 0;
+
+    // Quem está na nuvem com cada número, e sob qual id. As quatro tabelas
+    // com número sequencial são pequenas (dezenas de linhas) e aqui descem
+    // só duas colunas — não é o select=* paginado do pull, cabe numa
+    // requisição. Se a leitura falhar, não há como saber quem colide: sai
+    // sem renumerar nada.
+    let naNuvem;
+    try {
+      const resp = await fetch(
+        `${this.config.url}/rest/v1/${tableName}?select=id,${spec.unico}&limit=10000`,
+        { headers: this._headers() }
+      );
+      if (!resp.ok) return 0;
+      naNuvem = await resp.json();
+    } catch(e) {
+      return 0;
+    }
+    if (!Array.isArray(naNuvem)) return 0;
+
+    const donoNaNuvem = new Map();
+    for (const r of naNuvem) {
+      const v = String(r[spec.unico] || '');
+      if (v) donoNaNuvem.set(v, String(r.id));
+    }
+
+    // Universo do que já está tomado: nuvem MAIS este aparelho. Sem a parte
+    // local, a renumeração poderia cair em cima de um número que só existe
+    // aqui e ainda não subiu — trocando uma colisão por outra, que é
+    // exatamente o que aconteceu em 31/08.
+    const locais = (window.db && window.db.data && Array.isArray(window.db.data[tableName]))
+      ? window.db.data[tableName]
+      : [];
+    const tomados = new Set(donoNaNuvem.keys());
+    for (const r of locais) {
+      const v = String(r[spec.unico] || '');
+      if (v) tomados.add(v);
+    }
+
+    const numeroDe = v => {
+      const m = String(v || '').match(/(\d+)$/);
+      return m ? parseInt(m[1], 10) : 0;
+    };
+    let maiorN = 0;
+    tomados.forEach(v => { const n = numeroDe(v); if (n > maiorN) maiorN = n; });
+
+    let renumerados = 0;
+    for (const rec of payload) {
+      const valor = String(rec[spec.unico] || '');
+      if (!valor) continue;
+      const dono = donoNaNuvem.get(valor);
+      if (!dono || dono === String(rec.id)) continue;   // não é colisão
+
+      let novoN = maiorN;
+      let novos = null;
+      do {
+        novoN++;
+        novos = this._renderizarSequencia(rec, spec, novoN);
+      } while (novos && tomados.has(novos[spec.unico]));
+      if (!novos) continue;   // formato que não termina em dígitos: não mexe
+      maiorN = novoN;
+
+      const antes = {};
+      Object.keys(novos).forEach(k => { antes[k] = rec[k]; });
+
+      // TRÊS cópias do mesmo registro precisam receber o número novo:
+      //   1. o objeto que vai no POST desta retentativa (payload);
+      //   2. o do array que syncLocalToCloud passou, porque é dele que
+      //      _confirmarEnvio() tira o hash — com o valor velho ali, o
+      //      registro voltaria "sujo" no ciclo seguinte, para sempre;
+      //   3. o registro vivo em db.data, senão a tela segue mostrando o
+      //      número antigo e o próximo save() regrava a colisão.
+      Object.assign(rec, novos);
+      const original = (originais || []).find(o => o && String(o.id) === String(rec.id));
+      if (original && original !== rec) Object.assign(original, novos);
+      const vivo = locais.find(o => o && String(o.id) === String(rec.id));
+      if (vivo && vivo !== rec) Object.assign(vivo, novos);
+
+      tomados.add(novos[spec.unico]);
+      renumerados++;
+
+      console.warn(
+        `[CloudStore] COLISÃO DE NÚMERO em ${tableName}: "${valor}" já estava na nuvem sob o id ${dono}. ` +
+        `Este registro (id ${rec.id}) passou a ser "${novos[spec.unico]}" e o lote será reenviado.`
+      );
+      if (window.db && typeof window.db.logAudit === 'function') {
+        window.db.logAudit({
+          acao: 'RENUMERACAO_AUTOMATICA',
+          modulo: tableName,
+          registro_id: rec.id,
+          diff: { antes, depois: novos, motivo: `Número já existia na nuvem sob o id ${dono}.` }
+        });
+      }
+    }
+
+    if (renumerados > 0 && window.db && typeof window.db.save === 'function') window.db.save();
+    return renumerados;
+  }
+
+  // Aplica o número `n` a todos os campos de sequência do registro,
+  // preservando o prefixo e a largura DE CADA UM. Em ocorrencias_devolucao,
+  // 'DEV-2026-016' e 'DEV-016' são o mesmo número em dois formatos: mexer só
+  // no que tem UNIQUE deixaria os dois se contradizendo na tela e no PDF.
+  //
+  // O prefixo sai do valor atual, e não de uma constante: 'DEV-2026-' vira
+  // 'DEV-2027-' na virada do ano sem ninguém tocar aqui. Devolve null quando
+  // o campo com UNIQUE não termina em dígitos — formato que esta função não
+  // entende ela não renumera.
+  _renderizarSequencia(rec, spec, n) {
+    const aplicar = valor => {
+      const m = String(valor || '').match(/^(.*?)(\d+)$/);
+      return m ? m[1] + String(n).padStart(m[2].length, '0') : null;
+    };
+    const principal = aplicar(rec[spec.unico]);
+    if (!principal) return null;
+    const saida = {};
+    saida[spec.unico] = principal;
+    for (const campo of (spec.espelhos || [])) {
+      const v = aplicar(rec[campo]);
+      if (v) saida[campo] = v;
+    }
+    return saida;
   }
 
   // ---------------------------------------------------------------
@@ -1688,7 +2318,9 @@ class CloudStore {
       'ocorrencias_viagens', 'ocorrencias_rota', 'resumo_diario_cd',
       'relatorios_divergencia', 'auditoria_produtividade', 'trocas_veiculos',
       'retencoes_frota', 'reentregas_rota', 'audit_logs', 'registro_versoes',
-      'sinistros', 'itens_avulsos_destinacao'
+      'sinistros', 'itens_avulsos_destinacao',
+      'ocorrencias_cd', 'ocorrencias_colaborador', 'cortes_cd',  // 6.7.0
+      'infracoes_relatorios', 'infracoes'                        // 6.8.0
     ];
     let ok = true;
     for (const t of tabelas) {
@@ -1812,6 +2444,12 @@ class CloudStore {
       { dbKey: 'controle_viagens',      localKey: 'jr_controle_viagens',  tableName: 'controle_viagens' },
       { dbKey: 'ocorrencias_viagens',   localKey: 'jr_ocorrencias_viagens', tableName: 'ocorrencias_viagens' },
       { dbKey: 'resumo_diario_cd',      localKey: 'jr_resumo_diario_cd',  tableName: 'resumo_diario_cd' },
+      // 6.7.0 (Plano de Reorganização do CD, Bloco A): os três filhos do
+      // Resumo Diário ganharam tabela própria (migration 44). Não dependem
+      // de ninguém: os nomes de funcionário e produto são texto, não FK.
+      { dbKey: 'ocorrencias_cd',        localKey: 'jr_ocorrencias_cd',    tableName: 'ocorrencias_cd' },
+      { dbKey: 'ocorrencias_colaborador', localKey: 'jr_ocorrencias_colaborador', tableName: 'ocorrencias_colaborador' },
+      { dbKey: 'cortes_cd',             localKey: 'jr_cortes_cd',         tableName: 'cortes_cd' },
       { dbKey: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', tableName: 'medidas_disciplinares' },
       { dbKey: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', tableName: 'orientacoes_feedback' },
       { dbKey: 'atestados_medicos',     localKey: 'jr_atestados_medicos', tableName: 'atestados_medicos' },
@@ -1825,18 +2463,42 @@ class CloudStore {
       { dbKey: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', tableName: 'relatorios_divergencia' },
       { dbKey: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', tableName: 'auditoria_produtividade' },
       { dbKey: 'sinistros',             localKey: 'jr_sinistros',         tableName: 'sinistros' },
-      { dbKey: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', tableName: 'itens_avulsos_destinacao' }
+      { dbKey: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', tableName: 'itens_avulsos_destinacao' },
+      // 6.8.0 — Controle de Infrações (migration 48). Texto, sem FK.
+      { dbKey: 'infracoes_relatorios',  localKey: 'jr_infracoes_relatorios', tableName: 'infracoes_relatorios' },
+      { dbKey: 'infracoes',             localKey: 'jr_infracoes',         tableName: 'infracoes' }
     ];
 
     // Independe de haver algo a enviar: é o que mantém o diagnóstico do
     // aparelho honesto para a ETAPA 3 (ver CONFERIR_APARELHO.md).
     this._auditarCacheLocal();
 
+    // ---------------------------------------------------------------
+    // A MEMÓRIA PRIMEIRO, O DISCO DEPOIS (04/09/2026)
+    //
+    // Isto lia SÓ o jr_sac_db. Num aparelho com a cota estourada, o
+    // registro que o save() acabou de não conseguir gravar existe em
+    // window.db.data e NÃO existe no disco — então o push relia o retrato
+    // velho, o lançamento não subia para lugar nenhum e se perdia de vez
+    // no primeiro F5. É exatamente o aparelho de 91% do relato de 04/09.
+    //
+    // Ler a memória é seguro porque ela nunca está atrás do disco: o pull
+    // atualiza window.db.data ANTES de tentar gravar o cache (ver
+    // _pullDaNuvem, "Memória primeiro, porque é de graça"), e o save()
+    // serializa a memória para gravar. É a mesma coisa, sem depender de
+    // uma gravação que pode ter falhado. Só as chaves deste mapeamento
+    // são lidas, então clientes/produtos (que existem em db.data e não no
+    // jr_sac_db) continuam de fora, como antes.
+    // ---------------------------------------------------------------
     let fullDb = null;
-    try {
-      const rawFull = localStorage.getItem('jr_sac_db');
-      if (rawFull) fullDb = JSON.parse(rawFull);
-    } catch(e) {}
+    if (window.db && window.db.data) {
+      fullDb = window.db.data;
+    } else {
+      try {
+        const rawFull = localStorage.getItem('jr_sac_db');
+        if (rawFull) fullDb = JSON.parse(rawFull);
+      } catch(e) {}
+    }
 
     for (const m of mappings) {
       try {
@@ -1856,10 +2518,13 @@ class CloudStore {
           // só o que mudou aqui desde a última confirmação da nuvem.
           const mudados = this._separarOQueMudou(m.tableName, records);
           if (mudados.length === 0) continue;
+          // Hash do estado que VAI subir, tirado antes do await — ver
+          // _confirmarEnvio para o porquê.
+          const antes = this._hashesAntesDoEnvio(m.tableName, mudados);
           const enviou = await this.upsert(m.tableName, mudados);
           // Só marca como confirmado se o POST passou. Envio recusado
           // continua "sujo" e é tentado de novo no ciclo seguinte.
-          if (enviou) this._confirmarEnvio(m.tableName, mudados);
+          if (enviou) this._confirmarEnvio(m.tableName, mudados, antes);
         }
       } catch(e) {
         console.warn(`[CloudStore] Erro ao sincronizar ${m.tableName}:`, e);
@@ -1967,6 +2632,10 @@ class CloudStore {
     // aviso: o dado simplesmente sumia. Agora só relemos e mesclamos por
     // cima do jr_sac_db mais atual no final, não do snapshot do início.
     const pulledUpdates = {};
+    // O "local" que cada tabela usou na mesclagem (dbKey -> JSON). Serve para
+    // descobrir, na hora de aplicar, o que foi editado DEPOIS da mesclagem —
+    // ver _preservarEdicoesDuranteOPull().
+    const retratosDoMerge = {};
 
     // Relê jr_sac_db a CADA chamada, e não uma vez no início, pelo mesmo
     // motivo do comentário acima: o laço leva segundos e um save() no meio
@@ -2114,6 +2783,7 @@ class CloudStore {
         // depender de a segunda cópia ter cabido.
         if (localRaw !== mescladoStr) {
           pulledUpdates[m.dbKey] = mesclado;
+          retratosDoMerge[m.dbKey] = localRaw;
           anyChange = true;
         }
       } catch(e) {
@@ -2154,6 +2824,10 @@ class CloudStore {
       // a tela é a operação.
       // =============================================================
       if (window.db && window.db.data) {
+        for (const dbKey of Object.keys(pulledUpdates)) {
+          pulledUpdates[dbKey] = this._preservarEdicoesDuranteOPull(
+            retratosDoMerge[dbKey], pulledUpdates[dbKey], window.db.data[dbKey]);
+        }
         Object.assign(window.db.data, pulledUpdates);
       }
 
@@ -2250,6 +2924,15 @@ class CloudStore {
       window.dispatchEvent(new CustomEvent('jr-cloud-sync', { detail: { updated: true } }));
     }
 
+    // 6.7.0: "um pull terminou", tenha mudado algo ou não. Diferente do
+    // jr-cloud-sync acima, que só dispara com mudança. Quem escuta é a
+    // migração dos filhos do Resumo Diário (app.js): ela só pode rodar
+    // DEPOIS de este aparelho ter visto o que a nuvem já tem nas tabelas
+    // novas — senão um aparelho que abre a 6.7.0 dias depois dos outros
+    // recriaria, a partir do envelope antigo, registros que já foram
+    // editados na nuvem, e o upsert os devolveria ao conteúdo velho.
+    try { window.dispatchEvent(new CustomEvent('jr-cloud-pull-ok', { detail: { updated: !!(anyChange || veioCatalogo) } })); } catch(e) {}
+
     return anyChange || veioCatalogo;
   }
 
@@ -2260,7 +2943,7 @@ class CloudStore {
     if (!this.isConfigured()) return;
     this.stopAutoSync(); // cancela qualquer timer anterior
     
-    const interval = this.config.syncIntervalMs || 30000;
+    const interval = this.config.syncIntervalMs || 120000;
     console.log(`[CloudStore] Sincronização automática iniciada (a cada ${interval/1000}s)`);
 
     // Fase 5 (21/08/2026): esta função tinha um ramo que empurrava (push) o
@@ -2393,11 +3076,13 @@ class CloudStore {
     // outra: "o que estou vendo é de quando?". Sem isso, um aparelho que
     // parou de sincronizar (aba em segundo plano, celular que dormiu) é
     // visualmente idêntico a um em dia — e a única saída era desconfiar do
-    // sistema. Acima de 60s o número entra no rótulo; abaixo disso ele só
-    // polui, porque o ciclo normal é de 30s.
+    // sistema. Acima de dois ciclos o número entra no rótulo; abaixo disso
+    // ele só polui. Era 60s fixo quando o ciclo era de 30s — com o ciclo de
+    // 2 min da 6.8.1, o 60s fixo acenderia "há 1min" em todo aparelho em dia.
     const idadeMs = this._ultimoPullOkMs ? Date.now() - this._ultimoPullOkMs : null;
+    const limiteIdadeMs = Math.max(60000, 2 * (this.config.syncIntervalMs || 120000));
     let sufixo = '';
-    if (status === 'online' && idadeMs !== null && idadeMs > 60000) {
+    if (status === 'online' && idadeMs !== null && idadeMs > limiteIdadeMs) {
       const min = Math.floor(idadeMs / 60000);
       sufixo = ` <span style="color:#fbbf24;font-size:10px;">· há ${min}min</span>`;
     }
@@ -2488,6 +3173,9 @@ class CloudStore {
     // ativo. A projeção passa a ler igual.
     (spec.booleanoTrue || []).forEach(c => { out[c] = r[c] !== false; });
     (spec.data || []).forEach(c => { out[c] = vazio(r[c]) ? null : String(r[c]); });
+    // jsonb (21/09/2026, sinistros): vai como esta — array ou objeto. So o
+    // vazio vira null, para nao mandar "" a uma coluna jsonb.
+    (spec.json || []).forEach(c => { out[c] = vazio(r[c]) ? null : r[c]; });
     return out;
   }
 
@@ -2495,6 +3183,45 @@ class CloudStore {
   // lista branca é exatamente o _hashRegistro() de sempre.
   _hashParaSync(tableName, r) {
     return this._hashRegistro(this._projetarParaTabela(tableName, r));
+  }
+
+  // ASSINATURA DA PROJEÇÃO (14/09/2026) — o que fecha a janela da migration 43.
+  //
+  // O hash de sincronia depende da lista branca da tabela. Quando uma build
+  // nova cria ou altera a lista (6.6.3 fez isso com retencoes_frota), TODO
+  // registro daquela tabela passa a ter hash diferente do que está em
+  // `conhecidos` — e o resto do código lê isso como "TUDO foi editado aqui
+  // e ainda não subiu". Em 11/09/2026 foi exatamente o que aconteceu: no
+  // primeiro ciclo da 6.6.3, cada aparelho reenviou todas as retenções e
+  // preservou a própria cópia no pull; o aparelho que ainda tinha RETIDO em
+  // cache empurrou RETIDO por cima do LIBERADO que outro tinha acabado de
+  // enviar. A migration 43 previu a janela por escrito; aqui ela deixa de
+  // existir.
+  //
+  // Guardamos, ao lado dos hashes, uma assinatura da lista branca com que
+  // eles foram calculados (`jr_sync_hashes.__projecao[tabela]`). Quando a
+  // assinatura muda de uma build para outra:
+  //   - o push segura a tabela (nada sobe) até o pull rebasear;
+  //   - o pull rebaseia: como não há como saber o que é edição local de
+  //     verdade, a cópia local só fica se estiver carimbada e for
+  //     ESTRITAMENTE mais nova que a da nuvem; do contrário a nuvem manda,
+  //     e os hashes são regravados já com a assinatura nova.
+  // Assinatura ausente (mapa gravado por build anterior a esta regra) conta
+  // como igual: é registrada e nada é rebaseado — senão a primeira abertura
+  // desta build rebasearia todas as tabelas de todos os aparelhos.
+  _assinaturaProjecao(tableName) {
+    const spec = CloudStore.COLUNAS_POR_TABELA[tableName];
+    return spec ? this._hashRegistro(spec) : 'bruto';
+  }
+
+  _projecaoMudou(tableName, mapa) {
+    const guardada = mapa && mapa.__projecao && mapa.__projecao[tableName];
+    return !!guardada && guardada !== this._assinaturaProjecao(tableName);
+  }
+
+  _anotarProjecao(tableName, mapa) {
+    if (!mapa.__projecao) mapa.__projecao = {};
+    mapa.__projecao[tableName] = this._assinaturaProjecao(tableName);
   }
 
   _catalogoDisponivel() {
@@ -2608,8 +3335,9 @@ class CloudStore {
       if (!registros.length) continue;
       const mudados = this._separarOQueMudou(t.tableName, registros);
       if (!mudados.length) continue;
+      const antes = this._hashesAntesDoEnvio(t.tableName, mudados);
       if (await this.upsert(t.tableName, mudados)) {
-        this._confirmarEnvio(t.tableName, mudados);
+        this._confirmarEnvio(t.tableName, mudados, antes);
         enviouAlgo = true;
         console.log(`[CloudStore] Catálogo: ${mudados.length} ${t.dbKey} enviado(s) para a nuvem.`);
       }
@@ -2637,12 +3365,26 @@ class CloudStore {
 // sync-5.0.0", para sempre. O aviso que existe para detectar cache velho
 // vira ruido permanente, e ai ninguem olha mais para ele.
 //
-// Sao QUATRO marcadores de versao, e os quatro andam juntos:
+// Sao CINCO marcadores de versao, e os cinco andam juntos:
 //   js/cloudStore.js  CloudStore.BUILD   <- este
 //   version.json      build
 //   js/config.js      appVersion
 //   sw.js             CACHE_NAME
-CloudStore.BUILD = "filtros-fila-pendentes-cd-5.11.0";
+//   js/store.js       currentVersion
+//
+// ERAM QUATRO ate a 6.2.0, e esta lista dizia quatro. O quinto entrou na
+// 6.3.0 (esta anotado na observacao_deploy dela) e a lista aqui nao
+// acompanhou - foi assim que a 6.4.0 saiu com dois marcadores parados: quem
+// leu daqui bumpou os que estavam escritos.
+//
+// O CUSTO DE ESQUECER UM NAO E COSMETICO, e depende de qual:
+//   CloudStore.BUILD  -> jrDiagnosticoSync() reporta a versao errada, e a
+//                        conferencia de cache velho compara contra ela.
+//   version.json      -> jrConferirVersaoPublicada() nao ve versao nova e
+//                        nenhum aparelho e mandado atualizar.
+//   store.js          -> todo aparelho loga migracao de versao a cada
+//                        abertura, para sempre.
+CloudStore.BUILD = "visao-operacao-6.9.4";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -2683,6 +3425,25 @@ CloudStore.CATALOGO_EPOCA = '2000-01-01T00:00:00-03:00';
 // banco. Enviá-lo deixaria o relógio de um aparelho definir o cursor de
 // todos os outros.
 CloudStore.COLUNAS_POR_TABELA = {
+  // Controle de Infrações (6.8.0, migration 48) — nasce com lista branca,
+  // espelhando a migration coluna a coluna. data_infracao e valor são
+  // obrigatórios no formulário; as datas opcionais (status, impressão,
+  // exclusão) viram null em vez de "" pela projeção.
+  infracoes_relatorios: {
+    texto:    ['numero_relatorio', 'responsavel', 'observacao', 'criado_por', 'atualizado_por', 'deleted_by_nome'],
+    numero:   ['deleted_by_usuario_id'],
+    booleano: ['is_deleted'],
+    data:     ['data_lancamento', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
+  infracoes: {
+    texto:    ['numero_infracao', 'prestador_nome', 'prestador_tipo', 'veiculo_placa', 'status',
+               'status_alterado_por', 'criado_por', 'atualizado_por', 'deleted_by_nome'],
+    // parcelas e data_primeira_parcela: 6.8.2, migration 49.
+    numero:   ['relatorio_id', 'valor', 'recibo_impresso_qtd', 'deleted_by_usuario_id', 'parcelas'],
+    booleano: ['is_deleted'],
+    data:     ['data_infracao', 'status_alterado_em', 'recibo_impresso_em', 'criado_em', 'atualizado_em', 'deleted_at',
+               'data_primeira_parcela']
+  },
   clientes: {
     texto:    ['codigo_cliente', 'razao_social', 'cnpj', 'cidade', 'uf', 'deleted_by_nome'],
     numero:   ['deleted_by_usuario_id'],
@@ -2694,6 +3455,121 @@ CloudStore.COLUNAS_POR_TABELA = {
     numero:   ['valor_unitario_padrao', 'deleted_by_usuario_id'],
     booleano: ['is_deleted'],
     data:     ['deleted_at']
+  },
+  // retencoes_frota (10/09/2026) — o motivo 1 acima pela terceira vez.
+  //
+  // A liberacao de veiculo grava "descricao_acao_liberacao" (a Acao de
+  // Manutencao Realizada, obrigatoria desde 17/08/2026). A coluna nunca
+  // existiu no banco ate a migration 43: todo lote que carregasse uma
+  // liberacao voltava PGRST204 e era recusado INTEIRO — e como o igualador
+  // de chaves de upsert() copia a chave nova para todos os objetos do lote,
+  // UMA liberacao segurava todas as retencoes do aparelho. Ficavam sujas
+  // para sempre, retentando a cada 30s, caladas.
+  //
+  // Em 10/09/2026 isso deixou o PC da manutencao mostrando 2 veiculos
+  // LIBERADOS e o do analista mostrando os mesmos 2 RETIDOS, indefinidamente.
+  //
+  // A migration 43 conserta ESTE campo. A lista branca conserta a CLASSE:
+  // daqui em diante, campo que o JS invente e que nao seja coluna e' podado
+  // antes do POST, em vez de derrubar o lote.
+  retencoes_frota: {
+    texto:    ['numero_retencao', 'placa', 'tipo_veiculo', 'motivo', 'tipo_os',
+               'local', 'status', 'criado_por', 'deleted_by_nome', 'numero_os',
+               'link_os', 'descricao_acao_liberacao'],
+    numero:   ['veiculo_id'],
+    booleano: ['is_deleted'],
+    data:     ['data_parada', 'data_previsao', 'data_liberacao', 'criado_em',
+               'deleted_at', 'atualizado_em']
+  },
+  // As três tabelas da reorganização do CD (11/09/2026, migration 44) já
+  // nascem com lista branca — a lição do Bloco 0 do plano: campo que o JS
+  // invente e não seja coluna é podado antes do POST em vez de derrubar o
+  // lote. As listas espelham a migration coluna a coluna.
+  ocorrencias_cd: {
+    texto:    ['turno', 'ocorrencia', 'causa', 'acao', 'gestor', 'criado_por', 'deleted_by_nome'],
+    booleano: ['is_deleted'],
+    data:     ['data', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
+  ocorrencias_colaborador: {
+    texto:    ['turno', 'funcionario', 'requisito', 'carga', 'detalhamento', 'acao', 'status',
+               'medida_disciplinar', 'alinea_clt', 'gestor', 'criado_por', 'deleted_by_nome'],
+    numero:   ['peso', 'dias_suspensao'],
+    booleano: ['is_deleted'],
+    data:     ['data', 'disciplinar_gerada_em', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
+  cortes_cd: {
+    texto:    ['turno', 'codigo_item', 'descricao', 'quantidade', 'gestor', 'criado_por', 'deleted_by_nome'],
+    numero:   ['valor'],
+    booleano: ['is_deleted'],
+    data:     ['data', 'criado_em', 'atualizado_em', 'deleted_at']
+  },
+  // sinistros (21/09/2026) — a lista branca pelo motivo do TIPO, nao da
+  // coluna a mais. O formulario do sinistro tem sete <input type="date">
+  // opcionais (validade da CNH, data da assinatura, datas de cada parecer).
+  // Vazio, um input date devolve "" — e o PostgREST recusa "" numa coluna
+  // DATE com "invalid input syntax for type date", derrubando o lote
+  // inteiro (HTTP 400). Achado ao rodar jrMigrarTodasFotosLegado() em
+  // 21/09/2026: o SIN-2026-0001 estava ha uma semana sem conseguir subir
+  // (a nuvem tinha a copia de 14/09, sem a foto do motorista), calado, a
+  // cada 30s. A projecao converte "" em null para data, numero e texto —
+  // e o tipo jsonb entra aqui pela primeira vez, por causa dos seis grupos
+  // de foto e do midias_paths (migration 42). Espelha a tabela coluna a
+  // coluna; o que o JS inventar e nao for coluna e' podado antes do POST.
+  sinistros: {
+    texto:    ['numero_sinistro', 'carga', 'placa', 'motorista_nome', 'local_acidente', 'status_geral',
+               'motorista_cpf', 'motorista_cnh', 'tipo_veiculo_jr_motorista',
+               'veiculo_terceiro_condutor_nome', 'veiculo_terceiro_placa', 'veiculo_terceiro_renavam',
+               'veiculo_terceiro_marca', 'relato_motorista', 'sinalizacao_relato_motorista',
+               'motorista_assinatura_nome', 'relato_manutencao', 'sinalizacao_relato_manutencao',
+               'testemunha_nome_contato', 'parecer_manutencao', 'manutencao_gestor_nome',
+               'parecer_operacoes', 'operacoes_gestor_nome', 'parecer_juridico', 'juridico_nome',
+               'diretoria_nome', 'criado_por'],
+    numero:   ['ocorrencia_rota_id', 'veiculo_id', 'motorista_id', 'valor_desconto', 'numero_parcelas',
+               'midias_pendentes'],
+    booleano: ['etapa_motorista_completa', 'etapa_manutencao_completa', 'etapa_operacoes_completa',
+               'juridico_necessario', 'etapa_juridico_completa', 'etapa_diretoria_completa',
+               'havia_sinalizacao_motorista', 'havia_sinalizacao_manutencao', 'tem_testemunhas',
+               'responsabilidade_motorista', 'desconto_motorista', 'is_deleted'],
+    data:     ['data_acidente', 'motorista_cnh_validade', 'motorista_assinatura_data', 'manutencao_data',
+               'operacoes_data', 'juridico_data', 'diretoria_data', 'criado_em', 'atualizado_em', 'deleted_at'],
+    json:     ['fotos_danos_jr_motorista', 'fotos_danos_terceiro_motorista', 'fotos_danos_jr_manutencao',
+               'fotos_danos_terceiro_manutencao', 'orcamentos_anexos', 'fotos_acidente_bo', 'midias_paths']
+  },
+  // itens_avulsos_destinacao (22/09/2026) — o MESMO defeito do sinistro,
+  // achado uma semana depois na tabela vizinha, e caro do mesmo jeito.
+  //
+  // O formulario de editar item da Destinacao serve aos dois tipos de item da
+  // tela, e a coluna "data de validade" nao tem o mesmo tipo nos dois:
+  // itens_devolucao.data_validade e VARCHAR (a migration 26 a criou assim de
+  // proposito, porque o campo chegava vazio) e itens_avulsos_destinacao.
+  // data_validade e DATE (schema.sql, bloco 18). Um <input type="date"> em
+  // branco devolve "", e o PostgREST recusa "" numa coluna DATE com HTTP 400
+  // "invalid input syntax for type date" — derrubando o LOTE INTEIRO, nao o
+  // registro.
+  //
+  // Em 21/09/2026, as 14:28, um item avulso foi editado sem preencher a
+  // validade. A partir dali NENHUM item avulso daquele aparelho subiu mais:
+  // 36 itens novos e as 39 fotos que ja estavam no Storage (o upload e outro
+  // caminho e continuou funcionando, deixando os arquivos orfaos de linha)
+  // ficaram so no navegador, retentando a cada 30s, calados, com o indicador
+  // da nuvem verde. A tela mostrava a lista cheia para quem lancou e vazia
+  // para todo mundo.
+  //
+  // A correcao do formulario (js/app.js, handleSalvarEdicaoItemDestino grava
+  // null) fecha a origem. Esta lista fecha a CLASSE e, sobretudo, desbloqueia
+  // o aparelho que JA tem "" gravado em cache: a atualizacao troca o codigo,
+  // nao o localStorage, entao sem isto o item envenenado continuaria travando
+  // a tabela depois do deploy. Espelha o banco coluna a coluna (schema.sql +
+  // migration 47).
+  itens_avulsos_destinacao: {
+    // baixa_*: 6.8.5, migration 50 — todas VARCHAR/TEXT de propósito.
+    texto:    ['produto_codigo', 'produto_descricao', 'destino_item', 'observacao',
+               'status_negociacao', 'motivo_avulso', 'criado_por',
+               'baixa_acao', 'baixa_data', 'baixa_em', 'baixa_por', 'baixa_obs'],
+    numero:   ['quantidade', 'fotos_pendentes'],
+    booleano: ['is_deleted'],
+    data:     ['data_validade', 'data_negociacao', 'criado_em', 'atualizado_em', 'deleted_at'],
+    json:     ['divisoes_destino', 'fotos_paths']
   },
   // usuarios (31/08/2026) — o motivo 1 acima, de novo, e caro.
   //
@@ -2720,13 +3596,49 @@ CloudStore.COLUNAS_POR_TABELA = {
   // a projeção envia SEMPRE todas as colunas que declara, então declarar
   // `criado_em` faria todo upsert sobrescrever com null o carimbo que o
   // DEFAULT do banco pôs no INSERT.
+  //
+  // atualizado_em (15/09/2026, migration 46). Era a única tabela editável
+  // sem carimbo, e o custo apareceu: a senha da Adriana foi redefinida em
+  // "Logins e Senhas" e o login continuou recusando. Sem carimbo, o pull
+  // decide só por hash — um aparelho com a cópia dela "suja" (um switchRole
+  // bastava) recusava o hash novo e devolvia o antigo no push. Com o
+  // carimbo, vale o DESEMPATE POR atualizado_em de _mesclarPorRegistro e a
+  // guarda BEFORE UPDATE do banco. Quem carimba é o app (carimbarEdicao),
+  // não trigger: é o mesmo desenho das outras dez tabelas desde a 6.6.3.
+  //
+  // ATENÇÃO: declarar a coluna muda a assinatura da projeção (ver
+  // _assinaturaProjecao) — no primeiro pull da build nova a tabela rebaseia
+  // pela nuvem, e é isso que se quer aqui: cópia local sem carimbo perde.
   usuarios: {
     texto:        ['nome', 'email', 'senha_hash', 'role', 'cargo', 'departamento'],
-    booleanoTrue: ['ativo']
+    booleanoTrue: ['ativo'],
+    data:         ['atualizado_em']
   }
 };
 
-// As 25 tabelas que sincronizam, e onde cada uma mora neste aparelho.
+// NÚMEROS SEQUENCIAIS QUE PODEM SER RENUMERADOS SOZINHOS (02/09/2026).
+// Lidos por _resolverColisaoDeSequencia() — o comentário longo está lá.
+//
+//   unico    -> o campo que tem índice UNIQUE no banco e derruba o lote
+//   espelhos -> o mesmo número em outro formato, que tem de andar junto
+//
+// A lista é curta DE PROPÓSITO. Só entram campos cujo valor este app
+// inventa (um contador). motoristas.cnh, usuarios.email e
+// controle_viagens.carga também são UNIQUE e ficam de fora: ali o valor
+// vem do mundo real e renumerar seria falsificar o dado, não consertá-lo.
+// medidas_disciplinares.numero_medida também fica fora, por outro motivo:
+// não tem UNIQUE no banco, então nunca derruba envio nenhum.
+CloudStore.SEQUENCIAS_RENUMERAVEIS = {
+  ocorrencias_devolucao: { unico: 'numero_protocolo', espelhos: ['numero_devolucao'] },
+  ocorrencias_rota:      { unico: 'numero_protocolo', espelhos: [] },
+  retencoes_frota:       { unico: 'numero_retencao',  espelhos: [] },
+  sinistros:             { unico: 'numero_sinistro',  espelhos: [] },
+  // 6.8.0: as multas apontam para o relatório por relatorio_id, não pelo
+  // número — renumerar o INF-AAAA-NNNN não deixa nenhuma multa órfã.
+  infracoes_relatorios:  { unico: 'numero_relatorio', espelhos: [] }
+};
+
+// As 30 tabelas que sincronizam, e onde cada uma mora neste aparelho.
 //   tableName -> a tabela no Supabase
 //   localKey  -> a chave ESPELHO no localStorage ('jr_ocorrencias' etc.)
 //   dbKey     -> a colecao dentro de jr_sac_db e de window.db.data
@@ -2746,6 +3658,9 @@ CloudStore.MAPA_TABELAS = [
   { tableName: 'controle_viagens',      localKey: 'jr_controle_viagens',  dbKey: 'controle_viagens' },
   { tableName: 'ocorrencias_viagens',   localKey: 'jr_ocorrencias_viagens', dbKey: 'ocorrencias_viagens' },
   { tableName: 'resumo_diario_cd',      localKey: 'jr_resumo_diario_cd',  dbKey: 'resumo_diario_cd' },
+  { tableName: 'ocorrencias_cd',        localKey: 'jr_ocorrencias_cd',    dbKey: 'ocorrencias_cd' },
+  { tableName: 'ocorrencias_colaborador', localKey: 'jr_ocorrencias_colaborador', dbKey: 'ocorrencias_colaborador' },
+  { tableName: 'cortes_cd',             localKey: 'jr_cortes_cd',         dbKey: 'cortes_cd' },
   { tableName: 'medidas_disciplinares', localKey: 'jr_medidas_disciplinares', dbKey: 'medidas_disciplinares' },
   { tableName: 'orientacoes_feedback',  localKey: 'jr_orientacoes_feedback', dbKey: 'orientacoes_feedback' },
   { tableName: 'atestados_medicos',     localKey: 'jr_atestados_medicos', dbKey: 'atestados_medicos' },
@@ -2755,7 +3670,9 @@ CloudStore.MAPA_TABELAS = [
   { tableName: 'relatorios_divergencia', localKey: 'jr_relatorios_divergencia', dbKey: 'relatorios_divergencia' },
   { tableName: 'auditoria_produtividade', localKey: 'jr_auditoria_produtividade', dbKey: 'auditoria_produtividade' },
   { tableName: 'sinistros',             localKey: 'jr_sinistros',         dbKey: 'sinistros' },
-  { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' }
+  { tableName: 'itens_avulsos_destinacao', localKey: 'jr_itens_avulsos_destinacao', dbKey: 'itens_avulsos_destinacao' },
+  { tableName: 'infracoes_relatorios',  localKey: 'jr_infracoes_relatorios', dbKey: 'infracoes_relatorios' },  // 6.8.0
+  { tableName: 'infracoes',             localKey: 'jr_infracoes',         dbKey: 'infracoes' }                // 6.8.0
 ];
 
 // Tamanho do bloco de leitura paginada (item 4). Deliberadamente ABAIXO do
@@ -2831,11 +3748,87 @@ window.jrDiagnosticoSync = function() {
     console.warn(
       `⚠️ Este aparelho tem cache de build antiga: ${d.bloqueadosNaEscrita.total} registro(s) de ` +
       `${d.bloqueadosNaEscrita.tabela} foram recusados no envio (data de saída com estado de checklist). ` +
-      `Limpe o cache deste aparelho — é a ETAPA 3 do roteiro.`,
+      `NÃO é mais para limpar cache à mão (a antiga ETAPA 3): desde a 6.1.0, _faxinaDeFantasmas() tira ` +
+      `essas linhas do aparelho sozinha, a cada ciclo. Se este número não zerar no próximo ciclo, é caso ` +
+      `NOVO — a faxina não reconheceu o valor. Veja os exemplos abaixo e leve-os para o _ehVocabularioDeChecklist().`,
       d.bloqueadosNaEscrita.exemplos
     );
   }
-  if (!d.tabelasComPendencia.length) console.info('✅ Nenhuma tabela pendente — tudo que foi salvo aqui chegou ao banco.');
+  // O AVESSO DA PERGUNTA, E ELE FICAVA MUDO (22/09/2026).
+  //
+  // getDiagnostico() ja devolvia `recusandoDaNuvem` desde 28/08, com o
+  // comentario "A PERGUNTA QUE FALTAVA" escrito ao lado — mas este comando,
+  // que e por onde todo mundo entra, nunca imprimia o campo. Quem rodava
+  // jrDiagnosticoSync() num aparelho que estava IMPONDO a copia velha dele
+  // por cima da nuvem lia "✅ Nenhuma tabela pendente" e ia embora: as duas
+  // coisas sao verdade ao mesmo tempo, porque sao perguntas diferentes.
+  //
+  //   tabelasComPendencia -> o que este aparelho nao conseguiu MANDAR
+  //   recusandoDaNuvem    -> o que este aparelho se recusa a RECEBER
+  //
+  // O segundo e o que explica "dois aparelhos, mesma versao, telas
+  // diferentes": o registro foi mexido aqui, nao subiu, e por isso a copia
+  // local ganha do que os outros ja preencheram — etapa de sinistro,
+  // analise de devolucao, acao do gestor. O aparelho segue aceitando
+  // registro NOVO, entao parece que sincroniza, e e isso que torna o
+  // sintoma tao confuso de fora.
+  //
+  // So aparece depois de um pull desta sessao (o mapa e de memoria): num
+  // aparelho recem-aberto, esperar um ciclo de 30s antes de concluir.
+  // A CAUSA MAIS COMUM DA RECUSA, E ELA TAMBEM ERA MUDA (22/09/2026).
+  //
+  // Quando o localStorage enche, _gravarMapaSync() falha — e o mapa nao
+  // fica AUSENTE, fica VELHO. Mapa velho faz todo registro que mudou na
+  // nuvem desde a ultima gravacao boa parecer "alteracao local nao
+  // enviada", e a mesclagem, por desenho, deixa a copia local ganhar. O
+  // aparelho passa a ACEITAR registro novo e RECUSAR atualizacao de
+  // registro que ja tem: e a maquina que mostra a devolucao certa com a
+  // analise em branco, ou o sinistro certo com a Etapa 1 em branco, mesmo
+  // com outra pessoa tendo preenchido. O comentario ja estava escrito no
+  // catch de _gravarMapaSync(); o que faltava era ele CHEGAR a quem roda o
+  // diagnostico.
+  //
+  // Nao se conserta mudando quem ganha a mesclagem (a regra existe para nao
+  // perder o que foi digitado offline): conserta-se liberando espaco.
+  if (d.armazenamentoCheio) {
+    console.error(
+      '⛔ ESTE APARELHO NAO CONSEGUE MAIS GUARDAR O QUE BAIXA: ' + d.armazenamentoCheio.detalhe +
+      ' (em ' + d.armazenamentoCheio.quando + '). Enquanto isso durar ele RECUSA atualizacao de ' +
+      'registro que ja tem — a tela fica certa agora e velha de novo no proximo F5. ' +
+      'Libere espaco: jrFaxinarChaves(true) devolve chave sem dono, e jrMigrarTodasFotosLegado() ' +
+      'tira a foto em base64 de dentro do registro. Depois recarregue a pagina.'
+    );
+  }
+  if (d.espelhosSuspensos) {
+    console.warn('⚠️ Cota no limite: este aparelho suspendeu as copias de diagnostico para o dado real caber. Nao ha perda de dado, mas jrConferirCamadas() fica cego aqui.');
+  }
+  if (d.usoDoArmazenamento) {
+    const u = d.usoDoArmazenamento;
+    const critico = Number(u.percentual) >= 85;
+    console[critico ? 'warn' : 'info'](
+      (critico ? '⚠️ ' : '') + 'Armazenamento deste aparelho: ' + u.totalKB + ' KB (' + u.percentual + '%).' +
+      (critico ? ' Acima de ~85% a recusa acima vira questao de tempo.' : '')
+    );
+  }
+
+  const recusas = Object.keys(d.recusandoDaNuvem || {});
+  if (recusas.length) {
+    console.warn(
+      '⚠️ Este aparelho esta IMPONDO a copia local em ' +
+      recusas.reduce((n, t) => n + d.recusandoDaNuvem[t].length, 0) +
+      ' registro(s): eles foram mexidos aqui, ainda nao subiram, e por isso a ' +
+      'tela mostra a versao DESTE aparelho e nao a da nuvem. Se o que falta na ' +
+      'tela foi preenchido em outra maquina, e aqui que ele esta sendo barrado. ' +
+      'Rode jrRastrear(<numero ou id>) para ver as cinco copias do registro.'
+    );
+    console.table(recusas.map(t => ({ tabela: t, registros: d.recusandoDaNuvem[t].join(', ') })));
+  }
+
+  if (!d.tabelasComPendencia.length && !recusas.length) {
+    console.info('✅ Nenhuma tabela pendente e nenhum registro recusado — o que esta na tela e o que a nuvem tem.');
+  } else if (!d.tabelasComPendencia.length) {
+    console.info('Nenhuma tabela pendente de ENVIO — mas veja as recusas acima antes de concluir que esta tudo em dia.');
+  }
   return d;
 };
 
@@ -2849,6 +3842,45 @@ window.jrDiagnosticoSync = function() {
 // hoje: "as cópias que este aparelho guarda do mesmo registro concordam
 // entre si?". Um aparelho pode passar no primeiro e falhar no segundo — foi
 // exatamente o caso do lançamento de 23/08/2026.
+// ---------------------------------------------------------------
+// FAXINA MANUAL DAS CHAVES SEM DONO
+//
+//   jrFaxinarChaves()       -> so LISTA o que seria removido (nao apaga nada)
+//   jrFaxinarChaves(true)   -> remove
+//
+// A escada de cota do save() ja faz isto sozinha quando falta espaco (degrau
+// 2). Este comando existe para o caso em que se quer devolver o espaco AGORA,
+// sem esperar a proxima gravacao falhar - por exemplo num aparelho que ja
+// esta com a tarja vermelha na tela.
+//
+// O que conta como "sem dono": qualquer chave do localStorage que nao esteja
+// em CloudStore.chavesConhecidas(), que lista o que o app de fato usa. Ver o
+// comentario la para o porque de a lista ser essa e nao uma lista de lixo.
+// ---------------------------------------------------------------
+window.jrFaxinarChaves = function(aplicar) {
+  const orfas = CloudStore.listarChavesOrfas();
+  if (!orfas.length) {
+    console.log('%cNenhuma chave sem dono - os ~5 MB estao todos com quem devia.', 'color:#10b981;font-weight:bold');
+    return { orfas: [], KB: 0 };
+  }
+  const kb = orfas.reduce((a, o) => a + o.KB, 0);
+  console.table(orfas);
+  if (!aplicar) {
+    console.log('%c' + orfas.length + ' chave(s) sem dono ocupando ' + kb + ' KB. '
+      + 'Nada foi removido - rode jrFaxinarChaves(true) para devolver esse espaco.',
+      'color:#f59e0b;font-weight:bold');
+    return { orfas, KB: kb, removido: false };
+  }
+  const devolvido = window.cloudStore._purgarChavesOrfas();
+  const depois = window.db && typeof window.db.getStorageUsageInfo === 'function'
+    ? window.db.getStorageUsageInfo() : null;
+  console.log('%c' + devolvido + ' KB devolvidos.'
+    + (depois ? ' Uso agora: ' + depois.totalKB + ' KB (' + depois.percentual + '%), cabeMais: ' + depois.cabeMais : ''),
+    'color:#10b981;font-weight:bold');
+  if (typeof renderApp === 'function') { try { renderApp(); } catch (e) {} }
+  return { orfas, KB: devolvido, removido: true };
+};
+
 window.jrConferirCamadas = function() {
   const r = window.cloudStore.conferirCamadas();
   window.jrUltimaConferenciaCamadas = r;
@@ -3124,6 +4156,50 @@ function jrMesmaVersao(publicada, local) {
   return publicada === local;
 }
 
+// A ATUALIZAÇÃO É AUTOMÁTICA, MAS NÃO NO MEIO DE UM FORMULÁRIO (01/09/2026).
+//
+// Ao passar a conferir a versão nos eventos de acordar (ver o rodapé deste
+// arquivo), a conferência deixou de acontecer só de 15 em 15 minutos e passou
+// a acontecer no exato momento em que a pessoa volta para a tela — e um
+// location.reload() disparado enquanto alguém digita um lançamento joga fora
+// o que ela escreveu, sem nada na tela explicando por quê. Uma atualização que
+// come trabalho é pior do que uma que atrasa.
+//
+// A regra é simples: com a aba ESCONDIDA, recarrega na hora — é a melhor
+// janela possível, ninguém está olhando. Com a aba à vista e o cursor dentro
+// de um campo, adia; o próprio ato de sair do campo ou de trocar de aba
+// dispara a conferência de novo, e aí ela passa. Na prática o adiamento dura
+// segundos, e nunca custa a atualização: os eventos que a reabrem são os
+// mesmos que a pessoa produz ao terminar o que estava fazendo.
+function jrPodeRecarregarAgora() {
+  try {
+    if (typeof document === 'undefined') return true;
+    // 11/09/2026: texto digitado num card SEM foco também é trabalho não
+    // salvo — a Tratativas do Gestor tem um formulário por card, e a pessoa
+    // digita, clica fora e vai olhar outro. Foco e modal não enxergam isso;
+    // a marca de digitação (acesa pelo listener 'input' do app.js, apagada em
+    // todo renderApp()) enxerga. Vem ANTES do teste de aba escondida de
+    // propósito: aba de fundo com formulário pela metade é o caso do gestor
+    // que deixa a tela aberta o dia inteiro. O renderApp() que apaga a marca
+    // é quem retoma a atualização adiada (ver app.js).
+    if (window._jrTelaComDigitacao) return false;
+    if (document.visibilityState === 'hidden') return true;
+    // UM MODAL ABERTO E UM FORMULARIO EM EDICAO, mesmo com o cursor fora de
+    // qualquer campo. Sem esta checagem o reload derruba a Conferencia &
+    // Entrada no meio da conferencia e leva junto o que ja foi digitado - o
+    // modal vive no #modal-container e nao sobrevive a um location.reload().
+    const modal = document.getElementById('modal-container');
+    if (modal && !modal.classList.contains('hidden') && modal.innerHTML.trim() !== '') return false;
+    const el = document.activeElement;
+    if (!el) return true;
+    if (el.isContentEditable) return false;
+    const tag = String(el.tagName || '').toUpperCase();
+    return !(tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT');
+  } catch (e) {
+    return true;   // na dúvida, atualizar: código velho em produção é o risco maior
+  }
+}
+
 window.jrConferirVersaoPublicada = async function() {
   let publicada = null;
   try {
@@ -3144,6 +4220,18 @@ window.jrConferirVersaoPublicada = async function() {
     jrAvisarAtualizacaoManual(publicada);
     return publicada;
   }
+
+  // ADIAMENTO, e ele vem ANTES de carimbar jr_update_tentado de propósito:
+  // adiar não é tentar. Carimbar aqui gastaria a única tentativa que a trava
+  // contra laço concede, e o aparelho terminaria a sessão inteira na versão
+  // velha exibindo a tarja de "atualize à mão" sem nunca ter recarregado.
+  if (!jrPodeRecarregarAgora()) {
+    window._jrUpdatePendente = publicada;
+    console.info(`[CloudStore] Versão ${publicada} pronta para entrar, adiada: há um campo em edição nesta tela. Entra ao sair do campo ou ao trocar de aba.`);
+    return publicada;
+  }
+  window._jrUpdatePendente = null;
+
   try { sessionStorage.setItem('jr_update_tentado', publicada); } catch(e) {}
 
   // Rebaixa as cópias guardadas de cada arquivo do app. cache:'reload'
@@ -3189,10 +4277,79 @@ function jrAvisarAtualizacaoManual(versaoPublicada) {
   } catch(e) {}
 }
 
+// =================================================================
+// QUANDO A VERSÃO É CONFERIDA — 01/09/2026
+//
+// O DEFEITO QUE ISTO FECHA, e ele é o MESMO já documentado em
+// "SINCRONIZA AO VOLTAR PARA A TELA", só que na outra metade do app.
+//
+// A conferência de versão dependia de um único setInterval de 15 minutos —
+// e o navegador não deixa esse timer rodar quando a tela não está à vista:
+// aba de fundo cai para uma execução por minuto, aba parada ~5 min no Chrome
+// é CONGELADA (Page Lifecycle), e celular com a tela apagada é suspenso na
+// hora. O app deste prédio fica o dia inteiro atrás de uma planilha ou
+// minimizado como PWA: na prática o timer disparava a cada 15 minutos DE
+// TELA À VISTA, o que numa máquina de conferência pode ser uma vez por turno,
+// ou nenhuma.
+//
+// Só que o sintoma disso não se parece com "timer congelado" — se parece com
+// máquina teimosa. O aparelho fica online, sincroniza dado (o pull já acorda
+// nos eventos certos desde 28/08) e mesmo assim segue rodando o JavaScript da
+// semana passada. É a leitura de "26 aparelhos em versão antiga" no painel:
+// não é que a atualização automática não exista, é que ela quase nunca é
+// CHAMADA. Fechar e reabrir o app funcionava porque isso força um
+// DOMContentLoaded — ou seja, a instrução que a operação recebia era a de
+// executar à mão o único gatilho que ainda funcionava.
+//
+// Agora a conferência pega carona nos MESMOS quatro eventos que já acordam a
+// sincronização de dados, e por isso não precisa de nenhum acerto novo para
+// ser confiável — quem volta para a tela recebe o código novo antes de digitar
+// a primeira letra. O intervalo de fundo continua existindo como rede de
+// segurança e cai para 5 minutos: é um GET de version.json, alguns bytes.
+//
+// A JANELA DE 60s existe porque os três eventos de acordar disparam juntos no
+// mesmo gesto (destravar o celular dispara visibilitychange E focus). Sem ela
+// seriam três fetches por gesto, sem nenhum ganho.
+// =================================================================
 if (window.cloudStore.isConfigured()) {
+  let ultimaConferenciaMs = 0;
+
+  const conferirVersao = (motivo, janelaMs = 60000) => {
+    const agora = Date.now();
+    if (agora - ultimaConferenciaMs < janelaMs) return;
+    ultimaConferenciaMs = agora;
+    Promise.resolve(window.jrConferirVersaoPublicada()).catch(() => {});
+  };
+
   document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(() => window.jrConferirVersaoPublicada(), 3000);
-    setInterval(() => window.jrConferirVersaoPublicada(), 15 * 60 * 1000);
+    setTimeout(() => conferirVersao('abertura', 0), 3000);
+    setInterval(() => conferirVersao('rede de segurança', 0), 5 * 60 * 1000);
+  });
+
+  // A ABA ESCONDIDA É A MELHOR HORA PARA ATUALIZAR, e é por isso que este
+  // caso não tem janela de espera: ninguém está olhando, nenhum campo pode
+  // estar em edição para jrPodeRecarregarAgora() barrar, e a pessoa volta
+  // para a tela já na versão nova sem ter visto um recarregamento.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') conferirVersao('aba escondida', 0);
+    else conferirVersao('voltou para a tela');
+  });
+
+  window.addEventListener('pageshow', (ev) => {
+    if (ev.persisted) conferirVersao('página restaurada do cache do navegador');
+  });
+  window.addEventListener('focus', () => conferirVersao('janela recebeu foco'));
+  window.addEventListener('online', () => conferirVersao('rede voltou'));
+
+  // Sair de um campo é o fim natural do adiamento de jrPodeRecarregarAgora():
+  // quem terminou de digitar é exatamente quem pode receber a versão nova
+  // agora. Só faz alguma coisa se houver adiamento pendente, então não custa
+  // nada nos outros milhares de blur de um dia de uso.
+  document.addEventListener('focusout', () => {
+    if (!window._jrUpdatePendente) return;
+    setTimeout(() => {
+      if (window._jrUpdatePendente) conferirVersao('campo perdeu o foco', 0);
+    }, 250);   // deixa o foco assentar: trocar de campo dispara focusout antes do focusin
   });
 }
 

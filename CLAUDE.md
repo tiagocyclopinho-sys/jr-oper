@@ -122,6 +122,15 @@ partir do branch `main` do GitHub.
   da mediana do ano; despesa acima do mesmo mês do ano anterior. Metas: mediana
   do ano com 5% de melhora, limitada ao melhor mês. Gera também
   `... - resumo.txt` para o e-mail.
+- Versão corporativa em HTML e tela do app (6.9.4, 28/10): a parte comum fica em
+  `js/visaoOperacao.js` (UMD: `window.VisaoOperacao` no app, `require` no
+  gerador) — formatos, `carregarDados(rest, am)`, `analisar(d)` e
+  `gerarHtml(d, analise, { logo })`. O gerador grava `AAAA.MM - Visão
+  Operação.html` junto do .pptx; o app mostra a MESMA página em Visão Geral →
+  Visão Operação (iframe srcdoc, lê a nuvem só ao abrir, todos os perfis veem,
+  botões Atualizar / Imprimir / Baixar HTML). Gráficos em SVG com rótulo de
+  dados em TODOS (pedido do Tiago); cada gráfico recebe `W` = largura do cartão
+  (g1 1180, g2 580, g3 340). Mudou a página? Muda nos dois.
 - Os modelos Corte e Devolução expõem colunas sensíveis do WinThor
   (dim_PCEMPR/dim_PCUSUARI: salário, CPF, hash de senha); nunca consultar.
 

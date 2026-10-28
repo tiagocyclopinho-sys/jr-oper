@@ -52,7 +52,6 @@ if (typeof document !== 'undefined') {
 
 let activeTab = 'dashboard';
 let activeCadSubTab = 'motoristas';
-let activeResumoSubTab = 'resumo';
 let activeFrotaSubTab = 'reter'; // 'reter' | 'retidos' | 'liberados'
 let uploadedFotosBase64 = [];
 let uploadedVideosBase64 = [];
@@ -111,6 +110,34 @@ window.addEventListener('jr-cloud-sync', () => {
     return;
   }
   if (typeof renderApp === 'function') renderApp();
+});
+
+// 6.7.0 — MIGRAÇÃO DOS FILHOS DO RESUMO DIÁRIO (ver Store#migrarFilhosDoResumoDiario).
+// Roda depois de CADA pull concluído, e não no init(): o aparelho precisa
+// ter visto o que a nuvem já tem nas tabelas novas antes de copiar qualquer
+// coisa do envelope antigo. Idempotente por id, custa ~30 envelopes.
+// Sem nuvem configurada (modo local) roda uma vez na inicialização.
+window.addEventListener('jr-cloud-pull-ok', () => {
+  try {
+    if (!window.db || typeof db.migrarFilhosDoResumoDiario !== 'function') return;
+    const criados = db.migrarFilhosDoResumoDiario();
+    if (criados > 0) {
+      if (window.cloudStore && window.cloudStore.isConfigured()) {
+        window.cloudStore.syncLocalToCloud().catch(() => {});
+      }
+      const emCampo = document.activeElement && document.activeElement.matches &&
+        document.activeElement.matches('input, textarea, select');
+      if (!emCampo && !window._jrTelaComDigitacao && typeof renderApp === 'function') renderApp();
+    }
+  } catch (e) {
+    console.warn('[App] Migração dos filhos do Resumo Diário falhou:', e && e.message);
+  }
+});
+window.addEventListener('load', () => {
+  try {
+    if (window.cloudStore && window.cloudStore.isConfigured()) return;   // com nuvem, espera o pull
+    if (window.db && typeof db.migrarFilhosDoResumoDiario === 'function') db.migrarFilhosDoResumoDiario();
+  } catch (e) {}
 });
 
 // Acende a marca de "tem coisa digitada nesta tela ainda não salva". Só vale
@@ -375,6 +402,23 @@ function formatarDuracaoHHMMSS(valor, unidade = 'ms') {
 }
 
 // ===== CÁLCULO DE SLA DE MANUTENÇÃO & RETENÇÃO DE FROTA =====
+
+// OS LIMITES DO SLA DE RETENCAO, num lugar so - antes estavam escritos a mao
+// em cinco pontos diferentes do arquivo, inclusive dentro do NOME das
+// variaveis (retidosCriticos), o que fazia o rotulo mentir na primeira vez
+// que alguem mudasse o numero.
+//
+// MUDARAM EM 05/09/2026: eram 4h e 8h, herdados do socorro em rota, onde
+// caminhao parado na estrada e emergencia. Oficina nao e estrada - uma
+// preventiva de 80 mil km passa de 8h por projeto, e o vermelho acendia todo
+// dia por trabalho que estava indo bem. Alerta que acende sempre para de ser
+// alerta, e ai ninguem olha mais nenhum deles.
+//
+// O SOCORRO EM ROTA CONTINUA EM 4h/8h de proposito (ver maisAntigaVeicParadoRota
+// em renderDashboardView) - la o caminhao esta na estrada, e la 4h e muito.
+const SLA_RETENCAO_ATENCAO_H = 24;   // ate aqui, e trabalho normal de oficina
+const SLA_RETENCAO_CRITICO_H = 72;   // tres dias parado e outra conversa
+
 function calcularSlaManutencao(retencao) {
   if (!retencao) return { diffMs: 0, diffHoras: 0, hhmmss: '00:00:00', nivel: 'NORMAL', badgeHtml: '' };
 
@@ -404,15 +448,15 @@ function calcularSlaManutencao(retencao) {
   const diffHoras = diffMs / (1000 * 60 * 60);
   const hhmmss = formatarDuracaoHHMMSS(diffMs, 'ms');
 
-  let nivel = 'NORMAL'; // < 4h
-  let badgeHtml = `<span class="bg-emerald-950/80 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟢 ${hhmmss} (&lt;4h)</span>`;
+  let nivel = 'NORMAL';
+  let badgeHtml = `<span class="bg-emerald-950/80 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟢 ${hhmmss} (&lt;${SLA_RETENCAO_ATENCAO_H}h)</span>`;
 
-  if (diffHoras >= 8) {
-    nivel = 'CRITICO_8H';
-    badgeHtml = `<span class="bg-red-950 text-red-300 border border-red-600 px-2 py-0.5 rounded text-[10px] font-black inline-flex items-center gap-1 animate-pulse shadow">🔴 SLA &gt;8h (${hhmmss})</span>`;
-  } else if (diffHoras >= 4) {
-    nivel = 'ALERTA_4H';
-    badgeHtml = `<span class="bg-amber-950 text-amber-300 border border-amber-600 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟡 SLA &gt;4h (${hhmmss})</span>`;
+  if (diffHoras >= SLA_RETENCAO_CRITICO_H) {
+    nivel = 'CRITICO';
+    badgeHtml = `<span class="bg-red-950 text-red-300 border border-red-600 px-2 py-0.5 rounded text-[10px] font-black inline-flex items-center gap-1 animate-pulse shadow">🔴 SLA &gt;${SLA_RETENCAO_CRITICO_H}h (${hhmmss})</span>`;
+  } else if (diffHoras >= SLA_RETENCAO_ATENCAO_H) {
+    nivel = 'ATENCAO';
+    badgeHtml = `<span class="bg-amber-950 text-amber-300 border border-amber-600 px-2 py-0.5 rounded text-[10px] font-bold inline-flex items-center gap-1">🟡 SLA &gt;${SLA_RETENCAO_ATENCAO_H}h (${hhmmss})</span>`;
   }
 
   return { diffMs, diffHoras, hhmmss, nivel, badgeHtml };
@@ -813,6 +857,7 @@ function handleSalvarEdicaoUsuario(e, userId) {
   u.departamento = document.getElementById('edit-usr-departamento')?.value || u.departamento;
   u.role = document.getElementById('edit-usr-role')?.value || u.role;
   u.cargo = document.getElementById('edit-usr-cargo')?.value?.trim() || '';
+  db.carimbarEdicao('usuarios', u);   // migration 46
 
   const salvou = db.save();
   closeModal();
@@ -879,6 +924,10 @@ function handleRedefinirSenha(e, userId) {
 
   // Mesmo padrão de hash já usado em addUsuario/login (sha256Sync).
   u.senha_hash = sha256Sync(nova);
+  // Carimbo (migration 46): sem ele, o aparelho da pessoa podia recusar o
+  // hash novo no pull e devolver o antigo no push — caso da Adriana em
+  // 15/09/2026, "redefinida com sucesso" aqui e "Senha incorreta" lá.
+  db.carimbarEdicao('usuarios', u);
   const salvou = db.save();
   closeModal();
   if (!salvou) {
@@ -901,6 +950,7 @@ function toggleAtivoUsuario(userId) {
   if (!confirm(vaiDesativar ? `Desativar o acesso de ${u.nome}? O usuário não conseguirá mais fazer login.` : `Reativar o acesso de ${u.nome}?`)) return;
 
   u.ativo = vaiDesativar ? false : true;
+  db.carimbarEdicao('usuarios', u);   // migration 46
   const salvou = db.save();
   if (!salvou) {
     showToast('Não foi possível salvar a alteração neste dispositivo. Tente novamente.', 'error');
@@ -927,16 +977,31 @@ function formatarTipoMedidaLabel(tipo) {
 
 // Seletor de colaborador reutilizável — busca por nome, funciona tanto
 // para colaboradores_cd quanto para motoristas conforme `tipo`.
+// 6.7.0 (Bloco E): o Dossiê virou "Dossiê Prestador" e varre motoristas E
+// ajudantes — os dois são prestadores PJ e os dois pagam adiantamento.
+function listaPrestadoresDossie() {
+  const vivos = l => (l || []).filter(x => x && x.nome && !x.is_deleted);
+  return vivos(db.data.motoristas).map(m => ({ ...m, _tipoPrestador: 'MOTORISTA' }))
+    .concat(vivos(db.data.ajudantes).map(a => ({ ...a, _tipoPrestador: 'AJUDANTE' })));
+}
+function getDadosPrestadorMestre(nome) {
+  if (!nome) return null;
+  const alvo = String(nome).toUpperCase().trim();
+  const achado = listaPrestadoresDossie().find(x => String(x.nome || '').toUpperCase().trim() === alvo);
+  if (!achado) return null;
+  return { nome: achado.nome, matricula: achado.cod_erp || achado.matricula || '', tipo: achado._tipoPrestador };
+}
+
 function renderSeletorColaboradorAcompanhamento(tipo, varFiltro, varSelecionado, onSelectFn) {
-  const lista = tipo === 'MOTORISTA' ? (db.data.motoristas || []) : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
+  const lista = tipo === 'MOTORISTA' ? listaPrestadoresDossie() : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
   const busca = window[varFiltro] || '';
   const datalistId = tipo === 'MOTORISTA' ? 'dossie-datalist-motorista' : 'acomp-datalist-colaborador';
 
   return `
     <div class="max-w-md mx-auto mt-10 space-y-3 text-center">
       <div class="text-4xl">${tipo === 'MOTORISTA' ? '🪪' : '👤'}</div>
-      <h2 class="text-base font-black text-white">${tipo === 'MOTORISTA' ? 'Dossiê Motorista' : 'Acompanhamento de Funcionário CD'}</h2>
-      <p class="text-xs text-slate-400">Selecione um ${tipo === 'MOTORISTA' ? 'motorista' : 'colaborador'} cadastrado para ver o histórico completo.</p>
+      <h2 class="text-base font-black text-white">${tipo === 'MOTORISTA' ? 'Dossiê Prestador' : 'Acompanhamento de Funcionário CD'}</h2>
+      <p class="text-xs text-slate-400">Selecione um ${tipo === 'MOTORISTA' ? 'motorista ou ajudante' : 'colaborador'} cadastrado para ver o histórico completo.</p>
       <form onsubmit="handleSelecionarComValidacao(event, '${tipo}', '${datalistId}', '${onSelectFn}')" class="flex gap-2">
         <input type="text" id="${datalistId}-input" value="${busca}" list="${datalistId}" placeholder="Digite o nome cadastrado..." autofocus
           oninput="forcarMaiuscula(this); window['${varFiltro}']=this.value"
@@ -944,9 +1009,9 @@ function renderSeletorColaboradorAcompanhamento(tipo, varFiltro, varSelecionado,
         <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 rounded-lg text-sm shadow">Abrir</button>
       </form>
       <datalist id="${datalistId}">
-        ${lista.map(c => `<option value="${c.nome}">${c.chapa ? `Chapa ${c.chapa}` : ''}</option>`).join('')}
+        ${lista.map(c => `<option value="${c.nome}">${c._tipoPrestador ? c._tipoPrestador + (c.cod_erp ? ' · ERP ' + c.cod_erp : '') : (c.chapa ? `Chapa ${c.chapa}` : '')}</option>`).join('')}
       </datalist>
-      <p class="text-[10px] text-slate-500">A busca só aceita nomes já cadastrados — use o cadastro de ${tipo === 'MOTORISTA' ? 'Motoristas' : 'Colaboradores CD'} em Cadastros Mestres se o nome não aparecer na lista.</p>
+      <p class="text-[10px] text-slate-500">A busca só aceita nomes já cadastrados — use o cadastro de ${tipo === 'MOTORISTA' ? 'Motoristas / Ajudantes' : 'Colaboradores CD'} em Cadastros Mestres se o nome não aparecer na lista.</p>
     </div>`;
 }
 
@@ -957,10 +1022,10 @@ function handleSelecionarComValidacao(e, tipo, datalistId, onSelectFn) {
   e.preventDefault();
   const input = document.getElementById(datalistId + '-input');
   const nomeDigitado = (input?.value || '').trim().toUpperCase();
-  const lista = tipo === 'MOTORISTA' ? (db.data.motoristas || []) : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
+  const lista = tipo === 'MOTORISTA' ? listaPrestadoresDossie() : (db.data.colaboradores_cd || []).filter(c => c.ativo !== false);
   const match = lista.find(c => String(c.nome || '').toUpperCase().trim() === nomeDigitado);
   if (!match) {
-    alert(`⚠️ "${input?.value || ''}" não foi encontrado no cadastro de ${tipo === 'MOTORISTA' ? 'motoristas' : 'colaboradores CD'}. Selecione um nome da lista sugerida.`);
+    alert(`⚠️ "${input?.value || ''}" não foi encontrado no cadastro de ${tipo === 'MOTORISTA' ? 'motoristas / ajudantes' : 'colaboradores CD'}. Selecione um nome da lista sugerida.`);
     return;
   }
   window[onSelectFn === 'selecionarMotoristaDossie' ? '_dossieMotoristaFiltroBusca' : '_acompFuncFiltroBusca'] = '';
@@ -980,6 +1045,20 @@ function selecionarMotoristaDossie(nome) {
 }
 
 function renderCabecalhoAcompanhamento(dadosMestre, tipo, onVoltarFn) {
+  // 6.7.0: prestador é PJ — sem chapa, CNH, admissão ou desligamento.
+  if (tipo === 'MOTORISTA') {
+    return `
+    <div class="flex items-start justify-between flex-wrap gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div>
+        <button onclick="${onVoltarFn}" class="text-[10px] text-slate-400 hover:text-white font-bold mb-1.5">← Trocar prestador</button>
+        <h2 class="text-base font-black text-white">${dadosMestre.nome}</h2>
+        <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-slate-400 mt-1">
+          <span>Matrícula ERP: <b class="text-slate-300">${dadosMestre.matricula || '—'}</b></span>
+          <span><b class="${dadosMestre.tipo === 'AJUDANTE' ? 'text-cyan-300' : 'text-emerald-300'}">${dadosMestre.tipo === 'AJUDANTE' ? 'Ajudante' : 'Motorista'}</b></span>
+        </div>
+      </div>
+    </div>`;
+  }
   return `
     <div class="flex items-start justify-between flex-wrap gap-3 bg-slate-900 border border-slate-800 rounded-2xl p-4">
       <div>
@@ -1026,7 +1105,7 @@ function renderBlocoOrientacaoFeedback(nome, tipo, varDe, varAte, formVisivelVar
       <div class="flex items-center justify-between flex-wrap gap-2">
         <h3 class="text-xs font-black text-emerald-400 uppercase flex items-center gap-2"><span>💬</span> Orientação e Feedback (${registros.length})</h3>
         <div class="flex items-center gap-1.5">
-          <button onclick="abrirModalEmissaoDisciplinarCD({ tipo: 'ORIENTACAO_VERBAL', colabNome: '${nome.replace(/'/g,"\\'")}' })" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1 rounded-full font-bold transition flex items-center gap-1" title="Formulário completo, com gestor responsável e detalhamento dos fatos">🗣️ Emitir Orientação Verbal</button>
+          ${tipo === 'MOTORISTA' ? '' : `<button onclick="abrirModalEmissaoDisciplinarCD({ tipo: 'ORIENTACAO_VERBAL', colabNome: '${nome.replace(/'/g,"\\'")}' })" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-2 py-1 rounded-full font-bold transition flex items-center gap-1" title="Formulário completo, com gestor responsável e detalhamento dos fatos">🗣️ Emitir Orientação Verbal</button>`}
           <button onclick="window['${formVisivelVar}']=${!formAberto}; renderApp()" class="text-[10px] bg-emerald-900/60 hover:bg-emerald-800 border border-emerald-700 text-emerald-300 px-2 py-1 rounded-full font-bold transition">${formAberto ? '✕ Fechar' : '+ Adicionar Nota Rápida'}</button>
         </div>
       </div>
@@ -1184,44 +1263,150 @@ function renderBlocoMedidasAdministrativas(nome, tipo, varDe, varAte) {
     </div>`;
 }
 
-// --- Blocos exclusivos do Dossiê Motorista (reaproveitam dados já
+// --- Blocos exclusivos do Dossiê Prestador (reaproveitam dados já
 // existentes — nenhuma coleção nova) ---
+//
+// 21/09/2026: as quatro fontes abaixo ganharam função de dados própria,
+// usada pela tela, pelo impresso e pelo CSV — antes cada um montava a
+// lista do seu jeito, e o impresso simplesmente não montava (saía sem
+// Oc Operacional, Oc em Rota, Sinistros e Viagens que existiam na tela).
+// Todas devolvem registros com `data` em YYYY-MM-DD, que é o que
+// filtrarPorData() compara.
+
+// Viagens em que o prestador saiu — como motorista, ajudante ou 2º ajudante.
+function viagensDoPrestador(nome) {
+  const alvo = normalizeStr(nome);
+  return (db.getControleViagens ? db.getControleViagens() : (db.data.controle_viagens || []))
+    .filter(v => [v.motorista, v.ajudante, v.ajudante_2].some(n => n && normalizeStr(n) === alvo))
+    .map(v => ({
+      ...v,
+      data: String(v.data_saida || v.data_viagem || v.data || v.criado_em || '').slice(0, 10),
+      papel: normalizeStr(v.motorista) === alvo ? 'MOTORISTA' : (normalizeStr(v.ajudante_2) === alvo ? '2º AJUDANTE' : 'AJUDANTE'),
+      equipe: [v.motorista, v.ajudante, v.ajudante_2].filter(Boolean).join(' / ')
+    }));
+}
+
+// Oc Operacional fica dentro de Controle de Viagens, coleção
+// ocorrencias_viagens — não em resumo_diario_cd (achado corrigido em
+// 18/08/2026: o Dossiê Motorista buscava no lugar errado).
+function ocOperacionaisDoPrestador(nome) {
+  const alvo = normalizeStr(nome);
+  return db.getOcorrenciasViagens()
+    .filter(o => normalizeStr(o.funcionario || '') === alvo)
+    .map(o => ({ ...o, data: String(o.data || o.criado_em || '').slice(0, 10) }));
+}
+
+// Oc em Rota não tem campo de data próprio: a data é a do chamado
+// (criado_em). Cortada em 10 caracteres para o filtro "até" não excluir o
+// próprio dia (timestamp completo é sempre "maior" que YYYY-MM-DD).
+function ocRotaDoPrestador(nome) {
+  const alvo = normalizeStr(nome);
+  return (db.getOcorrenciasRota ? db.getOcorrenciasRota() : (db.data.ocorrencias_rota || []))
+    .filter(r => normalizeStr(r.motorista_nome || r.motorista || '') === alvo)
+    .map(r => ({ ...r, data: String(r.data_chamado || r.criado_em || r.data || '').slice(0, 10) }));
+}
+
+function sinistrosDoPrestador(nome) {
+  return db.getSinistros({ motoristaNome: nome })
+    .map(s => ({ ...s, data: String(s.data_acidente || s.criado_em || '').slice(0, 10) }));
+}
+
+function ordenarPorDataDesc(lista) {
+  return lista.slice().sort((a, b) => String(b.data || '').localeCompare(String(a.data || '')));
+}
+
+function statusViagemTexto(v) {
+  const st = String(v.status_viagem || '').toUpperCase();
+  if (st === 'FINALIZADO' || st === 'FINALIZADA') return 'Finalizada';
+  if (st === 'CANCELADO' || st === 'CANCELADA') return 'Cancelada';
+  return v.status_viagem || 'Em andamento';
+}
+function statusViagemLabel(v) {
+  const txt = statusViagemTexto(v);
+  const cor = txt === 'Finalizada' ? 'text-emerald-400' : (txt === 'Cancelada' ? 'text-red-400' : 'text-blue-300');
+  return `<span class="${cor} font-bold">${txt}</span>`;
+}
+
+function renderBlocoViagensPrestador(nome, varDe, varAte) {
+  const viagens = ordenarPorDataDesc(filtrarPorData(viagensDoPrestador(nome), varDe, varAte));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 class="text-xs font-black text-blue-400 uppercase flex items-center gap-2"><span>🚛</span> Viagens — ${viagens.length}</h3>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Saída</th><th class="p-2">Carga</th><th class="p-2">Rota</th><th class="p-2">Placa</th><th class="p-2">Papel</th><th class="p-2">Equipe</th><th class="p-2">Retorno</th><th class="p-2">Status</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${viagens.length === 0 ? '<tr><td colspan="8" class="p-3 text-center text-slate-500">Nenhuma viagem encontrada.</td></tr>' :
+              viagens.map(v => `<tr><td class="p-2 whitespace-nowrap">${formatarData(v.data)}${v.hora_saida ? ` <span class="text-slate-500">${v.hora_saida}</span>` : ''}</td><td class="p-2 font-bold text-emerald-400">${v.carga||'—'}</td><td class="p-2">${v.rota||'—'}</td><td class="p-2">${v.placa||'—'}</td><td class="p-2">${v.papel}</td><td class="p-2">${v.equipe||'—'}</td><td class="p-2 whitespace-nowrap">${v.data_retorno ? formatarData(v.data_retorno) : '—'}</td><td class="p-2">${statusViagemLabel(v)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function renderBlocoOcOperacionalMotorista(nomeMotorista, varDe, varAte) {
-  const termo = normalizeStr(nomeMotorista);
-  // Oc Operacional fica dentro de Controle de Viagens, coleção
-  // ocorrencias_viagens — não em resumo_diario_cd (achado corrigido em
-  // 18/08/2026: o Dossiê Motorista buscava no lugar errado).
-  let ocorrencias = db.getOcorrenciasViagens().filter(o => normalizeStr(o.funcionario || '') === termo);
-  ocorrencias = filtrarPorData(ocorrencias, varDe, varAte).sort((a,b) => new Date(b.data||0) - new Date(a.data||0));
+  const ocorrencias = ordenarPorDataDesc(filtrarPorData(ocOperacionaisDoPrestador(nomeMotorista), varDe, varAte));
   return `
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
       <h3 class="text-xs font-black text-cyan-400 uppercase flex items-center gap-2"><span>📋</span> Ocorrências Operacionais (Oc Operacional) — ${ocorrencias.length}</h3>
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
-          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Carga</th><th class="p-2">Motivo</th><th class="p-2">Status</th></tr></thead>
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Carga</th><th class="p-2">Rota</th><th class="p-2">Função</th><th class="p-2">Motivo</th><th class="p-2">Causa</th><th class="p-2">Ocorrência</th><th class="p-2">Ação</th><th class="p-2">Status</th></tr></thead>
           <tbody class="divide-y divide-slate-800">
-            ${ocorrencias.length === 0 ? '<tr><td colspan="4" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
-              ocorrencias.map(o => `<tr><td class="p-2">${formatarData(o.data)}</td><td class="p-2">${o.carga||'—'}</td><td class="p-2">${o.motivo||o.causa||'—'}</td><td class="p-2">${o.status||'—'}</td></tr>`).join('')}
+            ${ocorrencias.length === 0 ? '<tr><td colspan="9" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
+              ocorrencias.map(o => `<tr class="align-top"><td class="p-2 whitespace-nowrap">${formatarData(o.data)}</td><td class="p-2 font-bold text-emerald-400">${o.carga||'—'}</td><td class="p-2">${o.rota||'—'}</td><td class="p-2">${o.funcao||'—'}</td><td class="p-2">${o.motivo||'—'}</td><td class="p-2">${o.causa||'—'}</td><td class="p-2">${o.ocorrencia||'—'}</td><td class="p-2">${o.acao||'—'}</td><td class="p-2 whitespace-nowrap">${o.status||'—'}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>
     </div>`;
 }
 function renderBlocoOcRotaMotorista(nomeMotorista, varDe, varAte) {
-  const termo = normalizeStr(nomeMotorista);
-  let ocorrencias = (db.getOcorrenciasRota ? db.getOcorrenciasRota() : (db.data.ocorrencias_rota || []))
-    .filter(r => normalizeStr(r.motorista_nome || r.motorista || '') === termo)
-    .map(r => ({ ...r, data: r.data_parada || r.criado_em }));
-  ocorrencias = filtrarPorData(ocorrencias, varDe, varAte).sort((a,b) => new Date(b.data||0) - new Date(a.data||0));
+  const ocorrencias = ordenarPorDataDesc(filtrarPorData(ocRotaDoPrestador(nomeMotorista), varDe, varAte));
   return `
     <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
       <h3 class="text-xs font-black text-cyan-400 uppercase flex items-center gap-2"><span>🚚</span> Ocorrências em Rota (Oc em Rota) — ${ocorrencias.length}</h3>
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
-          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Carga</th><th class="p-2">Motivo</th><th class="p-2">Status</th></tr></thead>
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Protocolo</th><th class="p-2">Carga</th><th class="p-2">Placa</th><th class="p-2">Motivo</th><th class="p-2">Descrição</th><th class="p-2">Local</th><th class="p-2">Status</th></tr></thead>
           <tbody class="divide-y divide-slate-800">
-            ${ocorrencias.length === 0 ? '<tr><td colspan="4" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
-              ocorrencias.map(o => `<tr><td class="p-2">${formatarData(o.data)}</td><td class="p-2">${o.carga||'—'}</td><td class="p-2">${o.motivo||'—'}</td><td class="p-2">${o.status_chamado||o.status||'—'}</td></tr>`).join('')}
+            ${ocorrencias.length === 0 ? '<tr><td colspan="8" class="p-3 text-center text-slate-500">Nenhuma ocorrência encontrada.</td></tr>' :
+              ocorrencias.map(o => `<tr class="align-top"><td class="p-2 whitespace-nowrap">${formatarData(o.data)}</td><td class="p-2 font-bold text-emerald-400">${o.numero_protocolo||'—'}</td><td class="p-2">${o.carga_numero||o.carga||'—'}</td><td class="p-2">${o.veiculo_placa||'—'}</td><td class="p-2">${o.motivo_resumido||o.tipo_ocorrencia||o.motivo||'—'}</td><td class="p-2">${o.descricao||'—'}</td><td class="p-2">${o.localizacao||'—'}</td><td class="p-2 whitespace-nowrap">${String(o.status_chamado||o.status||'—').toUpperCase()}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// --- Bloco 5: Devoluções por Erro Carregamento (06/10/2026) — só consulta.
+// Só ERRO CARREGAMENTO, em que o colaborador foi apontado como separador
+// e/ou conferente na apuração da devolução. Mesmo fallback do formulário da
+// Análise (separador_apurado || separador_nome). A data vem de
+// data_abertura || criado_em, como em devolucoesErroMotoristaDoPrestador().
+function devolucoesErroCarregamentoDoColaborador(nome) {
+  const alvo = normalizeStr(nome);
+  return db.getDevolucoes()
+    .filter(d => String(d.tipo_erro || '').trim().toUpperCase() === 'ERRO CARREGAMENTO')
+    .map(d => {
+      const sep = normalizeStr(d.separador_apurado || d.separador_nome || '') === alvo;
+      const conf = normalizeStr(d.conferente_apurado || d.conferente_nome || '') === alvo;
+      if (!sep && !conf) return null;
+      const papel = sep && conf ? 'Separador e Conferente' : (sep ? 'Separador' : 'Conferente');
+      return { ...d, papel, data: String(d.data_abertura || d.criado_em || '').slice(0, 10) };
+    })
+    .filter(Boolean);
+}
+
+function renderBlocoDevolucoesErroCarregamento(nome, varDe, varAte) {
+  const devs = ordenarPorDataDesc(filtrarPorData(devolucoesErroCarregamentoDoColaborador(nome), varDe, varAte));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 class="text-xs font-black text-red-400 uppercase flex items-center gap-2"><span>📦</span> Devoluções por Erro Carregamento — ${devs.length}</h3>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Protocolo</th><th class="p-2">Papel</th><th class="p-2">Cliente</th><th class="p-2">Motivo</th><th class="p-2 text-right">Valor</th><th class="p-2">Tratativa</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${devs.length === 0 ? '<tr><td colspan="7" class="p-3 text-center text-slate-500">Nenhuma devolução encontrada.</td></tr>' :
+              devs.map(d => `<tr><td class="p-2">${formatarData(d.data)}</td><td class="p-2 font-bold text-emerald-400">${d.numero_devolucao || d.numero_protocolo || '—'}</td><td class="p-2">${d.papel}</td><td class="p-2">${d.cliente_nome || '—'}</td><td class="p-2">${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="p-2 text-right font-bold">R$ ${(parseFloat(d.valor_reclamado)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td class="p-2">${d.status_gestao === 'CONCLUIDO' ? '<span class="text-emerald-400 font-bold">Concluída</span>' : '<span class="text-amber-400 font-bold">Pendente</span>'}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>
@@ -1249,18 +1434,97 @@ function renderAcompanhamentoFuncionarioView() {
       ${renderBlocoAtestadosMedicos(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte', '_acompAmFormAberto')}
       ${renderBlocoAusencias(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte', '_acompArFormAberto')}
       ${renderBlocoMedidasAdministrativas(nomeSelecionado, 'CD', '_acompFiltroDataDe', '_acompFiltroDataAte')}
+      ${renderBlocoDevolucoesErroCarregamento(nomeSelecionado, '_acompFiltroDataDe', '_acompFiltroDataAte')}
     </div>`;
 }
 
-// --- TELA: Dossiê Motorista ---
+// --- TELA: Dossiê Prestador (6.7.0; a chave interna continua dossie_motorista) ---
+//
+// Devoluções por ERRO MOTORISTA em que o prestador estava na equipe — como
+// motorista OU como ajudante (equipeDaDevolucao). A data vem de
+// data_abertura || criado_em, porque a devolução não tem campo `data` e
+// filtrarPorData() lê exatamente esse campo.
+function devolucoesErroMotoristaDoPrestador(nome) {
+  const alvo = String(nome || '').trim().toUpperCase();
+  return db.getDevolucoes()
+    .filter(d => String(d.tipo_erro || '').trim().toUpperCase() === 'ERRO MOTORISTA')
+    .filter(d => equipeDaDevolucao(d).includes(alvo))
+    .map(d => ({ ...d, data: String(d.data_abertura || d.criado_em || '').slice(0, 10) }));
+}
+
+function renderBlocoDevolucoesErroMotorista(nome, varDe, varAte) {
+  const devs = filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte)
+    .sort((a, b) => String(b.data).localeCompare(String(a.data)));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <h3 class="text-xs font-black text-red-400 uppercase flex items-center gap-2"><span>📝</span> Devoluções por Erro Motorista — ${devs.length}</h3>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Protocolo</th><th class="p-2">Cliente</th><th class="p-2">Motivo</th><th class="p-2 text-right">Valor</th><th class="p-2">Tratativa</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${devs.length === 0 ? '<tr><td colspan="6" class="p-3 text-center text-slate-500">Nenhuma devolução encontrada.</td></tr>' :
+              devs.map(d => `<tr><td class="p-2">${formatarData(d.data)}</td><td class="p-2 font-bold text-emerald-400">${d.numero_devolucao || d.numero_protocolo || '—'}</td><td class="p-2">${d.cliente_nome || '—'}</td><td class="p-2">${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="p-2 text-right font-bold">R$ ${(parseFloat(d.valor_reclamado)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td class="p-2">${d.status_gestao === 'CONCLUIDO' ? '<span class="text-emerald-400 font-bold">Concluída</span>' : '<span class="text-amber-400 font-bold">Pendente</span>'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// Deduções / Adiantamentos: a mesma regra do recibo (equipeDaDevolucao +
+// ratearValor, em centavos) — a parte que cabe a ESTE prestador em cada
+// devolução por erro de motorista.
+function deducoesDoPrestador(nome) {
+  const alvo = String(nome || '').trim().toUpperCase();
+  return devolucoesErroMotoristaDoPrestador(nome).map(d => {
+    const equipe = equipeDaDevolucao(d);
+    const partes = ratearValor(d.valor_reclamado, equipe.length);
+    const idx = equipe.indexOf(alvo);
+    return {
+      data: d.data,
+      protocolo: d.numero_devolucao || d.numero_protocolo || '—',
+      total: parseFloat(d.valor_reclamado) || 0,
+      pessoas: equipe.length,
+      parte: idx >= 0 ? partes[idx] : 0,
+      status: d.status_gestao === 'CONCLUIDO' ? 'CONCLUÍDO' : 'PENDENTE GESTÃO',
+      devId: d.id
+    };
+  });
+}
+
+function renderBlocoDeducoesPrestador(nome, varDe, varAte) {
+  const linhas = filtrarPorData(deducoesDoPrestador(nome), varDe, varAte)
+    .sort((a, b) => String(b.data).localeCompare(String(a.data)));
+  const total = linhas.reduce((acc, l) => acc + l.parte, 0);
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <h3 class="text-xs font-black text-amber-400 uppercase flex items-center gap-2"><span>💸</span> Deduções / Adiantamentos — ${linhas.length}</h3>
+        <span class="bg-amber-950 text-amber-300 border border-amber-800 text-[11px] font-extrabold px-2.5 py-1 rounded">Total no período: R$ ${total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</span>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Protocolo</th><th class="p-2 text-right">Valor da devolução</th><th class="p-2 text-center">Equipe</th><th class="p-2 text-right">Parte deste prestador</th><th class="p-2">Situação</th><th class="p-2"></th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${linhas.length === 0 ? '<tr><td colspan="7" class="p-3 text-center text-slate-500">Nenhuma dedução no período.</td></tr>' :
+              linhas.map(l => `<tr><td class="p-2">${formatarData(l.data)}</td><td class="p-2 font-bold text-emerald-400">${l.protocolo}</td><td class="p-2 text-right">R$ ${l.total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td class="p-2 text-center">${l.pessoas}</td><td class="p-2 text-right font-bold text-amber-300">R$ ${l.parte.toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td class="p-2">${l.status}</td><td class="p-2 text-right"><button onclick="gerarAdiantamentoPdf('${l.devId}')" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 px-2 py-0.5 rounded font-bold" title="Recibo de adiantamento (PDF)">📄 Recibo</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function renderDossieMotoristaView() {
   const nomeSelecionado = window._dossieMotoristaSelecionado || '';
   if (!nomeSelecionado) {
     return renderSeletorColaboradorAcompanhamento('MOTORISTA', '_dossieMotoristaFiltroBusca', '_dossieMotoristaSelecionado', 'selecionarMotoristaDossie');
   }
 
-  const dadosMestre = db.getDadosMotoristaMestre(nomeSelecionado) || { nome: nomeSelecionado };
+  const dadosMestre = getDadosPrestadorMestre(nomeSelecionado) || { nome: nomeSelecionado, matricula: '', tipo: 'MOTORISTA' };
+  const ehMotorista = dadosMestre.tipo !== 'AJUDANTE';
 
+  // Sem Medidas Administrativas e sem Orientação Verbal: prestador é PJ e
+  // não recebe medida CLT. Oc. em Rota e Sinistros só fazem sentido para
+  // quem dirige.
   return `
     <div class="max-w-5xl mx-auto space-y-4">
       ${renderCabecalhoAcompanhamento(dadosMestre, 'MOTORISTA', "window._dossieMotoristaSelecionado=''; renderApp()")}
@@ -1272,10 +1536,13 @@ function renderDossieMotoristaView() {
       ${renderBlocoOrientacaoFeedback(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieOfFormAberto')}
       ${renderBlocoAtestadosMedicos(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieAmFormAberto')}
       ${renderBlocoAusencias(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieArFormAberto')}
-      ${renderBlocoMedidasAdministrativas(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoDevolucoesErroMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoDeducoesPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoInfracoesPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
+      ${renderBlocoViagensPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoOcOperacionalMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
-      ${renderBlocoOcRotaMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
-      ${renderBlocoSinistrosMotorista(nomeSelecionado)}
+      ${ehMotorista ? renderBlocoOcRotaMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte') : ''}
+      ${ehMotorista ? renderBlocoSinistrosMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte') : ''}
     </div>`;
 }
 
@@ -1284,21 +1551,66 @@ function renderDossieMotoristaView() {
 function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   const varDe = tipo === 'MOTORISTA' ? '_dossieFiltroDataDe' : '_acompFiltroDataDe';
   const varAte = tipo === 'MOTORISTA' ? '_dossieFiltroDataAte' : '_acompFiltroDataAte';
-  const dadosMestre = tipo === 'MOTORISTA' ? (db.getDadosMotoristaMestre(nome) || { nome }) : (getDadosColaboradorMestre(nome) || { nome });
+  const dadosMestre = tipo === 'MOTORISTA' ? (getDadosPrestadorMestre(nome) || { nome, matricula: '', tipo: 'MOTORISTA' }) : (getDadosColaboradorMestre(nome) || { nome });
 
   const orientacoes = filtrarPorData(db.getOrientacoesFeedback(nome), varDe, varAte);
   const atestados = filtrarPorData(db.getAtestadosMedicos(nome), varDe, varAte);
-  const ausencias = filtrarPorData(db.getAusenciasRegistros(nome), varDe, varAte);
+  // 6.7.0 (Bloco F): a tela lê getFaltasCondutasPorColaborador() desde
+  // 19/08/2026; PDF e CSV liam ausencias_registros, coleção morta, e saíam
+  // sem as faltas.
+  const ausencias = filtrarPorData(db.getFaltasCondutasPorColaborador(nome), varDe, varAte);
   const dataDe = window[varDe] || '';
   const dataAte = window[varAte] || '';
-  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined });
+  // 6.7.0: prestador não tem medida CLT; tem devolução por erro e dedução.
+  // Orientação Verbal vive no bloco de Orientação e Feedback desde
+  // 19/08/2026; a tela já a tira daqui (renderBlocoMedidasAdministrativas),
+  // e sem este filtro o impresso a listava duas vezes (Bloco F, 6.7.0).
+  const medidas = tipo === 'MOTORISTA' ? [] : db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
+    .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
+  const devsErro = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte)) : [];
+  const devsCarreg = tipo === 'MOTORISTA' ? [] : ordenarPorDataDesc(filtrarPorData(devolucoesErroCarregamentoDoColaborador(nome), varDe, varAte));
+  const deducoes = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(deducoesDoPrestador(nome), varDe, varAte)) : [];
+  // 21/09/2026: o impresso saía sem Viagens, Oc Operacional, Oc em Rota e
+  // Sinistros — tudo que a tela do Dossiê Prestador mostra. Mesmas
+  // funções de dados da tela, mesmo filtro de período.
+  const ehMotorista = tipo === 'MOTORISTA' && dadosMestre.tipo !== 'AJUDANTE';
+  const viagens = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(viagensDoPrestador(nome), varDe, varAte)) : [];
+  const ocOper = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(ocOperacionaisDoPrestador(nome), varDe, varAte)) : [];
+  const ocRota = ehMotorista ? ordenarPorDataDesc(filtrarPorData(ocRotaDoPrestador(nome), varDe, varAte)) : [];
+  const sinistros = ehMotorista ? ordenarPorDataDesc(filtrarPorData(sinistrosDoPrestador(nome), varDe, varAte)) : [];
+  const totalDeducoes = deducoes.reduce((acc, l) => acc + l.parte, 0);
+  // 6.8.0: infrações de trânsito em seção própria — não somam em Deduções.
+  const infracoesP = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(infracoesDoPrestador(nome), varDe, varAte)) : [];
+  const totalInfracoes = infracoesP.reduce((acc, l) => acc + (parseFloat(l.valor) || 0), 0);
+  const periodoTexto = (dataDe || dataAte)
+    ? `${dataDe ? 'de ' + formatarData(dataDe) : ''}${dataDe && dataAte ? ' ' : ''}${dataAte ? 'até ' + formatarData(dataAte) : ''}`
+    : 'Todo o histórico';
+  const brl = v => 'R$ ' + (parseFloat(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 
-  const secaoTabela = (titulo, cols, rows) => `
-    <h2>${titulo}</h2>
+  const secaoTabela = (titulo, cols, rows, rodape = '') => `
+    <h2>${titulo} <span class="qtd">${rows.length}</span></h2>
     <table>
       <thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>
-      <tbody>${rows.length === 0 ? `<tr><td colspan="${cols.length}" style="text-align:center;">Nenhum registro.</td></tr>` : rows.join('')}</tbody>
+      <tbody>${rows.length === 0 ? `<tr><td colspan="${cols.length}" style="text-align:center;">Nenhum registro.</td></tr>` : rows.join('') + rodape}</tbody>
     </table>`;
+
+  const resumoItens = tipo === 'MOTORISTA' ? [
+    ['Viagens', viagens.length],
+    ['Orientações', orientacoes.length],
+    ['Atestados', atestados.length],
+    ['Faltas / Condutas', ausencias.length],
+    ['Devoluções (erro motorista)', devsErro.length],
+    ['Deduções', brl(totalDeducoes)],
+    ['Infrações de trânsito', `${infracoesP.length} · ${brl(totalInfracoes)}`],
+    ['Oc. Operacionais', ocOper.length],
+    ...(ehMotorista ? [['Oc. em Rota', ocRota.length], ['Sinistros', sinistros.length]] : [])
+  ] : [
+    ['Orientações', orientacoes.length],
+    ['Atestados', atestados.length],
+    ['Faltas / Condutas', ausencias.length],
+    ['Medidas Administrativas', medidas.length],
+    ['Devoluções (erro carregamento)', devsCarreg.length]
+  ];
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -1321,29 +1633,50 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
     th, td { border: 1px solid #cbd5e1; padding: 5px 7px; text-align: left; }
     th { background: #4c1d95; color: #fff; text-transform: uppercase; font-size: 9px; }
     tr:nth-child(even) { background: #f8fafc; }
+    td { vertical-align: top; }
+    h2 .qtd { display: inline-block; background: #ede9fe; color: #4c1d95; border-radius: 10px; padding: 0 7px; font-size: 10px; margin-left: 6px; }
+    .resumo { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .resumo div { border: 1px solid #ddd6fe; border-radius: 6px; padding: 5px 9px; min-width: 90px; background: #faf5ff; }
+    .resumo b { display: block; font-size: 13px; color: #4c1d95; }
+    .resumo span { font-size: 8px; color: #64748b; text-transform: uppercase; }
+    .nowrap { white-space: nowrap; }
+    .num { text-align: right; }
   </style>
 </head>
 <body>
   <div class="header">
     <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
     <div class="title-area">
-      <h1>${tipo === 'MOTORISTA' ? 'Dossiê Motorista' : 'Acompanhamento de Funcionário'}</h1>
+      <h1>${tipo === 'MOTORISTA' ? 'Dossiê Prestador' : 'Acompanhamento de Funcionário'}</h1>
       <p>JR Distribuidora • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
     </div>
   </div>
   <div class="info-box">
     <b>Nome:</b> ${dadosMestre.nome} &nbsp;&nbsp;
+    ${tipo === 'MOTORISTA' ? `<b>Matrícula ERP:</b> ${dadosMestre.matricula || '—'} &nbsp;&nbsp; <b>${dadosMestre.tipo === 'AJUDANTE' ? 'Ajudante' : 'Motorista'}</b>` : `
     ${dadosMestre.chapa ? `<b>Chapa:</b> ${dadosMestre.chapa} &nbsp;&nbsp;` : ''}
     ${dadosMestre.funcao ? `<b>Função:</b> ${dadosMestre.funcao} &nbsp;&nbsp;` : ''}
     ${dadosMestre.cnh ? `<b>CNH:</b> ${dadosMestre.cnh} &nbsp;&nbsp;` : ''}
     <b>Admissão:</b> ${dadosMestre.data_admissao ? formatarData(dadosMestre.data_admissao) : '—'} &nbsp;&nbsp;
-    <b>Desligamento:</b> ${dadosMestre.data_desligamento ? formatarData(dadosMestre.data_desligamento) : '—'}
+    <b>Desligamento:</b> ${dadosMestre.data_desligamento ? formatarData(dadosMestre.data_desligamento) : '—'}`}
+    &nbsp;&nbsp; <b>Período:</b> ${periodoTexto}
+  </div>
+  <div class="resumo">
+    ${resumoItens.map(([rotulo, valor]) => `<div><b>${valor}</b><span>${rotulo}</span></div>`).join('')}
   </div>
 
-  ${secaoTabela('Orientação e Feedback', ['Data','Ocorrência','Ação'], orientacoes.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.ocorrencia}</td><td>${r.acao}</td></tr>`))}
-  ${secaoTabela('Atestados Médicos', ['Data','Parcial/Integral','Motivo','CID','Médico','CRM/CRO'], atestados.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.tipo_afastamento==='INTEGRAL'?'Integral':'Parcial'}</td><td>${r.motivo||'—'}</td><td>${r.cid||'—'}</td><td>${r.medico||'—'}</td><td>${r.crm_cro||'—'}</td></tr>`))}
-  ${secaoTabela('Dispensas / Atrasos / Faltas', ['Data','Motivo'], ausencias.map(r => `<tr><td>${formatarData(r.data)}</td><td>${r.motivo}</td></tr>`))}
-  ${secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td>${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Viagens', ['Saída','Carga','Rota','Placa','Papel','Equipe','Retorno','Status'], viagens.map(v => `<tr><td class="nowrap">${formatarData(v.data)}${v.hora_saida ? ' ' + v.hora_saida : ''}</td><td>${v.carga||'—'}</td><td>${v.rota||'—'}</td><td>${v.placa||'—'}</td><td>${v.papel}</td><td>${v.equipe||'—'}</td><td class="nowrap">${v.data_retorno ? formatarData(v.data_retorno) : '—'}</td><td>${statusViagemTexto(v)}</td></tr>`)) : ''}
+  ${secaoTabela('Orientação e Feedback', ['Data','Ocorrência','Ação'], orientacoes.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.ocorrencia}</td><td>${r.acao}</td></tr>`))}
+  ${secaoTabela('Atestados Médicos', ['Data','Parcial/Integral','Motivo','CID','Médico','CRM/CRO'], atestados.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.tipo_afastamento==='INTEGRAL'?'Integral':'Parcial'}</td><td>${r.motivo||'—'}</td><td>${r.cid||'—'}</td><td>${r.medico||'—'}</td><td>${r.crm_cro||'—'}</td></tr>`))}
+  ${secaoTabela('Faltas, Condutas & Ausências', ['Data','Turno','Conduta / Ausência','Avisado?','Período','Compensar?'], ausencias.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.turno||'—'}</td><td>${r.conduta||'—'}</td><td>${r.avisado||'—'}</td><td>${r.periodo||'Integral'}</td><td>${r.compensar||'NÃO'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? '' : secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td class="nowrap">${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? '' : secaoTabela('Devoluções por Erro Carregamento', ['Data','Protocolo','Papel','Cliente','Motivo','Valor','Tratativa'], devsCarreg.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.papel}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Devoluções por Erro Motorista', ['Data','Protocolo','Cliente','Motivo','Valor','Tratativa'], devsErro.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`)) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Deduções / Adiantamentos', ['Data','Protocolo','Valor da devolução','Equipe','Parte deste prestador','Situação'], deducoes.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${l.protocolo}</td><td class="num">${brl(l.total)}</td><td style="text-align:center;">${l.pessoas}</td><td class="num"><b>${brl(l.parte)}</b></td><td>${l.status}</td></tr>`), `<tr><td colspan="4" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalDeducoes)}</b></td><td></td></tr>`) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Infrações de Trânsito', ['Data','Nº infração','Veículo','Valor','Parcelamento','Status','Relatório'], infracoesP.map(l => `<tr><td class="nowrap">${formatarData(l.data)}</td><td>${vgEscTxt(l.numero_infracao)}</td><td>${vgEscTxt(l.veiculo_placa || '—')}</td><td class="num">${brl(l.valor)}</td><td>${_infParcelaResumo(l)}</td><td>${_infStatusLabel(l.status)}</td><td>${vgEscTxt(l.numero_relatorio || '—')}</td></tr>`), `<tr><td colspan="3" class="num"><b>Total no período</b></td><td class="num"><b>${brl(totalInfracoes)}</b></td><td colspan="3"></td></tr>`) : ''}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Ocorrências Operacionais (Oc Operacional)', ['Data','Carga','Rota','Função','Motivo','Causa','Ocorrência','Ação','Status'], ocOper.map(o => `<tr><td class="nowrap">${formatarData(o.data)}</td><td>${o.carga||'—'}</td><td>${o.rota||'—'}</td><td>${o.funcao||'—'}</td><td>${o.motivo||'—'}</td><td>${o.causa||'—'}</td><td>${o.ocorrencia||'—'}</td><td>${o.acao||'—'}</td><td>${o.status||'—'}</td></tr>`)) : ''}
+  ${ehMotorista ? secaoTabela('Ocorrências em Rota (Oc em Rota)', ['Data','Protocolo','Carga','Placa','Motivo','Descrição','Local','Status'], ocRota.map(o => `<tr><td class="nowrap">${formatarData(o.data)}</td><td>${o.numero_protocolo||'—'}</td><td>${o.carga_numero||o.carga||'—'}</td><td>${o.veiculo_placa||'—'}</td><td>${o.motivo_resumido||o.tipo_ocorrencia||o.motivo||'—'}</td><td>${o.descricao||'—'}</td><td>${o.localizacao||'—'}</td><td>${String(o.status_chamado||o.status||'—').toUpperCase()}</td></tr>`)) : ''}
+  ${ehMotorista ? secaoTabela('Sinistros', ['Nº','Data','Placa','Carga','Local','Responsabilidade','Desconto','Status'], sinistros.map(s => `<tr><td class="nowrap">${s.numero_sinistro||'—'}</td><td class="nowrap">${formatarData(s.data)}</td><td>${s.placa||'—'}</td><td>${s.carga||'—'}</td><td>${s.local_acidente||'—'}</td><td>${s.etapa_diretoria_completa ? (s.responsabilidade_motorista ? 'Sim' : 'Não') : 'Em apuração'}</td><td>${s.desconto_motorista ? brl(s.valor_desconto) + (s.numero_parcelas ? ` (${s.numero_parcelas}x)` : '') : '—'}</td><td>${s.status_geral === 'CONCLUIDO' ? 'Concluído' : 'Pendente'}</td></tr>`)) : ''}
 
   <script>window.onload = function() { setTimeout(function(){ window.print(); }, 500); }</script>
 </body>
@@ -1360,16 +1693,44 @@ function exportarAcompanhamentoCsv(nome, tipo) {
 
   const orientacoes = filtrarPorData(db.getOrientacoesFeedback(nome), varDe, varAte);
   const atestados = filtrarPorData(db.getAtestadosMedicos(nome), varDe, varAte);
-  const ausencias = filtrarPorData(db.getAusenciasRegistros(nome), varDe, varAte);
+  // 6.7.0 (Bloco F): a tela lê getFaltasCondutasPorColaborador() desde
+  // 19/08/2026; PDF e CSV liam ausencias_registros, coleção morta, e saíam
+  // sem as faltas.
+  const ausencias = filtrarPorData(db.getFaltasCondutasPorColaborador(nome), varDe, varAte);
   const dataDe = window[varDe] || '';
   const dataAte = window[varAte] || '';
-  const medidas = db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined });
+  // Orientação Verbal vive no bloco de Orientação e Feedback desde
+  // 19/08/2026; a tela já a tira daqui (renderBlocoMedidasAdministrativas),
+  // e sem este filtro o impresso a listava duas vezes (Bloco F, 6.7.0).
+  const medidas = tipo === 'MOTORISTA' ? [] : db.getMedidasDisciplinares({ colaboradorNome: nome, dataDe: dataDe || undefined, dataAte: dataAte || undefined })
+    .filter(m => m.tipo !== 'ORIENTACAO_VERBAL');
+  const deducoes = tipo === 'MOTORISTA' ? filtrarPorData(deducoesDoPrestador(nome), varDe, varAte) : [];
+  const infracoesP = tipo === 'MOTORISTA' ? filtrarPorData(infracoesDoPrestador(nome), varDe, varAte) : [];
+  // 21/09/2026: mesmas fontes que a tela e o impresso — o CSV saía sem
+  // devoluções, viagens, Oc Operacional, Oc em Rota e sinistros.
+  const dadosMestre = tipo === 'MOTORISTA' ? getDadosPrestadorMestre(nome) : null;
+  const ehMotorista = tipo === 'MOTORISTA' && (!dadosMestre || dadosMestre.tipo !== 'AJUDANTE');
+  const devsErro = tipo === 'MOTORISTA' ? filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte) : [];
+  const devsCarreg = tipo === 'MOTORISTA' ? [] : filtrarPorData(devolucoesErroCarregamentoDoColaborador(nome), varDe, varAte);
+  const viagens = tipo === 'MOTORISTA' ? filtrarPorData(viagensDoPrestador(nome), varDe, varAte) : [];
+  const ocOper = tipo === 'MOTORISTA' ? filtrarPorData(ocOperacionaisDoPrestador(nome), varDe, varAte) : [];
+  const ocRota = ehMotorista ? filtrarPorData(ocRotaDoPrestador(nome), varDe, varAte) : [];
+  const sinistros = ehMotorista ? filtrarPorData(sinistrosDoPrestador(nome), varDe, varAte) : [];
 
-  const linhas = [['Secao','Data','Campo1','Campo2','Campo3','Campo4','Campo5'].map(h => `"${h}"`).join(';')];
-  orientacoes.forEach(r => linhas.push(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao, '', '', ''].map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')));
-  atestados.forEach(r => linhas.push(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
-  ausencias.forEach(r => linhas.push(['AUSENCIA', formatarData(r.data), r.motivo, '', '', '', ''].map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')));
-  medidas.forEach(m => linhas.push(['MEDIDA_DISCIPLINAR', formatarData(m.data_ocorrencia), m.tipo, m.alineas_clt, m.motivo, m.gestor, ''].map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(';')));
+  const linhas = [['Secao','Data','Campo1','Campo2','Campo3','Campo4','Campo5','Campo6','Campo7','Campo8'].map(h => `"${h}"`).join(';')];
+  const csvLinha = campos => linhas.push(campos.concat(Array(Math.max(0, 10 - campos.length)).fill('')).map(v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g,'""')}"`).join(';'));
+  viagens.forEach(v => csvLinha(['VIAGEM', formatarData(v.data), v.carga, v.rota, v.placa, v.papel, v.equipe, v.data_retorno ? formatarData(v.data_retorno) : '', statusViagemTexto(v)]));
+  deducoes.forEach(l => csvLinha(['DEDUCAO_ADIANTAMENTO', formatarData(l.data), l.protocolo, l.total.toFixed(2), String(l.pessoas), l.parte.toFixed(2), l.status]));
+  infracoesP.forEach(l => csvLinha(['INFRACAO_TRANSITO', formatarData(l.data), l.numero_infracao, l.veiculo_placa, (parseFloat(l.valor) || 0).toFixed(2), _infStatusLabel(l.status), l.numero_relatorio, _infParcelaResumo(l)]));
+  devsErro.forEach(d => csvLinha(['DEVOLUCAO_ERRO_MOTORISTA', formatarData(d.data), d.numero_devolucao || d.numero_protocolo, d.cliente_nome, d.motivo_real_causa_raiz || d.motivo_reclamado, (parseFloat(d.valor_reclamado)||0).toFixed(2), d.status_gestao === 'CONCLUIDO' ? 'CONCLUIDA' : 'PENDENTE']));
+  devsCarreg.forEach(d => csvLinha(['DEVOLUCAO_ERRO_CARREGAMENTO', formatarData(d.data), d.numero_devolucao || d.numero_protocolo, d.papel, d.cliente_nome, d.motivo_real_causa_raiz || d.motivo_reclamado, (parseFloat(d.valor_reclamado)||0).toFixed(2), d.status_gestao === 'CONCLUIDO' ? 'CONCLUIDA' : 'PENDENTE']));
+  orientacoes.forEach(r => csvLinha(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao]));
+  atestados.forEach(r => csvLinha(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro]));
+  ausencias.forEach(r => csvLinha(['FALTA_CONDUTA', formatarData(r.data), r.turno, r.conduta, r.avisado, r.periodo || 'Integral', r.compensar || 'NÃO']));
+  medidas.forEach(m => csvLinha(['MEDIDA_DISCIPLINAR', formatarData(m.data_ocorrencia), m.tipo, m.alineas_clt, m.motivo, m.gestor]));
+  ocOper.forEach(o => csvLinha(['OC_OPERACIONAL', formatarData(o.data), o.carga, o.rota, o.funcao, o.motivo, o.causa, o.ocorrencia, o.acao, o.status]));
+  ocRota.forEach(o => csvLinha(['OC_EM_ROTA', formatarData(o.data), o.numero_protocolo, o.carga_numero || o.carga, o.veiculo_placa, o.motivo_resumido || o.tipo_ocorrencia || o.motivo, o.descricao, o.localizacao, String(o.status_chamado || o.status || '').toUpperCase()]));
+  sinistros.forEach(s => csvLinha(['SINISTRO', formatarData(s.data), s.numero_sinistro, s.placa, s.carga, s.local_acidente, s.etapa_diretoria_completa ? (s.responsabilidade_motorista ? 'RESP. MOTORISTA: SIM' : 'RESP. MOTORISTA: NÃO') : 'EM APURAÇÃO', s.desconto_motorista ? (parseFloat(s.valor_desconto)||0).toFixed(2) : '', s.status_geral]));
 
   if (linhas.length === 1) { alert('Nenhum registro encontrado para exportar com os filtros atuais.'); return; }
 
@@ -1383,6 +1744,931 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   link.click();
   document.body.removeChild(link);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// CONTROLE DE INFRAÇÕES DE TRÂNSITO (6.8.0, migration 48)
+// ═══════════════════════════════════════════════════════════════════
+// Uma ficha (relatório) com quantas multas precisar: data, nº do auto,
+// valor, prestador e veículo — os dois últimos por busca em qualquer
+// trecho do cadastro (datalist). Motoristas E ajudantes: ajudante às vezes
+// dirige.
+//
+// Recibo: modelo do Recibo de Adiantamento, UMA FOLHA A4 POR PRESTADOR,
+// 100% dele (multa não se rateia). A folha nunca vaza para a segunda: a
+// tabela aperta conforme a quantidade e, acima de 25 multas, vira duas
+// colunas. Acima de 50 multas de um mesmo prestador o app avisa em vez de
+// cortar.
+//
+// Status (Pendente → Recibo assinado → Descontado) é trocado à mão; imprimir
+// não muda o status. Sem alertas por enquanto.
+//
+// No Dossiê as multas ficam só no bloco próprio — NÃO entram no total de
+// Deduções / Adiantamentos.
+
+const INF_MAX_POR_FOLHA = 50;
+
+function _infLinhaVazia() {
+  return { id: null, data_infracao: '', numero_infracao: '', valor: '', prestador_nome: '', veiculo_placa: '' };
+}
+
+// PARCELAMENTO (6.8.2, migration 49). O status continua sendo da multa
+// inteira: depois da assinatura o financeiro agenda o desconto mensal.
+// Aqui só se calcula o que o recibo descreve — nada disso é gravado.
+function _infParcelas(i) {
+  const n = parseInt(i && i.parcelas, 10);
+  return n >= 1 && n <= 12 ? n : 1;
+}
+
+// Mesmo dia nos meses seguintes; dia que o mês não tem vira o último dia
+// dele (31/01 → 28/02 → 31/03).
+function _infSomarMeses(iso, meses) {
+  const [a, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+  if (!a || !m || !d) return '';
+  const alvo = new Date(Date.UTC(a, m - 1 + meses, 1));
+  const ultimo = new Date(Date.UTC(alvo.getUTCFullYear(), alvo.getUTCMonth() + 1, 0)).getUTCDate();
+  alvo.setUTCDate(Math.min(d, ultimo));
+  return alvo.toISOString().slice(0, 10);
+}
+
+// [{ n, data, valor }] — valores em centavos pela mesma regra do rateio do
+// adiantamento (ratearValor): parcelas iguais, o centavo que sobra vai nas
+// primeiras, e a soma fecha com o valor da multa.
+function _infCronograma(i) {
+  const n = _infParcelas(i);
+  const valores = ratearValor(i.valor, n);
+  return valores.map((v, k) => ({
+    n: k + 1,
+    data: i.data_primeira_parcela ? _infSomarMeses(i.data_primeira_parcela, k) : '',
+    valor: v
+  }));
+}
+
+// 6.8.3: O PARCELAMENTO É DO CONDUTOR, NÃO DA MULTA. Divide-se o TOTAL do
+// prestador (R$ 1.925,05 em 6x), não cada multa. O banco continua guardando
+// parcelas/data_primeira_parcela em cada multa (sem migration): a ficha
+// grava o MESMO plano em todas as multas do prestador, e o recibo agrupa
+// por plano. Multas de relatórios diferentes com planos diferentes saem
+// como grupos separados na mesma folha.
+function _infChavePlano(i) {
+  const n = _infParcelas(i);
+  return n + '|' + (i.data_primeira_parcela || '');
+}
+
+// "1 × R$ 320,85 + 5 × R$ 320,84"
+function _infResumoValores(cr) {
+  const fmt = v => 'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const grupos = [];
+  cr.forEach(p => {
+    const g = grupos.find(x => x.valor === p.valor);
+    if (g) g.qtd++; else grupos.push({ valor: p.valor, qtd: 1 });
+  });
+  return grupos.map(g => `${g.qtd} × ${fmt(g.valor)}`).join(' + ');
+}
+
+// Texto curto para tela, Dossiê e CSV: a multa entra no plano do prestador.
+function _infParcelaResumo(i) {
+  const n = _infParcelas(i);
+  if (n === 1) return i.data_primeira_parcela ? `1x · em ${formatarData(i.data_primeira_parcela)}` : '1x';
+  return `plano ${n}x · 1ª em ${formatarData(i.data_primeira_parcela)}`;
+}
+
+function _infBrl(v) {
+  return 'R$ ' + (parseFloat(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _infNormPlaca(p) {
+  return String(p || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function _infStatusLabel(s) {
+  return (Store.STATUS_INFRACAO || {})[s || 'PENDENTE'] || 'Pendente';
+}
+
+function _infStatusClasse(s) {
+  if (s === 'DESCONTADO') return 'bg-emerald-950 text-emerald-300 border-emerald-800';
+  if (s === 'RECIBO_ASSINADO') return 'bg-blue-950 text-blue-300 border-blue-800';
+  return 'bg-amber-950 text-amber-300 border-amber-800';
+}
+
+function _infVeiculosCadastro() {
+  return (db.data.veiculos || []).filter(v => v && v.placa && !v.is_deleted);
+}
+
+function _infVeiculoPorPlaca(placa) {
+  const alvo = _infNormPlaca(placa);
+  return _infVeiculosCadastro().find(v => _infNormPlaca(v.placa) === alvo) || null;
+}
+
+function _infPrestadorPorNome(nome) {
+  const alvo = String(nome || '').trim().toUpperCase();
+  return listaPrestadoresDossie().find(p => String(p.nome || '').trim().toUpperCase() === alvo) || null;
+}
+
+function _infDatalists() {
+  const prest = listaPrestadoresDossie()
+    .slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+  const veic = _infVeiculosCadastro()
+    .slice().sort((a, b) => String(a.placa).localeCompare(String(b.placa), 'pt-BR'));
+  return `
+    <datalist id="inf-datalist-prestador">${prest.map(p => `<option value="${vgEscTxt(String(p.nome).toUpperCase())}">${p._tipoPrestador === 'AJUDANTE' ? 'Ajudante' : 'Motorista'}</option>`).join('')}</datalist>
+    <datalist id="inf-datalist-veiculo">${veic.map(v => `<option value="${vgEscTxt(_infNormPlaca(v.placa))}">${vgEscTxt([v.modelo, v.tipo].filter(Boolean).join(' — '))}</option>`).join('')}</datalist>`;
+}
+
+// --- filtros da lista ---
+function _infFiltros() {
+  if (window._infFiltroStatus === undefined) window._infFiltroStatus = 'PENDENTE';
+  return {
+    dataDe: window._infFiltroDe || '',
+    dataAte: window._infFiltroAte || '',
+    status: window._infFiltroStatus || 'TODOS',
+    busca: String(window._infFiltroBusca || '').trim().toUpperCase()
+  };
+}
+
+function listarInfracoesFiltradas() {
+  const f = _infFiltros();
+  let lista = db.getInfracoes({ status: f.status, dataDe: f.dataDe || undefined, dataAte: f.dataAte || undefined });
+  if (f.busca) {
+    lista = lista.filter(i => {
+      const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+      return [i.prestador_nome, i.numero_infracao, i.veiculo_placa, rel && rel.numero_relatorio]
+        .some(v => String(v || '').toUpperCase().includes(f.busca));
+    });
+  }
+  return lista;
+}
+
+// --- TELA ---
+function renderInfracoesView() {
+  const f = _infFiltros();
+  const lista = listarInfracoesFiltradas();
+  const total = lista.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0);
+  const nPrest = new Set(lista.map(i => i.prestador_nome)).size;
+  const sel = (window._infSelecionadas || []).filter(id => lista.some(i => String(i.id) === String(id)));
+  window._infSelecionadas = sel;
+  const relatorios = db.getRelatoriosInfracoes();
+  const inp = 'bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs';
+
+  return `
+    <div class="space-y-5">
+      <div class="bg-gradient-to-r from-slate-900 via-red-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-red-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+        <div class="flex items-center gap-3">
+          <div class="bg-red-600/30 p-2.5 rounded-xl border border-red-500/40 text-2xl">🚦</div>
+          <div>
+            <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+              INFRAÇÕES DE TRÂNSITO
+              <span class="bg-red-800 text-red-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">RECIBO POR PRESTADOR</span>
+            </h2>
+            <p class="text-[11px] text-slate-300 font-medium">Lance as multas em lote e imprima uma via por prestador com todas as multas dele</p>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button onclick="imprimirRecibosInfracoesFiltradas()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5">🖨️ Imprimir recibos</button>
+          <button onclick="exportarInfracoesCsv()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-2 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5">📊 Exportar CSV</button>
+          <button onclick="abrirFichaInfracoes()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">+ Novo relatório</button>
+        </div>
+      </div>
+
+      ${window._infForm ? renderFichaInfracoes() : ''}
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-end gap-3">
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Infração de</label>
+          <input type="date" value="${f.dataDe}" class="${inp}" onchange="window._infFiltroDe=this.value; renderApp()"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Até</label>
+          <input type="date" value="${f.dataAte}" class="${inp}" onchange="window._infFiltroAte=this.value; renderApp()"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status</label>
+          <select class="${inp}" onchange="window._infFiltroStatus=this.value; renderApp()">
+            <option value="TODOS" ${f.status === 'TODOS' ? 'selected' : ''}>Todos</option>
+            ${Object.entries(Store.STATUS_INFRACAO).map(([k, l]) => `<option value="${k}" ${f.status === k ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></div>
+        <div class="flex-1 min-w-[180px]"><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Busca</label>
+          <input type="text" value="${vgEscTxt(window._infFiltroBusca || '')}" placeholder="🔎 Prestador, nº, placa ou relatório" class="${inp} w-full"
+            onchange="window._infFiltroBusca=this.value; renderApp()"></div>
+        ${(f.dataDe || f.dataAte || f.busca || f.status !== 'PENDENTE') ? `<button onclick="window._infFiltroDe='';window._infFiltroAte='';window._infFiltroBusca='';window._infFiltroStatus='PENDENTE';renderApp()" class="text-[11px] text-slate-400 hover:text-white underline pb-1.5">Limpar filtros</button>` : ''}
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+          <h3 class="text-xs font-bold text-red-400 uppercase flex items-center gap-1.5"><span>🚦</span> Infrações <span class="bg-red-950 text-red-300 border border-red-800/80 text-[10px] font-black px-2 py-0.5 rounded-full">${lista.length}</span></h3>
+          <span class="bg-amber-950 text-amber-300 border border-amber-800 text-[11px] font-extrabold px-2.5 py-1 rounded">${nPrest} prestador(es) · Total ${_infBrl(total)}</span>
+        </div>
+        ${sel.length ? `
+        <div class="flex flex-wrap items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs">
+          <span class="text-slate-300 font-bold">${sel.length} selecionada(s)</span>
+          <span class="text-slate-500">Marcar como:</span>
+          ${Object.entries(Store.STATUS_INFRACAO).map(([k, l]) => `<button onclick="alterarStatusSelecionadasInfracoes('${k}')" class="px-2 py-1 rounded border ${_infStatusClasse(k)} font-bold text-[11px]">${l}</button>`).join('')}
+          <button onclick="gerarReciboInfracoesPdf(window._infSelecionadas)" class="ml-auto bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/50 px-2 py-1 rounded font-bold text-[11px]">🖨️ Recibos das selecionadas</button>
+          <button onclick="window._infSelecionadas=[]; renderApp()" class="text-slate-400 hover:text-white underline text-[11px]">limpar</button>
+        </div>` : ''}
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr>
+                <th class="p-2 w-6"><input type="checkbox" ${lista.length && sel.length === lista.length ? 'checked' : ''} onchange="window._infSelecionadas = this.checked ? listarInfracoesFiltradas().map(i => String(i.id)) : []; renderApp()"></th>
+                <th class="p-2 whitespace-nowrap">Data</th>
+                <th class="p-2 whitespace-nowrap">Nº infração</th>
+                <th class="p-2">Prestador</th>
+                <th class="p-2 whitespace-nowrap">Veículo</th>
+                <th class="p-2 text-right whitespace-nowrap">Valor</th>
+                <th class="p-2">Status</th>
+                <th class="p-2 whitespace-nowrap">Relatório</th>
+                <th class="p-2 whitespace-nowrap">Recibo</th>
+                <th class="p-2 text-center">Ações</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-slate-300">
+              ${lista.length === 0 ? '<tr><td colspan="10" class="p-4 text-center text-slate-500">Nenhuma infração com os filtros atuais.</td></tr>' :
+                lista.map(i => {
+                  const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+                  const marcado = sel.includes(String(i.id));
+                  return `<tr class="${marcado ? 'bg-slate-800/60' : ''}">
+                    <td class="p-2"><input type="checkbox" ${marcado ? 'checked' : ''} onchange="toggleSelecaoInfracao('${i.id}', this.checked)"></td>
+                    <td class="p-2 whitespace-nowrap">${formatarData(i.data_infracao)}</td>
+                    <td class="p-2 font-mono font-bold text-red-300 whitespace-nowrap">${vgEscTxt(i.numero_infracao)}</td>
+                    <td class="p-2 font-bold text-white">${vgEscTxt(i.prestador_nome)}${i.prestador_tipo === 'AJUDANTE' ? ' <span class="text-[9px] text-slate-400 font-normal">(ajudante)</span>' : ''}</td>
+                    <td class="p-2 font-mono whitespace-nowrap">${vgEscTxt(i.veiculo_placa || '—')}</td>
+                    <td class="p-2 text-right font-bold text-amber-300 whitespace-nowrap">${_infBrl(i.valor)}${_infParcelas(i) > 1 ? `<div class="text-[10px] font-normal text-slate-400">${_infParcelaResumo(i)}</div>` : ''}</td>
+                    <td class="p-2">
+                      <select onchange="alterarStatusInfracao('${i.id}', this.value)" class="border rounded px-1 py-0.5 text-[11px] font-bold ${_infStatusClasse(i.status)}">
+                        ${Object.entries(Store.STATUS_INFRACAO).map(([k, l]) => `<option value="${k}" ${(i.status || 'PENDENTE') === k ? 'selected' : ''}>${l}</option>`).join('')}
+                      </select>
+                    </td>
+                    <td class="p-2 font-mono text-[11px] whitespace-nowrap">${rel ? vgEscTxt(rel.numero_relatorio) : '—'}</td>
+                    <td class="p-2 text-[10px] text-slate-400 whitespace-nowrap">${i.recibo_impresso_em ? `${formatarData(String(i.recibo_impresso_em).slice(0, 10))} (${i.recibo_impresso_qtd || 1}x)` : 'não impresso'}</td>
+                    <td class="p-2 text-center whitespace-nowrap">
+                      <button onclick="gerarReciboInfracoesPdf(['${i.id}'])" title="Recibo só desta infração" class="text-amber-300 hover:text-amber-200 px-1">📄</button>
+                      <button onclick="abrirHistoricoRegistro('infracoes', '${i.id}', '${vgEscAttr(i.numero_infracao)}')" title="Histórico" class="text-slate-300 hover:text-white px-1">📜</button>
+                      <button onclick="excluirInfracaoUi('${i.id}')" title="Excluir" class="text-red-400 hover:text-red-300 px-1">🗑️</button>
+                    </td>
+                  </tr>`;
+                }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
+        <h3 class="text-xs font-bold text-slate-300 uppercase flex items-center gap-1.5 border-b border-slate-800 pb-2"><span>🗂️</span> Relatórios lançados <span class="bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-black px-2 py-0.5 rounded-full">${relatorios.length}</span></h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr><th class="p-2">Nº</th><th class="p-2">Lançamento</th><th class="p-2">Responsável</th><th class="p-2 text-center">Multas</th><th class="p-2 text-center">Prestadores</th><th class="p-2 text-right">Total</th><th class="p-2">Observação</th><th class="p-2 text-center">Ações</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-slate-300">
+              ${relatorios.length === 0 ? '<tr><td colspan="8" class="p-4 text-center text-slate-500">Nenhum relatório lançado ainda. Use "+ Novo relatório".</td></tr>' :
+                relatorios.map(r => {
+                  const multas = db.getInfracoes({ relatorioId: r.id });
+                  const tot = multas.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0);
+                  return `<tr>
+                    <td class="p-2 font-mono font-bold text-red-300 whitespace-nowrap">${vgEscTxt(r.numero_relatorio)}</td>
+                    <td class="p-2 whitespace-nowrap">${formatarData(r.data_lancamento)}</td>
+                    <td class="p-2">${vgEscTxt(r.responsavel || '—')}</td>
+                    <td class="p-2 text-center">${multas.length}</td>
+                    <td class="p-2 text-center">${new Set(multas.map(i => i.prestador_nome)).size}</td>
+                    <td class="p-2 text-right font-bold text-amber-300 whitespace-nowrap">${_infBrl(tot)}</td>
+                    <td class="p-2 text-slate-400">${vgEscTxt(r.observacao || '')}</td>
+                    <td class="p-2 text-center whitespace-nowrap">
+                      <button onclick="gerarReciboInfracoesPdf(db.getInfracoes({ relatorioId: '${r.id}' }).map(i => i.id))" title="Recibos deste relatório" class="text-amber-300 hover:text-amber-200 px-1">📄</button>
+                      <button onclick="abrirFichaInfracoes('${r.id}')" title="Editar" class="text-blue-300 hover:text-blue-200 px-1">✏️</button>
+                      <button onclick="abrirHistoricoRegistro('infracoes_relatorios', '${r.id}', '${vgEscAttr(r.numero_relatorio)}')" title="Histórico" class="text-slate-300 hover:text-white px-1">📜</button>
+                      <button onclick="excluirRelatorioInfracoesUi('${r.id}')" title="Excluir relatório e multas" class="text-red-400 hover:text-red-300 px-1">🗑️</button>
+                    </td>
+                  </tr>`;
+                }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+// --- FICHA (novo / editar) ---
+function abrirFichaInfracoes(relatorioId) {
+  if (relatorioId) {
+    const rel = db.getRelatorioInfracaoPorId(relatorioId);
+    if (!rel || rel.is_deleted) { alert('Relatório não encontrado.'); return; }
+    window._infForm = {
+      id: rel.id,
+      numero_relatorio: rel.numero_relatorio,
+      data_lancamento: rel.data_lancamento || hojeIsoBrasilia(),
+      responsavel: rel.responsavel || '',
+      observacao: rel.observacao || '',
+      linhas: db.getInfracoes({ relatorioId: rel.id }).slice().reverse().map(i => ({
+        id: i.id, data_infracao: i.data_infracao || '', numero_infracao: i.numero_infracao || '',
+        valor: i.valor, prestador_nome: i.prestador_nome || '', veiculo_placa: i.veiculo_placa || ''
+      })),
+      // Plano de cada prestador = o da primeira multa dele no relatório.
+      planos: db.getInfracoes({ relatorioId: rel.id }).reduce((acc, i) => {
+        if (!acc[i.prestador_nome]) acc[i.prestador_nome] = { parcelas: String(_infParcelas(i)), data_primeira_parcela: i.data_primeira_parcela || '' };
+        return acc;
+      }, {}),
+      erros: []
+    };
+  } else {
+    window._infForm = {
+      id: null,
+      numero_relatorio: null,
+      data_lancamento: hojeIsoBrasilia(),
+      responsavel: (db.currentUser && db.currentUser.nome) ? String(db.currentUser.nome).toUpperCase() : '',
+      observacao: '',
+      linhas: [_infLinhaVazia(), _infLinhaVazia(), _infLinhaVazia()],
+      planos: {},
+      erros: []
+    };
+  }
+  renderApp();
+  setTimeout(() => { const el = document.getElementById('inf-ficha'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+}
+
+function fecharFichaInfracoes() {
+  const f = window._infForm;
+  const temDado = f && f.linhas.some(l => l.numero_infracao || l.valor || l.prestador_nome);
+  if (temDado && !f.id && !confirm('Descartar as infrações digitadas?')) return;
+  window._infForm = null;
+  renderApp();
+}
+
+function _infCab(campo, valor) {
+  if (window._infForm) window._infForm[campo] = valor;
+}
+
+function _infCampo(idx, campo, valor) {
+  const f = window._infForm;
+  if (!f || !f.linhas[idx]) return;
+  f.linhas[idx][campo] = valor;
+  if (campo === 'valor') {
+    const el = document.getElementById('inf-ficha-total');
+    if (el) el.textContent = _infTotalFicha();
+  }
+  if (campo === 'valor' || campo === 'prestador_nome') _infAtualizarPlanos();
+}
+
+// --- Parcelamento por prestador (6.8.3) ---
+function _infPlano(nome) {
+  const f = window._infForm;
+  if (!f.planos) f.planos = {};
+  if (!f.planos[nome]) f.planos[nome] = { parcelas: '1', data_primeira_parcela: '' };
+  return f.planos[nome];
+}
+
+// Prestadores (já reconhecidos no cadastro) que aparecem na ficha, com o
+// total e a quantidade de multas de cada um.
+function _infPrestadoresDaFicha() {
+  const f = window._infForm;
+  const mapa = {};
+  (f ? f.linhas : []).forEach(l => {
+    const p = l.prestador_nome ? _infPrestadorPorNome(l.prestador_nome) : null;
+    if (!p) return;
+    const m = mapa[p.nome] = mapa[p.nome] || { nome: p.nome, total: 0, qtd: 0 };
+    m.total += parseFloat(l.valor) || 0;
+    m.qtd++;
+  });
+  return Object.values(mapa).sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+}
+
+function _infPlanoCampo(nome, campo, valor) {
+  _infPlano(nome)[campo] = valor;
+  _infAtualizarPlanos();
+}
+
+function _infAtualizarPlanos() {
+  const el = document.getElementById('inf-planos');
+  if (el) el.innerHTML = renderPlanosInfracoes();
+}
+
+function renderPlanosInfracoes() {
+  const lista = _infPrestadoresDaFicha();
+  if (!lista.length) return '<div class="text-[11px] text-slate-500">Escolha o prestador nas linhas acima para definir o parcelamento dele.</div>';
+  const inp = 'bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs';
+  return lista.map(p => {
+    const plano = _infPlano(p.nome);
+    const n = parseInt(plano.parcelas, 10) || 1;
+    const cr = _infCronograma({ valor: p.total, parcelas: n, data_primeira_parcela: plano.data_primeira_parcela });
+    const faltaData = n > 1 && !plano.data_primeira_parcela;
+    const previa = n === 1 ? `à vista: ${_infBrl(p.total)}`
+      : `${_infResumoValores(cr)}${plano.data_primeira_parcela ? ` · de ${formatarData(cr[0].data)} a ${formatarData(cr[cr.length - 1].data)}` : ''}`;
+    const nomeAttr = vgEscAttr(p.nome);
+    return `
+      <div class="grid grid-cols-2 md:grid-cols-[minmax(0,1fr)_120px_80px_135px_minmax(0,1.2fr)] gap-2 items-center py-1 border-b border-slate-800 last:border-b-0">
+        <span class="text-xs font-bold text-white col-span-2 md:col-span-1">${vgEscTxt(p.nome)} <span class="text-[10px] text-slate-400 font-normal">(${p.qtd} multa${p.qtd > 1 ? 's' : ''})</span></span>
+        <span class="text-xs font-bold text-amber-300 md:text-right">${_infBrl(p.total)}</span>
+        <select class="${inp}" onchange="_infPlanoCampo('${nomeAttr}', 'parcelas', this.value)">
+          ${Array.from({ length: 12 }, (_, k) => k + 1).map(k => `<option value="${k}" ${n === k ? 'selected' : ''}>${k}x</option>`).join('')}
+        </select>
+        <input type="date" title="Data da 1ª parcela" value="${plano.data_primeira_parcela || ''}" class="${inp} ${faltaData ? 'border-red-500' : ''}" onchange="_infPlanoCampo('${nomeAttr}', 'data_primeira_parcela', this.value)">
+        <span class="text-[11px] ${faltaData ? 'text-red-400 font-bold' : 'text-slate-300'} col-span-2 md:col-span-1">${faltaData ? 'informe a data da 1ª parcela' : previa}</span>
+      </div>`;
+  }).join('');
+}
+
+function _infTotalFicha() {
+  const f = window._infForm;
+  const linhas = f ? f.linhas.filter(l => parseFloat(l.valor) > 0) : [];
+  return `${linhas.length} infração(ões) · total ${_infBrl(linhas.reduce((a, l) => a + (parseFloat(l.valor) || 0), 0))}`;
+}
+
+function adicionarLinhaFichaInfracoes() {
+  if (!window._infForm) return;
+  window._infForm.linhas.push(_infLinhaVazia());
+  renderApp();
+  setTimeout(() => {
+    const els = document.querySelectorAll('#inf-ficha input[data-inf-primeiro]');
+    if (els.length) els[els.length - 1].focus();
+  }, 30);
+}
+
+function removerLinhaFichaInfracoes(idx) {
+  const f = window._infForm;
+  if (!f) return;
+  const l = f.linhas[idx];
+  if (l && l.id && !confirm(`Remover a infração ${l.numero_infracao || ''} deste relatório? Ela vai para a Lixeira ao salvar.`)) return;
+  f.linhas.splice(idx, 1);
+  if (!f.linhas.length) f.linhas.push(_infLinhaVazia());
+  renderApp();
+}
+
+function renderFichaInfracoes() {
+  const f = window._infForm;
+  const inp = 'w-full bg-slate-800 border text-white rounded p-1.5 text-xs';
+  const errosPorLinha = {};
+  (f.erros || []).forEach(e => { if (e.linha) (errosPorLinha[e.linha] = errosPorLinha[e.linha] || []).push(e.msg); });
+  const borda = pos => errosPorLinha[pos] ? 'border-red-500' : 'border-slate-700';
+
+  return `
+    <div id="inf-ficha" class="bg-slate-900 border-2 border-red-700/60 rounded-xl p-4 shadow-2xl space-y-4">
+      ${_infDatalists()}
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2">
+        <h3 class="text-sm font-black text-white flex items-center gap-2">🚦 ${f.id ? 'Editar relatório de infrações' : 'Novo relatório de infrações'}</h3>
+        <span class="bg-slate-800 text-slate-200 font-mono text-xs px-2.5 py-1 rounded border border-slate-700">${f.numero_relatorio ? vgEscTxt(f.numero_relatorio) : 'número gerado ao salvar'}</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data do lançamento *</label>
+          <input type="date" value="${f.data_lancamento || ''}" class="${inp} border-slate-700" onchange="_infCab('data_lancamento', this.value)"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Responsável</label>
+          <input type="text" value="${vgEscTxt(f.responsavel || '')}" class="${inp} border-slate-700" oninput="forcarMaiuscula(this); _infCab('responsavel', this.value)"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Observação (opcional)</label>
+          <input type="text" value="${vgEscTxt(f.observacao || '')}" placeholder="Ex.: lote DETRAN setembro" class="${inp} border-slate-700" oninput="_infCab('observacao', this.value)"></div>
+      </div>
+
+      ${(f.erros || []).length ? `
+      <div class="bg-red-950/60 border border-red-700 rounded-lg p-3 text-xs text-red-200 space-y-0.5">
+        <div class="font-black text-red-300 mb-1">Não foi salvo — corrija e tente de novo:</div>
+        ${f.erros.map(e => `<div>• ${e.linha ? `Linha ${e.linha}: ` : ''}${vgEscTxt(e.msg)}</div>`).join('')}
+      </div>` : ''}
+
+      <div class="space-y-1.5">
+        <div class="hidden md:grid grid-cols-[28px_130px_150px_110px_minmax(0,1fr)_150px_32px] gap-2 text-[10px] text-slate-400 font-bold uppercase px-0.5">
+          <span>#</span><span>Data *</span><span>Nº da infração *</span><span>Valor (R$) *</span><span>Prestador * <span class="normal-case font-normal">(digite parte do nome)</span></span><span>Veículo * <span class="normal-case font-normal">(parte da placa)</span></span><span></span>
+        </div>
+        ${f.linhas.map((l, idx) => {
+          const pos = idx + 1;
+          return `
+          <div class="grid grid-cols-2 md:grid-cols-[28px_130px_150px_110px_minmax(0,1fr)_150px_32px] gap-2 items-center bg-slate-950/40 md:bg-transparent p-2 md:p-0 rounded">
+            <span class="text-[11px] font-bold ${errosPorLinha[pos] ? 'text-red-400' : 'text-slate-500'}">${pos}</span>
+            <input type="date" data-inf-primeiro="1" value="${l.data_infracao || ''}" class="${inp} ${borda(pos)}" onchange="_infCampo(${idx}, 'data_infracao', this.value)">
+            <input type="text" value="${vgEscTxt(l.numero_infracao || '')}" placeholder="Nº do auto" class="${inp} ${borda(pos)} font-mono" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'numero_infracao', this.value)">
+            <input type="number" step="0.01" min="0" inputmode="decimal" value="${l.valor === '' || l.valor === null || l.valor === undefined ? '' : l.valor}" placeholder="0,00" class="${inp} ${borda(pos)} text-right" oninput="_infCampo(${idx}, 'valor', this.value)">
+            <input type="text" list="inf-datalist-prestador" value="${vgEscTxt(l.prestador_nome || '')}" placeholder="Nome do prestador" class="${inp} ${borda(pos)} col-span-2 md:col-span-1 font-bold" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'prestador_nome', this.value)">
+            <input type="text" list="inf-datalist-veiculo" value="${vgEscTxt(l.veiculo_placa || '')}" placeholder="Placa" class="${inp} ${borda(pos)} font-mono" oninput="forcarMaiuscula(this); _infCampo(${idx}, 'veiculo_placa', this.value)">
+            <button type="button" onclick="removerLinhaFichaInfracoes(${idx})" title="Remover linha" class="text-red-400 hover:text-red-300 text-sm">🗑️</button>
+          </div>`;
+        }).join('')}
+      </div>
+
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <button type="button" onclick="adicionarLinhaFichaInfracoes()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">+ Adicionar infração</button>
+        <span id="inf-ficha-total" class="text-xs font-bold text-amber-300">${_infTotalFicha()}</span>
+      </div>
+
+      <div class="bg-slate-950/60 border border-emerald-800/50 rounded-lg p-3 space-y-1">
+        <div class="text-[10px] font-black text-emerald-400 uppercase">💳 Parcelamento por prestador <span class="normal-case font-normal text-slate-400">— divide o TOTAL de cada condutor; parcelas mensais a partir da 1ª</span></div>
+        <div id="inf-planos">${renderPlanosInfracoes()}</div>
+      </div>
+
+      <div class="flex flex-wrap justify-end gap-2 border-t border-slate-800 pt-3">
+        <button type="button" onclick="fecharFichaInfracoes()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2 rounded-lg text-xs border border-slate-600">Cancelar</button>
+        <button type="button" onclick="salvarFichaInfracoes(false)" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-3 py-2 rounded-lg text-xs border border-slate-500">💾 Salvar</button>
+        <button type="button" onclick="salvarFichaInfracoes(true)" class="bg-red-600 hover:bg-red-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg">💾 Salvar e emitir recibos</button>
+      </div>
+    </div>`;
+}
+
+function salvarFichaInfracoes(emitir) {
+  const f = window._infForm;
+  if (!f) return;
+  // Linha inteiramente em branco é ignorada (a ficha abre com três).
+  const preenchidas = f.linhas
+    .map((l, idx) => ({ l, pos: idx + 1 }))
+    .filter(({ l }) => [l.data_infracao, l.numero_infracao, l.valor, l.prestador_nome, l.veiculo_placa].some(v => String(v ?? '').trim() !== ''));
+
+  // Prestador e veículo têm de existir no cadastro — é o que impede nome
+  // digitado de um jeito diferente de virar outra pessoa no Dossiê.
+  const erros = [];
+  const linhas = preenchidas.map(({ l, pos }, i) => {
+    const prest = l.prestador_nome ? _infPrestadorPorNome(l.prestador_nome) : null;
+    const veic = l.veiculo_placa ? _infVeiculoPorPlaca(l.veiculo_placa) : null;
+    if (l.prestador_nome && !prest) erros.push({ linha: pos, msg: `prestador "${String(l.prestador_nome).toUpperCase()}" não está no cadastro — escolha da lista` });
+    if (l.veiculo_placa && !veic) erros.push({ linha: pos, msg: `veículo "${_infNormPlaca(l.veiculo_placa)}" não está no cadastro — escolha da lista` });
+    return {
+      _posTela: pos,
+      id: l.id || null,
+      data_infracao: l.data_infracao,
+      numero_infracao: l.numero_infracao,
+      valor: l.valor,
+      prestador_nome: prest ? prest.nome : l.prestador_nome,
+      prestador_tipo: prest ? prest._tipoPrestador : null,
+      veiculo_placa: veic ? _infNormPlaca(veic.placa) : l.veiculo_placa,
+      parcelas: prest ? _infPlano(prest.nome).parcelas : '1',
+      data_primeira_parcela: prest ? _infPlano(prest.nome).data_primeira_parcela : ''
+    };
+  });
+  // O plano é do prestador: o erro sai uma vez por prestador, não por linha.
+  _infPrestadoresDaFicha().forEach(p => {
+    const pl = _infPlano(p.nome);
+    if ((parseInt(pl.parcelas, 10) || 1) > 1 && !pl.data_primeira_parcela) {
+      erros.push({ linha: null, msg: `${p.nome}: informe a data da 1ª parcela no parcelamento` });
+    }
+  });
+  const ERROS_DE_PLANO = ['informe a data da 1ª parcela', 'parcelas precisa ser de 1 a 12'];
+
+  const res = db.salvarRelatorioInfracoes({
+    id: f.id, data_lancamento: f.data_lancamento, responsavel: f.responsavel, observacao: f.observacao, linhas,
+    somenteValidar: erros.length > 0
+  });
+  // O store numera as linhas que recebeu (só as preenchidas); a tela mostra
+  // a posição na ficha. Traduz de volta.
+  const todosErros = erros.concat((res.erros || []).filter(e => !ERROS_DE_PLANO.includes(e.msg)).map(e => ({
+    linha: e.linha ? (linhas[e.linha - 1] || {})._posTela : null, msg: e.msg
+  }))).sort((a, b) => (a.linha || 0) - (b.linha || 0));
+  if (!res.success) {
+    f.erros = todosErros.length ? todosErros : [{ linha: null, msg: 'Não foi possível salvar.' }];
+    renderApp();
+    setTimeout(() => { const el = document.getElementById('inf-ficha'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+    return;
+  }
+
+  const rel = res.relatorio;
+  window._infForm = null;
+  showToast(`Relatório ${rel.numero_relatorio} salvo.`);
+  renderApp();
+  if (emitir) gerarReciboInfracoesPdf(db.getInfracoes({ relatorioId: rel.id }).map(i => i.id));
+}
+
+// --- ações da lista ---
+function toggleSelecaoInfracao(id, marcado) {
+  const sel = new Set((window._infSelecionadas || []).map(String));
+  if (marcado) sel.add(String(id)); else sel.delete(String(id));
+  window._infSelecionadas = Array.from(sel);
+  renderApp();
+}
+
+function alterarStatusInfracao(id, status) {
+  const r = db.alterarStatusInfracoes([id], status);
+  if (!r.success) { alert(r.message || 'Não foi possível alterar o status.'); return; }
+  showToast(`Status alterado para "${_infStatusLabel(status)}".`);
+  renderApp();
+}
+
+function alterarStatusSelecionadasInfracoes(status) {
+  const ids = window._infSelecionadas || [];
+  if (!ids.length) return;
+  if (!confirm(`Marcar ${ids.length} infração(ões) como "${_infStatusLabel(status)}"?`)) return;
+  const r = db.alterarStatusInfracoes(ids, status);
+  window._infSelecionadas = [];
+  showToast(`${r.alteradas || 0} infração(ões) atualizada(s).`);
+  renderApp();
+}
+
+function excluirInfracaoUi(id) {
+  const i = db.getInfracaoPorId(id);
+  if (!i) return;
+  const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+  const ultima = rel && db.getInfracoes({ relatorioId: rel.id }).length === 1;
+  if (!confirm(`Excluir a infração ${i.numero_infracao} de ${i.prestador_nome} (${_infBrl(i.valor)})?${ultima ? `\n\nÉ a última do relatório ${rel.numero_relatorio}: o relatório vai junto.` : ''}\n\nO registro vai para a Governança & Lixeira.`)) return;
+  const r = db.excluirInfracao(id);
+  if (!r.success) { alert(r.message); return; }
+  window._infSelecionadas = (window._infSelecionadas || []).filter(x => String(x) !== String(id));
+  showToast('Infração excluída.');
+  renderApp();
+}
+
+function excluirRelatorioInfracoesUi(id) {
+  const rel = db.getRelatorioInfracaoPorId(id);
+  if (!rel) return;
+  const n = db.getInfracoes({ relatorioId: id }).length;
+  if (!confirm(`Excluir o relatório ${rel.numero_relatorio} e as ${n} infração(ões) dele?\n\nTudo vai para a Governança & Lixeira; restaurar o relatório traz as multas de volta.`)) return;
+  const r = db.excluirRelatorioInfracoes(id);
+  if (!r.success) { alert(r.message); return; }
+  if (window._infForm && String(window._infForm.id) === String(id)) window._infForm = null;
+  showToast(`Relatório ${rel.numero_relatorio} excluído.`);
+  renderApp();
+}
+
+function imprimirRecibosInfracoesFiltradas() {
+  const lista = listarInfracoesFiltradas();
+  if (!lista.length) { alert('Nenhuma infração com os filtros atuais.'); return; }
+  const f = _infFiltros();
+  const nPrest = new Set(lista.map(i => i.prestador_nome)).size;
+  const total = lista.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0);
+  if (!confirm(`Imprimir ${nPrest} recibo(s) — um por prestador — com ${lista.length} infração(ões), total ${_infBrl(total)}?\n\nFiltro de status: ${f.status === 'TODOS' ? 'todos' : _infStatusLabel(f.status)}.`)) return;
+  gerarReciboInfracoesPdf(lista.map(i => i.id));
+}
+
+function exportarInfracoesCsv() {
+  const lista = listarInfracoesFiltradas();
+  if (!lista.length) { alert('Nenhuma infração com os filtros atuais.'); return; }
+  const cab = ['Relatorio', 'Data infracao', 'Numero infracao', 'Valor', 'Parcelas', '1a parcela', 'Prestador', 'Tipo', 'Placa', 'Status', 'Recibo impresso em', 'Vezes impresso', 'Lancado por', 'Lancado em'];
+  const q = v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g, '""')}"`;
+  const linhas = [cab.map(q).join(';')].concat(lista.map(i => {
+    const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+    return [rel ? rel.numero_relatorio : '', formatarData(i.data_infracao), i.numero_infracao,
+      (parseFloat(i.valor) || 0).toFixed(2).replace('.', ','), _infParcelas(i), i.data_primeira_parcela ? formatarData(i.data_primeira_parcela) : '',
+      i.prestador_nome, i.prestador_tipo || '',
+      i.veiculo_placa, _infStatusLabel(i.status), i.recibo_impresso_em ? formatarDataHora(i.recibo_impresso_em) : '',
+      i.recibo_impresso_qtd || 0, i.criado_por || '', i.criado_em ? formatarDataHora(i.criado_em) : ''].map(q).join(';');
+  }));
+  baixarCsv(`infracoes_${agoraIsoBrasilia().slice(0, 10)}.csv`, linhas.join('\n'));
+}
+
+// --- RECIBO (uma folha A4 por prestador) ---
+//
+// A folha tem altura FIXA (A4 menos as margens) e a tabela ocupa o que
+// sobra entre o cabeçalho e o bloco de valor/assinaturas. A densidade
+// muda com a quantidade de multas:
+//   até 14  → normal (letra maior, linhas folgadas)
+//   15 a 25 → compacta
+//   26 a 50 → compacta em duas colunas lado a lado
+// Acima de 50 não imprime: avisa quem é, para dividir por período.
+function gerarReciboInfracoesPdf(ids) {
+  const infs = (ids || []).map(id => db.getInfracaoPorId(id)).filter(i => i && !i.is_deleted);
+  if (!infs.length) { alert('Nenhuma infração para imprimir.'); return; }
+
+  const grupos = {};
+  infs.forEach(i => { (grupos[i.prestador_nome] = grupos[i.prestador_nome] || []).push(i); });
+  const nomes = Object.keys(grupos).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const excedidos = nomes.filter(n => grupos[n].length > INF_MAX_POR_FOLHA);
+  if (excedidos.length) {
+    alert(`Estes prestadores têm mais de ${INF_MAX_POR_FOLHA} infrações e não cabem numa folha A4:\n\n${excedidos.map(n => `• ${n} (${grupos[n].length})`).join('\n')}\n\nFiltre por período e imprima em partes.`);
+    return;
+  }
+
+  const emissao = new Date().toLocaleDateString('pt-BR');
+  const folhas = nomes.map((nome, idx) => {
+    const lista = grupos[nome].slice().sort((a, b) => String(a.data_infracao || '').localeCompare(String(b.data_infracao || '')));
+    const total = lista.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0);
+    const prest = _infPrestadorPorNome(nome);
+    const tipo = (prest && prest._tipoPrestador) || lista[0].prestador_tipo || 'MOTORISTA';
+    const papelTitulo = tipo === 'AJUDANTE' ? 'Ajudante' : 'Motorista';
+    const papelAssin = tipo === 'AJUDANTE' ? 'AJUDANTE / PRESTADOR' : 'MOTORISTA / PRESTADOR';
+    const documento = prest ? (prest.cpf ? `CPF ${prest.cpf}` : (prest.cnh ? `CNH ${prest.cnh}` : '')) : '';
+    const matricula = prest ? (prest.cod_erp || prest.matricula || '') : '';
+    const placas = [...new Set(lista.map(i => i.veiculo_placa).filter(Boolean))];
+    const veiculosTxt = placas.map(p => {
+      const v = _infVeiculoPorPlaca(p);
+      return v && v.modelo ? `${p} (${v.modelo})` : p;
+    }).join(', ') || '—';
+    const relNums = [...new Set(lista.map(i => (db.getRelatorioInfracaoPorId(i.relatorio_id) || {}).numero_relatorio).filter(Boolean))];
+    const d1 = lista[0].data_infracao, d2 = lista[lista.length - 1].data_infracao;
+    const periodo = d1 === d2 ? formatarData(d1) : `${formatarData(d1)} a ${formatarData(d2)}`;
+    const dens = lista.length <= 14 ? 'normal' : (lista.length <= 25 ? 'compacta' : 'colunas');
+    const totalFmt = total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // 6.8.3: o parcelamento é do CONDUTOR — divide o total, não cada multa.
+    // Agrupa por plano (parcelas + 1ª data); no caso normal há um só, e o
+    // quadro mostra o total dividido com a data e o valor de cada parcela.
+    // Sem nenhuma multa parcelada, a folha sai igual à 6.8.0.
+    const brl2 = v => 'R$ ' + (parseFloat(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const planos = [];
+    lista.forEach(i => {
+      const k = _infChavePlano(i);
+      let g = planos.find(x => x.chave === k);
+      if (!g) planos.push(g = { chave: k, parcelas: _infParcelas(i), data: i.data_primeira_parcela || '', itens: [] });
+      g.itens.push(i);
+    });
+    planos.forEach(g => { g.total = Math.round(g.itens.reduce((a, i) => a + (parseFloat(i.valor) || 0), 0) * 100) / 100; });
+    planos.sort((a, b) => b.parcelas - a.parcelas);
+    const temParc = planos.some(g => g.parcelas > 1);
+    const umPlanoSo = planos.length === 1;
+    const parcHtml = !temParc ? '' : `
+      <div class="parc">
+        <div class="parc-tit">PARCELAMENTO DO DESCONTO${umPlanoSo ? ` — ${brl2(planos[0].total)} EM ${planos[0].parcelas}x` : ''}</div>
+        ${planos.map(g => {
+          const rotulo = umPlanoSo ? ''
+            : `<div class="parc-lin"><b>${g.itens.length} infração(ões) — ${brl2(g.total)} em ${g.parcelas}x</b>${g.parcelas === 1 && g.data ? ` em ${formatarData(g.data)}` : ''}${g.parcelas > 1 ? ':' : ''}</div>`;
+          if (g.parcelas === 1) return rotulo;
+          const cr = _infCronograma({ valor: g.total, parcelas: g.parcelas, data_primeira_parcela: g.data });
+          return rotulo + `<div class="parc-grid">${cr.map(p => `<div class="parc-cel"><span>${p.n}ª · ${formatarData(p.data)}</span><b>${brl2(p.valor)}</b></div>`).join('')}</div>`;
+        }).join('')}
+      </div>`;
+
+    const tabela = (itens, inicio, completa) => `
+      <table class="tb">
+        <thead><tr>
+          <th style="width:${completa ? '26px' : '22px'}">#</th><th>Data</th><th>Nº da infração</th><th>Veículo</th>${completa ? '<th>Relatório</th>' : ''}<th class="r">Valor</th>
+        </tr></thead>
+        <tbody>
+          ${itens.map((i, k) => {
+            const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+            return `<tr><td class="c">${inicio + k + 1}</td><td>${formatarData(i.data_infracao)}</td><td class="b">${vgEscTxt(i.numero_infracao)}</td><td>${vgEscTxt(i.veiculo_placa || '—')}</td>${completa ? `<td>${rel ? vgEscTxt(rel.numero_relatorio) : '—'}</td>` : ''}<td class="r b">R$ ${(parseFloat(i.valor) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+
+    // As DUAS formas vão na folha e o CSS mostra uma: a densidade inicial
+    // sai da contagem, e o ajuste no load (ajustarFolhas, lá embaixo) sobe
+    // de degrau se o quadro de parcelamento tiver comido espaço da tabela.
+    const meioIdx = Math.ceil(lista.length / 2);
+    const tabelasHtml = `<div class="v-uma">${tabela(lista, 0, true)}</div>`
+      + `<div class="v-duas"><div class="duas">${tabela(lista.slice(0, meioIdx), 0, false)}${tabela(lista.slice(meioIdx), meioIdx, false)}</div></div>`;
+
+    return `
+  <div class="folha dens-${dens}">
+    <div class="topo">
+      <div class="header">
+        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+        <div class="header-title">
+          <h2>JR DISTRIBUIDORA</h2>
+          <p>Logística Corporativa • Gestão de Frotas & Operações Logísticas</p>
+        </div>
+      </div>
+      <div class="badge-via">RECIBO DE ADIANTAMENTO — INFRAÇÕES DE TRÂNSITO (VIA ${idx + 1} DE ${nomes.length})</div>
+      <div class="grid">
+        <div class="field"><div class="field-lbl">Prestador / ${papelTitulo}</div><div class="field-val">${vgEscTxt(nome)}</div></div>
+        <div class="field"><div class="field-lbl">${documento ? 'Documento' : 'Matrícula ERP'}</div><div class="field-val">${vgEscTxt(documento || matricula || '—')}</div></div>
+        <div class="field"><div class="field-lbl">Veículo(s)</div><div class="field-val">${vgEscTxt(veiculosTxt)}</div></div>
+        <div class="field"><div class="field-lbl">Período das infrações</div><div class="field-val">${periodo} — ${lista.length} infração(ões)</div></div>
+        <div class="field" style="grid-column: span 2;"><div class="field-lbl">Relatório(s) de lançamento</div><div class="field-val">${vgEscTxt(relNums.join(', ') || '—')}</div></div>
+      </div>
+      <div class="section-title">🚦 INFRAÇÕES DE TRÂNSITO DESTE PRESTADOR (${lista.length})</div>
+    </div>
+
+    <div class="meio">${tabelasHtml}</div>
+
+    <div class="base">
+      <div class="val-highlight">
+        <div class="val-lbl">VALOR DO ADIANTAMENTO — INFRAÇÕES DE TRÂNSITO (100% DO PRESTADOR):</div>
+        <div class="val-amt">R$ ${totalFmt}</div>
+      </div>
+      ${parcHtml}
+      <div class="termo">
+        <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO:</b><br>
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${totalFmt}</b> (100% integral) referente ${lista.length === 1 ? 'à infração de trânsito relacionada acima' : `às ${lista.length} infrações de trânsito relacionadas acima`}, ocorrida(s) no período de <b>${periodo}</b> na condução de veículo da frota.${temParc ? ' O desconto seguirá o parcelamento descrito acima.' : ''}
+      </div>
+      <div class="sigs">
+        <div><div class="sig-line"></div><div class="sig-lbl">${vgEscTxt(nome)}<br>(${papelAssin})</div></div>
+        <div><div class="sig-line"></div><div class="sig-lbl">SUPERVISOR LOGÍSTICO / JR<br>(JR DISTRIBUIDORA)</div></div>
+      </div>
+      <div class="rodape">Emitido em ${emissao} • JR Oper</div>
+    </div>
+  </div>`;
+  }).join('');
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>RECIBO DE ADIANTAMENTO — INFRAÇÕES DE TRÂNSITO — JR DISTRIBUIDORA</title>
+  <style>
+    @page { size: A4 portrait; margin: 10mm; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; color: #0f172a; background: #e2e8f0; }
+    /* A4 = 297mm; menos 2 x 10mm de margem = 277mm. 1mm de folga para o
+       arredondamento do Chrome não empurrar uma folha em branco. */
+    .folha { width: 190mm; height: 276mm; margin: 8mm auto; background: #fff; border: 2.5px solid #0f172a; border-radius: 10px; padding: 6mm 7mm; display: flex; flex-direction: column; overflow: hidden; }
+    @media print {
+      body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .folha { margin: 0; page-break-after: always; break-after: page; }
+      .folha:last-child { page-break-after: auto; break-after: auto; }
+    }
+    .topo, .base { flex: 0 0 auto; }
+    .meio { flex: 1 1 auto; min-height: 0; overflow: hidden; margin-bottom: 4mm; }
+    .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 10px; }
+    .logo { height: 44px; }
+    .header-title { text-align: right; }
+    .header-title h2 { margin: 0; font-size: 18px; font-weight: 900; letter-spacing: 0.5px; }
+    .header-title p { margin: 3px 0 0; font-size: 10.5px; color: #475569; font-weight: bold; }
+    .badge-via { background: #0f172a; color: #fff; font-size: 12.5px; font-weight: 900; padding: 7px 14px; border-radius: 6px; text-align: center; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+    .section-title { font-size: 10.5px; font-weight: 900; text-transform: uppercase; margin-bottom: 5px; letter-spacing: 0.5px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 10px; }
+    .field { border: 1px solid #cbd5e1; padding: 6px 10px; border-radius: 6px; background: #f8fafc; }
+    .field-lbl { font-size: 8.5px; font-weight: 800; color: #64748b; text-transform: uppercase; }
+    .field-val { font-size: 11.5px; font-weight: bold; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tb { width: 100%; border-collapse: collapse; }
+    .tb th { background: #e2e8f0; text-transform: uppercase; border: 1px solid #cbd5e1; text-align: left; font-size: 9px; border-bottom: 1.5px solid #0f172a; }
+    .tb td { border: 1px solid #cbd5e1; }
+    .tb .r { text-align: right; } .tb .c { text-align: center; color: #64748b; } .tb .b { font-weight: bold; }
+    .tb tbody tr:nth-child(even) td { background: #f8fafc; }
+    .dens-normal .tb th { padding: 6px 8px; } .dens-normal .tb td { padding: 6px 8px; font-size: 11.5px; }
+    .dens-compacta .tb th { padding: 2px 6px; } .dens-compacta .tb td { padding: 2px 6px; font-size: 9.5px; line-height: 1.2; }
+    .dens-colunas .tb th { padding: 2px 4px; font-size: 8px; } .dens-colunas .tb td { padding: 1.5px 4px; font-size: 9px; line-height: 1.2; }
+    .duas { display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; align-items: start; }
+    .v-duas { display: none; }
+    .dens-colunas .v-uma { display: none; } .dens-colunas .v-duas { display: block; }
+    .parc { border: 1.5px solid #16a34a; background: #f0fdf4; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
+    .parc-tit { font-size: 9px; font-weight: 900; color: #15803d; letter-spacing: 0.5px; margin-bottom: 2px; }
+    .parc-lin { font-size: 9.5px; color: #14532d; line-height: 1.35; break-inside: avoid; }
+    .parc-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; margin: 3px 0 4px; }
+    .parc-cel { border: 1px solid #bbf7d0; background: #fff; border-radius: 4px; padding: 3px 4px; text-align: center; line-height: 1.25; }
+    .parc-cel span { display: block; font-size: 8.5px; color: #15803d; }
+    .parc-cel b { display: block; font-size: 10.5px; color: #14532d; }
+    .aperto .parc-lin { font-size: 8px; line-height: 1.2; }
+    .aperto .parc-cel { padding: 1px 3px; } .aperto .parc-cel span { font-size: 7.5px; } .aperto .parc-cel b { font-size: 9px; }
+    .aperto .termo { font-size: 9px; line-height: 1.35; padding: 6px 10px; }
+    .aperto .val-highlight { padding: 6px 12px; } .aperto .val-amt { font-size: 20px; }
+    .aperto .sigs { margin-top: 10mm; }
+    .aperto .tb td { font-size: 8px !important; padding-top: 1px !important; padding-bottom: 1px !important; }
+    .val-highlight { background: #dcfce7; border: 2px solid #16a34a; padding: 10px 14px; border-radius: 8px; text-align: right; margin-bottom: 8px; }
+    .val-lbl { font-size: 10.5px; font-weight: 900; color: #15803d; text-transform: uppercase; letter-spacing: 0.5px; }
+    .val-amt { font-size: 24px; font-weight: 900; color: #166534; margin-top: 2px; }
+    .termo { font-size: 10.5px; color: #334155; line-height: 1.5; text-align: justify; border: 1px solid #cbd5e1; padding: 10px 14px; background: #f8fafc; border-radius: 6px; margin-bottom: 8px; }
+    .sigs { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 13mm; text-align: center; }
+    .sig-line { border-top: 1.5px solid #0f172a; margin-bottom: 6px; }
+    .sig-lbl { font-size: 9.5px; font-weight: bold; text-transform: uppercase; line-height: 1.35; }
+    .rodape { margin-top: 3mm; font-size: 8px; color: #94a3b8; text-align: right; }
+  </style>
+</head>
+<body>
+  ${folhas}
+  <script>
+    // Garante UMA folha por prestador: se a tabela não coube no espaço que
+    // sobrou (o quadro de parcelamento come espaço), sobe um degrau —
+    // normal → compacta → duas colunas → aperto — até caber.
+    function ajustarFolhas() {
+      var degraus = ['dens-normal', 'dens-compacta', 'dens-colunas'];
+      var folhas = document.querySelectorAll('.folha');
+      for (var f = 0; f < folhas.length; f++) {
+        var fl = folhas[f], meio = fl.querySelector('.meio');
+        var cabe = function() { return meio.scrollHeight <= meio.clientHeight + 1; };
+        var i = degraus.findIndex(function(c) { return fl.classList.contains(c); });
+        while (!cabe() && i < degraus.length - 1) { fl.classList.remove(degraus[i]); i++; fl.classList.add(degraus[i]); }
+        if (!cabe()) fl.classList.add('aperto');
+      }
+    }
+    window.onload = function() { ajustarFolhas(); setTimeout(function() { window.print(); }, 400); };
+  </script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=900,height=950');
+  if (!win) { alert('Bloqueador de pop-up detectado. Permita pop-ups para visualizar o recibo.'); return; }
+  win.document.write(htmlContent);
+  win.document.close();
+  db.registrarEmissaoReciboInfracoes(infs.map(i => i.id));
+  if (typeof activeTab !== 'undefined' && activeTab === 'infracoes') renderApp();
+}
+
+// --- DOSSIÊ PRESTADOR: bloco próprio (não soma em Deduções) ---
+function infracoesDoPrestador(nome) {
+  return db.getInfracoes({ prestadorNome: nome }).map(i => {
+    const rel = db.getRelatorioInfracaoPorId(i.relatorio_id);
+    return { ...i, data: i.data_infracao, numero_relatorio: rel ? rel.numero_relatorio : '' };
+  });
+}
+
+function renderBlocoInfracoesPrestador(nome, varDe, varAte) {
+  const linhas = ordenarPorDataDesc(filtrarPorData(infracoesDoPrestador(nome), varDe, varAte));
+  const total = linhas.reduce((a, l) => a + (parseFloat(l.valor) || 0), 0);
+  const pendentes = linhas.filter(l => (l.status || 'PENDENTE') === 'PENDENTE');
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <h3 class="text-xs font-black text-red-400 uppercase flex items-center gap-2"><span>🚦</span> Infrações de Trânsito — ${linhas.length}</h3>
+        <div class="flex items-center gap-2 flex-wrap">
+          ${pendentes.length ? `<button onclick="gerarReciboInfracoesPdf([${pendentes.map(l => `'${l.id}'`).join(',')}])" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 px-2 py-1 rounded font-bold">📄 Recibo das pendentes (${pendentes.length})</button>` : ''}
+          <span class="bg-red-950 text-red-300 border border-red-800 text-[11px] font-extrabold px-2.5 py-1 rounded">Total no período: ${_infBrl(total)}</span>
+        </div>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Data</th><th class="p-2">Nº infração</th><th class="p-2">Veículo</th><th class="p-2 text-right">Valor</th><th class="p-2">Status</th><th class="p-2">Relatório</th><th class="p-2"></th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${linhas.length === 0 ? '<tr><td colspan="7" class="p-3 text-center text-slate-500">Nenhuma infração no período.</td></tr>' :
+              linhas.map(l => `<tr><td class="p-2">${formatarData(l.data)}</td><td class="p-2 font-mono font-bold text-red-300">${vgEscTxt(l.numero_infracao)}</td><td class="p-2 font-mono">${vgEscTxt(l.veiculo_placa || '—')}</td><td class="p-2 text-right font-bold text-amber-300">${_infBrl(l.valor)}${_infParcelas(l) > 1 ? `<div class="text-[10px] font-normal text-slate-400">${_infParcelaResumo(l)}</div>` : ''}</td><td class="p-2"><span class="border rounded px-1.5 py-0.5 text-[10px] font-bold ${_infStatusClasse(l.status)}">${_infStatusLabel(l.status)}</span></td><td class="p-2 font-mono">${vgEscTxt(l.numero_relatorio || '—')}</td><td class="p-2 text-right"><button onclick="gerarReciboInfracoesPdf(['${l.id}'])" class="text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 px-2 py-0.5 rounded font-bold" title="Recibo desta infração (PDF)">📄 Recibo</button></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+window.renderInfracoesView = renderInfracoesView;
+window.abrirFichaInfracoes = abrirFichaInfracoes;
+window.fecharFichaInfracoes = fecharFichaInfracoes;
+window.salvarFichaInfracoes = salvarFichaInfracoes;
+window.adicionarLinhaFichaInfracoes = adicionarLinhaFichaInfracoes;
+window.removerLinhaFichaInfracoes = removerLinhaFichaInfracoes;
+window._infCab = _infCab;
+window._infCampo = _infCampo;
+window.toggleSelecaoInfracao = toggleSelecaoInfracao;
+window.alterarStatusInfracao = alterarStatusInfracao;
+window.alterarStatusSelecionadasInfracoes = alterarStatusSelecionadasInfracoes;
+window.excluirInfracaoUi = excluirInfracaoUi;
+window.excluirRelatorioInfracoesUi = excluirRelatorioInfracoesUi;
+window.imprimirRecibosInfracoesFiltradas = imprimirRecibosInfracoesFiltradas;
+window.exportarInfracoesCsv = exportarInfracoesCsv;
+window.gerarReciboInfracoesPdf = gerarReciboInfracoesPdf;
+window.listarInfracoesFiltradas = listarInfracoesFiltradas;
 
 // ═══════════════════════════════════════════════════════════════════
 // INVESTIGAÇÃO DE SINISTRO (baseado em Formulário_Investigação_de_
@@ -1473,8 +2759,43 @@ async function handleCriarSinistro(e) {
   closeModal();
   if (!res.success) { showToast(res.message, 'error'); renderApp(); return; }
   showToast(`✅ Sinistro ${res.sinistro.numero_sinistro} registrado!`);
-  window._sinistroSelecionadoId = res.sinistro.id;
-  switchTab('sinistros');
+  abrirSinistro(res.sinistro.id, 'sinistros');
+}
+
+// ABRIR E FECHAR O DETALHE DO SINISTRO (22/09/2026).
+//
+// Havia QUATRO entradas para a mesma tela, cada uma escrevendo
+// window._sinistroSelecionadoId na mao, e NENHUMA limpava
+// _sinistroEtapaExpandidaId. Como renderSinistroDetalhe so volta a Etapa 1
+// quando esse id MUDA, sair para a lista e reabrir o MESMO sinistro nao
+// reabria a Etapa 1: ela ficava como tivesse ficado da ultima vez — fechada
+// se alguem clicou no cabecalho de outra etapa, ou fechada porque
+// handleSalvarEtapaSinistro avanca a expansao para a etapa SEGUINTE ao
+// concluir uma.
+//
+// Numa base com UM sinistro so, o id nunca muda. Entao o reset nunca mais
+// acontecia na sessao inteira do navegador, e a Etapa 1 ficava fechada para
+// sempre: a barra "Etapa 1 — Motorista Envolvido" continuava na tela, o
+// conteudo nao. Foi o relato de 22/09/2026 ("a investigacao nao esta
+// apresentando a primeira etapa") — e NAO era sincronizacao: jrRastrear
+// mostrou as cinco copias do SIN-2026-0001 com a mesma assinatura, inclusive
+// a da nuvem.
+//
+// O pedido de 18/08/2026 diz "ao ABRIR um sinistro (ou trocar de sinistro) a
+// Etapa 1 comeca expandida". Abrir pela lista e abrir. O estado do acordeao
+// passa a morrer ao sair da tela, que e o unico jeito de a promessa valer em
+// TODA entrada e nao so na primeira. Dentro da tela nada muda: o clique no
+// cabecalho e o avanco automatico ao concluir uma etapa continuam iguais.
+function abrirSinistro(id, aba) {
+  window._sinistroSelecionadoId = String(id);
+  window._sinistroEtapaExpandidaId = null;
+  if (aba) switchTab(aba); else renderApp();
+}
+
+function fecharSinistro() {
+  window._sinistroSelecionadoId = '';
+  window._sinistroEtapaExpandidaId = null;
+  renderApp();
 }
 
 // --- Tela principal: lista + detalhe ---
@@ -1522,14 +2843,14 @@ function renderSinistrosView() {
                 const etapasOk = [s.etapa_motorista_completa, s.etapa_manutencao_completa, s.etapa_operacoes_completa, (!s.juridico_necessario || s.etapa_juridico_completa), s.etapa_diretoria_completa].filter(Boolean).length;
                 const etapasTotal = s.juridico_necessario ? 5 : 4;
                 return `
-                <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="window._sinistroSelecionadoId='${s.id}'; renderApp()">
+                <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="abrirSinistro('${s.id}')">
                   <td class="p-3 font-mono font-bold text-red-400">${s.numero_sinistro}</td>
                   <td class="p-3">${formatarData(s.data_acidente)}</td>
                   <td class="p-3 font-bold text-white">${s.motorista_nome}</td>
                   <td class="p-3">${s.placa||'—'} ${s.carga?`/ ${s.carga}`:''}</td>
                   <td class="p-3 text-center font-bold">${etapasOk}/${etapasTotal}</td>
                   <td class="p-3 text-center">${formatarStatusSinistroBadge(s.status_geral)}</td>
-                  <td class="p-3 text-right"><button onclick="event.stopPropagation(); window._sinistroSelecionadoId='${s.id}'; renderApp()" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td>
+                  <td class="p-3 text-right"><button onclick="event.stopPropagation(); abrirSinistro('${s.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td>
                 </tr>`;
               }).join('')}
           </tbody>
@@ -1556,7 +2877,7 @@ function renderSinistroDetalhe(id) {
     <div class="max-w-4xl mx-auto space-y-4">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-start justify-between flex-wrap gap-3">
         <div>
-          <button onclick="window._sinistroSelecionadoId=''; renderApp()" class="text-[10px] text-slate-400 hover:text-white font-bold mb-1.5">← Voltar à lista</button>
+          <button onclick="fecharSinistro()" class="text-[10px] text-slate-400 hover:text-white font-bold mb-1.5">← Voltar à lista</button>
           <h2 class="text-base font-black text-white">${s.numero_sinistro} — ${s.motorista_nome}</h2>
           <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-slate-400 mt-1">
             <span>Data: <b class="text-slate-300">${formatarData(s.data_acidente)}</b></span>
@@ -1632,9 +2953,10 @@ function renderEtapaMotorista(s) {
           <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Relatar Sinalização / De quem era a preferência</label><input type="text" id="em-sinalizacao-relato" value="${s.sinalizacao_relato_motorista||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-800 pt-2">
-          ${renderUploadFotosSinistro('danos_jr_motorista', 'Fotos dos Danos — Veículo JR *', s.fotos_danos_jr_motorista)}
-          ${renderUploadFotosSinistro('danos_terceiro_motorista', 'Fotos dos Danos — Veículo Terceiro', s.fotos_danos_terceiro_motorista)}
+          ${renderUploadFotosSinistro(s, 'danos_jr_motorista', 'Fotos dos Danos — Veículo JR *')}
+          ${renderUploadFotosSinistro(s, 'danos_terceiro_motorista', 'Fotos dos Danos — Veículo Terceiro')}
         </div>
+        ${_avisoFotosPendentesSinistro(s)}
         <div class="grid grid-cols-2 gap-3">
           <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Assinatura (Nome do Motorista) <span class="text-red-400">*</span></label><input type="text" id="em-assinatura" required value="${s.motorista_assinatura_nome||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
           <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Data <span class="text-red-400">*</span></label><input type="date" id="em-assinatura-data" required value="${s.motorista_assinatura_data||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5"></div>
@@ -1671,13 +2993,14 @@ function renderEtapaManutencao(s) {
           <div class="sm:col-span-2"><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Relatar Sinalização / Preferência</label><input type="text" id="man-sinalizacao-relato" value="${s.sinalizacao_relato_manutencao||''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)"></div>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-800 pt-2">
-          ${renderUploadFotosSinistro('danos_jr_manutencao', 'Fotos dos Danos — Veículo JR', s.fotos_danos_jr_manutencao, s.fotos_danos_jr_motorista)}
-          ${renderUploadFotosSinistro('danos_terceiro_manutencao', 'Fotos dos Danos — Veículo Terceiro', s.fotos_danos_terceiro_manutencao, s.fotos_danos_terceiro_motorista)}
+          ${renderUploadFotosSinistro(s, 'danos_jr_manutencao', 'Fotos dos Danos — Veículo JR', 'danos_jr_motorista')}
+          ${renderUploadFotosSinistro(s, 'danos_terceiro_manutencao', 'Fotos dos Danos — Veículo Terceiro', 'danos_terceiro_motorista')}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          ${renderUploadFotosSinistro('orcamentos', 'Orçamentos Anexados (até 3)', s.orcamentos_anexos)}
-          ${renderUploadFotosSinistro('fotos_acidente_bo', 'Fotos do Acidente + B.O.', s.fotos_acidente_bo)}
+          ${renderUploadFotosSinistro(s, 'orcamentos', 'Orçamentos Anexados (até 3)')}
+          ${renderUploadFotosSinistro(s, 'fotos_acidente_bo', 'Fotos do Acidente + B.O.')}
         </div>
+        ${_avisoFotosPendentesSinistro(s)}
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 border-t border-slate-800 pt-2">
           <div><label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Há Testemunhas?</label>
             <select id="man-testemunhas" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
@@ -1761,6 +3084,7 @@ function handleToggleJuridicoNecessario(id, checked) {
   if (!s) return;
   s.juridico_necessario = checked;
   db._recalcularStatusSinistro(s);
+  db.carimbarEdicao('sinistros', s);
   db.save();
   renderApp();
 }
@@ -1808,7 +3132,11 @@ function renderEtapaDiretoria(s) {
     </div>`;
 }
 
-function handleSalvarEtapaSinistro(e, id, etapa) {
+// 21/09/2026 (migration 42): virou async porque a foto de cada grupo vai para
+// a fila do fotoStore DEPOIS de a etapa gravar — e nao mais como base64 dentro
+// de fotos_danos_* pelo Object.assign do store. UM sinistro com 7 fotos pesava
+// 795 KB no localStorage de todo aparelho.
+async function handleSalvarEtapaSinistro(e, id, etapa) {
   e.preventDefault();
   const sAtual = (db.data.sinistros || []).find(x => String(x.id) === String(id));
   let dados = {};
@@ -1826,15 +3154,17 @@ function handleSalvarEtapaSinistro(e, id, etapa) {
       havia_sinalizacao_motorista: document.getElementById('em-sinalizacao')?.value === 'SIM',
       sinalizacao_relato_motorista: document.getElementById('em-sinalizacao-relato')?.value,
       motorista_assinatura_nome: document.getElementById('em-assinatura')?.value,
-      motorista_assinatura_data: document.getElementById('em-assinatura-data')?.value,
-      fotos_danos_jr_motorista: (window._sinistroFotos.danos_jr_motorista && window._sinistroFotos.danos_jr_motorista.length) ? window._sinistroFotos.danos_jr_motorista : undefined,
-      fotos_danos_terceiro_motorista: (window._sinistroFotos.danos_terceiro_motorista && window._sinistroFotos.danos_terceiro_motorista.length) ? window._sinistroFotos.danos_terceiro_motorista : undefined
+      motorista_assinatura_data: document.getElementById('em-assinatura-data')?.value
+      // As fotos (danos_jr_motorista / danos_terceiro_motorista) nao vao nos
+      // dados: entram na fila depois do salvar, la embaixo.
     };
     var completaEl = document.getElementById('em-completa');
     // Fotos são obrigatórias na Etapa 1 (pedido de 18/08/2026) — conta o
-    // que já existia no registro somado ao que acabou de ser anexado
-    // agora, já que o upload não substitui, ele soma à galeria.
-    const totalFotosJr = (sAtual?.fotos_danos_jr_motorista?.length || 0) + (window._sinistroFotos.danos_jr_motorista?.length || 0);
+    // que já existia no registro (Storage + legado + pendente) somado ao
+    // que acabou de ser anexado agora, já que o upload soma à galeria.
+    const jaTem = (sAtual && db && typeof db.estadoFotos === 'function')
+      ? db.estadoFotos(sAtual, 'danos_jr_motorista', 'sinistros').total : 0;
+    const totalFotosJr = jaTem + (window._sinistroFotos.danos_jr_motorista?.length || 0);
     if (totalFotosJr === 0) {
       alert('⚠️ Anexe ao menos uma foto dos danos do Veículo JR antes de salvar esta etapa.');
       return;
@@ -1848,11 +3178,8 @@ function handleSalvarEtapaSinistro(e, id, etapa) {
       testemunha_nome_contato: document.getElementById('man-testemunha-contato')?.value,
       parecer_manutencao: document.getElementById('man-parecer')?.value,
       manutencao_gestor_nome: document.getElementById('man-gestor')?.value,
-      manutencao_data: document.getElementById('man-data')?.value,
-      fotos_danos_jr_manutencao: (window._sinistroFotos.danos_jr_manutencao && window._sinistroFotos.danos_jr_manutencao.length) ? window._sinistroFotos.danos_jr_manutencao : undefined,
-      fotos_danos_terceiro_manutencao: (window._sinistroFotos.danos_terceiro_manutencao && window._sinistroFotos.danos_terceiro_manutencao.length) ? window._sinistroFotos.danos_terceiro_manutencao : undefined,
-      orcamentos_anexos: (window._sinistroFotos.orcamentos && window._sinistroFotos.orcamentos.length) ? window._sinistroFotos.orcamentos : undefined,
-      fotos_acidente_bo: (window._sinistroFotos.fotos_acidente_bo && window._sinistroFotos.fotos_acidente_bo.length) ? window._sinistroFotos.fotos_acidente_bo : undefined
+      manutencao_data: document.getElementById('man-data')?.value
+      // Os quatro grupos de foto desta etapa entram na fila depois do salvar.
     };
     var completaEl = document.getElementById('man-completa');
   } else if (etapa === 'operacoes') {
@@ -1885,6 +3212,11 @@ function handleSalvarEtapaSinistro(e, id, etapa) {
   const marcarCompleta = completaEl ? completaEl.checked : true;
   const res = db.atualizarEtapaSinistro(id, etapa, dados, marcarCompleta);
   if (!res.success) { showToast(res.message, 'error'); return; }
+
+  // DEPOIS de a etapa gravar, e nunca antes: sem etapa salva nao ha por que
+  // guardar foto para ela. Todos os grupos que a pessoa anexou nesta tela.
+  await _enfileirarFotosSinistro(res.sinistro,
+    Object.keys(window._sinistroFotos || {}).map(g => ({ grupo: g, fotos: window._sinistroFotos[g] })));
   window._sinistroFotos = {};
 
   // Acordeão: ao concluir uma etapa, minimiza ela e abre a próxima do
@@ -1903,8 +3235,12 @@ function handleSalvarEtapaSinistro(e, id, etapa) {
 }
 
 // --- Bloco no Dossiê Motorista ---
-function renderBlocoSinistrosMotorista(nomeMotorista) {
-  const sinistros = db.getSinistros({ motoristaNome: nomeMotorista });
+// 21/09/2026: passou a respeitar o filtro de período do dossiê (varDe/
+// varAte), como os outros blocos — antes listava todo o histórico.
+function renderBlocoSinistrosMotorista(nomeMotorista, varDe, varAte) {
+  const sinistros = (varDe || varAte)
+    ? ordenarPorDataDesc(filtrarPorData(sinistrosDoPrestador(nomeMotorista), varDe, varAte))
+    : db.getSinistros({ motoristaNome: nomeMotorista });
   return `
     <div class="bg-slate-900 border border-red-900/60 rounded-2xl p-4 space-y-3">
       <div class="flex items-center justify-between">
@@ -1916,7 +3252,7 @@ function renderBlocoSinistrosMotorista(nomeMotorista) {
           <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Nº</th><th class="p-2">Data</th><th class="p-2">Placa/Carga</th><th class="p-2">Status</th><th class="p-2 text-right">.</th></tr></thead>
           <tbody class="divide-y divide-slate-800">
             ${sinistros.length === 0 ? '<tr><td colspan="5" class="p-3 text-center text-slate-500">Nenhum sinistro registrado.</td></tr>' :
-              sinistros.map(s => `<tr><td class="p-2 font-mono text-red-400 font-bold">${s.numero_sinistro}</td><td class="p-2">${formatarData(s.data_acidente)}</td><td class="p-2">${s.placa||'—'} ${s.carga?`/ ${s.carga}`:''}</td><td class="p-2">${formatarStatusSinistroBadge(s.status_geral)}</td><td class="p-2 text-right"><button onclick="window._sinistroSelecionadoId='${s.id}'; switchTab('sinistros')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td></tr>`).join('')}
+              sinistros.map(s => `<tr><td class="p-2 font-mono text-red-400 font-bold">${s.numero_sinistro}</td><td class="p-2">${formatarData(s.data_acidente)}</td><td class="p-2">${s.placa||'—'} ${s.carga?`/ ${s.carga}`:''}</td><td class="p-2">${formatarStatusSinistroBadge(s.status_geral)}</td><td class="p-2 text-right"><button onclick="abrirSinistro('${s.id}', 'sinistros')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold">Abrir →</button></td></tr>`).join('')}
           </tbody>
         </table>
       </div>
@@ -2081,13 +3417,38 @@ function renderAparelhosContent() {
           Rode a <b>ETAPA 2b</b> do roteiro de implantação — o arquivo
           <code class="text-slate-200">database/migration_25a_dispositivos.sql</code>, colado no SQL Editor do
           Supabase. É uma consulta só, e não altera nenhum dado existente.<br>
-          Depois disso, cada aparelho passa a aparecer aqui sozinho, em até 30 segundos.
+          Depois disso, cada aparelho passa a aparecer aqui sozinho, em até 2 minutos.
         </div>
       </div>`;
   } else if (cache.lista.length === 0) {
     corpo = '<div class="p-8 text-center text-slate-500">Nenhum aparelho registrado ainda. Abra o app em cada máquina e volte aqui.</div>';
   } else {
-    const desatualizados = cache.lista.filter(a => a.build !== buildAtual).length;
+    // "VERSÃO ANTIGA" SÓ CONTA APARELHO EM USO — 01/09/2026.
+    //
+    // A linha em `dispositivos` nunca é apagada: uma máquina que abriu o app
+    // uma vez em agosto fica ali para sempre carimbada com a build daquele
+    // dia. O alarme, que existe para dizer "há gente operando com código
+    // velho", passava a somar aparelho que ninguém liga há semanas — e era
+    // assim que ele marcava 26 de 33 e nunca descia. Não existe atualização
+    // automática que alcance um aparelho desligado; contá-lo aqui não avisa
+    // ninguém de nada, só ensina a operação a ignorar o alarme.
+    //
+    // A comparação também passa a ser por jrMesmaVersao() — o mesmo x.y.z
+    // que a auto-atualização usa para decidir se recarrega. Comparando a
+    // string inteira, um codinome diferente pintava de vermelho um aparelho
+    // que está na versão certa, e o painel passava a discordar do próprio
+    // mecanismo que ele existe para conferir (já aconteceu na 5.0.0 e na
+    // 5.2.0; ver o comentário de CloudStore.BUILD).
+    const JANELA_EM_USO_MS = 3 * 24 * 60 * 60 * 1000;
+    const mesmaVersao = (b) => (typeof jrMesmaVersao === 'function')
+      ? jrMesmaVersao(buildAtual, b) : (b === buildAtual);
+    const estaEmUso = (a) => {
+      const t = Date.parse(a && a.ultimo_acesso || '');
+      return !isNaN(t) && (Date.now() - t) <= JANELA_EM_USO_MS;
+    };
+    const emUso = cache.lista.filter(estaEmUso);
+    const desatualizados = emUso.filter(a => !mesmaVersao(a.build)).length;
+    const dormentes = cache.lista.length - emUso.length;
     const recusadosPorAparelho = cache.lista.map(a => a.registros_recusados || 0);
     const contaminados = recusadosPorAparelho.filter(n => n > 0).length;
     // Se TODOS marcam o mesmo número, não é um aparelho sujo — é a mesma
@@ -2100,12 +3461,11 @@ function renderAparelhosContent() {
     const todosIguais = contaminados === cache.lista.length && cache.lista.length > 1
       && recusadosPorAparelho.every(n => n === recusadosPorAparelho[0]);
     corpo = `
-      ${(desatualizados > 0 || contaminados > 0) ? `
+      ${(desatualizados > 0 || contaminados > 0 || dormentes > 0) ? `
       <div class="bg-amber-950/30 border border-amber-900/60 rounded-xl p-3 text-[11px] text-amber-200 space-y-1">
-        ${desatualizados > 0 ? `<div>⚠️ <b>${desatualizados}</b> aparelho(s) em versão antiga — peça para fechar e reabrir o app.</div>` : ''}
-        ${contaminados > 0 ? (todosIguais
-          ? `<div>⛔ Todos os aparelhos marcam <b>${recusadosPorAparelho[0]}</b> recusados — mesmo número em todos significa que os registros estão <b>no banco</b>, não neste ou naquele aparelho. Limpar cache não resolve: é a faxina da <b>ETAPA 1</b> (<code>migration_25</code>).</div>`
-          : `<div>⛔ <b>${contaminados}</b> de ${cache.lista.length} aparelho(s) com registros recusados no envio, e os números <b>não batem entre si</b> — o que destoa está reenviando cache antigo. Coloque-o na versão atual (ETAPA 3).</div>`) : ''}
+        ${desatualizados > 0 ? `<div>⚠️ <b>${desatualizados}</b> aparelho(s) <b>em uso</b> ainda na versão antiga — a atualização entra sozinha assim que a tela do app voltar a ficar à vista naquela máquina, sem ninguém precisar fechar e reabrir. Se um deles continuar aqui no dia seguinte, é cache preso num proxy: <b>Ctrl + Shift + R</b> naquele aparelho.</div>` : ''}
+        ${dormentes > 0 ? `<div class="text-slate-400">💤 <b>${dormentes}</b> aparelho(s) sem abrir o app há mais de 3 dias. A versão na linha deles é a do último acesso e <b>não é pendência</b>: nenhuma atualização alcança máquina desligada, e eles se acertam sozinhos na primeira abertura.</div>` : ''}
+        ${contaminados > 0 ? `<div>⛔ <b>${contaminados}</b> de ${cache.lista.length} aparelho(s) ainda marcam registro recusado no envio${todosIguais ? ` (todos com o mesmo número, ${recusadosPorAparelho[0]})` : ''}. <b>Não é para limpar cache à mão</b>: desde a 6.1.0 a faxina tira essas linhas do aparelho sozinha, a cada ciclo — o número cai para zero no primeiro ciclo depois que a máquina entrar nesta versão, e um aparelho que ainda esteja na versão antiga aparece na linha de cima. Se um deles continuar aqui <b>já na versão atual</b>, é caso novo: rode <code>jrDiagnosticoSync()</code> no console daquele aparelho e leve os exemplos para quem mantém o app.</div>` : ''}
       </div>` : ''}
       <div class="overflow-x-auto rounded-xl border border-slate-800">
         <table class="w-full text-left text-xs border-collapse">
@@ -2121,14 +3481,18 @@ function renderAparelhosContent() {
           </thead>
           <tbody class="divide-y divide-slate-800 text-[11px]">
             ${cache.lista.map(a => {
-              const atual = a.build === buildAtual;
+              const atual = mesmaVersao(a.build);
+              // Vermelho é chamado para agir. Aparelho dormente fica cinza:
+              // a versão dele é um retrato do último acesso, e não há ação
+              // possível enquanto a máquina não for ligada.
+              const dormente = !estaEmUso(a);
               const recusados = a.registros_recusados || 0;
               const sou = meuId && a.id === meuId;
               return `
               <tr class="hover:bg-slate-800/40 ${recusados > 0 ? 'bg-red-950/20' : ''}">
                 <td class="p-3 font-bold text-white">${a.apelido || a.id}${sou ? ' <span class="text-[9px] text-emerald-400 font-black">(este)</span>' : ''}</td>
                 <td class="p-3 text-slate-400">${a.plataforma || '—'}</td>
-                <td class="p-3"><span class="${atual ? 'text-emerald-400' : 'text-red-400 font-black'}">${a.build || '—'}</span></td>
+                <td class="p-3"><span class="${atual ? 'text-emerald-400' : (dormente ? 'text-slate-500' : 'text-red-400 font-black')}">${a.build || '—'}</span></td>
                 <td class="p-3 text-slate-300">${a.ultimo_usuario || '—'}</td>
                 <td class="p-3 text-slate-400">${_tempoRelativo(a.ultimo_acesso)}</td>
                 <td class="p-3 text-right ${recusados > 0 ? 'text-red-400 font-black' : 'text-slate-500'}">${recusados}</td>
@@ -2300,7 +3664,7 @@ function renderResquiciosDesteAparelho() {
       <div class="text-[11px] ${r.totalEmRisco > 0 ? 'text-red-300' : 'text-amber-300'}">
         ⚠️ <b>${r.totalDivergentes}</b> registro(s) com cópias que não batem entre si.
         ${r.totalEmRisco > 0
-          ? `<b class="text-red-400">${r.totalEmRisco} some(m) no próximo ciclo de 30s se não subirem antes</b> — não feche o app e toque em "Ver o motivo" acima para forçar o envio.`
+          ? `<b class="text-red-400">${r.totalEmRisco} some(m) no próximo ciclo de sincronização (até 2 min) se não subirem antes</b> — não feche o app e toque em "Ver o motivo" acima para forçar o envio.`
           : 'Nenhum em risco de sumir: é atraso de espelho, e o próximo ciclo resolve.'}
       </div>
       <div class="overflow-x-auto rounded-xl border border-slate-800">
@@ -2531,6 +3895,8 @@ function restaurarItemLixeira(collection, id) {
   if (db.restoreItem(collection, id)) {
     showToast('Registro restaurado com sucesso!');
     renderApp();
+  } else if (db.ultimoErroRestauracao) {
+    alert(db.ultimoErroRestauracao);
   }
 }
 
@@ -2633,7 +3999,18 @@ const NAV_GRUPOS = [
     id: 'visao_geral', icon: '📊', titulo: 'Visão Geral',
     itens: [
       { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo', papeis: null },
-      { tab: 'boletim_gerencial', icon: '📄', label: 'Boletim Gerencial', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] }
+      // 6.9.4: fechamento mensal (Power BI + Jr-Oper), a mesma pagina do .html do gerador.
+      { tab: 'visao_operacao', icon: '📈', label: 'Visão Operação', papeis: null }
+    ]
+  },
+  {
+    // 6.7.0 (decisão 6 do plano): as três subabas do Boletim subiram para o
+    // menu. Os três itens abrem a mesma tela; o que muda é a subaba.
+    id: 'boletim', icon: '📄', titulo: 'Boletim Gerencial',
+    itens: [
+      { tab: 'boletim_gerencial', icon: '📊', label: 'Visão Executiva', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] },
+      { tab: 'boletim_export_csv', icon: '📥', label: 'Exportação CSV', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] },
+      { tab: 'boletim_pdfs', icon: '📄', label: 'Central de PDFs', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] }
     ]
   },
   {
@@ -2645,31 +4022,45 @@ const NAV_GRUPOS = [
     ]
   },
   {
+    // 6.7.0: Ocorrência Colaborador (a antiga subaba "Ocorrências CD"),
+    // Ocorrência CD e Corte viraram telas próprias — cada registro ganhou
+    // identidade e data próprias (migration 44).
     id: 'cd', icon: '📦', titulo: 'Centro de Distribuição',
     itens: [
-      { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico CD', papeis: ['CD', 'GESTOR', 'ADMIN'] },
-      { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário CD', papeis: ['CD', 'GESTOR', 'ADMIN'] }
+      { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'ocorrencia_colaborador', icon: '👤', label: 'Ocorrência Colaborador', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'ocorrencia_cd', icon: '📢', label: 'Ocorrência CD', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'corte_cd', icon: '✂️', label: 'Corte', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      // 6.9.0: visao geral de pontos (Power BI) x ocorrencias, por mes de fechamento (26 a 25).
+      { tab: 'produtividade_cd', icon: '🏆', label: 'Produtividade', papeis: ['CD', 'GESTOR', 'ADMIN'] }
     ]
   },
   {
+    // 6.7.0 (decisão 4): "Largada" deixou de existir como subaba — é a
+    // própria tela de Controle de Viagens. As outras quatro subiram para
+    // irmãs dela.
     id: 'frota', icon: '🚚', titulo: 'Operação & Frota',
     itens: [
-      { tab: 'controle_viagens', icon: '🚍', label: 'Controle de Viagens', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'],
-        sub: [
-          { valor: 'largada', icon: '🚩', label: 'Largada' },
-          { valor: 'operacional', icon: '⚠️', label: 'Oc. Operacional' },
-          { valor: 'frota_rota', icon: '🚚', label: 'Oc. em Rota' },
-          { valor: 'troca_veiculos', icon: '🔄', label: 'Trocas de Veículos' },
-          { valor: 'reentregas', icon: '🔁', label: 'Reentregas' }
-        ] },
+      { tab: 'controle_viagens', icon: '🚍', label: 'Controle de Viagens', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'oc_operacional', icon: '⚠️', label: 'Oc. Operacional', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'oc_rota', icon: '🚚', label: 'Oc. em Rota', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'reentregas', icon: '🔁', label: 'Reentregas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'troca_veiculos', icon: '🔄', label: 'Troca de Veículos', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'disponibilidade_frota', icon: '🚛', label: 'Disponibilidade da Frota', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] },
-      { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] }
+      { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      // 6.8.0 (migration 48). Papéis declarados só como matéria-prima da
+      // futura tela de Admin: o filtro por papel está desligado e todo mundo
+      // vê todas as telas (NAV_FILTRO_POR_PAPEL).
+      { tab: 'infracoes', icon: '🚦', label: 'Infrações de Trânsito', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] }
     ]
   },
   {
     id: 'pessoas', icon: '👤', titulo: 'Pessoas',
     itens: [
-      { tab: 'dossie_motorista', icon: '🪪', label: 'Dossiê do Motorista', papeis: ['GESTOR', 'ADMIN'] },
+      // A chave interna 'dossie_motorista' é mantida de propósito (6.7.0):
+      // só o rótulo muda, para não quebrar nada que aponte para ela.
+      { tab: 'dossie_motorista', icon: '🪪', label: 'Dossiê Prestador', papeis: ['GESTOR', 'ADMIN'] },
       { tab: 'acompanhamento_funcionario', icon: '📁', label: 'Acompanhamento do Funcionário', papeis: ['GESTOR', 'ADMIN'] }
     ]
   },
@@ -2747,13 +4138,21 @@ function toggleNavVerTudo() {
 }
 window.toggleNavVerTudo = toggleNavVerTudo;
 
-// Atalho direto para uma sub-aba de Controle de Viagens. Precisa ser uma
-// função em window: `activeViagensSubTab` é declarada com `let` no escopo do
-// script e um onclick inline (que roda no escopo global) não enxerga esse
-// tipo de binding. Mesmo motivo do atalho 'rota_ocorrencias' já existente.
+// 6.7.0: as antigas subabas de Controle de Viagens viraram telas irmãs.
+// switchViagensSubTab() continua existindo por compatibilidade — vários
+// botões (Dashboard, modal de detalhes) chamam switchTab('controle_viagens')
+// seguido de switchViagensSubTab('reentregas') — e passa a ser um atalho
+// para a tela correspondente.
+const TELA_POR_SUBABA_VIAGENS = {
+  largada: 'controle_viagens',
+  operacional: 'oc_operacional',
+  ocorrencias: 'oc_operacional',
+  frota_rota: 'oc_rota',
+  troca_veiculos: 'troca_veiculos',
+  reentregas: 'reentregas'
+};
 function switchTabViagensSub(sub) {
-  activeViagensSubTab = sub;
-  switchTab('controle_viagens');
+  switchTab(TELA_POR_SUBABA_VIAGENS[sub] || 'controle_viagens');
 }
 window.switchTabViagensSub = switchTabViagensSub;
 
@@ -2815,17 +4214,8 @@ function renderNavMenu() {
             ? '<span class="text-[10px] opacity-60" title="Exige a senha de administrador">🔒</span>' : ''}
         </button>`;
 
-      // Sub-abas só aparecem quando a tela-mãe está aberta: manter as 5 de
-      // Controle de Viagens sempre visíveis devolveria o menu ao tamanho de
-      // antes, que é o problema que este trabalho veio resolver.
-      if (!i.sub || !ativo) return botao;
-
-      const htmlSub = i.sub.map(s => `
-        <button onclick="switchTabViagensSub('${s.valor}')" class="w-full text-left pl-9 pr-3 py-1.5 rounded-lg text-[11px] font-semibold transition flex items-center gap-2 ${activeViagensSubTab === s.valor ? 'text-emerald-300 bg-slate-800/60' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}">
-          <span>${s.icon}</span> ${s.label}
-        </button>`).join('');
-
-      return botao + `<div class="mt-0.5 space-y-0.5 border-l border-slate-800 ml-5">${htmlSub}</div>`;
+      // 6.7.0: não há mais subabas no menu — cada antiga subaba é um item.
+      return botao;
     }).join('');
 
     return `
@@ -2907,6 +4297,9 @@ function renderApp() {
       case 'dashboard':
         html = renderDashboardView();
         break;
+      case 'visao_operacao':
+        html = renderVisaoOperacaoView();
+        break;
       case 'sac_abertura':
         html = renderSacAberturaView();
         break;
@@ -2920,18 +4313,29 @@ function renderApp() {
         html = renderCdRecepcaoView();
         break;
       case 'controle_viagens':
+        activeViagensSubTab = 'largada';
         html = renderControleViagensView();
+        break;
+      // 6.7.0: as quatro antigas subabas de Controle de Viagens são telas.
+      case 'oc_operacional':
+        activeViagensSubTab = 'operacional';
+        html = renderTelaFrota('⚠️', 'Ocorrência Operacional', 'Ocorrências operacionais das viagens', renderViagensOcorrenciasSubTab());
+        break;
+      case 'oc_rota':
+      case 'rota_ocorrencias':   // apelido antigo, ainda usado por atalhos
+        activeViagensSubTab = 'frota_rota';
+        html = renderTelaFrota('🚚', 'Ocorrência em Rota', 'Socorro, retenção e chamados da frota em rota', renderRotaOcorrenciasView());
+        break;
+      case 'reentregas':
+        activeViagensSubTab = 'reentregas';
+        html = renderTelaFrota('🔁', 'Reentregas', 'Registro e custódia das reentregas', renderViagensReentregasSubTab());
+        break;
+      case 'troca_veiculos':
+        activeViagensSubTab = 'troca_veiculos';
+        html = renderTelaFrota('🔄', 'Troca de Veículos', 'Trocas de veículo escalado', renderViagensTrocaVeiculosSubTab());
         break;
       case 'disponibilidade_frota':
         html = renderDisponibilidadeFrotaView();
-        break;
-      case 'rota_ocorrencias':
-        // PRIORIDADE 3: a tela lê a variável "activeViagensSubTab" (não
-        // "window._activeViagensSubTab") e o valor esperado da sub-aba de
-        // frota é "frota_rota" (não "frota") — antes este atalho não
-        // abria a sub-aba correta dentro de Controle de Viagens.
-        activeViagensSubTab = 'frota_rota';
-        html = renderControleViagensView();
         break;
       case 'cadastros_dados':
         html = renderCadastrosDadosView();
@@ -2951,10 +4355,30 @@ function renderApp() {
       case 'sinistros':
         html = renderSinistrosView();
         break;
+      case 'infracoes':
+        html = renderInfracoesView();
+        break;
       case 'resumo_diario_cd':
         html = renderResumoDiarioCdView();
         break;
+      // 6.7.0: as três telas novas do CD.
+      case 'ocorrencia_colaborador':
+        html = renderOcorrenciaColaboradorView();
+        break;
+      case 'ocorrencia_cd':
+        html = renderOcorrenciaCDView();
+        break;
+      case 'corte_cd':
+        html = renderCorteCDView();
+        break;
+      case 'produtividade_cd':
+        html = renderProdutividadeCDView();
+        break;
+      // 6.7.0: as três subabas do Boletim no menu — mesma tela, subaba
+      // decidida pelo activeTab (ver renderBoletimGerencialView).
       case 'boletim_gerencial':
+      case 'boletim_export_csv':
+      case 'boletim_pdfs':
         html = renderBoletimGerencialView();
         break;
       // Apelido antigo do Conector Power BI: nenhum switchTab() aponta para
@@ -2992,6 +4416,14 @@ function renderApp() {
   // deste arquivo) de ficar acesa para sempre depois de um formulário
   // abandonado, bloqueando as atualizações vindas da nuvem.
   window._jrTelaComDigitacao = false;
+  // A marca apagada é o fim natural do adiamento de jrPodeRecarregarAgora()
+  // (11/09/2026): quem acabou de salvar ou trocou de tela pode receber a
+  // versão nova. 2,5s e não 250ms como no closeModal: o save() que costuma
+  // vir logo antes deste render agenda o envio para a nuvem com debounce de
+  // 1,5s, e o reload tem de esperar essa requisição sair.
+  if (window._jrUpdatePendente && typeof window.jrConferirVersaoPublicada === 'function') {
+    setTimeout(() => { window.jrConferirVersaoPublicada().catch(() => {}); }, 2500);
+  }
   updateUserHeader();
   renderNavMenu();
   decorarTabelasOrdenaveis();
@@ -3307,6 +4739,22 @@ function closeModal() {
   if (modal) {
     modal.innerHTML = '';
     modal.classList.add('hidden');
+    // O ONCLICK TEM DE SAIR JUNTO. Dois lugares atribuem
+    // modal.onclick = closeModal (o visualizador de midia e o modal de
+    // detalhes da ocorrencia) e ninguem limpava: depois de abrir UM deles, o
+    // #modal-container ficava com "fechar ao clicar em qualquer lugar" para o
+    // resto da sessao. A partir dali, marcar um radio da Conferencia fechava
+    // a Conferencia. E a metade do "ele simplesmente fecha" que nao tinha
+    // nada a ver com versao - e a que sobrevivia ao F5 so porque o F5
+    // recria a pagina.
+    modal.onclick = null;
+  }
+  // Fechar o modal e o fim natural do adiamento da atualizacao, do mesmo jeito
+  // que sair de um campo e (ver o focusout em cloudStore.js). Sem isto, quem
+  // passa a manha abrindo e fechando modais so receberia a versao nova ao
+  // trocar de aba. So faz alguma coisa se houver adiamento pendente.
+  if (window._jrUpdatePendente && typeof window.jrConferirVersaoPublicada === 'function') {
+    setTimeout(() => { window.jrConferirVersaoPublicada().catch(() => {}); }, 250);
   }
 }
 
@@ -3429,14 +4877,12 @@ function switchCdSubTab(sub) {
 }
 window.switchCdSubTab = switchCdSubTab;
 
-function switchResumoSubTab(sub) {
-  activeResumoSubTab = sub;
-  renderApp();
-}
-window.switchResumoSubTab = switchResumoSubTab;
-
+// 6.7.0: as subabas do Boletim são itens do menu. Quem chama isto direto
+// ainda funciona — vira um switchTab para a tela certa.
+const TELA_POR_SUBABA_BOLETIM = { executiva: 'boletim_gerencial', export_csv: 'boletim_export_csv', relatorios_pdf: 'boletim_pdfs' };
 function switchBolSubTab(sub) {
   window._activeBolSubTab = sub;
+  if (TELA_POR_SUBABA_BOLETIM[sub] && activeTab !== TELA_POR_SUBABA_BOLETIM[sub]) { switchTab(TELA_POR_SUBABA_BOLETIM[sub]); return; }
   renderApp();
 }
 window.switchBolSubTab = switchBolSubTab;
@@ -3463,6 +4909,103 @@ function toggleGuiaGravidade() {
   }
 }
 window.toggleGuiaGravidade = toggleGuiaGravidade;
+
+// Piloto (23/09/2026): expandir um card do Dashboard revela um mini-gráfico
+// de barras com a fila agrupada por alguma chave (pares [rótulo, contagem] em
+// data-chart-json — pode ser gestor, departamento, veículo etc, um cardId
+// diferente por card) — mesmo dado do card, outra leitura, sem duplicar
+// consulta nenhuma.
+//
+// window._cardCharts guarda a instância do Chart.js por cardId porque o
+// Dashboard pode re-renderizar (troca de filtro de período etc.) e recriar o
+// <canvas> do zero; sem isso o Chart.js reclama de "Canvas is already in
+// use" ao tentar desenhar em cima de um canvas que ele mesmo já usou antes.
+window._cardCharts = window._cardCharts || {};
+
+// Cor fixa pros rótulos mais recorrentes entre os cards (responsável da
+// tratativa e departamento de abertura) — pra quem olha todo dia associar a
+// cor ao nome de um card pro outro, em vez de reaprender a paleta a cada
+// clique. Rótulo que não está aqui cai no fallback cíclico logo abaixo.
+const CORES_NOME_CARD_CHART = {
+  'VICTOR HUGO':        '#38bdf8',
+  'TIAGO FERREIRA':     '#a78bfa',
+  'MARCOS ADRIANO':     '#fbbf24',
+  'MELQUIADES NETO':    '#34d399',
+  'GUSTAVO CAMARA':     '#f472b6',
+  'SEM RESPONSÁVEL':    '#64748b',
+  'SEM DEPARTAMENTO':   '#64748b'
+};
+const PALETA_CARD_CHART_FALLBACK = ['#38bdf8', '#a78bfa', '#fbbf24', '#34d399', '#f472b6', '#22d3ee', '#fb923c'];
+
+function toggleCardChart(cardId, evt) {
+  if (evt) evt.stopPropagation();
+  const wrap = document.getElementById('chart-wrap-' + cardId);
+  const chevron = document.getElementById('chevron-' + cardId);
+  if (!wrap) return;
+  const cardEl = wrap.closest('[data-chart-json]');
+
+  const isHidden = wrap.classList.contains('hidden');
+  if (!isHidden) {
+    wrap.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+    return;
+  }
+
+  wrap.classList.remove('hidden');
+  if (chevron) chevron.style.transform = 'rotate(180deg)';
+
+  if (typeof Chart === 'undefined' || !cardEl) return;
+
+  // Se já existe uma instância deste card (de uma expansão anterior, antes de
+  // o Dashboard re-renderizar), destrói antes de recriar em cima do canvas
+  // novo — Chart.js não deixa dois gráficos vivos no mesmo <canvas> id.
+  if (window._cardCharts[cardId]) {
+    window._cardCharts[cardId].destroy();
+    delete window._cardCharts[cardId];
+  }
+
+  let pares = [];
+  try { pares = JSON.parse(cardEl.dataset.chartJson || '[]'); } catch (e) { pares = []; }
+  const canvas = document.getElementById('chart-' + cardId);
+  if (!canvas || pares.length === 0) return;
+
+  const labels = pares.map(p => p[0]);
+  const valores = pares.map(p => p[1]);
+  const cores = labels.map((nome, i) => CORES_NOME_CARD_CHART[nome] || PALETA_CARD_CHART_FALLBACK[i % PALETA_CARD_CHART_FALLBACK.length]);
+  // Nome completo só cabe truncado no eixo — o card tem uns 260px de largura
+  // pra rótulo + barra + números. "CENTRO DE DISTRIBUIÇÃO" e "SUPERVISOR
+  // OPERAÇÃO" (departamentos reais) estouravam e saíam cortados pela ESQUERDA
+  // sem aviso nenhum. Trunca com "…" no eixo, mostra o nome inteiro no
+  // tooltip do hover.
+  const rotuloCurto = nome => nome.length > 14 ? nome.slice(0, 13) + '…' : nome;
+
+  window._cardCharts[cardId] = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: valores,
+        backgroundColor: cores,
+        borderRadius: 4,
+        maxBarThickness: 18
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: true, callbacks: { title: items => labels[items[0].dataIndex] } }
+      },
+      scales: {
+        x: { ticks: { color: '#94a3b8', precision: 0 }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#cbd5e1', font: { size: 10 }, autoSkip: false, callback: (val, idx) => rotuloCurto(labels[idx]) }, grid: { display: false } }
+      }
+    }
+  });
+}
+window.toggleCardChart = toggleCardChart;
 
 function toggleDashRecRow(rowId) {
   const detailEl = document.getElementById('rec-detail-' + rowId);
@@ -3750,7 +5293,22 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
     });
   };
 
+  // O STORAGE VEM PRIMEIRO (04/09/2026, migration 38).
+  //
+  // Desde a mudança para o Supabase Storage, a foto da devolução NÃO está
+  // mais em fotos_abertura: está em fotos_abertura_paths, como caminho. Sem
+  // estas linhas este modal voltaria a mostrar ZERO foto justamente nas
+  // devoluções já migradas — que é, letra por letra, a falha de 26/08
+  // descrita no comentário acima: quem decide pela tela decidindo sem ver a
+  // prova. Vem antes dos arrays legados porque é onde a foto mora agora.
+  const _urlDaFoto = c => (window.fotoStore && typeof window.fotoStore.urlPublica === 'function')
+    ? window.fotoStore.urlPublica(c) : c;
+  empurrar(fotos, (registro.fotos_abertura_paths || []).map(_urlDaFoto));
+  empurrar(fotos, (registro.fotos_investigacao_paths || []).map(_urlDaFoto));
+
   // Campos reais da devolução, na ordem em que a ocorrência os produz.
+  // Continuam aqui para os registros ainda não migrados; empurrar() ignora
+  // repetido, então nada duplica quando as duas formas convivem.
   empurrar(fotos, registro.fotos_abertura);
   empurrar(fotos, registro.fotos_investigacao);
   empurrar(videos, registro.videos_abertura);
@@ -3764,7 +5322,15 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
   empurrar(videos, registro.video_investigacao_url);
   empurrar(fotos, registro.fotos);
   empurrar(videos, registro.videos);
-  empurrar(fotos, registro.midia_fotos);
+  // Rota (migration 41) e sinistro (migration 42): o caminho no Storage vem
+  // primeiro; midia_fotos pode ser o array serializado (coluna TEXT), e
+  // Store._lerLegadoFoto aceita as duas formas.
+  empurrar(fotos, (registro.midia_fotos_paths || []).map(_urlDaFoto));
+  if (registro.midias_paths && typeof registro.midias_paths === 'object') {
+    Object.values(registro.midias_paths).forEach(l => empurrar(fotos, (Array.isArray(l) ? l : []).map(_urlDaFoto)));
+  }
+  empurrar(fotos, (typeof Store !== 'undefined' && Store._lerLegadoFoto)
+    ? Store._lerLegadoFoto(registro, { legado: 'midia_fotos' }) : registro.midia_fotos);
   empurrar(videos, registro.midia_videos);
   if (Array.isArray(registro.anexos)) {
     registro.anexos.forEach(a => {
@@ -3832,7 +5398,7 @@ function abrirModalDetalhesOcorrenciaCompleta(tipoRegistro, id) {
             <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
               <div class="text-[10px] text-slate-400 uppercase font-semibold">Equipe de Rota</div>
               <div class="font-bold text-white text-xs">Mot: ${registro.motorista_nome || registro.motorista || 'N/A'}</div>
-              <div class="text-[10px] text-slate-400">Ajud: ${registro.ajudante_nome || registro.ajudante || 'N/A'}</div>
+              <div class="text-[10px] text-slate-400">Ajud: ${(Array.isArray(registro.ajudantes) && registro.ajudantes.length) ? registro.ajudantes.join(' + ') : (registro.ajudante_nome || registro.ajudante || 'N/A')}</div>
             </div>
             <div class="bg-slate-900 p-2.5 rounded-lg border border-slate-800/80">
               <div class="text-[10px] text-slate-400 uppercase font-semibold">Situação do Registro</div>
@@ -4450,6 +6016,17 @@ function registroNoPeriodo(registro, colecao, de, ate) {
   return true;
 }
 
+// Para o que é INTERVALO e não instante (retenção de oficina, socorro em
+// rota): tocou o período se começou até o fim dele e terminou depois do
+// início. fimMs null = ainda em aberto, logo toca qualquer período que
+// comece antes de agora. Comparação por data de calendário em Brasília,
+// igual ao registroNoPeriodo.
+function imobilizacaoTocaPeriodo(iniMs, fimMs, de, ate) {
+  if (ate && dataIsoBrasilia(iniMs) > ate) return false;
+  if (de && fimMs !== null && dataIsoBrasilia(fimMs) < de) return false;
+  return true;
+}
+
 // =============================================================================
 // TIPO DE ERRO — FONTE ÚNICA (26/08/2026)
 //
@@ -4493,17 +6070,280 @@ function opcoesTipoErro(valorAtual, incluirLegado) {
   return partes.join('');
 }
 
+// =============================================================================
+// RESPONSÁVEL PELA DEVOLUÇÃO (22/09/2026)
+//
+// O gerente cobra a correção de alguém, e até aqui tinha de descobrir quem era
+// pesquisando caso a caso. A regra que ele já usa na prática é fixa e sai do
+// TIPO DE ERRO — com UMA exceção, o ERRO CARREGAMENTO, que depende do turno de
+// quem separou ou conferiu.
+//
+// É DERIVAÇÃO NA HORA, NÃO CARIMBO. Decisão do dia: se o responsável por um
+// tipo mudar, a tela inteira passa a refletir a mudança, inclusive no
+// histórico. É o que dispensa migration — nenhuma coluna nova em
+// ocorrencias_devolucao, que é justamente a tabela SEM lista branca no
+// cloudStore: campo que o JS invente e não seja coluna volta PGRST204 e derruba
+// o lote inteiro, calado, a cada 30s (foi o que aconteceu com retencoes_frota
+// em 10/09 e com sinistros em 21/09).
+// =============================================================================
+const RESPONSAVEL_POR_TIPO_ERRO = {
+  'ERRO MOTORISTA':         'VICTOR HUGO',
+  'ERRO LOGÍSTICO':         'VICTOR HUGO',
+  'PROBLEMA MECÂNICO':      'VICTOR HUGO',
+  'RESP. NÃO IDENTIFICADO': 'VICTOR HUGO',
+  'ERRO COMERCIAL':         'TIAGO FERREIRA',
+  'ERRO INDÚSTRIA':         'TIAGO FERREIRA',
+  'ERRO CLIENTE':           'TIAGO FERREIRA'
+  // ERRO CARREGAMENTO não entra aqui de propósito: sai do turno do
+  // separador/conferente, em supervisorCarregamentoDaSecao().
+  // OUTRO (categoria antiga) também não: não há a quem atribuir um registro
+  // que ninguém classificou ainda — ele aparece como "—" e pede reclassificação.
+};
+
+const SUPERVISORES_CARREGAMENTO = {
+  SECO:    'MARCOS ADRIANO',
+  TURNO_1: 'MELQUIADES NETO',
+  TURNO_2: 'GUSTAVO CAMARA'
+};
+
+// Supervisor do carregamento a partir da `secao` do colaboradores_cd.
+//
+// O 3º TURNO NÃO EXISTE na operação — é nomenclatura de DP. Em 22/09/2026 os 5
+// colaboradores que estavam nessa seção foram migrados para o 2º turno e a
+// opção saiu do cadastro. A linha do 3º turno FICA aqui de propósito, como
+// rede: colaboradores_cd não tem `atualizado_em`, então o desempate por carimbo
+// do pull não vale para ela e um aparelho com cache sujo pode devolver a seção
+// antiga. Sem esta linha, essas cinco pessoas sumiriam do filtro; com ela,
+// continuam apontando para o mesmo supervisor.
+//
+// Não confundir com turnoPadraoDoUsuario(), que responde outra pergunta (em que
+// turno o USUÁRIO LOGADO lança o Resumo Diário) e por isso devolve null no que
+// não reconhece. Aqui, null é devolução sem responsável na tela do gerente.
+function supervisorCarregamentoDaSecao(secao) {
+  const s = normalizeStr(secao);
+  if (!s) return '';
+  if (s.includes('SECO')) return SUPERVISORES_CARREGAMENTO.SECO;
+  if (/\b1\s*TURNO/.test(s)) return SUPERVISORES_CARREGAMENTO.TURNO_1;
+  if (/\b2\s*TURNO/.test(s)) return SUPERVISORES_CARREGAMENTO.TURNO_2;
+  if (/\b3\s*TURNO/.test(s)) return SUPERVISORES_CARREGAMENTO.TURNO_2;  // ver comentário acima
+  return '';
+}
+
+// A seção cadastrada de um colaborador do CD, pelo NOME gravado na apuração.
+//
+// Casamento exato e depois por substring, igual a turnoPadraoDoUsuario — e pelo
+// mesmo motivo: o mesmo nome aparece grafado de mais de um jeito. O que NÃO se
+// repete daquela função é o filtro `ativo !== false`: aqui se está respondendo
+// de quem era a responsabilidade NAQUELA devolução, e desligar alguém não pode
+// apagar o supervisor de um erro que já aconteceu.
+function secaoDoColaboradorCd(nome) {
+  const alvo = normalizeStr(nome);
+  if (!alvo) return '';
+  const colabs = (db.data.colaboradores_cd || []).filter(c => c && c.nome && !c.is_deleted);
+  let colab = colabs.find(c => normalizeStr(c.nome) === alvo);
+  if (!colab) colab = colabs.find(c => { const n = normalizeStr(c.nome); return n.length > 5 && (n.includes(alvo) || alvo.includes(n)); });
+  return colab && colab.secao ? colab.secao : '';
+}
+
+// Quem responde por esta devolução. Lista, e não nome único, por causa do
+// ERRO CARREGAMENTO: separador e conferente podem ser de turnos diferentes
+// (na base de hoje, DEV-021 e DEV-095 são assim) e aí os DOIS supervisores
+// precisam enxergar o chamado — cada um tem uma pessoa a cobrar.
+// Devolve [{ nome, papel }]; papel só é preenchido no carregamento.
+function responsaveisDaDevolucao(dev) {
+  if (!dev) return [];
+  const tipo = String(dev.tipo_erro || '').trim().toUpperCase();
+  if (tipo !== 'ERRO CARREGAMENTO') {
+    const nome = RESPONSAVEL_POR_TIPO_ERRO[tipo];
+    return nome ? [{ nome, papel: '' }] : [];
+  }
+  const out = [];
+  [['separador_apurado', 'Separador'], ['conferente_apurado', 'Conferente']].forEach(([campo, papel]) => {
+    const sup = supervisorCarregamentoDaSecao(secaoDoColaboradorCd(dev[campo]));
+    if (!sup) return;
+    const ja = out.find(o => o.nome === sup);
+    if (ja) { ja.papel += ' / ' + papel; return; }
+    out.push({ nome: sup, papel });
+  });
+  return out;
+}
+
+function nomesResponsaveisDaDevolucao(dev) {
+  return responsaveisDaDevolucao(dev).map(r => r.nome);
+}
+
+// Departamento de quem ABRIU o registro (não de quem responde pelo erro —
+// isso é responsaveisDaDevolucao()). Usa criado_por_usuario_id, gravado na
+// abertura (js/store.js:1710), para achar o cadastro em db.data.usuarios e
+// ler o campo departamento (DEPARTAMENTOS_PADRAO). Sem usuário achado ou sem
+// departamento preenchido, cai em role — e só na falta dos dois vira "SEM
+// DEPARTAMENTO", pra não confundir com um departamento real desse nome.
+function departamentoDeQuemAbriu(dev) {
+  const uid = dev && dev.criado_por_usuario_id;
+  if (!uid) return 'SEM DEPARTAMENTO';
+  const u = (db.data.usuarios || []).find(x => String(x.id) === String(uid));
+  return (u && (u.departamento || u.role)) || 'SEM DEPARTAMENTO';
+}
+
+// Texto para a tela e para o PDF. Quando o carregamento dá dois supervisores,
+// sai "FULANO (Separador) · SICRANO (Conferente)" — quem olha precisa saber
+// por que são dois, senão parece erro do sistema.
+function textoResponsavelDaDevolucao(dev) {
+  const rs = responsaveisDaDevolucao(dev);
+  if (rs.length === 0) return '—';
+  return rs.map(r => r.papel ? `${r.nome} (${r.papel})` : r.nome).join(' · ');
+}
+
+// Todos os nomes que o filtro pode oferecer, em ordem alfabética.
+function todosResponsaveisDevolucao() {
+  const set = new Set([
+    ...Object.values(RESPONSAVEL_POR_TIPO_ERRO),
+    ...Object.values(SUPERVISORES_CARREGAMENTO)
+  ]);
+  return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function opcoesResponsavelDevolucao(valorAtual) {
+  const atual = String(valorAtual || '');
+  return todosResponsaveisDevolucao()
+    .map(n => `<option value="${n}"${atual === n ? ' selected' : ''}>${n}</option>`)
+    .join('');
+}
+
+// O predicado do filtro, um só, usado pela Análise e pela Tratativa.
+// '__SEM__' isola o que não tem responsável (hoje: só a categoria antiga
+// OUTRO, e carregamento cujo separador/conferente não casa com o cadastro) —
+// é essa a fila que precisa de reclassificação.
+function devolucaoCasaResponsavel(dev, filtro) {
+  if (!filtro) return true;
+  const nomes = nomesResponsaveisDaDevolucao(dev);
+  if (filtro === '__SEM__') return nomes.length === 0;
+  return nomes.includes(filtro);
+}
+
+// As seções oferecidas no cadastro de colaboradores do CD.
+//
+// O 3º TURNO SAIU EM 22/09/2026. Não existe na operação — é nomenclatura que
+// só o DP usa. Os 5 colaboradores que estavam nessa seção (Cicero, Wilian,
+// Ueslei, Igor e Klaefy) foram migrados para o 2º turno no mesmo dia, e
+// nenhuma outra tabela tinha uma linha sequer com 3º turno.
+//
+// `colaborador` opcional: quando informado e ainda gravado numa seção que não
+// está mais na lista, ela volta só para ele. É o que impede o <select> de abrir
+// na primeira opção e trocar a seção da pessoa em silêncio no primeiro save —
+// colaboradores_cd não tem `atualizado_em`, então o desempate por carimbo do
+// pull não protege essa tabela e um aparelho com cache antigo pode reapresentar
+// a seção velha a qualquer momento.
+const SECOES_CD = [
+  'CARREGAMENTO FRIOS - 1 TURNO',
+  'CARREGAMENTO FRIOS - 2 TURNO',
+  'CARREGAMENTO SECOS',
+  'CARREGAMENTO'
+];
+
+function secoesParaColaborador(colaborador) {
+  const atual = colaborador && colaborador.secao ? String(colaborador.secao).trim() : '';
+  if (atual && !SECOES_CD.includes(atual)) return [...SECOES_CD, atual];
+  return [...SECOES_CD];
+}
+
+// ERRO CARREGAMENTO EXIGE SEPARADOR E CONFERENTE (22/09/2026).
+//
+// Não é higiene de cadastro: é o que torna o chamado cobrável. Em todo tipo de
+// erro o responsável sai direto do tipo; no carregamento ele sai do TURNO de
+// quem separou e de quem conferiu. Sem os dois nomes, responsaveisDaDevolucao()
+// devolve lista vazia e a devolução cai em "sem responsável" — o gerente vê o
+// erro e não vê de quem cobrar, que é exatamente o problema que esta entrega
+// veio resolver.
+//
+// Vale só para ERRO CARREGAMENTO. Os outros tipos continuam podendo salvar sem
+// separador/conferente, de propósito: numa devolução comercial ou de indústria
+// o responsável já nasce identificado pelo tipo, e cobrar dois campos que não
+// mudam nada seria atrito à toa no SAC (24 das 93 de hoje são comerciais).
+//
+// Chamada pelos DOIS caminhos que gravam apuração — o formulário da Análise e
+// o modal de editar análise. Devolve false e avisa quando falta algo.
+function exigeSeparadorConferente(tipoErro, separador, conferente) {
+  if (String(tipoErro || '').trim().toUpperCase() !== 'ERRO CARREGAMENTO') return true;
+  const faltando = [];
+  if (!String(separador  || '').trim()) faltando.push('Separador');
+  if (!String(conferente || '').trim()) faltando.push('Conferente');
+  if (faltando.length === 0) return true;
+  alert(
+    `⚠️ ERRO CARREGAMENTO exige ${faltando.join(' e ')}.\n\n` +
+    `É pelo turno do separador e do conferente que o sistema sabe qual supervisor responde pela devolução ` +
+    `(1º turno, 2º turno ou Seco). Sem esse nome, o gestor vê o erro e não vê de quem cobrar.\n\n` +
+    `Selecione ${faltando.length > 1 ? 'os dois campos' : 'o campo'} e salve de novo.`
+  );
+  return false;
+}
+
+// A MESMA busca da Análise e da Tratativa (22/09/2026). Era só da Análise; a
+// Tratativa não tinha busca nenhuma, e com o volume de devoluções que subiu o
+// gestor passou a percorrer a lista no olho.
+//
+// SUBSTRING DE PROPÓSITO, e não casamento do número inteiro: digitar "42" tem
+// de trazer a DEV-042. Que traga junto a DEV-142, a DEV-242 e a DEV-420 é o
+// comportamento pedido — é mais barato ler quatro linhas do que não achar a
+// que se procura. Pelo mesmo motivo o protocolo (DEV-2026-042) entra na busca:
+// quem digita "42" acha o registro pelos dois números.
+//
+// normalizeStr e não toLowerCase: é a mesma regra do resto do app desde a
+// 6.6.0 (colapsa acento e espaço repetido), e "EDSON  DOS  SANTOS", gravado
+// com espaço duplo, precisa casar com o que a pessoa digita.
+//
+// 6.8.6: motorista e ajudantes também entram (pedido de 06/10/2026), pela
+// mesma equipeDaDevolucao() do recibo — motorista_nome, ajudantes[] e
+// ajudante_nome.
+function devolucaoCasaBusca(dev, termo) {
+  const q = normalizeStr(termo);
+  if (!q) return true;
+  return normalizeStr(dev.numero_devolucao).includes(q)
+      || normalizeStr(dev.numero_protocolo).includes(q)
+      || normalizeStr(dev.cliente_nome).includes(q)
+      || normalizeStr(dev.nota_fiscal).includes(q)
+      || equipeDaDevolucao(dev).some(n => normalizeStr(n).includes(q));
+}
+
+// O aviso de aba (22/09/2026). Buscar "42" numa aba que não tem a DEV-042
+// devolvia "Nenhuma ocorrência encontrada" — indistinguível de "essa devolução
+// não existe". Quem procura um protocolo não sabe, e não tem por que saber, se
+// ele já foi concluído. O aviso diz onde está e leva até lá.
+function avisoOutraAba(qtdOutraAba, rotuloOutraAba, onclickIr) {
+  if (!qtdOutraAba) return '';
+  return `<div class="mt-3 bg-sky-950/50 border border-sky-800 rounded-lg p-3 flex flex-wrap items-center justify-between gap-2">
+      <span class="text-xs text-sky-200">🔎 Nenhuma nesta aba — <b>${qtdOutraAba}</b> em <b>${rotuloOutraAba}</b>.</span>
+      <button onclick="${onclickIr}" class="bg-sky-700 hover:bg-sky-600 text-white font-bold px-3 py-1.5 rounded-lg text-[11px] shadow">Ir para ${rotuloOutraAba}</button>
+    </div>`;
+}
+
 // ===== DASHBOARD =====
 function getSlaBreakdown(list, dateField) {
   const agora = Date.now();
   let critico = 0, alerta = 0, ok = 0;
+
+  // (01/09/2026) dateField passou a aceitar LISTA de campos, além da string
+  // de sempre. Com string o comportamento é o original, byte a byte — campo
+  // ausente cai em `ok`. Com lista, a data sai de _momentoDoRegistroParaSla,
+  // a mesma cascata que getMaisAntigaPendente usa, e registro sem o campo
+  // esperado deixa de ser contado como "🟢 dentro do prazo" por omissão.
+  // Precisou disso para a fila do Gestor, cujo relógio começa em
+  // atualizado_em (quando a análise devolveu o chamado para ele) e cai para
+  // criado_em nos registros que nunca foram reeditados.
+  const campos = Array.isArray(dateField) ? dateField : null;
+
   (list || []).forEach(item => {
-    const dataRef = item ? item[dateField] : null;
-    if (!dataRef) { ok++; return; }
-    // _parseDataFlex, e não new Date(): a hora que volta da nuvem não tem
-    // fuso e seria lida como local, adiantando tudo em 3h (ver o comentário
-    // longo em _parseDataFlex).
-    const ms = _parseDataFlex(dataRef);
+    let ms;
+    if (campos) {
+      ms = _momentoDoRegistroParaSla(item, campos);
+    } else {
+      const dataRef = item ? item[dateField] : null;
+      if (!dataRef) { ok++; return; }
+      // _parseDataFlex, e não new Date(): a hora que volta da nuvem não tem
+      // fuso e seria lida como local, adiantando tudo em 3h (ver o comentário
+      // longo em _parseDataFlex).
+      ms = _parseDataFlex(dataRef);
+    }
     if (ms === null) { ok++; return; }
     const horas = (agora - ms) / 36e5;
     if (horas > 48) critico++;
@@ -4512,6 +6352,29 @@ function getSlaBreakdown(list, dateField) {
   });
   return { critico, alerta, ok };
 }
+
+// A fila do Gestor: causa raiz JÁ apurada e parecer ainda não dado.
+//
+// Não é o mesmo que a aba "Pendentes" da tela de Tratativas, que mostra tudo
+// que não está CONCLUIDO — ali entram também as devoluções que sequer passaram
+// pela Análise, e que portanto estão na mesa do analista, não na do gestor.
+// Cobrar o gestor por elas seria cobrar a pessoa errada, e o Dashboard já tem
+// um alerta próprio ("Análises Pendentes") para essa outra fila.
+//
+// O corte é status_gestao === 'PENDENTE_GESTOR', que é exatamente o carimbo
+// que updateInvestigacao põe quando a apuração termina e devolve o chamado
+// para o gestor (js/store.js:1909).
+function tratativasPendentesGestor(devs) {
+  return (devs || []).filter(d => d && d.status_gestao === 'PENDENTE_GESTOR');
+}
+
+// De quando conta o relógio do gestor: do momento em que o chamado CAIU na mesa
+// dele, não da abertura da devolução. atualizado_em é esse instante — tanto a
+// apuração inicial quanto qualquer reedição posterior o regravam junto com o
+// status_gestao = 'PENDENTE_GESTOR' (js/store.js:1909-1911). Como reedição
+// REABRE a tratativa, reiniciar a contagem ali é o certo: o parecer anterior
+// foi dado sobre outra informação.
+const CAMPOS_SLA_TRATATIVA_GESTOR = ['atualizado_em', 'criado_em', 'data_abertura', 'data'];
 
 // Encontra a ocorrência pendente mais antiga de uma lista e devolve a idade
 // dela já formatada, com o nível de SLA — é o que os cards de "Alertas &
@@ -4745,7 +6608,7 @@ function renderDashboardView() {
   const allViagens = db.getControleViagens();
   const allOcViagens = db.getOcorrenciasViagens();
   const allTrocas = db.getTrocasVeiculos();
-  const rawResumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
+  const rawResumosCd = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
 
   // Filtragem periódica por intervalo de datas.
   //
@@ -4790,8 +6653,22 @@ function renderDashboardView() {
   });
 
   const totalValor = devs.reduce((a, d) => a + (parseFloat(d.valor_reclamado)||0), 0);
+  // Mini-gráfico do card "Devolução Total": devoluções do período agrupadas
+  // pelo departamento de quem abriu o chamado (SAC, Monitoramento, etc.) —
+  // mesma lógica de card-expansível do "Tratativas do Gestor", outra chave de
+  // agrupamento.
+  const porDepartamentoMap = {};
+  devs.forEach(d => {
+    const dep = departamentoDeQuemAbriu(d);
+    porDepartamentoMap[dep] = (porDepartamentoMap[dep] || 0) + 1;
+  });
+  const porDepartamentoArr = Object.entries(porDepartamentoMap).sort((a, b) => b[1] - a[1]);
   const pendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
-  const veicParados = rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO').length;
+  // (18/09/2026) "Parado em rota" é retrato de AGORA — não pode depender da
+  // data em que o chamado abriu. Com o filtro em "Esta Semana", um caminhão
+  // que quebrou na sexta anterior e continuava parado na segunda marcava 0
+  // aqui. Mesma lista do alerta (veicParadosAlerta, abaixo).
+  const veicParados = allRotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO').length;
   const allRetencoes = typeof db.getRetencoesFrota === 'function' ? db.getRetencoesFrota() : [];
   const retencoes = allRetencoes.filter(r => r.status === 'RETIDO');
   const veicRetidos = retencoes.length;
@@ -4819,21 +6696,71 @@ function renderDashboardView() {
   const pendCdAlerta = allDevs.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
   const abertasCausaRaizAlerta = allDevs.filter(d => !d.motivo_real_causa_raiz || !d.acao_tomada);
   const veicParadosAlerta = allRotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO');
+  // (01/09/2026) A fila do Gestor era a única etapa do fluxo SEM alerta: a
+  // devolução saía da Análise com causa raiz apurada, entrava em
+  // PENDENTE_GESTOR e ficava ali sem aparecer em lugar nenhum do Dashboard.
+  // Quando este alerta foi escrito havia 15 chamados nesse estado, nenhum com
+  // parecer, o mais antigo parado desde 23/08 — nove dias sem ninguém ver.
+  const tratativasGestorAlerta = tratativasPendentesGestor(allDevs);
 
   // Idade da ocorrência pendente mais antiga em cada painel de alerta —
   // complementa a contagem por faixa (🔴🟡🟢) com "há quanto tempo está
   // parado o pior caso", que é o que mais importa para priorização.
   const maisAntigaPendCd = getMaisAntigaPendente(pendCdAlerta, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
   const maisAntigaAnalise = getMaisAntigaPendente(abertasCausaRaizAlerta, ['criado_em', 'data_abertura', 'data'], { atencao: 24, estourado: 48 });
+  const maisAntigaTratativaGestor = getMaisAntigaPendente(tratativasGestorAlerta, CAMPOS_SLA_TRATATIVA_GESTOR, { atencao: 24, estourado: 48 });
+  const slaTratativaGestor = getSlaBreakdown(tratativasGestorAlerta, CAMPOS_SLA_TRATATIVA_GESTOR);
+  // (23/09/2026) Mini-gráfico do card "Tratativas do Gestor": pedido para
+  // agrupar por QUEM responde pela devolução, não por faixa de SLA — usa o
+  // mesmo mapa de responsaveisDaDevolucao() que a tela de Análise já usa
+  // (ver [[responsavel-devolucao-mapa]]), então muda sozinho se o mapa mudar.
+  const porGestorTratativaMap = {};
+  tratativasGestorAlerta.forEach(d => {
+    const nomes = nomesResponsaveisDaDevolucao(d);
+    (nomes.length ? nomes : ['SEM RESPONSÁVEL']).forEach(nome => {
+      porGestorTratativaMap[nome] = (porGestorTratativaMap[nome] || 0) + 1;
+    });
+  });
+  const porGestorTratativaArr = Object.entries(porGestorTratativaMap).sort((a, b) => b[1] - a[1]);
   const maisAntigaVeicParadoRota = getMaisAntigaPendente(veicParadosAlerta, ['criado_em', 'data_chamado', 'data'], { atencao: 4, estourado: 8 });
-  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
+  // A retencao de oficina passa a usar 24h/72h. A linha ACIMA - socorro em
+  // rota - continua em 4h/8h de proposito: caminhao parado na estrada e outra
+  // coisa.
+  const LIM_RETENCAO = { atencao: SLA_RETENCAO_ATENCAO_H, estourado: SLA_RETENCAO_CRITICO_H };
+  // criado_em PRIMEIRO, e nao data_parada. Ate 07/09/2026 esta linha lia
+  // data_parada na frente enquanto calcularSlaManutencao() lia criado_em - dois
+  // relogios para o mesmo veiculo. O RET-2026-001 aparecia como "em atencao"
+  // (71,5h por criado_em) e "prazo estourado" (80,1h por data_parada) no MESMO
+  // card. Como o registro nao guarda a hora em que o veiculo entrou na oficina,
+  // so a data, o instante confiavel e o do lancamento - e e o mesmo que
+  // classifica o nivel. Um relogio so.
+  const maisAntigaVeicRetido = getMaisAntigaPendente(retencoes, ['criado_em', 'data_parada', 'data'], LIM_RETENCAO);
   const sinistrosPendentesDash = typeof db.getSinistros === 'function' ? db.getSinistros({ status: 'PENDENTE' }) : [];
   const maisAntigoSinistroDash = getMaisAntigaPendente(sinistrosPendentesDash, ['data_acidente', 'criado_em', 'data'], { atencao: 24, estourado: 48 });
   const totDescontosGestor = devs.filter(d => d.desconto_produtividade_gestor).length;
   const totalCortesValor = cortesList.reduce((a, c) => a + (parseFloat(c.valor)||0), 0);
   const totalCustoSocorro = rotas.reduce((a, r) => a + (parseFloat(r.custo_socorro)||0), 0);
   const viagensIniciadas = viagens.length;
-  const chkNaoRealizado = viagens.filter(v => v.status_saida === 'PENDENTE' || v.checklist_status === 'PENDENTE' || v.status === 'PENDENTE').length;
+  // 01/09/2026 — ESTE CARTÃO SEMPRE MARCOU ZERO. Filtrava por status_saida,
+  // checklist_status e status: NENHUM dos três existe no registro de viagem
+  // (ver addViagem() em store.js — os campos são checklist_saida e
+  // checklist_chegada). Como os três eram sempre undefined, o filtro nunca
+  // casava e o Dashboard exibia 0 checklist pendente enquanto a tela de
+  // Controle de Viagens mostrava vários selos vermelhos de NÃO INICIADO.
+  //
+  // "Pendente" também era o rótulo errado: pendente é o que ainda vai
+  // acontecer. Um checklist de saída de viagem que já largou não fica
+  // pendente — ele NÃO FOI REALIZADO, e é assim que o cartão passa a chamar.
+  //
+  // O CARTÃO ACUSA SÓ O QUE FOI VALIDADO: entram os checklists marcados
+  // explicitamente como NÃO INICIADO na escala. Checklist em branco NÃO é
+  // contado e NÃO aparece no cartão — em branco não é prova de que deixou de
+  // ser feito, é ausência de apontamento, e um número exibido no Dashboard
+  // vira cobrança em cima de alguém. Falta de dado se resolve na escala, não
+  // no indicador.
+  const chkSaidaNaoRealizado = viagens.filter(v => checklistNaoRealizado(v.checklist_saida)).length;
+  const chkChegadaNaoRealizado = viagens.filter(v => checklistNaoRealizado(v.checklist_chegada)).length;
+  const chkNaoRealizado = chkSaidaNaoRealizado + chkChegadaNaoRealizado;
 
   // ===== REENTREGAS NO PERÍODO =====
   const todasReentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
@@ -4845,9 +6772,14 @@ function renderDashboardView() {
   const indiceReentregaViagemPct = viagensIniciadas > 0 ? ((reentregasPeriodo.length / viagensIniciadas) * 100).toFixed(1) : '0.0';
 
   // ===== NOVOS KPIs: TRANSPORTE =====
-  const ocOperacionais = (Array.isArray(db.data.transporte_oc_operacionais) ? db.data.transporte_oc_operacionais : []).filter(o => registroNoPeriodo(o, 'transporte_oc_operacionais', fDe, fAte));
-  const totOcOperacionais = ocOperacionais.length;
-  const totOcOperacionaisPend = ocOperacionais.filter(o => o.status !== 'FINALIZADA').length;
+  // (18/09/2026) ESTE CARTÃO SEMPRE MARCOU ZERO. Lia db.data.transporte_oc_operacionais,
+  // que é a coleção do módulo de importação por CSV — vazia em produção. A
+  // tela "Ocorrência Operacional" (renderViagensOcorrenciasSubTab) lê
+  // 'ocorrencias_viagens', que é a tabela que sincroniza e onde o CCO lança.
+  // Havia 16 pendentes na tela e "0" no Dashboard. Mesma coleção, mesma
+  // regra de pendência (status !== 'FINALIZADA'; status nulo é pendente).
+  const totOcOperacionais = ocViagens.length;
+  const totOcOperacionaisPend = ocViagens.filter(o => o.status !== 'FINALIZADA').length;
   const totFusionIniciado = viagens.filter(v => (v.fusion || '').toUpperCase() === 'INICIADO').length;
   const pctFusionIniciado = viagensIniciadas > 0 ? Math.round((totFusionIniciado / viagensIniciadas) * 100) : 0;
 
@@ -4855,10 +6787,12 @@ function renderDashboardView() {
   const totFaltasColab = faltasColabList.length;
 
   // ===== SLA CRÍTICO DE MANUTENÇÃO (4H / 8H) =====
-  const retidosCriticos8h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO_8H');
-  const retidosAlerta4h = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'ALERTA_4H');
-  const maisAntigaCritico8h = getMaisAntigaPendente(retidosCriticos8h, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
-  const maisAntigaAlerta4h = getMaisAntigaPendente(retidosAlerta4h, ['data_parada', 'criado_em', 'data'], { atencao: 4, estourado: 8 });
+  const retidosCriticos = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO');
+  const retidosAtencao = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'ATENCAO');
+  // maisAntigaCritico e maisAntigaAtencao existiam SO para os dois cards de SLA
+  // do Dashboard, removidos em 07/09/2026. retidosCriticos e retidosAtencao
+  // continuam, porque o card de Veiculos Retidos usa os dois na composicao
+  // ("N critico(s), N em atencao").
 
   // ===== CÁLCULOS DOS NOVOS KPIS =====
   // 1. Lead Time de Abertura (Formato hh:mm:ss — Tempo médio entre criação da ocorrência e parecer/ação do gestor)
@@ -4882,10 +6816,19 @@ function renderDashboardView() {
   const leadTimeMedioHhmmss = formatarDuracaoHHMMSS(leadTimeMedioMs, 'ms');
 
   // 2. MTTR Operacional / Tempo Médio de Imobilização (Formato hh:mm:ss — Tempo médio entre parada e liberação)
+  //
+  // (18/09/2026) Até aqui só entrava imobilização ABERTA dentro do período
+  // (registroNoPeriodo olha a data de abertura). Um caminhão que quebrou na
+  // sexta 11/09 e foi liberado na segunda 14/09 sumia do filtro "Esta Semana"
+  // (14 a 18/09) — o Dashboard mostrava 00:00:00 na semana em que a frota
+  // ficou três dias com um veículo parado. Imobilização é um INTERVALO, não
+  // um instante: entra no MTTR toda parada que TOCOU o período — começou
+  // antes do fim dele e terminou (ou ainda não terminou) depois do início.
+  // A mesma lista alimenta o rodapé do cartão de Veículos Parados em Rota.
   let totalMttrMs = 0;
   let countMttr = 0;
-  const retencoesPeriodo = allRetencoes.filter(r => registroNoPeriodo(r, 'retencoes_frota', fDe, fAte));
-  retencoesPeriodo.forEach(r => {
+  const chamadosRotaPeriodo = [];
+  allRetencoes.forEach(r => {
     const msIniR = r.criado_em ? _parseDataFlex(r.criado_em) : (r.data_parada ? _parseDataFlex(r.data_parada + 'T08:00:00') : null);
     const dtInicio = msIniR === null ? null : new Date(msIniR);
     if (dtInicio && !isNaN(dtInicio.getTime())) {
@@ -4895,21 +6838,24 @@ function renderDashboardView() {
       } else if (r.status === 'RETIDO') {
         dtFim = new Date();
       }
-      if (dtFim && !isNaN(dtFim.getTime())) {
+      if (dtFim && !isNaN(dtFim.getTime()) && imobilizacaoTocaPeriodo(dtInicio.getTime(), r.status === 'RETIDO' ? null : dtFim.getTime(), fDe, fAte)) {
         totalMttrMs += Math.max(0, dtFim.getTime() - dtInicio.getTime());
         countMttr++;
       }
     }
   });
-  rotas.forEach(r => {
+  allRotas.forEach(r => {
     if (r.veiculo_parado || r.status_chamado === 'finalizado' || r.status === 'RESOLVIDO') {
       const msIniC = r.criado_em ? _parseDataFlex(r.criado_em) : (r.data_chamado ? _parseDataFlex(r.data_chamado + 'T08:00:00') : null);
       const dtInicio = msIniC === null ? null : new Date(msIniC);
       if (dtInicio && !isNaN(dtInicio.getTime())) {
-        const dtFim = (r.status === 'RESOLVIDO' || r.status_chamado === 'finalizado') && r.resolvido_em ? new Date(r.resolvido_em) : new Date();
-        if (!isNaN(dtFim.getTime())) {
+        const finalizado = (r.status === 'RESOLVIDO' || r.status_chamado === 'finalizado') && r.resolvido_em;
+        const msFimC = finalizado ? _parseDataFlex(r.resolvido_em) : null;
+        const dtFim = msFimC === null ? new Date() : new Date(msFimC);
+        if (!isNaN(dtFim.getTime()) && imobilizacaoTocaPeriodo(dtInicio.getTime(), finalizado ? dtFim.getTime() : null, fDe, fAte)) {
           totalMttrMs += Math.max(0, dtFim.getTime() - dtInicio.getTime());
           countMttr++;
+          chamadosRotaPeriodo.push(r);
         }
       }
     }
@@ -5000,7 +6946,9 @@ function renderDashboardView() {
       rota: itemRaw.carga_rota || itemRaw.rota_nome || itemRaw.rota || '—',
       veiculo: itemRaw.veiculo_placa || itemRaw.placa || '—',
       motorista: itemRaw.motorista_nome || itemRaw.motorista || itemRaw.motorista_original || '—',
-      ajudante: itemRaw.ajudante_nome || itemRaw.ajudante || '—',
+      ajudante: (Array.isArray(itemRaw.ajudantes) && itemRaw.ajudantes.length)
+        ? itemRaw.ajudantes.join(' + ')
+        : (itemRaw.ajudante_nome || itemRaw.ajudante || '—'),
       motivo: itemRaw.motivo_reclamado || itemRaw.motivo || itemRaw.problema || itemRaw.descricao || '—',
       causaRaiz: itemRaw.motivo_real_causa_raiz || itemRaw.causa_raiz || itemRaw.tipo_problema || '—',
       tipoErro: itemRaw.tipo_erro || 'NÃO CLASSIFICADO',
@@ -5009,6 +6957,89 @@ function renderDashboardView() {
       gravidade: gravItem,
       raw: itemRaw
     });
+  }
+
+  // Top 5 dos cards "Top Veículos / Prestadores / Colaboradores" — mesmos
+  // campos que pushItemRec() usa por baixo das abas da Matriz, mas
+  // INCONDICIONAIS (não dependem de qual aba está selecionada lá embaixo,
+  // porque aqui são três cards fixos, um por dimensão) e só contagem, sem
+  // valor/gravidade/itens — o card só precisa do "quantas vezes apareceu".
+  function contarPorChave(map, key) {
+    if (!key || key === 'N/A' || key === '—' || key === 'PENDENTE') return;
+    const k = String(key).toUpperCase().trim();
+    if (!k) return;
+    map[k] = (map[k] || 0) + 1;
+  }
+
+  const porVeiculoMap = {};
+  devs.forEach(d => contarPorChave(porVeiculoMap, d.veiculo_placa));
+  rotas.forEach(r => contarPorChave(porVeiculoMap, r.veiculo_placa));
+  ocViagens.forEach(o => contarPorChave(porVeiculoMap, o.veiculo_placa || o.placa));
+  reentregasPeriodo.forEach(re => contarPorChave(porVeiculoMap, re.placa));
+  const topVeiculosArr = Object.entries(porVeiculoMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const porPrestadorMap = {};
+  devs.forEach(d => {
+    const mot = (d.motorista_nome || '').toUpperCase().trim();
+    if (mot && mot !== 'N/A' && mot !== '—') contarPorChave(porPrestadorMap, `${mot} (Motorista)`);
+    const ajusRec = (Array.isArray(d.ajudantes) && d.ajudantes.length) ? d.ajudantes : [d.ajudante_nome];
+    ajusRec.forEach(a => {
+      const aju = String(a || '').toUpperCase().trim();
+      if (aju && aju !== 'N/A' && aju !== '—') contarPorChave(porPrestadorMap, `${aju} (Ajudante)`);
+    });
+  });
+  rotas.forEach(r => {
+    const mot = (r.motorista_nome || '').toUpperCase().trim();
+    if (mot && mot !== 'N/A' && mot !== '—') contarPorChave(porPrestadorMap, `${mot} (Motorista)`);
+  });
+  reentregasPeriodo.forEach(re => {
+    const motOrig = (re.motorista_original || '').toUpperCase().trim();
+    const motNovo = (re.motorista_novo || '').toUpperCase().trim();
+    if (motOrig && motOrig !== 'N/A' && motOrig !== '—') contarPorChave(porPrestadorMap, `${motOrig} (Motorista)`);
+    if (motNovo && motNovo !== 'N/A' && motNovo !== '—' && motNovo !== motOrig) contarPorChave(porPrestadorMap, `${motNovo} (Novo Motorista)`);
+  });
+  const topPrestadoresArr = Object.entries(porPrestadorMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const porColaboradorMap = {};
+  devs.forEach(d => {
+    const sep = (d.separador_apurado || d.separador_nome || '').toUpperCase().trim();
+    const conf = (d.conferente_apurado || d.conferente_nome || '').toUpperCase().trim();
+    if (sep && sep !== 'PENDENTE' && sep !== '—') contarPorChave(porColaboradorMap, `${sep} (Separador)`);
+    if (conf && conf !== 'PENDENTE' && conf !== '—') contarPorChave(porColaboradorMap, `${conf} (Conferente)`);
+  });
+  faltasColabList.forEach(f => { if (f && f.colaborador) contarPorChave(porColaboradorMap, `${f.colaborador} (Operacional CD)`); });
+  ocorrenciasCdList.forEach(o => { if (o && o.colaborador) contarPorChave(porColaboradorMap, `${o.colaborador} (Operacional CD)`); });
+  const topColaboradoresArr = Object.entries(porColaboradorMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // Markup dos três cards "Top N" acima — mesmo padrão de expandir dos cards
+  // de Gestor/Departamento, um helper só porque são três cópias idênticas na
+  // estrutura, mudando apenas o título, o ícone e a lista.
+  function cardTopN(cardId, titulo, icone, arr) {
+    const total = arr.reduce((a, par) => a + par[1], 0);
+    // Sem ocorrência no período: card fica sem clique e sem seta — não há o
+    // que expandir, e um card "clicável" que não abre nada é pior que um
+    // que nunca fingiu abrir.
+    if (arr.length === 0) {
+      return `
+          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
+            <div class="text-[10px] text-slate-400 font-bold uppercase">${icone} ${titulo}</div>
+            <div class="text-xl font-black text-white mt-1">0</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Sem ocorrência no período</div>
+          </div>`;
+    }
+    const subtitulo = `${arr[0][0]} lidera (${arr[0][1]})`;
+    return `
+          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl cursor-pointer select-none" onclick="toggleCardChart('${cardId}', event)" data-chart-json='${JSON.stringify(arr).replace(/'/g, "&#39;")}'>
+            <div class="text-[10px] text-slate-400 font-bold uppercase flex items-center justify-between">
+              <span>${icone} ${titulo}</span>
+              <span id="chevron-${cardId}" class="text-slate-600 transition-transform">▾</span>
+            </div>
+            <div class="text-xl font-black text-white mt-1">${total}</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">${subtitulo}</div>
+            <div id="chart-wrap-${cardId}" class="hidden mt-2 pt-2 border-t border-slate-800" style="height:${Math.max(90, arr.length * 32 + 24)}px">
+              <canvas id="chart-${cardId}"></canvas>
+            </div>
+          </div>`;
   }
 
   if (activeRecTab === 'veiculo') {
@@ -5036,9 +7067,15 @@ function renderDashboardView() {
   } else if (activeRecTab === 'prestador') {
     devs.forEach(d => {
       const mot = (d.motorista_nome || '').toUpperCase().trim();
-      const aju = (d.ajudante_nome || '').toUpperCase().trim();
       if (mot && mot !== 'N/A' && mot !== '—') pushItemRec(`${mot} (Motorista)`, 'Prestador / Equipe Rota', 'DEV_SAC', d, d.valor_reclamado);
-      if (aju && aju !== 'N/A' && aju !== '—') pushItemRec(`${aju} (Ajudante)`, 'Prestador / Equipe Rota', 'DEV_SAC', d, d.valor_reclamado);
+      // Podem ser DOIS ajudantes desde a v6.6.0. d.ajudantes ja vem do store
+      // filtrado (sem 'N/A', sem repetido); ajudante_nome fica de reserva para
+      // registro montado fora de getDevolucoes().
+      const ajusRec = (Array.isArray(d.ajudantes) && d.ajudantes.length) ? d.ajudantes : [d.ajudante_nome];
+      ajusRec.forEach(a => {
+        const aju = String(a || '').toUpperCase().trim();
+        if (aju && aju !== 'N/A' && aju !== '—') pushItemRec(`${aju} (Ajudante)`, 'Prestador / Equipe Rota', 'DEV_SAC', d, d.valor_reclamado);
+      });
     });
     rotas.forEach(r => {
       const mot = (r.motorista_nome || '').toUpperCase().trim();
@@ -5061,7 +7098,10 @@ function renderDashboardView() {
   // completas, nao pelas filtradas. Antes, escolher um periodo sem
   // pendencia fazia o painel inteiro sumir, escondendo o que ainda estava
   // em aberto (23/08/2026).
-  const temAlertasCriticos = (reentregasPendentes.length > 0 || retidosCriticos8h.length > 0 || retidosAlerta4h.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || sinistrosPendentesDash.length > 0);
+  // retidosCriticos/retidosAtencao sairam desta condicao junto com os dois
+  // cards de SLA: veicRetidos > 0 ja cobre os mesmos veiculos, e mante-los
+  // aqui so mantinha a secao acesa por um alerta que nao existe mais.
+  const temAlertasCriticos = (reentregasPendentes.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || tratativasGestorAlerta.length > 0 || sinistrosPendentesDash.length > 0);
 
   return `
     <div class="space-y-6">
@@ -5102,33 +7142,15 @@ function renderDashboardView() {
                 <button onclick="switchTab('controle_viagens'); switchViagensSubTab('reentregas');" class="bg-purple-900/50 hover:bg-purple-800 border border-purple-600 text-purple-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Ver</button>
               </div>` : ''}
 
-            <!-- ALERTA DE SLA CRÍTICO >8H -->
-            ${retidosCriticos8h.length > 0 ? `
-              <div class="bg-slate-950 border border-red-700 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md animate-pulse">
-                <div class="flex items-center gap-3 overflow-hidden">
-                  <div class="w-9 h-9 rounded-lg bg-red-950 border border-red-600 text-red-400 flex items-center justify-center shrink-0 text-base font-bold">🔴</div>
-                  <div class="truncate">
-                    <div class="text-xs font-black text-red-300 truncate">${retidosCriticos8h.length} Veículo(s) SLA &gt;8h</div>
-                    <div class="text-[10px] text-red-400 font-bold truncate">Imobilização crítica estourada</div>
-                    ${_linhaSla(maisAntigaCritico8h, 'Parado há')}
-                  </div>
-                </div>
-                <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-red-900/60 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
-              </div>` : ''}
-
-            <!-- ALERTA DE SLA EM ATENÇÃO >4H -->
-            ${retidosAlerta4h.length > 0 ? `
-              <div class="bg-slate-950 border border-amber-600/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
-                <div class="flex items-center gap-3 overflow-hidden">
-                  <div class="w-9 h-9 rounded-lg bg-amber-950 border border-amber-600 text-amber-300 flex items-center justify-center shrink-0 text-base font-bold">🟡</div>
-                  <div class="truncate">
-                    <div class="text-xs font-black text-amber-300 truncate">${retidosAlerta4h.length} Veículo(s) SLA &gt;4h</div>
-                    <div class="text-[10px] text-slate-400 truncate">Atenção tempo na oficina</div>
-                    ${_linhaSla(maisAntigaAlerta4h, 'Parado há')}
-                  </div>
-                </div>
-                <button onclick="activeFrotaSubTab='retidos'; switchTab('disponibilidade_frota');" class="bg-amber-900/50 hover:bg-amber-800 border border-amber-600 text-amber-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Frota</button>
-              </div>` : ''}
+            <!-- OS DOIS CARDS DE SLA SAIRAM DAQUI EM 07/09/2026.
+                 Eles contavam os MESMOS veiculos que o card de Veiculos
+                 Retidos logo abaixo: com 2 retidos, ambos em atencao, a tela
+                 dizia "2 Veiculo(s) SLA >24h" e "2 Veiculo(s) Retido(s) - 0
+                 critico(s), 2 em atencao" - a mesma frase duas vezes. O
+                 Dashboard passa a ter UM alerta por assunto: retencao em
+                 oficina aqui embaixo, veiculo parado em rota logo adiante.
+                 A leitura por faixa de SLA continua existindo, na tela de
+                 Disponibilidade da Frota, que e onde se age sobre ela. -->
 
             <!-- ALERTA VEÍCULOS PARADOS EM ROTA -->
             ${veicParadosAlerta.length > 0 ? `
@@ -5145,13 +7167,16 @@ function renderDashboardView() {
               </div>` : ''}
 
             <!-- ALERTA VEÍCULOS RETIDOS MANUTENÇÃO -->
-            ${veicRetidos > 0 && retidosCriticos8h.length === 0 && retidosAlerta4h.length === 0 ? `
+            <!-- CONTA SEMPRE. Ate 05/09/2026 este card so aparecia se NENHUM veiculo
+                 tivesse SLA - ou seja, sumia justamente quando havia veiculo estourado.
+                 Com 2 retidos e 1 critico, a tela mostrava "1" e escondia o total. -->
+            ${veicRetidos > 0 ? `
               <div class="bg-slate-950 border border-amber-600/60 rounded-xl p-3 flex items-center justify-between gap-2">
                 <div class="flex items-center gap-3 overflow-hidden">
                   <div class="w-9 h-9 rounded-lg bg-amber-950/80 border border-amber-600/70 text-amber-400 flex items-center justify-center shrink-0 text-base font-bold">🔧</div>
                   <div class="truncate">
                     <div class="text-xs font-black text-amber-300 truncate">${veicRetidos} Veículo(s) Retido(s)</div>
-                    <div class="text-[10px] text-slate-400 truncate">Oficina / Manutenção</div>
+                    <div class="text-[10px] text-slate-400 truncate">Oficina · ${retidosCriticos.length} crítico(s), ${retidosAtencao.length} em atenção</div>
                     ${_linhaSla(maisAntigaVeicRetido, 'Retido há')}
                   </div>
                 </div>
@@ -5184,6 +7209,25 @@ function renderDashboardView() {
                   </div>
                 </div>
                 <button onclick="switchTab('sac_investigacao')" class="bg-orange-900/40 hover:bg-orange-900/80 border border-orange-700 text-orange-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Analisar</button>
+              </div>` : ''}
+
+            <!-- ALERTA TRATATIVAS DO GESTOR PENDENTES -->
+            ${tratativasGestorAlerta.length > 0 ? `
+              <div class="bg-slate-950 border border-sky-800/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
+                <div class="flex items-center gap-3 overflow-hidden">
+                  <div class="w-9 h-9 rounded-lg bg-sky-950 border border-sky-700 text-sky-300 flex items-center justify-center shrink-0 text-base font-bold">👔</div>
+                  <div class="truncate">
+                    <div class="text-xs font-black text-sky-300 truncate">${tratativasGestorAlerta.length} Tratativa(s) do Gestor</div>
+                    <div class="text-[10px] text-slate-400 truncate">Causa raiz apurada, sem parecer</div>
+                    ${_linhaSla(maisAntigaTratativaGestor, 'Mais antiga')}
+                    <div class="flex items-center gap-2 mt-0.5 text-[10px] font-bold">
+                      <span class="text-red-400" title="Mais de 48h na mesa do gestor">🔴 ${slaTratativaGestor.critico}</span>
+                      <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaTratativaGestor.alerta}</span>
+                      <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaTratativaGestor.ok}</span>
+                    </div>
+                  </div>
+                </div>
+                <button onclick="window._activeGestorSubTab='pendentes'; switchTab('gestao_gestor')" class="bg-sky-900/50 hover:bg-sky-800 border border-sky-600 text-sky-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Tratar</button>
               </div>` : ''}
 
             <!-- ALERTA SINISTROS PENDENTES -->
@@ -5273,13 +7317,13 @@ function renderDashboardView() {
               <span>⏱️</span> MTTR Imobilização
             </div>
             <div class="text-lg font-black text-amber-300 mt-1 font-mono">${mttrMedioHhmmss}</div>
-            <div class="text-[10px] text-slate-400 mt-0.5">Média oficina (hh:mm:ss)</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">${countMttr} imobilização(ões) • oficina + socorro</div>
           </div>
 
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Veículos Parados em Rota</div>
             <div class="text-xl font-black ${veicParados > 0 ? 'text-red-400 animate-pulse' : 'text-slate-300'} mt-1">${veicParados}</div>
-            <div class="text-[10px] text-slate-500 mt-0.5">Socorro mecânico</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Parado(s) agora • ${chamadosRotaPeriodo.length} socorro(s) no período</div>
           </div>
 
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
@@ -5289,9 +7333,9 @@ function renderDashboardView() {
           </div>
 
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
-            <div class="text-[10px] text-slate-400 font-bold uppercase">Checklist Pendente</div>
+            <div class="text-[10px] text-slate-400 font-bold uppercase">Checklist Não Realizado</div>
             <div class="text-xl font-black ${chkNaoRealizado > 0 ? 'text-red-400' : 'text-slate-300'} mt-1">${chkNaoRealizado}</div>
-            <div class="text-[10px] text-slate-500 mt-0.5">Saída não iniciada</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">${chkSaidaNaoRealizado} saída • ${chkChegadaNaoRealizado} chegada</div>
           </div>
 
           <!-- NOVO: OC OPERACIONAIS -->
@@ -5378,14 +7422,22 @@ function renderDashboardView() {
           <span class="text-xs text-slate-400 font-bold">Lead time, causas raiz e auditoria</span>
         </div>
 
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
           <!-- CARD DEVOLUÇÃO TOTAL -->
-          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
-            <div class="text-[10px] text-slate-400 font-bold uppercase">Valor Total Reclamado</div>
+          <!-- (23/09/2026) Mesmo padrão de expandir do card "Tratativas do
+               Gestor", agora agrupando por departamento de quem abriu. -->
+          <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl cursor-pointer select-none" onclick="toggleCardChart('devolucao-departamento', event)" data-chart-json='${JSON.stringify(porDepartamentoArr).replace(/'/g, "&#39;")}'>
+            <div class="text-[10px] text-slate-400 font-bold uppercase flex items-center justify-between">
+              <span>Valor Total Reclamado</span>
+              <span id="chevron-devolucao-departamento" class="text-slate-600 transition-transform">▾</span>
+            </div>
             <div class="text-lg font-black text-emerald-400 mt-1">R$ ${totalValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">${devs.length} devolução(ões)</div>
+            <div id="chart-wrap-devolucao-departamento" class="hidden mt-2 pt-2 border-t border-slate-800" style="height:${Math.max(90, porDepartamentoArr.length * 32 + 24)}px">
+              <canvas id="chart-devolucao-departamento"></canvas>
+            </div>
           </div>
-          
+
           <!-- CARD LEAD TIME DE ABERTURA (HH:MM:SS) -->
           <div class="bg-slate-950 border border-amber-900/60 p-3 rounded-xl">
             <div class="text-[10px] text-amber-400 font-bold uppercase flex items-center gap-1">
@@ -5435,6 +7487,45 @@ function renderDashboardView() {
               ⏳ Mais antiga: ${maisAntigaAnalise.texto}
             </div>` : ''}
           </div>
+
+          <!-- CARD TRATATIVAS DO GESTOR PENDENTES -->
+          <!-- (23/09/2026) Piloto de "expandir card": clique revela um mini-
+               gráfico com a fila pendente agrupada por QUEM responde (mapa de
+               responsaveisDaDevolucao(), ver [[responsavel-devolucao-mapa]]) —
+               não pela faixa de SLA, que já aparece em texto acima. Se o
+               piloto colar, replica pros outros cards; a análise "de
+               verdade" continua sendo o Power BI, isso aqui é só o efeito no
+               card. -->
+          <div class="bg-slate-950 border ${tratativasGestorAlerta.length > 0 ? 'border-sky-800/70' : 'border-slate-800'} p-3 rounded-xl cursor-pointer select-none" onclick="toggleCardChart('tratativa-gestor', event)" data-chart-json='${JSON.stringify(porGestorTratativaArr).replace(/'/g, "&#39;")}'>
+            <div class="text-[10px] text-slate-400 font-bold uppercase flex items-center justify-between">
+              <span>Tratativas do Gestor</span>
+              <span id="chevron-tratativa-gestor" class="text-slate-600 transition-transform">▾</span>
+            </div>
+            <div class="text-xl font-black ${tratativasGestorAlerta.length > 0 ? 'text-sky-300' : 'text-emerald-400'} mt-1">${tratativasGestorAlerta.length}</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Parecer pendente</div>
+            <div class="flex items-center gap-2 mt-1.5 text-[10px] font-bold">
+              <span class="text-red-400" title="Mais de 48h na mesa do gestor">🔴 ${slaTratativaGestor.critico}</span>
+              <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaTratativaGestor.alerta}</span>
+              <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaTratativaGestor.ok}</span>
+            </div>
+            ${maisAntigaTratativaGestor.item ? `
+            <div class="text-[10px] font-bold mt-1 ${maisAntigaTratativaGestor.horas > 48 ? 'text-red-400' : maisAntigaTratativaGestor.horas >= 24 ? 'text-amber-400' : 'text-slate-400'}" title="Devolução ${maisAntigaTratativaGestor.item.numero_devolucao || maisAntigaTratativaGestor.item.numero_protocolo || ''}">
+              ⏳ Mais antiga: ${maisAntigaTratativaGestor.texto}
+            </div>` : ''}
+            <div id="chart-wrap-tratativa-gestor" class="hidden mt-2 pt-2 border-t border-slate-800" style="height:${Math.max(90, porGestorTratativaArr.length * 32 + 24)}px">
+              <canvas id="chart-tratativa-gestor"></canvas>
+            </div>
+          </div>
+
+          <!-- CARDS TOP VEÍCULOS / PRESTADORES / COLABORADORES -->
+          <!-- (23/09/2026) Mesmo mecanismo de expandir dos cards acima.
+               Resumo rápido no topo — o detalhe completo (valor, gravidade,
+               clique pro registro) continua na Matriz de Recorrências logo
+               abaixo; esses cards não substituem ela, só evitam rolar a
+               página pra ver quem lidera. -->
+          ${cardTopN('top-veiculos', 'Top Veículos', '🚛', topVeiculosArr)}
+          ${cardTopN('top-prestadores', 'Top Prestadores', '👤', topPrestadoresArr)}
+          ${cardTopN('top-colaboradores', 'Top Colaboradores CD', '🏭', topColaboradoresArr)}
         </div>
       </div>
 
@@ -5691,6 +7782,7 @@ function renderSacAberturaView() {
   uploadedVideosBase64 = [];
   uploadedFotoBase64 = '';
   uploadedVideoBase64 = '';
+  window._sacCargaAvisada = '';  // formulário novo: a mesma carga volta a avisar
 
   // Consolida cargas da Largada (Controle de Viagens) + Cadastros Mestre
   const cargasViagens = (db.getControleViagens && db.getControleViagens()) || [];
@@ -5708,9 +7800,14 @@ function renderSacAberturaView() {
     }
   });
 
-  // Gerar próximo número de protocolo automaticamente
-  const nextNum = (db.data.ocorrencias_devolucao.length + 1).toString().padStart(3,'0');
-  const nextProtocol = `DEV-${new Date().getFullYear()}-${nextNum}`;
+  // Prévia do próximo número de protocolo. É SÓ prévia: o número de verdade
+  // sai em addDevolucao(), depois do pull da nuvem. Mas tem de ser calculada
+  // pela MESMA regra (maior número + 1, via getNextSequenceNumber), não por
+  // "quantidade de registros + 1": em 15/09/2026 a lista tinha 73 linhas e o
+  // maior número era 077 (excluídas definitivas/expurgadas saem da contagem,
+  // não da numeração), e a prévia mostrava DEV-2026-074 — o mesmo número de
+  // uma devolução já aberta e em análise. Parecia duplicidade; era a prévia.
+  const nextProtocol = db.getNextSequenceNumber('ocorrencias_devolucao', 'numero_protocolo', 'DEV-2026-', 3);
 
   return `
     <div class="max-w-4xl mx-auto space-y-5">
@@ -5737,7 +7834,7 @@ function renderSacAberturaView() {
             <div>
               <label class="block text-xs font-semibold text-slate-300 mb-1">Número da Carga (Validação da Largada) *</label>
               <input type="text" id="sac-carga-numero" list="cargas-list" required placeholder="Digite ou selecione o Nº da Carga (Ex: 43111)" 
-                oninput="forcarMaiuscula(this); onSacCargaSelect(this.value)" onchange="onSacCargaSelect(this.value)"
+                oninput="forcarMaiuscula(this); onSacCargaSelect(this.value)" onchange="onSacCargaSelect(this.value); avisarDevolucoesMesmaCarga(this.value)"
                 class="w-full bg-slate-800 border border-slate-700 text-emerald-400 font-bold rounded-lg p-2 text-xs focus:border-emerald-500 focus:outline-none">
               <datalist id="cargas-list">
                 ${listaCargasValidadas.map(c => `<option value="${c.carga}">Carga Nº ${c.carga} | Rota: ${c.rota || 'Sem Rota'}${c.placa ? ` | ${c.placa}` : ''}</option>`).join('')}
@@ -5792,6 +7889,9 @@ function renderSacAberturaView() {
             <div>
               <label class="block text-xs font-semibold text-slate-300 mb-1">Nota Fiscal (NF)</label>
               <input type="text" id="sac-nf" placeholder="Ex: NF-99412 (opcional)" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs" oninput="forcarMaiuscula(this)">
+              <input type="file" id="sac-nf-pdf" accept="application/pdf" multiple onchange="handleNfPdfUpload(this)"
+                class="mt-1.5 w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-1.5 text-xs file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-slate-600 file:text-white hover:file:bg-slate-500">
+              <div id="sac-nf-pdf-preview" class="hidden mt-1 flex flex-wrap gap-1.5"></div>
             </div>
           </div>
 
@@ -6107,34 +8207,149 @@ function getDadosProduto(item) {
 // app (no modal-container já existente), o que funciona em qualquer
 // navegador/celular.
 function abrirMidiaLightbox(url, tipo) {
-  const modalContainer = document.getElementById('modal-container');
-  if (!modalContainer || !url) return;
-  modalContainer.innerHTML = `
+  if (!url) return;
+  // PROPRIO CONTAINER, e nao o #modal-container. Ate 05/09/2026 este
+  // visualizador escrevia no MESMO no onde vive a Conferencia & Entrada, a
+  // tratativa, a reentrega e a edicao de viagem. Clicar numa foto de dentro
+  // da Conferencia apagava o formulario inteiro, e fechar a foto deixava a
+  // tela vazia: "abri a foto e a janela sumiu com tudo que eu ja tinha
+  // conferido". O z-index e maior que o do #modal-container (z-50) de
+  // proposito - a foto abre POR CIMA do formulario, que continua ali.
+  let box = document.getElementById('lightbox-container');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'lightbox-container';
+    box.className = 'hidden fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm '
+                  + 'flex items-center justify-center p-3 sm:p-4';
+    document.body.appendChild(box);
+  }
+  box.innerHTML = `
     <div class="max-w-3xl w-full" onclick="event.stopPropagation()">
       <div class="flex justify-end mb-2">
-        <button onclick="closeModal()" class="bg-slate-800 hover:bg-slate-700 text-white font-bold w-9 h-9 rounded-full shadow-lg">✕</button>
+        <button onclick="fecharMidiaLightbox()"
+          class="bg-slate-800 hover:bg-slate-700 text-white font-bold w-9 h-9 rounded-full shadow-lg">✕</button>
       </div>
       ${tipo === 'video'
         ? `<video src="${url}" controls autoplay class="w-full max-h-[80vh] rounded-lg shadow-2xl bg-black"></video>`
         : `<img src="${url}" class="w-full max-h-[80vh] object-contain rounded-lg shadow-2xl bg-slate-950" alt="Mídia da ocorrência">`}
     </div>`;
-  modalContainer.classList.remove('hidden');
-  modalContainer.onclick = closeModal;
+  box.classList.remove('hidden');
+  box.onclick = fecharMidiaLightbox;
 }
+
+// Fecha SO o visualizador. O modal que estava por baixo continua aberto e
+// com tudo preenchido - e a diferenca entre olhar uma foto e perder a
+// conferencia inteira por ter olhado uma foto.
+function fecharMidiaLightbox() {
+  const box = document.getElementById('lightbox-container');
+  if (!box) return;
+  // Sem o pause, fechar um video deixa o audio tocando atras da tela.
+  const v = box.querySelector('video');
+  if (v) { try { v.pause(); } catch (e) {} }
+  box.innerHTML = '';
+  box.classList.add('hidden');
+}
+window.fecharMidiaLightbox = fecharMidiaLightbox;
 
 // Monta a galeria de mídia de uma devolução, separando por etapa
 // (Abertura no SAC / Análise e Investigação), para dar o "histórico
 // completo da ocorrência" nas telas de Gestão de Tratativas e Recepção CD.
+// O QUE O CLIENTE RECLAMOU, na abertura. Existe como funcao separada porque
+// duas telas precisam da MESMA coisa e ja houve triplicacao neste arquivo
+// (ver o comentario em app.js:4500): a Analise mostrava isso desde sempre, a
+// Tratativa do Gestor nunca mostrou - e e o gestor quem decide desconto.
+//
+// colapsar: na tela do gestor os cards vem em lista, e um relato inteiro em
+// cada um torna a rolagem impraticavel. <details> resolve sem esconder nada.
+function renderRelatoAbertura(d, opcoes = {}) {
+  const { titulo = 'Relato da Abertura', colapsar = false } = opcoes;
+  const texto    = String(d.detalhamento_texto || '').trim();
+  const itens    = Array.isArray(d.itens) ? d.itens : [];
+  const abertoEm = d.criado_em ? new Date(d.criado_em).toLocaleString('pt-BR') : '';
+  const miolo = `
+    <div class="text-slate-400 italic">"${d.motivo_reclamado || '—'}"</div>
+    ${texto ? `<div class="text-slate-300 whitespace-pre-line">${texto}</div>`
+            : '<div class="text-slate-500 italic text-[11px]">Sem detalhamento na abertura.</div>'}
+    ${itens.length === 0 ? (d.sem_itens
+      ? `<div class="text-amber-300/80 text-[11px] pt-1">⚠️ Sem itens: ${d.observacao_sem_itens || '—'}</div>` : '')
+      : `<div class="pt-2 border-t border-slate-800">
+           <div class="font-bold text-slate-400 mb-1 text-[10px] uppercase">Itens reclamados</div>
+           <div class="space-y-1">
+             ${itens.map(i => `<div class="flex justify-between gap-3 text-[11px] text-slate-300">
+                 <span>${i.produto_codigo} — ${i.produto_descricao} (x${i.quantidade})</span>
+                 <span class="text-emerald-400 font-semibold shrink-0">R$ ${(i.valor_total || 0).toFixed(2)}</span>
+               </div>`).join('')}
+           </div>
+         </div>`}
+    ${abertoEm ? `<div class="text-[10px] text-slate-500 pt-1">🕒 Aberto em ${abertoEm}</div>` : ''}`;
+  if (!colapsar) {
+    return `<div class="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2 text-xs">
+      <div class="font-bold text-slate-300">${titulo}:</div>${miolo}</div>`;
+  }
+  const curto = texto.length <= 180 && itens.length <= 3;
+  return `<details class="bg-slate-950 rounded-lg border border-slate-800 text-xs" ${curto ? 'open' : ''}>
+    <summary class="cursor-pointer select-none p-3 font-bold text-slate-300 hover:text-white">
+      📋 ${titulo}${curto ? '' : ` <span class="text-slate-500 font-normal">(clique para abrir)</span>`}
+    </summary>
+    <div class="px-3 pb-3 space-y-2">${miolo}</div>
+  </details>`;
+}
+
 function renderGaleriaMidia(dev, opcoes = {}) {
   const {
     titulo = null,
     vazio = 'Nenhuma foto ou vídeo anexado nesta ocorrência.',
     permitirExcluir = true
   } = opcoes;
-  const fotosAbertura = Array.isArray(dev.fotos_abertura) ? dev.fotos_abertura : (dev.foto_url ? [dev.foto_url] : []);
+  // A galeria soma as DUAS formas que uma foto pode ter agora: caminho no
+  // Storage (a partir da migration 38) e base64 legado (registros anteriores
+  // ao deploy de 04/09/2026, e os 11 que ainda esperam a migração do passo 3).
+  // Enquanto os dois formatos coexistirem, quem olha a tela não precisa saber
+  // de qual deles a imagem veio.
+  const _urlFoto = c => (window.fotoStore && typeof window.fotoStore.urlPublica === 'function')
+    ? window.fotoStore.urlPublica(c) : c;
+  // Cada miniatura carrega o PRÓPRIO campo e o PRÓPRIO índice, em vez de
+  // depender da posição na lista montada.
+  //
+  // Sem isso a exclusão apagaria a foto errada: a lista agora mistura duas
+  // origens (caminhos do Storage + base64 legado), e o 🗑️ mandava um índice
+  // posicional junto de um nome de campo fixo. Clicar na 1ª miniatura, que é
+  // do Storage, faria splice em fotos_abertura[0] — outro array, outra foto.
+  const _fotosDe = (etapa, legadoDireto) => {
+    if (!db || typeof db.estadoFotos !== 'function') {
+      return legadoDireto.map((url, i) => ({ url, campo: 'fotos_' + etapa, indice: i }));
+    }
+    const est = db.estadoFotos(dev, etapa, 'devolucoes');
+    const doStorage = est.paths.map((p, i) => ({
+      url: _urlFoto(p), campo: 'fotos_' + etapa + '_paths', indice: i
+    }));
+    const base = est.legado.length ? est.legado : legadoDireto;
+    return doStorage.concat(base.map((url, i) => ({
+      url, campo: 'fotos_' + etapa, indice: i
+    })));
+  };
+
+  const fotosAbertura = _fotosDe('abertura',
+    Array.isArray(dev.fotos_abertura) && dev.fotos_abertura.length
+      ? dev.fotos_abertura : (dev.foto_url ? [dev.foto_url] : []));
   const videosAbertura = Array.isArray(dev.videos_abertura) ? dev.videos_abertura : (dev.video_url ? [dev.video_url] : []);
-  const fotosInvestigacao = Array.isArray(dev.fotos_investigacao) ? dev.fotos_investigacao : [];
+  const fotosInvestigacao = _fotosDe('investigacao',
+    Array.isArray(dev.fotos_investigacao) ? dev.fotos_investigacao : []);
   const videosInvestigacao = Array.isArray(dev.videos_investigacao) ? dev.videos_investigacao : (dev.video_investigacao_url ? [dev.video_investigacao_url] : []);
+
+  // A NF nao vira miniatura: PDF nao renderiza em <img>. Vira link.
+  const nfDocs = (db && typeof db.estadoFotos === 'function')
+    ? db.estadoFotos(dev, 'nf', 'devolucoes').paths : [];
+  const nfHtml = nfDocs.length === 0 ? '' : `
+    <div class="space-y-1">
+      <div class="text-[9px] text-slate-500 font-bold uppercase">🧾 Nota Fiscal em PDF (${nfDocs.length})</div>
+      <div class="flex flex-wrap gap-2">
+        ${nfDocs.map((p, i) => `
+          <a href="${_urlFoto(p)}" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-1.5 bg-slate-950 border border-emerald-800/60 hover:border-emerald-500 text-emerald-300 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition"
+             title="Abrir a nota fiscal numa aba nova">📄 ${dev.nota_fiscal || 'NF'}${nfDocs.length > 1 ? ` (${i + 1})` : ''}</a>`).join('')}
+      </div>
+    </div>`;
 
   const grupos = [
     { label: '📋 Abertura (SAC)', campoFotos: 'fotos_abertura', campoVideos: 'videos_abertura', fotos: fotosAbertura, videos: videosAbertura },
@@ -6170,11 +8385,16 @@ function renderGaleriaMidia(dev, opcoes = {}) {
       </div>`;
   };
 
-  if (grupos.length === 0) {
+  // AS DUAS SAIDAS. Uma devolucao com NF e SEM foto - o caso mais comum - caia
+  // no retorno de "nenhuma foto anexada" e a NF nunca aparecia.
+  if (grupos.length === 0 && !nfHtml) {
     // O marcador vai TAMBÉM no estado vazio: sem ele, apagar o último item
     // arrancaria o próprio nó que a atualização usa para se achar, e a galeria
     // pararia de responder até um reload.
     return `<div ${marcadores} class="text-[10px] text-slate-500 italic">${vazio}</div>`;
+  }
+  if (grupos.length === 0) {
+    return `<div ${marcadores} class="space-y-2.5">${titulo ? `<div class="text-[10px] font-bold text-slate-300 uppercase tracking-wider">${titulo}</div>` : ''}${nfHtml}</div>`;
   }
 
   return `
@@ -6184,10 +8404,11 @@ function renderGaleriaMidia(dev, opcoes = {}) {
         <div class="space-y-1">
           <div class="text-[9px] text-slate-500 font-bold uppercase">${g.label} (${g.fotos.length + g.videos.length})</div>
           <div class="flex flex-wrap gap-2.5">
-            ${g.fotos.map((f, i) => renderItemMidia(f, 'foto', g.campoFotos, i)).join('')}
+            ${g.fotos.map(f => renderItemMidia(f.url, 'foto', f.campo, f.indice)).join('')}
             ${g.videos.map((v, i) => renderItemMidia(v, 'video', g.campoVideos, i)).join('')}
           </div>
         </div>`).join('')}
+      ${nfHtml}
       ${podeExcluir ? `<div class="text-[9px] text-slate-600 italic">🗑️ exclui o item da ocorrência. A exclusão é definitiva e fica registrada no histórico com o seu nome.</div>` : ''}
     </div>`;
 }
@@ -6299,6 +8520,41 @@ function comprimirImagem(file, maxDimensao = 1280, qualidade = 0.75) {
   });
 }
 
+let uploadedNfDocsBase64 = [];
+// A NF NAO PASSA POR comprimirImagem(). Aquela funcao desenha o arquivo num
+// <canvas> e reexporta como JPEG - com um PDF na entrada ela devolveria lixo,
+// ou nada. Aqui e leitura crua e so.
+function handleNfPdfUpload(inputEl) {
+  const files = Array.from(inputEl.files || []);
+  uploadedNfDocsBase64 = [];
+  const box = document.getElementById('sac-nf-pdf-preview');
+  if (box) { box.innerHTML = ''; box.classList.add('hidden'); }
+  if (!files.length) return;
+  files.forEach(file => {
+    if (file.type !== 'application/pdf') {
+      showToast('O anexo da NF aceita só PDF. Ignorado: ' + file.name, 'error');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('A NF ' + file.name + ' tem mais de 10 MB e o servidor recusa nesse tamanho.', 'error');
+      return;
+    }
+    const fr = new FileReader();
+    fr.onload = () => {
+      uploadedNfDocsBase64.push(fr.result);
+      if (box) {
+        box.classList.remove('hidden');
+        const chip = document.createElement('div');
+        chip.className = 'bg-slate-950 border border-emerald-800/60 text-emerald-300 rounded px-2 py-1 text-[10px] font-semibold';
+        chip.textContent = '📄 ' + file.name;
+        box.appendChild(chip);
+      }
+    };
+    fr.onerror = () => showToast('Não consegui ler o PDF ' + file.name + '.', 'error');
+    fr.readAsDataURL(file);
+  });
+}
+
 function handleFotoUpload(inputEl, context, devId) {
   context = context || 'sac';
   const files = Array.from(inputEl.files || []);
@@ -6372,25 +8628,77 @@ function limparSinistroFotosGrupo(grupo) {
   const container = document.getElementById('sinistro-foto-preview-' + grupo);
   if (container) container.innerHTML = '';
 }
-function renderUploadFotosSinistro(grupo, label, fotosExistentes, fotosHerdadas) {
-  const existentes = fotosExistentes || [];
-  const herdadas = fotosHerdadas || [];
+// 21/09/2026 (migration 42): recebe o SINISTRO e o nome do grupo, e monta a
+// galeria pelo db.estadoFotos(s, grupo, 'sinistros') — caminho no Storage
+// primeiro, base64 legado depois, e o que ainda esta so neste aparelho. A
+// assinatura antiga recebia os arrays de base64 direto do registro; nao ha
+// mais base64 para receber.
+function renderUploadFotosSinistro(s, grupo, label, grupoHerdado) {
+  const herdadas = grupoHerdado ? _galeriaFotosModulo(s, grupoHerdado, 'sinistros', { compacta: true, classeThumb: 'border border-slate-600 opacity-90' }) : '';
   return `
     <div>
       <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">${label}</label>
       <input type="file" accept="image/*" multiple onchange="handleSinistroFotoUpload(this, '${grupo}')"
         class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-emerald-700 file:text-white hover:file:bg-emerald-600 cursor-pointer">
-      ${herdadas.length > 0 ? `
+      ${herdadas ? `
       <div class="mt-1.5">
         <div class="text-[9px] text-slate-500 font-bold uppercase mb-1">Da Etapa 1 (já enviadas)</div>
-        <div class="flex gap-2 flex-wrap">
-          ${herdadas.map(f => `<img src="${f}" class="w-16 h-16 object-cover rounded-lg border border-slate-600 shadow opacity-90">`).join('')}
-        </div>
+        ${herdadas}
       </div>` : ''}
-      <div id="sinistro-foto-preview-${grupo}" class="flex gap-2 flex-wrap mt-1.5">
-        ${existentes.map(f => `<img src="${f}" class="w-16 h-16 object-cover rounded-lg border border-slate-700 shadow">`).join('')}
-      </div>
+      ${_galeriaFotosModulo(s, grupo, 'sinistros', { compacta: true })}
+      <div id="sinistro-foto-preview-${grupo}" class="flex gap-2 flex-wrap mt-1.5"></div>
     </div>`;
+}
+
+// O contador do sinistro e UM para o registro inteiro (migration 42), entao o
+// aviso "aguardando envio" aparece uma vez por etapa, e nao grupo a grupo.
+function _avisoFotosPendentesSinistro(s) {
+  const pend = Math.max(0, parseInt(s && s.midias_pendentes) || 0);
+  if (!pend) return '';
+  return `<div class="text-[10px] font-bold text-amber-300 bg-amber-950/70 border border-amber-700 rounded px-2 py-1 inline-block"
+               title="A foto existe, mas ainda está no aparelho de quem fotografou. Sobe sozinha quando aquele aparelho tiver rede.">📷 ${pend} foto(s) deste sinistro aguardando envio</div>`;
+}
+
+// Enfileira as fotos de varios grupos de UM sinistro. Existe separada de
+// _enfileirarFotosDevolucao por causa do contador: no sinistro ele e UM para o
+// registro inteiro (migration 42), entao so pode ser escrito depois de TODOS
+// os grupos entrarem, e com o total que esta na fila deste aparelho — nao com
+// o tamanho do ultimo grupo.
+async function _enfileirarFotosSinistro(sn, grupos) {
+  const lista = (grupos || []).map(g => ({ grupo: g.grupo, fotos: (g.fotos || []).filter(Boolean) })).filter(g => g.fotos.length);
+  if (!sn || !sn.id || !lista.length) return 0;
+
+  if (!window.fotoStore || !window.fotoStore.disponivel()) {
+    alert('⚠️ A etapa foi gravada, mas a(s) foto(s) NÃO puderam ser guardadas: '
+        + 'este navegador não permite armazenamento local (IndexedDB). '
+        + 'Se estiver em aba anônima, saia dela e anexe a foto de novo.');
+    return 0;
+  }
+
+  const enfileiradas = [];
+  try {
+    for (const g of lista) {
+      for (const dataUrl of g.fotos) {
+        enfileiradas.push(await window.fotoStore.enfileirar({
+          registro_id: sn.id, etapa: g.grupo, dataUrl, modulo: 'sinistros'
+        }));
+      }
+    }
+  } catch (err) {
+    for (const x of enfileiradas) { try { await window.fotoStore.remover(x); } catch (e) {} }
+    alert('⚠️ A etapa foi gravada, mas não consegui guardar a(s) foto(s) neste aparelho: ' + err.message);
+    return 0;
+  }
+
+  let naFila = enfileiradas.length;
+  try { naFila = await window.fotoStore.contarDoRegistro(sn.id, 'sinistros'); } catch (e) {}
+  if (typeof db.ajustarFotosPendentes === 'function') {
+    db.ajustarFotosPendentes(sn.id, lista[0].grupo, naFila, 'sinistros');
+  }
+  if (typeof window.atualizarTarjaFotosPendentes === 'function') window.atualizarTarjaFotosPendentes();
+
+  window.fotoStore.processarFila().catch(() => {});
+  return enfileiradas.length;
 }
 
 // =============================================================================
@@ -6893,6 +9201,9 @@ function buscarCargaInfo(cargaNum) {
   const placa = (v ? v.placa : '') || cPlaca || (itemOp ? (itemOp.veiculo_placa || itemOp.placa) : '') || '';
   const motoristaName = (v ? (v.motorista || v.motorista_nome) : '') || cMotoristaNome || (itemOp ? (itemOp.motorista_nome || itemOp.motorista) : '') || '';
   const ajudanteName = (v ? (v.ajudante || v.ajudante_nome) : '') || cAjudanteNome || (itemOp ? (itemOp.ajudante_nome || itemOp.ajudante) : '') || '';
+  // O segundo ajudante so existe na viagem (v6.6.0) — nao ha equivalente em
+  // cargas nem nas tabelas operacionais, entao aqui nao ha caminho de reserva.
+  const ajudante2Name = (v ? (v.ajudante_2 || '') : '') || '';
   const dataVal = (v ? (v.data_saida || v.data) : '') || cData || (itemOp ? (itemOp.data_saida || itemOp.data || itemOp.data_ocorrencia) : '') || '';
 
   const found = !!(v || c || itemOp || rotaName || placa || motoristaName);
@@ -6903,6 +9214,7 @@ function buscarCargaInfo(cargaNum) {
     placa: placa,
     motoristaName: motoristaName,
     ajudanteName: ajudanteName,
+    ajudante2Name: ajudante2Name,
     data: dataVal,
     motoristaId: c ? c.motorista_id : null,
     ajudanteId: c ? c.ajudante_id : null,
@@ -7053,6 +9365,75 @@ function checkCargaExistente(val) {
   }
 }
 
+// DEVOLUÇÃO JÁ ABERTA PARA A MESMA CARGA (6.8.4, 29/09/2026).
+// Caso real: abriram uma devolução de FALTA e, quando apareceu a SOBRA da mesma
+// carga, abriram outra em vez de corrigir a primeira — e o colaborador levou
+// dois erros por um erro de atendimento. A separação é POR CARGA (5cx de um
+// cliente + 4cx de outro saem como 9cx), então o aviso é pela carga, com
+// devoluções de TODOS os clientes e em QUALQUER status, inclusive concluídas.
+// É só aviso: quem decide entre corrigir a existente ou abrir outra é a pessoa.
+// Mostra uma vez por número digitado (window._sacCargaAvisada) para não
+// reabrir o modal a cada blur no mesmo campo.
+function avisarDevolucoesMesmaCarga(cargaNum) {
+  const cNum = String(cargaNum || '').trim().toUpperCase();
+  if (!cNum || window._sacCargaAvisada === cNum) return;
+
+  const devs = ((db.getDevolucoes && db.getDevolucoes()) || (db.data && db.data.ocorrencias_devolucao) || [])
+    .filter(d => String(d.carga_numero || d.carga || '').trim().toUpperCase() === cNum)
+    .sort((a, b) => String(b.criado_em || '').localeCompare(String(a.criado_em || '')));
+  if (!devs.length) return;
+
+  const container = document.getElementById('modal-container');
+  if (!container) return;
+  window._sacCargaAvisada = cNum;
+
+  const esc = v => String(v === undefined || v === null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const statusDev = d => {
+    if (d.status_gestao === 'CONCLUIDO' || d.status_fechamento === 'CONCLUIDO') return { txt: 'CONCLUÍDA', cls: 'text-emerald-400 border-emerald-700' };
+    if ((d.status_fechamento || 'PENDENTE_FISICO') === 'PENDENTE_FISICO') return { txt: 'AGUARDANDO CD', cls: 'text-amber-400 border-amber-700' };
+    return { txt: 'EM ANÁLISE', cls: 'text-sky-400 border-sky-700' };
+  };
+  const todosItens = (db.data && db.data.itens_devolucao) || [];
+
+  const cards = devs.map(d => {
+    const st = statusDev(d);
+    const itens = (d.itens && d.itens.length) ? d.itens : todosItens.filter(i => i.ocorrencia_devolucao_id == d.id);
+    const listaItens = itens.slice(0, 5).map(i => {
+      const p = getDadosProduto(i);
+      return `<li>${esc(p.codigo)} — ${esc(p.descricao)} · <b>${esc(i.quantidade)}</b>${i.motivo_item ? ` · ${esc(i.motivo_item)}` : ''}</li>`;
+    }).join('');
+    const maisItens = itens.length > 5 ? `<li class="text-slate-500">+ ${itens.length - 5} item(ns)</li>` : '';
+    return `
+      <div class="bg-slate-800/60 border border-slate-700 rounded-lg p-3 space-y-1.5">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <span class="font-black text-emerald-400 text-xs">${esc(d.numero_devolucao || d.numero_protocolo)}</span>
+          <span class="text-[10px] font-bold border rounded px-1.5 py-0.5 ${st.cls}">${st.txt}</span>
+        </div>
+        <div class="text-[11px] text-slate-200"><b>${esc(d.cliente_nome || 'CLIENTE NÃO INFORMADO')}</b>${d.nota_fiscal ? ` · NF ${esc(d.nota_fiscal)}` : ''}</div>
+        <div class="text-[11px] text-slate-400">Motivo: <b class="text-slate-200">${esc(d.motivo_reclamado || '—')}</b> · aberta em ${formatarData(d.criado_em || d.data)}</div>
+        ${listaItens ? `<ul class="text-[10px] text-slate-400 list-disc pl-4 space-y-0.5">${listaItens}${maisItens}</ul>` : ''}
+        <div class="flex justify-end pt-1">
+          <button type="button" onclick="closeModal(); editarDevolucaoSacModal('${esc(d.id)}')" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1 rounded text-[11px] shadow">✏️ Editar esta devolução</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="bg-slate-900 border border-amber-700/70 rounded-2xl max-w-2xl w-full p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-extrabold text-amber-300 flex items-center gap-2">⚠️ Carga ${esc(cNum)} já tem ${devs.length} devolução(ões)</h3>
+        <button type="button" onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+      </div>
+      <p class="text-xs text-slate-300">A separação é conferida por carga. Se esta ocorrência completa uma das abaixo (ex.: uma <b>Falta</b> que depois virou <b>Sobra</b>), corrija a existente em vez de abrir outra — duas devoluções para o mesmo erro geram dois erros para o colaborador.</p>
+      <div class="space-y-2">${cards}</div>
+      <div class="flex justify-end pt-1 border-t border-slate-800">
+        <button type="button" onclick="closeModal()" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-1.5 rounded text-xs mt-3">➕ Seguir abrindo uma nova</button>
+      </div>
+    </div>`;
+  container.classList.remove('hidden');
+}
+
 function onSacCargaSelect(cargaNum) {
   if (!cargaNum) return;
   const info = buscarCargaInfo(cargaNum);
@@ -7065,7 +9446,10 @@ function onSacCargaSelect(cargaNum) {
   const avisoHint = document.getElementById('sac-carga-nao-encontrada');
   if (avisoHint) avisoHint.classList.toggle('hidden', info.found);
 
-  const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+  // Era uma normalizacao propria, quase igual a normalizeStr mas sem colapsar
+  // espaco repetido — e "EDSON  DOS  SANTOS", que esta gravado assim no
+  // banco, nunca casava com o cadastro. Uma regra so (v6.6.0).
+  const norm = normalizeStr;
 
   // Auto-selecionar Rota
   const rotaSel = document.getElementById('sac-rota-nome');
@@ -7092,43 +9476,63 @@ function onSacCargaSelect(cargaNum) {
     }
   }
 
+  // Amarra um <select> de CADASTRO (cujo value e o ID) ao nome que veio da
+  // carga. Motorista e ajudante dividem esta funcao porque dividiam o defeito.
+  //
+  // O QUE ESTAVA ERRADO: nao achando o nome, o codigo fabricava uma <option>
+  // com o NOME dentro do value — num select em que value e o id. O formulario
+  // mandava entao ajudante_id="MARIA SOUZA", que virava NaN e depois null, e a
+  // pessoa aparecia como "N/A" no fim da linha sem ninguem dizer por que. Era
+  // um dos produtores dos 12 casos medidos em 07/09/2026.
+  //
+  // AGORA: acha por comparacao tolerante (acento, caixa, espaco sobrando) e
+  // amarra o ID DE VERDADE. Nao achando, a <option> nasce com value VAZIO e
+  // diz na cara que a pessoa esta fora do cadastro — o campo fica honestamente
+  // em branco em vez de guardar lixo que so seria descoberto no recibo.
+  //
+  // E o sistema NUNCA amarra um "parece ser" sozinho. Ele mostra o palpite e
+  // para por ai; quem confirma e gente, na tela de editar a viagem.
+  const amarrarPessoa = (sel, nomeAlvo, listaCadastro) => {
+    if (!sel || !nomeAlvo) return false;
+    const r = jrConferirCadastro(nomeAlvo, listaCadastro);
+    if (r.status === 'ok') {
+      const alvo = norm(r.sugestao);
+      const opt = Array.from(sel.options).find(o => norm(o.textContent) === alvo);
+      if (opt) { sel.value = opt.value; return true; }
+    }
+    const marca = r.status === 'quase'
+      ? ` (fora do cadastro — parece ser ${r.sugestao})`
+      : ' (fora do cadastro)';
+    const nova = document.createElement('option');
+    nova.value = '';                     // o nome NUNCA vai no lugar do id
+    nova.textContent = nomeAlvo + marca;
+    nova.selected = true;
+    sel.appendChild(nova);
+    return false;
+  };
+
   // Auto-selecionar Motorista
   const motSel = document.getElementById('sac-motorista-id');
   if (motSel) {
     const targetMot = motoristaName || (c ? c.motorista_nome || c.motorista : '');
     if (targetMot) {
-      const nTarget = norm(targetMot);
-      let opt = Array.from(motSel.options).find(o => norm(o.textContent).includes(nTarget) || nTarget.includes(norm(o.textContent)));
-      if (opt) {
-        motSel.value = opt.value;
-      } else {
-        const newOpt = document.createElement('option');
-        newOpt.value = targetMot;
-        newOpt.textContent = targetMot;
-        newOpt.selected = true;
-        motSel.appendChild(newOpt);
-      }
+      amarrarPessoa(motSel, targetMot, (db.data && db.data.motoristas) || []);
     } else if (c && c.motorista_id) {
       motSel.value = c.motorista_id;
     }
   }
 
-  // Auto-selecionar Ajudante
+  // Auto-selecionar Ajudante.
+  //
+  // Aqui cabe UM so, e continua cabendo: o segundo ajudante nao passa por este
+  // campo. Desde a v6.6.0 o recibo pergunta ao Controle de Viagens quem estava
+  // na viagem, entao a equipe inteira chega por la — este campo virou registro
+  // de apoio, e nao mais o fio de onde o dinheiro pendia.
   const ajuSel = document.getElementById('sac-ajudante-id');
   if (ajuSel) {
     const targetAju = ajudanteName || (c ? c.ajudante_nome || c.ajudante : '');
     if (targetAju) {
-      const nTarget = norm(targetAju);
-      let opt = Array.from(ajuSel.options).find(o => norm(o.textContent).includes(nTarget) || nTarget.includes(norm(o.textContent)));
-      if (opt) {
-        ajuSel.value = opt.value;
-      } else {
-        const newOpt = document.createElement('option');
-        newOpt.value = targetAju;
-        newOpt.textContent = targetAju;
-        newOpt.selected = true;
-        ajuSel.appendChild(newOpt);
-      }
+      amarrarPessoa(ajuSel, targetAju, (db.data && db.data.ajudantes) || []);
     } else if (c && c.ajudante_id) {
       ajuSel.value = c.ajudante_id;
     }
@@ -7244,9 +9648,33 @@ function calcTotalValores() {
   if (inp) inp.value = total.toFixed(2);
 }
 
+// TRAVA DE DUPLO ENVIO - 15/10/2026
+//
+// DEV-189/190 (14/10) e DEV-195/196 (15/10) nasceram no mesmo segundo, com
+// ids a ~30 ms um do outro, mesmo usuario e conteudo identico. A submissao
+// abaixo espera o syncCloudToLocal() ANTES de gravar, e durante essa espera
+// o botao continuava ativo: um segundo toque rodava o handler inteiro de
+// novo e cada execucao pegava o proximo numero. A trava vale ate o fim da
+// gravacao (inclusive o alert), e o botao fica desabilitado para quem toca
+// ver que o primeiro envio esta em andamento.
+let _sacAberturaEnviando = false;
+
 async function handleSacAberturaSubmit(e) {
   e.preventDefault();
+  if (_sacAberturaEnviando) return;
+  _sacAberturaEnviando = true;
+  const btn = e.submitter || e.target?.querySelector('button[type="submit"]');
+  const btnTexto = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Salvando...'; }
+  try {
+    await _handleSacAberturaSubmitInterno(e);
+  } finally {
+    _sacAberturaEnviando = false;
+    if (btn && btn.isConnected) { btn.disabled = false; btn.innerHTML = btnTexto; }
+  }
+}
 
+async function _handleSacAberturaSubmitInterno(e) {
   // PRIORIDADE 2e: bloquear submissão com carga inexistente na Largada
   const cargaNumeroDigitada = document.getElementById('sac-carga-numero')?.value || '';
   if (!buscarCargaInfo(cargaNumeroDigitada).found) {
@@ -7332,13 +9760,23 @@ async function handleSacAberturaSubmit(e) {
     motivo_reclamado: document.getElementById('sac-motivo-reclamado').value,
     valor_reclamado: document.getElementById('sac-valor-reclamado').value,
     detalhamento_texto: document.getElementById('sac-detalhamento').value,
-    // ADENDO: salva os ARRAYS completos de fotos/vídeos (antes só o
-    // primeiro item era persistido, e o vídeo era descartado por um bug
-    // em store.js). foto_url/video_url continuam sendo enviados como
-    // aliases do 1º item, por compatibilidade.
-    fotos_abertura: (typeof uploadedFotosBase64 !== 'undefined') ? uploadedFotosBase64 : [],
+    // A FOTO NÃO ENTRA MAIS AQUI (04/09/2026, migration 38).
+    //
+    // Estas três linhas gravavam a imagem inteira em base64 dentro do
+    // registro — e `foto_url` gravava a PRIMEIRA de novo, duplicada. Medido
+    // na nuvem antes da mudança: 3.975 dos 4.029 KB da tabela eram isso, e
+    // como o pull monta select=*, cada foto voltava para todo aparelho a
+    // cada 30 segundos. Onze devoluções com foto encheram os ~5 MB de
+    // localStorage e custaram a tratativa da DEV-024, que foi digitada e
+    // nunca existiu.
+    //
+    // Agora a foto vai para a fila do IndexedDB e de lá para o Storage, como
+    // a reentrega faz desde a migration 34. Isso acontece logo ABAIXO desta
+    // chamada, e não aqui, por um motivo simples: a fila precisa do id da
+    // devolução, e o id só existe depois de addDevolucao() retornar.
+    fotos_abertura: [],
     videos_abertura: (typeof uploadedVideosBase64 !== 'undefined') ? uploadedVideosBase64 : [],
-    foto_url: (typeof uploadedFotosBase64 !== 'undefined' && uploadedFotosBase64.length) ? uploadedFotosBase64[0] : (typeof uploadedFotoBase64 !== 'undefined' ? uploadedFotoBase64 : ''),
+    foto_url: '',
     video_url: (typeof uploadedVideosBase64 !== 'undefined' && uploadedVideosBase64.length) ? uploadedVideosBase64[0] : (typeof uploadedVideoBase64 !== 'undefined' ? uploadedVideoBase64 : ''),
     cliente_emite_nf: emiteNf,
     forma_acerto: document.getElementById('sac-forma-acerto').value,
@@ -7346,8 +9784,17 @@ async function handleSacAberturaSubmit(e) {
     observacao_sem_itens: obsSemItens
   }, itens);
 
+  // A foto só pode ir para a fila agora: antes disto não havia id para ela
+  // apontar. Se falhar, a devolução JÁ ESTÁ GRAVADA — o aviso diz exatamente
+  // isso, para ninguém achar que perdeu a ocorrência inteira por causa da
+  // foto.
+  await _enfileirarFotosDevolucao(dev, 'abertura',
+    (typeof uploadedFotosBase64 !== 'undefined') ? uploadedFotosBase64 : []);
+  await _enfileirarFotosDevolucao(dev, 'nf', uploadedNfDocsBase64);
+
   uploadedFotosBase64 = [];
   uploadedVideosBase64 = [];
+  uploadedNfDocsBase64 = [];
 
   // Mesmo problema do cadastro de usuário e do import de escala (achados de
   // 20/08/2026): o alert() logo abaixo bloqueia a aba até o usuário tocar
@@ -7373,25 +9820,29 @@ function renderSacInvestigacaoView() {
   const motivos = db.data.motivos_devolucao;
   const causasRaiz = (db.data.motivos_devolucao && db.data.motivos_devolucao.length > 0) ? db.data.motivos_devolucao : (db.data.causas_raiz || []);
   const usuariosAtivos = (db.getUsuarios && db.getUsuarios().length > 0) ? db.getUsuarios().filter(u => u.ativo !== false) : (db.data.usuarios || []);
-  const separadores = (typeof db !== 'undefined' && typeof db.getSeparadores === 'function') ? db.getSeparadores() : (db.data.separadores_conferentes || []);
-  const conferentes = (typeof db !== 'undefined' && typeof db.getConferentes === 'function') ? db.getConferentes() : (db.data.separadores_conferentes || []);
+  // Separador e Conferente usam a MESMA lista: todos os colaboradores do CD.
+  // A operação não é estanque — separador que sabe conferir assume a
+  // conferência para agilizar, e conferente/empilhador ajuda na separação
+  // quando precisa. Filtrar por função escondia gente que de fato atuou.
+  const equipeCd = (typeof db !== 'undefined' && typeof db.getColaboradoresCDNomes === 'function') ? db.getColaboradoresCDNomes() : (db.data.separadores_conferentes || []);
+  const separadores = equipeCd;
+  const conferentes = equipeCd;
 
   const fDataDe = window._invFiltroDataDe || '';
   const fDataAte = window._invFiltroDataAte || '';
   const fTexto = window._invFiltroTexto || '';
+  const fResp = window._invFiltroResponsavel || '';
 
   let devsFiltrados = todosDevs;
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   devsFiltrados = devsFiltrados.filter(d => registroNoPeriodo(d, 'ocorrencias_devolucao', fDataDe, fDataAte));
-  if (fTexto) {
-    const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
-    const q = norm(fTexto);
-    devsFiltrados = devsFiltrados.filter(d =>
-      norm(d.numero_devolucao || d.numero_protocolo).includes(q) ||
-      norm(d.cliente_nome).includes(q) ||
-      norm(d.nota_fiscal).includes(q)
-    );
-  }
+  // A busca era escrita aqui e em lugar nenhum mais; passou para
+  // devolucaoCasaBusca(), compartilhada com a Tratativa, para as duas telas não
+  // divergirem. Corrige de passagem um caso que ficava de fora: o protocolo só
+  // era consultado quando numero_devolucao estava vazio (`a || b`), então numa
+  // devolução com os dois preenchidos não se achava nada pelo DEV-2026-xxx.
+  devsFiltrados = devsFiltrados.filter(d => devolucaoCasaBusca(d, fTexto));
+  devsFiltrados = devsFiltrados.filter(d => devolucaoCasaResponsavel(d, fResp));
 
   const pendentes = devsFiltrados.filter(d => !d.motivo_real_causa_raiz || d.motivo_real_causa_raiz.trim() === '');
   const monitorados = devsFiltrados.filter(d => d.motivo_real_causa_raiz && d.motivo_real_causa_raiz.trim() !== '');
@@ -7440,10 +9891,21 @@ function renderSacInvestigacaoView() {
           <!-- Busca por Protocolo/Cliente/NF -->
           <div class="flex items-center gap-2 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
             <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">🔎 Buscar:</span>
-            <input type="text" id="inv-busca-texto" value="${fTexto}" placeholder="Protocolo, cliente ou NF"
+            <input type="text" id="inv-busca-texto" value="${fTexto}" placeholder="Protocolo, cliente, NF ou motorista"
               oninput="window._invFiltroTexto=this.value; renderApp(); setTimeout(()=>{ const el=document.getElementById('inv-busca-texto'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0);"
               class="bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs w-40 sm:w-56">
             ${fTexto ? `<button onclick="window._invFiltroTexto=''; renderApp()" class="text-slate-400 hover:text-white text-xs font-bold" title="Limpar busca">✕</button>` : ''}
+          </div>
+          <!-- Filtro de responsável (22/09/2026): o mesmo da Tratativa. Aqui
+               ele só tem efeito na aba Monitorados — na Pendentes ainda não há
+               tipo de erro classificado, que é de onde o responsável sai. -->
+          <div class="flex items-center gap-1.5 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
+            <span class="text-[10px] text-slate-400 font-bold uppercase pl-1">👤 Responsável:</span>
+            <select id="inv-filtro-responsavel" onchange="window._invFiltroResponsavel=this.value; renderApp();" class="bg-slate-800 border border-slate-700 text-purple-300 rounded p-1 text-xs font-semibold">
+              <option value="">Todos</option>
+              ${opcoesResponsavelDevolucao(fResp)}
+              <option value="__SEM__" ${fResp==='__SEM__'?'selected':''}>— Sem responsável definido</option>
+            </select>
           </div>
           <!-- Ordenação por campo -->
           <div class="flex items-center gap-1.5 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow">
@@ -7482,7 +9944,14 @@ function renderSacInvestigacaoView() {
         </div>
       </div>
 
-      ${exibidos.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">Nenhuma ocorrência encontrada nesta categoria.</div>` :
+      ${exibidos.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">
+          Nenhuma ocorrência encontrada nesta categoria.
+          ${avisoOutraAba(
+            activeInvestigacaoSubTab === 'pendentes' ? monitorados.length : pendentes.length,
+            activeInvestigacaoSubTab === 'pendentes' ? 'Monitorados' : 'Pendentes',
+            `switchInvestigacaoSubTab('${activeInvestigacaoSubTab === 'pendentes' ? 'monitorados' : 'pendentes'}')`
+          )}
+        </div>` :
       exibidos.map(d => `
         <div class="bg-slate-900 border ${d.motivo_real_causa_raiz?'border-emerald-800/60':'border-amber-800/60'} rounded-xl p-5 shadow-xl space-y-4">
           <!-- Cabeçalho -->
@@ -7502,10 +9971,13 @@ function renderSacInvestigacaoView() {
                 <div class="text-base font-black text-emerald-400">R$ ${d.valor_reclamado.toFixed(2)}</div>
                 <div class="text-[10px] text-slate-400">${d.forma_acerto}</div>
               </div>
-              ${(d.status_fechamento || 'PENDENTE_FISICO') === 'PENDENTE_FISICO' ? `
-                <button onclick="editarDevolucaoSacModal('${d.id}')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-800/70 shadow-sm transition flex items-center gap-1" title="Corrigir cliente, NF e itens sem perder o número do protocolo">
-                  ✏️ Corrigir Devolução
-                </button>` : ''}
+              <!-- Sem trava de status desde 08/09/2026: a devolução responde
+                   quem responde pelo erro, e isso não deixa de ser corrigível
+                   porque o CD conferiu a mercadoria. O que a conferência
+                   protege é tratado item a item em updateDevolucaoSac. -->
+              <button onclick="editarDevolucaoSacModal('${d.id}')" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-800/70 shadow-sm transition flex items-center gap-1" title="Corrigir cliente, NF, motivo e itens sem perder o número do protocolo">
+                ✏️ Corrigir Devolução
+              </button>
               ${d.motivo_real_causa_raiz ? `
                 <button onclick="editarInvestigacaoModal('${d.id}')" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1">
                   ✏️ Editar Análise
@@ -7519,17 +9991,8 @@ function renderSacInvestigacaoView() {
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
             <!-- Relato -->
             <div class="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-2">
-              <div class="font-bold text-slate-300">Reclamação:</div>
-              <div class="text-slate-400 italic">"${d.motivo_reclamado}"</div>
-              <div class="text-slate-300">${d.detalhamento_texto}</div>
+              ${renderRelatoAbertura(d, { titulo: 'Reclamação' })}
               <div class="pt-1">${renderGaleriaMidia(d, { titulo: '📎 Mídia Anexada' })}</div>
-              ${d.itens?.length > 0 ? `
-                <div class="pt-2 border-t border-slate-800">
-                  <div class="font-bold text-slate-400 mb-1">Itens Reclamados:</div>
-                  <div class="space-y-1">
-                    ${d.itens.map(i => `<div class="flex justify-between text-[11px] text-slate-300"><span>${i.produto_codigo} — ${i.produto_descricao} (x${i.quantidade})</span><span class="text-emerald-400 font-semibold">R$ ${i.valor_total.toFixed(2)}</span></div>`).join('')}
-                  </div>
-                </div>` : ''}
             </div>
 
             <!-- Formulário de Apuração -->
@@ -7553,16 +10016,19 @@ function renderSacInvestigacaoView() {
                 <input type="text" id="inv-erro-outro-${d.id}" value="${d.tipo_erro_outro||''}" placeholder="Especifique o outro erro..." class="${d.tipo_erro==='OUTRO'?'':'hidden'} mt-1 w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
               </div>
 
+              <!-- O " *" já sai no HTML quando o registro JÁ está classificado
+                   como ERRO CARREGAMENTO; marcarSeparadorConferenteObrigatorio()
+                   cuida de quem MUDA o tipo com a tela aberta. -->
               <div class="grid grid-cols-2 gap-2">
                 <div>
-                  <label class="block text-[10px] text-slate-300 mb-1">Separador (Equipe CD)</label>
+                  <label class="block text-[10px] text-slate-300 mb-1">Separador (Equipe CD)${d.tipo_erro === 'ERRO CARREGAMENTO' ? ' <span class="text-red-400 font-bold">*</span>' : ''}</label>
                   <select id="inv-sep-${d.id}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
                     <option value="">-- Não identificado --</option>
                     ${separadores.map(s => `<option value="${s}" ${(d.separador_apurado||d.separador_nome)===s?'selected':''}>${s}</option>`).join('')}
                   </select>
                 </div>
                 <div>
-                  <label class="block text-[10px] text-slate-300 mb-1">Conferente (Equipe CD)</label>
+                  <label class="block text-[10px] text-slate-300 mb-1">Conferente (Equipe CD)${d.tipo_erro === 'ERRO CARREGAMENTO' ? ' <span class="text-red-400 font-bold">*</span>' : ''}</label>
                   <select id="inv-conf-${d.id}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
                     <option value="">-- Não identificado --</option>
                     ${conferentes.map(s => `<option value="${s}" ${(d.conferente_apurado||d.conferente_nome)===s?'selected':''}>${s}</option>`).join('')}
@@ -7622,7 +10088,8 @@ function editarInvestigacaoModal(id) {
   if (!d) return;
 
   const causasRaiz = db.getMotivosDevolucao ? db.getMotivosDevolucao() : (db.data.motivos_devolucao || []);
-  const separadores = db.data.separadores_conferentes || [];
+  // Mesma lista única do CD usada na apuração: sem separar por função.
+  const separadores = (typeof db.getColaboradoresCDNomes === 'function') ? db.getColaboradoresCDNomes() : (db.data.separadores_conferentes || []);
 
   const modalContainer = document.getElementById('modal-container');
   if (!modalContainer) return;
@@ -7643,21 +10110,21 @@ function editarInvestigacaoModal(id) {
 
         <div>
           <label class="block text-[10px] text-amber-400 font-bold mb-1">Tipo de Erro *</label>
-          <select id="ed-inv-erro" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 font-bold">
+          <select id="ed-inv-erro" required onchange="marcarSeparadorConferenteObrigatorio(null, this.value, 'ed')" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 font-bold">
             ${opcoesTipoErro(d.tipo_erro)}
           </select>
         </div>
 
         <div class="grid grid-cols-2 gap-2">
           <div>
-            <label class="block text-[10px] text-slate-400 mb-1">Separador</label>
+            <label class="block text-[10px] text-slate-400 mb-1">Separador${d.tipo_erro === 'ERRO CARREGAMENTO' ? ' <span class="text-red-400 font-bold">*</span>' : ''}</label>
             <select id="ed-inv-sep" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
               <option value="">-- Não se aplica --</option>
               ${separadores.map(s => `<option value="${s}" ${(d.separador_apurado||d.separador_nome)===s?'selected':''}>${s}</option>`).join('')}
             </select>
           </div>
           <div>
-            <label class="block text-[10px] text-slate-400 mb-1">Conferente</label>
+            <label class="block text-[10px] text-slate-400 mb-1">Conferente${d.tipo_erro === 'ERRO CARREGAMENTO' ? ' <span class="text-red-400 font-bold">*</span>' : ''}</label>
             <select id="ed-inv-conf" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5">
               <option value="">-- Não se aplica --</option>
               ${separadores.map(s => `<option value="${s}" ${(d.conferente_apurado||d.conferente_nome)===s?'selected':''}>${s}</option>`).join('')}
@@ -7707,7 +10174,7 @@ function editarInvestigacaoModal(id) {
   modalContainer.classList.remove('hidden');
 }
 
-function handleSalvarEdicaoInvestigacao(e, id) {
+async function handleSalvarEdicaoInvestigacao(e, id) {
   e.preventDefault();
 
   // O modal ganhou upload de evidencia em 26/08/2026, e o video sobe para o
@@ -7715,22 +10182,39 @@ function handleSalvarEdicaoInvestigacao(e, id) {
   // SEM o video - mesma trava que a tela de abertura ja usa.
   if (typeof jrPodeSalvarComVideos === 'function' && !jrPodeSalvarComVideos()) return;
 
+  // A MESMA trava do formulário da Análise, e não uma parecida: travar só lá
+  // deixaria este modal como porta dos fundos para salvar um ERRO CARREGAMENTO
+  // sem separador e sem conferente.
+  const edErro = document.getElementById('ed-inv-erro').value;
+  const edSep  = document.getElementById('ed-inv-sep').value;
+  const edConf = document.getElementById('ed-inv-conf').value;
+  if (!exigeSeparadorConferente(edErro, edSep, edConf)) return;
+
   const dev = db.data.ocorrencias_devolucao.find(x => x.id == id);
   if (dev) {
     db.saveVersion('ocorrencias_devolucao', dev);
   }
   db.updateInvestigacao(id, {
     motivo_real_causa_raiz: document.getElementById('ed-inv-causa').value,
-    tipo_erro: document.getElementById('ed-inv-erro').value,
-    separador_apurado: document.getElementById('ed-inv-sep').value,
-    conferente_apurado: document.getElementById('ed-inv-conf').value,
+    tipo_erro: edErro,
+    separador_apurado: edSep,
+    conferente_apurado: edConf,
     acao_tomada: document.getElementById('ed-inv-acao').value,
-    // Os inputs do modal usam handleFotoUpload/handleVideoUpload com o contexto
-    // 'inv', que enche estes mesmos globais - sem passa-los adiante, a evidencia
-    // anexada aqui aparecia no preview e nao era gravada em lugar nenhum.
-    fotos_investigacao_novas: (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : [],
+    // A foto sai daqui pelo mesmo motivo da abertura (migration 38): vai para
+    // a fila logo abaixo, em vez de virar base64 dentro do registro. O vídeo
+    // continua por este caminho — ele tem bucket próprio desde a migration 35
+    // e não é o que enche a cota (0,8 KB no total, medido em 04/09/2026).
+    fotos_investigacao_novas: [],
     videos_investigacao_novas: (typeof uploadedVideosBase64Inv !== 'undefined' && Array.isArray(uploadedVideosBase64Inv)) ? uploadedVideosBase64Inv : []
   });
+
+  // DEPOIS do update, e nunca antes: se a apuração não gravar, não há por que
+  // guardar foto para ela.
+  const devAlvo = (db.data.ocorrencias_devolucao || []).find(x => x.id == id);
+  if (devAlvo) {
+    await _enfileirarFotosDevolucao(devAlvo, 'investigacao',
+      (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : []);
+  }
 
   if (typeof uploadedFotosBase64Inv !== 'undefined') uploadedFotosBase64Inv = [];
   if (typeof uploadedVideosBase64Inv !== 'undefined') uploadedVideosBase64Inv = [];
@@ -7743,6 +10227,90 @@ function handleSalvarEdicaoInvestigacao(e, id) {
 function toggleOutroErro(devId, valor) {
   const outro = document.getElementById(`inv-erro-outro-${devId}`);
   if (outro) outro.classList.toggle('hidden', valor !== 'OUTRO');
+  marcarSeparadorConferenteObrigatorio(devId, valor);
+}
+
+// Acende o " *" nos rótulos de Separador e Conferente quando o tipo escolhido
+// é ERRO CARREGAMENTO. A trava de verdade é exigeSeparadorConferente(), no
+// submit; isto existe só para a pessoa ver a exigência ANTES de preencher o
+// resto e tomar o alerta na hora de salvar.
+//
+// Não dá para usar o atributo `required` do HTML aqui: a obrigatoriedade
+// depende de OUTRO campo do mesmo formulário, e o <select> é redesenhado
+// inteiro a cada renderApp(). O rótulo é mexido direto no DOM, sem redesenhar
+// — redesenhar perderia o que já estava digitado nos outros cards da tela.
+function marcarSeparadorConferenteObrigatorio(devId, valor, prefixo) {
+  const obrigatorio = String(valor || '').trim().toUpperCase() === 'ERRO CARREGAMENTO';
+  const p = prefixo || 'inv';
+  ['sep', 'conf'].forEach(sufixo => {
+    const campo = document.getElementById(p === 'inv' ? `inv-${sufixo}-${devId}` : `ed-inv-${sufixo}`);
+    if (!campo) return;
+    const label = campo.parentElement ? campo.parentElement.querySelector('label') : null;
+    if (label) {
+      // O texto base sai do próprio rótulo na primeira passada e fica guardado:
+      // as duas telas escrevem o rótulo de um jeito ("Separador (Equipe CD)" na
+      // Análise, "Separador" no modal) e reescrever com um texto fixo daqui
+      // apagaria a diferença.
+      if (!label.dataset.rotuloBase) label.dataset.rotuloBase = label.textContent.replace(/\s*\*\s*$/, '').trim();
+      label.innerHTML = obrigatorio
+        ? `${label.dataset.rotuloBase} <span class="text-red-400 font-bold">*</span>`
+        : label.dataset.rotuloBase;
+    }
+    campo.classList.toggle('border-red-600', obrigatorio && !campo.value);
+  });
+}
+
+// QUEM DIVIDE A CONTA DO ADIANTAMENTO. Uma definicao so, porque ate 04/09/2026
+// existiam duas e elas discordavam: gerarAdiantamentoPdf() aceitava 'N/A' como
+// ajudante de verdade e rateava 50/50 com uma via para ninguem, enquanto o
+// ranking de produtividade (app.js:5148) filtrava 'N/A' corretamente.
+//
+// Devolve NOMES, nao ids, de proposito: o id do ajudante e justamente o elo
+// que esta quebrado. O nome e o que a escala tem, o que o recibo imprime e o
+// que a pessoa assina.
+//
+// JR_NAO_E_PESSOA mudou de casa na v6.6.0: vive no store.js, que carrega antes
+// deste arquivo, porque agora quem monta dev.ajudantes e o store (a partir do
+// Controle de Viagens) e quem imprime e daqui. Mesma regra dos dois lados.
+function equipeDaDevolucao(dev) {
+  const nomes = [];
+  const push = (n) => {
+    const v = String(n || '').trim().toUpperCase();
+    if (JR_NAO_E_PESSOA.includes(v)) return;
+    if (!nomes.includes(v)) nomes.push(v);   // mesma pessoa nao paga duas vezes
+  };
+  push(dev.motorista_nome);
+  (Array.isArray(dev.ajudantes) ? dev.ajudantes : []).forEach(push);
+  push(dev.ajudante_nome);
+  return nomes;
+}
+
+// A MESMA EQUIPE, com o papel de cada um — o recibo precisa saber o que
+// escrever em cada folha. O motorista e reconhecido pelo nome, e nao pela
+// posicao na lista: numa devolucao sem motorista informado, o primeiro da lista
+// e um ajudante, e a folha nao pode sair dizendo "MOTORISTA / PRESTADOR".
+//
+// Devolve SEMPRE ao menos uma folha. Devolucao sem ninguem identificado
+// continua imprimindo uma via de motorista com 100% do valor, como hoje.
+function equipeComPapel(dev) {
+  const motorista = String(dev.motorista_nome || '').trim().toUpperCase();
+  const folhas = equipeDaDevolucao(dev).map(nome => ({
+    nome,
+    papel: nome === motorista ? 'MOTORISTA' : 'AJUDANTE'
+  }));
+  if (!folhas.length) {
+    folhas.push({ nome: dev.motorista_nome || 'NÃO INFORMADO', papel: 'MOTORISTA' });
+  }
+  return folhas;
+}
+// Rateio em CENTAVOS. R$ 100,00 / 3 = 33,33 e 33,33 x 3 = 99,99: some um
+// centavo, e a soma dos recibos deixa de fechar com o valor cobrado. A sobra
+// vai para a primeira via (o motorista).
+function ratearValor(total, n) {
+  const cent = Math.round((parseFloat(total) || 0) * 100);
+  if (!n) return [];
+  const base = Math.floor(cent / n), sobra = cent - base * n;
+  return Array.from({ length: n }, (_, i) => (base + (i < sobra ? 1 : 0)) / 100);
 }
 
 function gerarAdiantamentoPdf(devId) {
@@ -7757,11 +10325,16 @@ function gerarAdiantamentoPdf(devId) {
   const totalValor = parseFloat(dev.valor_reclamado) || 0;
   const dtCriacao = dev.criado_em ? new Date(dev.criado_em).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
 
-  // REGRA DE DIVISÃO: Rateio 50/50 quando existe ajudante de fato vinculado. Sem ajudante, valor integral 100% no motorista.
-  const ajudanteNomeBruto = String(dev.ajudante_nome || '').trim();
-  const temAjudante = !!(ajudanteNomeBruto && ajudanteNomeBruto.toUpperCase() !== 'AJUDANTE' && ajudanteNomeBruto.toUpperCase() !== 'NÃO INFORMADO');
-  const valorPorPessoa = (temAjudante ? (totalValor / 2) : totalValor).toFixed(2);
-  const percentualLabel = temAjudante ? '50%' : '100%';
+  // REGRA DE DIVISÃO: uma folha por pessoa que estava na viagem, cada uma com A
+  // SUA cota. Sem ninguem alem do motorista, uma folha so, com 100% do valor.
+  //
+  // Ate a v6.5.1 eram duas folhas escritas a mao, e AS DUAS imprimiam cotas[0]
+  // — a cota do motorista. Com centavo quebrado, as duas somavam um centavo a
+  // mais que o valor cobrado; cotas[1] nunca chegou a ser lido.
+  const folhas = equipeComPapel(dev);
+  const cotas  = ratearValor(totalValor, folhas.length);
+  const rateado = folhas.length > 1;
+  const percentualLabel = Math.round(100 / folhas.length) + '%';
 
   const itensTableHtml = itens.length === 0 ? `
     <div style="padding: 10px; text-align: center; color: #64748b; font-style: italic; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc;">
@@ -7795,9 +10368,19 @@ function gerarAdiantamentoPdf(devId) {
       </tbody>
     </table>`;
 
-  const via2AjudanteHtml = !temAjudante ? '' : `
-  <!-- PÁGINA 2: VIA DO AJUDANTE -->
-  <div class="page-container page-break">
+  // UMA FOLHA POR PESSOA. Era este laço que faltava: as duas folhas estavam
+  // escritas à mão, uma "VIA DO MOTORISTA" e outra "VIA DO AJUDANTE", e por
+  // isso não havia lugar para um terceiro. O percentual também estava escrito à
+  // mão ("50%") — com três pessoas a folha do ajudante sairia dizendo 50%
+  // enquanto a do motorista dizia 33%, no mesmo PDF.
+  const paginasHtml = folhas.map((pessoa, idx) => {
+    const cotaFmt = (cotas[idx] || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2});
+    const papelTitulo = pessoa.papel === 'MOTORISTA' ? 'Motorista' : 'Ajudante';
+    const papelAssin  = pessoa.papel === 'MOTORISTA' ? 'MOTORISTA / PRESTADOR' : 'AJUDANTE / COLABORADOR';
+    const outros = folhas.filter((_, i) => i !== idx).map(p => p.nome).join('  •  ');
+    return `
+  <!-- PÁGINA ${idx + 1}: VIA DE ${pessoa.nome} -->
+  <div class="page-container${idx > 0 ? ' page-break' : ''}">
     <div>
       <div class="header">
         <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
@@ -7807,16 +10390,17 @@ function gerarAdiantamentoPdf(devId) {
         </div>
       </div>
 
-      <div class="badge-via">RECIBO DE ADIANTAMENTO — VIA DO AJUDANTE (PÁGINA 2 - 50%)</div>
+      <div class="badge-via">RECIBO DE ADIANTAMENTO — VIA DO ${pessoa.papel} (PÁGINA ${idx + 1} DE ${folhas.length} — ${percentualLabel})</div>
 
       <div class="section-title">📋 DADOS DA OCORRÊNCIA & TRANSPORTE</div>
       <div class="grid">
-        <div class="field"><div class="field-lbl">Colaborador / Ajudante</div><div class="field-val">${dev.ajudante_nome}</div></div>
+        <div class="field"><div class="field-lbl">Colaborador / ${papelTitulo}</div><div class="field-val">${pessoa.nome || 'NÃO INFORMADO'}</div></div>
         <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Data: ${dtCriacao})</div></div>
         <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
         <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
         <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
         <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
+        ${outros ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Demais integrantes da equipe (Rateio ${percentualLabel} cada)</div><div class="field-val">${outros}</div></div>` : ''}
       </div>
 
       <div class="motivo-box">
@@ -7832,20 +10416,20 @@ function gerarAdiantamentoPdf(devId) {
 
     <div>
       <div class="val-highlight">
-        <div class="val-lbl">VALOR DO ADIANTAMENTO DO AJUDANTE (50% do total R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
-        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
+        <div class="val-lbl">VALOR DO ADIANTAMENTO DO ${pessoa.papel} (${percentualLabel} do total R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
+        <div class="val-amt">R$ ${cotaFmt}</div>
       </div>
 
       <div class="termo">
         <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> (correspondente a 50% do total da ocorrência) referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${cotaFmt}</b> ${rateado ? `(correspondente a ${percentualLabel} do total da ocorrência, rateado entre os ${folhas.length} integrantes da equipe)` : '(100% integral)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
       </div>
 
       <div class="sigs">
         <div>
           <div class="sig-space"></div>
           <div class="sig-line"></div>
-          <div class="sig-lbl">${dev.ajudante_nome}<br>(AJUDANTE / COLABORADOR)</div>
+          <div class="sig-lbl">${pessoa.nome || 'ASSINATURA'}<br>(${papelAssin})</div>
         </div>
         <div>
           <div class="sig-space"></div>
@@ -7855,6 +10439,7 @@ function gerarAdiantamentoPdf(devId) {
       </div>
     </div>
   </div>`;
+  }).join('');
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -7897,68 +10482,7 @@ function gerarAdiantamentoPdf(devId) {
   </style>
 </head>
 <body>
-  <!-- PÁGINA 1: VIA DO MOTORISTA -->
-  <div class="page-container">
-    <div>
-      <div class="header">
-        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
-        <div class="header-title">
-          <h2>JR DISTRIBUIDORA</h2>
-          <p>Logística Corporativa • Gestão de Frotas & Operações Logísticas</p>
-        </div>
-      </div>
-
-      <div class="badge-via">RECIBO DE ADIANTAMENTO — VIA DO MOTORISTA (PÁGINA 1 - ${percentualLabel})</div>
-
-      <div class="section-title">📋 DADOS DA OCORRÊNCIA & TRANSPORTE</div>
-      <div class="grid">
-        <div class="field"><div class="field-lbl">Colaborador / Motorista</div><div class="field-val">${dev.motorista_nome || 'NÃO INFORMADO'}</div></div>
-        <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Data: ${dtCriacao})</div></div>
-        <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
-        ${temAjudante ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Ajudante Vinculado (Rateio 50%)</div><div class="field-val">${dev.ajudante_nome}</div></div>` : ''}
-      </div>
-
-      <div class="motivo-box">
-        <div class="motivo-lbl">MOTIVO RECLAMADO DA OCORRÊNCIA</div>
-        <div class="motivo-txt">${dev.motivo_reclamado || 'NÃO ESPECIFICADO'}${dev.motivo_real_causa_raiz ? ` — Causa Raiz: ${dev.motivo_real_causa_raiz}` : ''}</div>
-      </div>
-
-      <div class="products-section">
-        <div class="section-title">📦 PRODUTOS / ITENS QUE GERARAM A OCORRÊNCIA (${itens.length})</div>
-        ${itensTableHtml}
-      </div>
-    </div>
-
-    <div>
-      <div class="val-highlight">
-        <div class="val-lbl">VALOR DO ADIANTAMENTO DO MOTORISTA (${percentualLabel} do total R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
-        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
-      </div>
-
-      <div class="termo">
-        <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> ${temAjudante ? '(correspondente a 50% do total da ocorrência)' : '(100% integral)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
-      </div>
-
-      <div class="sigs">
-        <div>
-          <div class="sig-space"></div>
-          <div class="sig-line"></div>
-          <div class="sig-lbl">${dev.motorista_nome || 'ASSINATURA MOTORISTA'}<br>(MOTORISTA / PRESTADOR)</div>
-        </div>
-        <div>
-          <div class="sig-space"></div>
-          <div class="sig-line"></div>
-          <div class="sig-lbl">SUPERVISOR LOGÍSTICO / JR<br>(JR DISTRIBUIDORA)</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  ${via2AjudanteHtml}
+  ${paginasHtml}
 
   <script>
     window.onload = function() {
@@ -7981,7 +10505,10 @@ function gerarValeMotoristaPdf(devId) {
   gerarAdiantamentoPdf(devId);
 }
 
-function handleInvestigacaoSubmit(e, devId) {
+// 21/09/2026: virou async pelo mesmo motivo do modal de edição (migration
+// 38): a foto da investigação vai para a fila do fotoStore DEPOIS de o
+// registro gravar, e não como base64 dentro dele.
+async function handleInvestigacaoSubmit(e, devId) {
   e.preventDefault();
 
   const causaVal = document.getElementById(`inv-causa-${devId}`)?.value || '';
@@ -7989,6 +10516,8 @@ function handleInvestigacaoSubmit(e, devId) {
   const erroOutro = document.getElementById(`inv-erro-outro-${devId}`)?.value || '';
   const acaoVal = document.getElementById(`inv-acao-${devId}`)?.value || '';
   const respAnalise = document.getElementById(`inv-resp-${devId}`)?.value || '';
+  const sepVal = document.getElementById(`inv-sep-${devId}`)?.value || '';
+  const confVal = document.getElementById(`inv-conf-${devId}`)?.value || '';
 
   if (!causaVal) {
     alert('Por favor, selecione a Causa Raiz Real!');
@@ -7998,6 +10527,7 @@ function handleInvestigacaoSubmit(e, devId) {
     alert('Por favor, selecione o Tipo de Erro / Categoria!');
     return;
   }
+  if (!exigeSeparadorConferente(erroSel, sepVal, confVal)) return;
   if (!acaoVal.trim()) {
     alert('Por favor, descreva a Ação Tomada / Encaminhamento!');
     return;
@@ -8016,12 +10546,19 @@ function handleInvestigacaoSubmit(e, devId) {
     motivo_real_causa_raiz: causaVal,
     tipo_erro: erroSel,
     tipo_erro_outro: erroOutro,
-    separador_apurado: document.getElementById(`inv-sep-${devId}`)?.value || '',
-    conferente_apurado: document.getElementById(`inv-conf-${devId}`)?.value || '',
+    separador_apurado: sepVal,
+    conferente_apurado: confVal,
     video_investigacao_url: videoInvUrl,
-    // ADENDO: novas fotos/vídeos anexados durante a Investigação (arrays
-    // completos) — são ACUMULADOS ao histórico da ocorrência em updateInvestigacao()
-    fotos_investigacao_novas: (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : [],
+    // FOTO NÃO ENTRA AQUI (achado de 21/09/2026). Este formulário era o
+    // ÚNICO caminho da devolução que ainda gravava foto em base64 dentro do
+    // registro: a migration 38 tirou o base64 da abertura e do modal de
+    // edição da investigação, mas esqueceu este submit. Medido no aparelho
+    // do gestor: 8 devoluções apuradas num só dia puseram 1.616 KB de
+    // fotos_investigacao no jr_sac_db e levaram a cota a 98%. A foto vai
+    // para a fila logo abaixo (_enfileirarFotosDevolucao), que é o mesmo
+    // caminho da abertura; o vídeo continua por aqui porque tem bucket
+    // próprio desde a migration 35 e não pesa na cota.
+    fotos_investigacao_novas: [],
     videos_investigacao_novas: (typeof uploadedVideosBase64Inv !== 'undefined' && Array.isArray(uploadedVideosBase64Inv)) ? uploadedVideosBase64Inv : [],
     acao_tomada: acaoVal,
     responsavel_analise: respAnalise,
@@ -8029,6 +10566,13 @@ function handleInvestigacaoSubmit(e, devId) {
   });
 
   const dev = db.data.ocorrencias_devolucao.find(x => x.id == devId);
+
+  // DEPOIS do update, e nunca antes: se a apuração não gravar, não há por que
+  // guardar foto para ela. Mesma ordem do modal de edição.
+  if (dev) {
+    await _enfileirarFotosDevolucao(dev, 'investigacao',
+      (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) ? uploadedFotosBase64Inv : []);
+  }
 
   if (typeof uploadedVideosBase64Inv !== 'undefined' && Array.isArray(uploadedVideosBase64Inv)) uploadedVideosBase64Inv = [];
   if (typeof uploadedFotosBase64Inv !== 'undefined' && Array.isArray(uploadedFotosBase64Inv)) uploadedFotosBase64Inv = [];
@@ -8053,32 +10597,37 @@ function renderGestaoGestorView() {
   const filtroDataDe = window._filtroGestorDataDe || '';
   const filtroDataAte = window._filtroGestorDataAte || '';
   const filtroCarga = window._filtroGestorCarga || '';
+  const filtroBusca = window._filtroGestorBusca || '';
+  const filtroResp = window._filtroGestorResponsavel || '';
 
   const filtroSort = window._filtroGestorSort || 'data_desc';
-  const todosPendentes = todosDevs.filter(d => d.status_gestao !== 'CONCLUIDO');
+  // 19/10/2026: "Pendentes" era tudo que não está CONCLUIDO — e aí entravam
+  // as devoluções que ainda estão na Análise (status_gestao = 'PENDENTE', o
+  // default do banco), contadas ao mesmo tempo como pendência do analista e
+  // do gestor. A fila do gestor começa na apuração da causa raiz; usa o mesmo
+  // corte do card do Dashboard (tratativasPendentesGestor) para que os dois
+  // números batam e o SLA de cada área conte só o que é dela.
+  const todosPendentes = tratativasPendentesGestor(todosDevs);
   const todosConcluidos = todosDevs.filter(d => d.status_gestao === 'CONCLUIDO');
 
-  let devsExibidos = activeGestorTab === 'pendentes' ? todosPendentes : todosConcluidos;
+  // 6.7.0 (Bloco F): o predicado dos filtros vira função e é aplicado ao
+  // universo inteiro ANTES de separar por status — assim os três cards
+  // reagem aos filtros como o rodapé. Os badges das abas continuam globais.
+  const passaFiltros = d => {
+    if (filtroCarga && !String(d.carga_numero || d.carga || d.carga_rota || '').toLowerCase().includes(filtroCarga.toLowerCase().trim())) return false;
+    if (filtroTipoErro && d.tipo_erro !== filtroTipoErro) return false;
+    if (!devolucaoCasaBusca(d, filtroBusca)) return false;
+    if (!devolucaoCasaResponsavel(d, filtroResp)) return false;
+    const criado = d.criado_em ? d.criado_em.split('T')[0] : '';
+    if (filtroDataDe && criado < filtroDataDe) return false;
+    if (filtroDataAte && criado > filtroDataAte) return false;
+    return true;
+  };
+  const devsFiltrados = todosDevs.filter(passaFiltros);
+  const pendentesFiltrados = tratativasPendentesGestor(devsFiltrados);
+  const concluidosFiltrados = devsFiltrados.filter(d => d.status_gestao === 'CONCLUIDO');
 
-  // Aplicação dos filtros no painel ativo (especialmente para Concluídos)
-  if (filtroCarga) {
-    devsExibidos = devsExibidos.filter(d => String(d.carga_numero || d.carga || d.carga_rota || '').toLowerCase().includes(filtroCarga.toLowerCase().trim()));
-  }
-  if (filtroTipoErro) {
-    devsExibidos = devsExibidos.filter(d => d.tipo_erro === filtroTipoErro);
-  }
-  if (filtroDataDe) {
-    devsExibidos = devsExibidos.filter(d => {
-      const criado = d.criado_em ? d.criado_em.split('T')[0] : '';
-      return criado >= filtroDataDe;
-    });
-  }
-  if (filtroDataAte) {
-    devsExibidos = devsExibidos.filter(d => {
-      const criado = d.criado_em ? d.criado_em.split('T')[0] : '';
-      return criado <= filtroDataAte;
-    });
-  }
+  let devsExibidos = activeGestorTab === 'pendentes' ? pendentesFiltrados : concluidosFiltrados;
 
   // Ordenação dinâmica pelo campo selecionado
   devsExibidos = [...devsExibidos].sort((a, b) => {
@@ -8110,7 +10659,7 @@ function renderGestaoGestorView() {
     }
   });
 
-  const totDesconto = todosDevs.filter(d => d.desconto_produtividade_gestor).length;
+  const totDesconto = devsFiltrados.filter(d => d.desconto_produtividade_gestor).length;
   const separadores = db.data.separadores_conferentes || [];
 
   return `
@@ -8137,11 +10686,11 @@ function renderGestaoGestorView() {
       <!-- CARDS DE INDICADORES DO GESTOR -->
       <div class="grid grid-cols-3 gap-3">
         <div class="bg-slate-900 border border-amber-800/50 p-3 rounded-xl text-center shadow">
-          <div class="text-xl font-black text-amber-400">${todosPendentes.length}</div>
+          <div class="text-xl font-black text-amber-400">${pendentesFiltrados.length}</div>
           <div class="text-[10px] text-slate-400 mt-0.5 font-bold uppercase">Pendentes de Ação</div>
         </div>
         <div class="bg-slate-900 border border-emerald-800/50 p-3 rounded-xl text-center shadow">
-          <div class="text-xl font-black text-emerald-400">${todosConcluidos.length}</div>
+          <div class="text-xl font-black text-emerald-400">${concluidosFiltrados.length}</div>
           <div class="text-[10px] text-slate-400 mt-0.5 font-bold uppercase">Concluídas</div>
         </div>
         <div class="bg-slate-900 border border-red-800/50 p-3 rounded-xl text-center shadow">
@@ -8159,6 +10708,26 @@ function renderGestaoGestorView() {
           <span class="text-[10px] text-slate-400">${devsExibidos.length} ocorrência(s) encontrada(s)</span>
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end pt-1">
+          <!-- Busca por número (22/09/2026). Digitar "42" traz a DEV-042.
+               O foco é devolvido depois do renderApp porque a tela inteira é
+               redesenhada a cada tecla — mesmo tratamento da busca da Análise. -->
+          <div class="sm:col-span-2">
+            <label class="block text-[10px] text-sky-400 font-bold mb-1">🔎 Nº da Devolução / Cliente / NF</label>
+            <div class="flex items-center gap-1.5">
+              <input type="text" id="filtro-gestor-busca" value="${filtroBusca}" placeholder="Ex: 42, DEV-042, cliente, NF, motorista..."
+                oninput="window._filtroGestorBusca=this.value; renderApp(); setTimeout(()=>{ const el=document.getElementById('filtro-gestor-busca'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }, 0);"
+                class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs placeholder:text-slate-600 focus:border-sky-500 focus:outline-none">
+              ${filtroBusca ? `<button onclick="window._filtroGestorBusca=''; renderApp()" class="text-slate-400 hover:text-white text-xs font-bold px-1 shrink-0" title="Limpar busca">✕</button>` : ''}
+            </div>
+          </div>
+          <div>
+            <label class="block text-[10px] text-purple-400 font-bold mb-1">👤 Responsável</label>
+            <select id="filtro-gestor-responsavel" onchange="aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-purple-300 font-bold rounded-lg p-2 text-xs">
+              <option value="">Todos os Responsáveis</option>
+              ${opcoesResponsavelDevolucao(filtroResp)}
+              <option value="__SEM__" ${filtroResp==='__SEM__'?'selected':''}>— Sem responsável definido</option>
+            </select>
+          </div>
           <div>
             <label class="block text-[10px] text-cyan-400 font-bold mb-1">Nº da Carga</label>
             <input type="text" id="filtro-gestor-carga" value="${filtroCarga}" placeholder="Ex: 43125..." oninput="forcarMaiuscula(this); aplicarFiltroGestor()" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none">
@@ -8201,7 +10770,14 @@ function renderGestaoGestorView() {
       </div>
 
       <!-- LISTA DE OCORRÊNCIAS NO PAINEL ATIVO -->
-      ${devsExibidos.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">Nenhuma ocorrência encontrada nesta aba com os filtros informados.</div>` :
+      ${devsExibidos.length === 0 ? `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-500">
+          Nenhuma ocorrência encontrada nesta aba com os filtros informados.
+          ${avisoOutraAba(
+            activeGestorTab === 'pendentes' ? concluidosFiltrados.length : pendentesFiltrados.length,
+            activeGestorTab === 'pendentes' ? 'Concluídas' : 'Pendentes',
+            `switchGestorSubTab('${activeGestorTab === 'pendentes' ? 'concluidos' : 'pendentes'}')`
+          )}
+        </div>` :
       devsExibidos.map(d => `
         <div class="bg-slate-900 border ${d.status_gestao==='CONCLUIDO'?'border-emerald-800/60':'border-amber-800/60'} rounded-xl shadow-xl overflow-hidden">
           <!-- Cabeçalho -->
@@ -8245,6 +10821,19 @@ function renderGestaoGestorView() {
               <div class="text-slate-400 text-[10px]">${d.conferente_apurado||d.conferente_nome||'—'}</div>
             </div>
           </div>
+          <!-- Responsável pela correção: derivado do tipo de erro (e do turno
+               do separador/conferente, no carregamento). Fica em faixa própria
+               porque é o que o gerente procura quando abre a tela. -->
+          <div class="px-4 pt-3">
+            <div class="bg-purple-950/40 border border-purple-800/60 rounded-lg px-3 py-2 flex flex-wrap items-center gap-2">
+              <span class="text-[9px] text-purple-400 uppercase font-bold">👤 Responsável pela correção</span>
+              <span class="text-xs font-black ${nomesResponsaveisDaDevolucao(d).length ? 'text-purple-200' : 'text-amber-400 italic'}">${textoResponsavelDaDevolucao(d)}</span>
+            </div>
+          </div>
+          <!-- O que o cliente reclamou: o gestor decide desconto sobre isto.
+               Fica FORA do <form> de propósito - é leitura, não campo, e assim
+               não interfere no que o gestor está digitando. -->
+          <div class="px-4 pb-3">${renderRelatoAbertura(d, { colapsar: true })}</div>
           <!-- ADENDO: histórico completo de mídia (Abertura + Investigação) -->
           <div class="px-4 pb-3">${renderGaleriaMidia(d, { titulo: '📎 Histórico de Mídia da Ocorrência' })}</div>
           ${d.atualizado_em ? `<div class="px-4 pb-2 text-[10px] text-purple-300">🕒 Última atualização da Análise em ${new Date(d.atualizado_em).toLocaleString('pt-BR')} por <b>${d.atualizado_por || '—'}</b> • <button type="button" onclick="abrirHistoricoRegistro('ocorrencias_devolucao', '${d.id}', '${(d.numero_devolucao||d.numero_protocolo||'').replace(/'/g, "\\'")}')" class="text-blue-400 hover:text-blue-300 hover:underline">📜 Ver histórico</button></div>` : ''}
@@ -8273,15 +10862,21 @@ function renderGestaoGestorView() {
                 </label>
                 <div>
                   <label class="block text-[10px] text-slate-400 mb-1">Status da Gestão</label>
+                  <!-- "Pendente" grava PENDENTE_GESTOR, não PENDENTE: PENDENTE é o
+                       status da abertura (chamado na Análise). Gravar PENDENTE aqui
+                       tirava o chamado da fila do gestor (DEV-075/100, 26/09/2026). -->
                   <select id="gestor-status-${d.id}" class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs font-bold">
-                    <option value="PENDENTE" ${d.status_gestao!=='CONCLUIDO'?'selected':''}>⏳ Pendente</option>
+                    <option value="PENDENTE_GESTOR" ${d.status_gestao!=='CONCLUIDO'?'selected':''}>⏳ Pendente</option>
                     <option value="CONCLUIDO" ${d.status_gestao==='CONCLUIDO'?'selected':''}>✅ Concluído</option>
                   </select>
                 </div>
               </div>
 
               <div class="flex flex-wrap justify-between items-center gap-2 pt-2">
-                <div>
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" onclick="imprimirTratativaDevolucaoPdf('${d.id}')" class="bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold px-4 py-2 rounded-lg text-xs border border-emerald-700/50 shadow flex items-center gap-1.5 transition" title="Abertura, Análise e Tratativa em folhas separadas">
+                    <span>🖨️</span> Imprimir Tratativa
+                  </button>
                   ${d.tipo_erro === 'ERRO MOTORISTA' ? `
                     <button type="button" onclick="gerarAdiantamentoPdf('${d.id}')" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold px-4 py-2 rounded-lg text-xs shadow flex items-center gap-1.5 transition">
                       <span>📄</span> Emitir Adiantamento (PDF)
@@ -8302,6 +10897,10 @@ function aplicarFiltroGestor() {
   window._filtroGestorDataDe = document.getElementById('filtro-gestor-data-de')?.value || '';
   window._filtroGestorDataAte = document.getElementById('filtro-gestor-data-ate')?.value || '';
   window._filtroGestorCarga = document.getElementById('filtro-gestor-carga')?.value || '';
+  window._filtroGestorResponsavel = document.getElementById('filtro-gestor-responsavel')?.value || '';
+  // A busca NÃO é lida aqui: ela grava direto em window no oninput, e reler o
+  // campo neste ponto apagaria o que a pessoa digitou quando outro filtro
+  // mudasse antes do redesenho.
   window._filtroGestorSort = document.getElementById('filtro-gestor-sort')?.value || window._filtroGestorSort || 'data_desc';
   renderApp();
 }
@@ -8312,12 +10911,37 @@ function limparFiltroGestor() {
   window._filtroGestorDataDe = '';
   window._filtroGestorDataAte = '';
   window._filtroGestorCarga = '';
+  window._filtroGestorBusca = '';
+  window._filtroGestorResponsavel = '';
   window._filtroGestorSort = 'data_desc';
   renderApp();
 }
 
+// Cada card da tela é um <form> próprio, e o renderApp() no fim desta função
+// redesenha a tela INTEIRA — o que estava digitado em OUTRO card e ainda não
+// salvo some sem aviso. Antes de redesenhar, procura texto pendente nos
+// demais cards e pergunta; se a pessoa cancelar, nada é gravado e ela pode
+// salvar o outro card primeiro (achado de 11/09/2026, DEV-004).
+function _cardsGestorComTextoNaoSalvo(devIdAtual) {
+  const pendentes = [];
+  document.querySelectorAll('textarea[id^="gestor-acao-"]').forEach(ta => {
+    const id = ta.id.replace('gestor-acao-', '');
+    if (String(id) === String(devIdAtual)) return;
+    const dev = db.data.ocorrencias_devolucao.find(x => x.id == id);
+    if (!dev) return;
+    if ((ta.value || '').trim() !== (dev.acao_gestor || '').trim()) {
+      pendentes.push(dev.numero_devolucao || dev.numero_protocolo || id);
+    }
+  });
+  return pendentes;
+}
 function handleAcaoGestorSubmit(e, devId) {
   e.preventDefault();
+  const naoSalvos = _cardsGestorComTextoNaoSalvo(devId);
+  if (naoSalvos.length > 0) {
+    const ok = confirm(`⚠️ Há texto digitado e NÃO salvo em: ${naoSalvos.join(', ')}.\n\nAo salvar este card a tela é redesenhada e esse texto se perde.\n\nOK = salvar mesmo assim (perde o outro texto)\nCancelar = voltar e salvar o outro card primeiro`);
+    if (!ok) return;
+  }
   const dev = db.data.ocorrencias_devolucao.find(x => x.id == devId);
   db.updateAcaoGestor(devId, {
     acao_gestor: document.getElementById(`gestor-acao-${devId}`).value,
@@ -8375,20 +10999,325 @@ function getItensDestinadosFiltrados() {
     });
   });
 
+  // BAIXA (6.8.5). A destinação diz para onde o item vai dentro do CD; a
+  // baixa diz que a ação foi feita. Cada item vira uma ou mais "partes"
+  // (o item inteiro, ou cada divisão + o que sobrou sem dividir), e o item
+  // só sai da fila quando TODAS as partes têm baixa.
+  todosItensDestinados.forEach(item => {
+    item._partes = partesDoItemDestino(item);
+    item._pendente = item._partes.some(p => !p.baixa);
+  });
+  const pendentes = todosItensDestinados.filter(i => i._pendente);
+
+  const casaProduto = (item, termoBruto) => {
+    if (!termoBruto) return true;
+    const termo = termoBruto.toUpperCase();
+    const cod = String(item.produto_codigo || item.codigo || '').toUpperCase();
+    const desc = String(item.produto_descricao || item.descricao || '').toUpperCase();
+    return cod.includes(termo) || desc.includes(termo);
+  };
+
   const fCdDestinoProduto = window._cdDestinoFiltroProduto || '';
   const fCdDestinoTipo    = window._cdDestinoFiltroTipo    || '';
-  const itensDestinadosFiltrados = todosItensDestinados.filter(item => {
-    if (fCdDestinoProduto) {
-      const termo = fCdDestinoProduto.toUpperCase();
-      const cod = String(item.produto_codigo || item.codigo || '').toUpperCase();
-      const desc = String(item.produto_descricao || item.descricao || '').toUpperCase();
-      if (!cod.includes(termo) && !desc.includes(termo)) return false;
-    }
+  const itensDestinadosFiltrados = pendentes.filter(item => {
+    if (!casaProduto(item, fCdDestinoProduto)) return false;
     if (fCdDestinoTipo && item.destino !== fCdDestinoTipo) return false;
     return true;
   });
 
-  return { todosItensDestinados, itensDestinadosFiltrados };
+  // Lista de baixas: uma linha por PARTE baixada (um item dividido pode ter
+  // metade descartada hoje e metade ainda na fila).
+  const baixasTodas = [];
+  todosItensDestinados.forEach(item => {
+    item._partes.filter(p => p.baixa).forEach(p => baixasTodas.push({ item, parte: p }));
+  });
+  baixasTodas.sort((a, b) => String(b.parte.baixa.data || '').localeCompare(String(a.parte.baixa.data || '')));
+
+  const fBxBusca = window._cdBaixaBusca   || '';
+  const fBxAcao  = window._cdBaixaAcao    || '';
+  const fBxDe    = window._cdBaixaDataDe  || '';
+  const fBxAte   = window._cdBaixaDataAte || '';
+  const baixasFiltradas = baixasTodas.filter(({ item, parte }) => {
+    if (!casaProduto(item, fBxBusca) && !String(item.protocolo || '').toUpperCase().includes(fBxBusca.toUpperCase())) return false;
+    if (fBxAcao && parte.baixa.acao !== fBxAcao) return false;
+    const dt = parte.baixa.data || '';
+    if (fBxDe && (!dt || dt < fBxDe)) return false;
+    if (fBxAte && (!dt || dt > fBxAte)) return false;
+    return true;
+  });
+
+  // todosItensDestinados = só a FILA (pendentes). É o que o contador da
+  // subaba, a tabela e as exportações da Destinação sempre quiseram dizer.
+  return { todosItensDestinados: pendentes, itensDestinadosFiltrados, baixasTodas, baixasFiltradas };
+}
+
+// ===== BAIXA DA DESTINAÇÃO (6.8.5, migration 50) =====
+const ACOES_BAIXA_DESTINO = {
+  DESCARTADO:           '🗑️ Descartado',
+  VENDIDO:              '💰 Vendido',
+  CONSUMO_INTERNO:      '🍴 Consumo interno',
+  REINTEGRADO_ESTOQUE:  '📦 Reintegrado ao estoque',
+  REEMBALADO_ESTOQUE:   '♻️ Reembalado e reintegrado',
+  DEVOLVIDO_FORNECEDOR: '🔵 Devolvido ao fornecedor',
+  NAO_RETORNOU:         '📭 Não retornou ao CD'
+};
+
+function formatarAcaoBaixaLabel(acao) {
+  return ACOES_BAIXA_DESTINO[acao] || acao || '—';
+}
+
+// Ação que o modal já traz marcada, conforme o destino da parte.
+function acaoBaixaSugerida(destino) {
+  switch (destino) {
+    case 'AVARIA_DESCARTE':        return 'DESCARTADO';
+    case 'VENDIDO':
+    case 'PRODUTOS_NEGOCIACAO':    return 'VENDIDO';
+    case 'RETRABALHO_REEMBALAGEM': return 'REEMBALADO_ESTOQUE';
+    case 'DEVOLUCAO_FORNECEDOR':   return 'DEVOLVIDO_FORNECEDOR';
+    default:                       return 'REINTEGRADO_ESTOQUE';
+  }
+}
+
+// A baixa de uma parte (item inteiro ou divisão), ou null se ainda está na
+// fila. Além da baixa registrada pelo botão, alguns estados JÁ SÃO a ação
+// concluída e saem da fila sozinhos, sem ninguém precisar clicar de novo:
+//   - negociação marcada como Descartado / Vendido / Consumo interno;
+//   - destino Vendido;
+//   - Falta sem retorno e Renegociado em rota (o produto nunca entrou no
+//     CD — não há o que destinar).
+// Essas baixas "automáticas" não têm autor; a data é a da negociação.
+function baixaDaParte(parte, destino) {
+  if (parte.baixa_acao) {
+    return { acao: parte.baixa_acao, data: parte.baixa_data || String(parte.baixa_em || '').slice(0, 10) || null,
+             por: parte.baixa_por || null, obs: parte.baixa_obs || '', automatica: false };
+  }
+  const dataNeg = String(parte.data_negociacao || '').slice(0, 10) || null;
+  const auto = acao => ({ acao, data: dataNeg, por: null, obs: '', automatica: true });
+  switch (parte.status_negociacao) {
+    case 'DESCARTADO':      return auto('DESCARTADO');
+    case 'VENDA_NEGOCIADA': return auto('VENDIDO');
+    case 'ENVIADO_CONSUMO': return auto('CONSUMO_INTERNO');
+  }
+  if (destino === 'VENDIDO') return auto('VENDIDO');
+  if (destino === 'FALTA_SEM_RETORNO' || destino === 'RENEGOCIADO_ROTA') {
+    return { acao: 'NAO_RETORNOU', data: null, por: null, obs: '', automatica: true };
+  }
+  return null;
+}
+
+// Item sem divisão = uma parte (o próprio item). Item dividido = cada
+// divisão + o restante não dividido, que segue o destino do item e usa os
+// campos de baixa do próprio item.
+function partesDoItemDestino(item) {
+  const divs = Array.isArray(item.divisoes_destino) ? item.divisoes_destino : [];
+  const qtdTotal = parseFloat(item.quantidade) || 0;
+  if (divs.length === 0) {
+    return [{ tipo: 'item', divId: '', quantidade: qtdTotal, destino: item.destino, baixa: baixaDaParte(item, item.destino) }];
+  }
+  const partes = divs.map(dv => ({
+    tipo: 'divisao', divId: dv.id, quantidade: parseFloat(dv.quantidade) || 0, destino: dv.destino,
+    observacao: dv.observacao || '', baixa: baixaDaParte(dv, dv.destino)
+  }));
+  const restante = qtdTotal - divs.reduce((s, d) => s + (parseFloat(d.quantidade) || 0), 0);
+  if (restante > 0.0001) {
+    // O restante não herda o status de negociação do item: quem dividiu
+    // decidiu o desfecho por divisão. Só a baixa explícita do item conta.
+    const baixaRest = item.baixa_acao ? baixaDaParte({ ...item, status_negociacao: null }, item.destino)
+                                      : baixaDaParte({ status_negociacao: null }, item.destino);
+    partes.push({ tipo: 'restante', divId: '', quantidade: restante, destino: item.destino, baixa: baixaRest });
+  }
+  return partes;
+}
+
+// Onde gravar a baixa: no registro real do item, ou dentro da divisão.
+function _alvoDaBaixa(ref, divId) {
+  if (!divId) return ref.raw;
+  return (Array.isArray(ref.raw.divisoes_destino) ? ref.raw.divisoes_destino : [])
+    .find(dv => String(dv.id) === String(divId)) || null;
+}
+
+function abrirModalBaixaItem(itemId, devId, divId) {
+  const ref = resolverItemDestino(itemId, devId);
+  if (!ref) { alert('Item não encontrado.'); return; }
+  const alvo = _alvoDaBaixa(ref, divId);
+  if (!alvo) { alert('Divisão não encontrada.'); return; }
+  const destino = divId ? alvo.destino : (ref.raw.destino_item || ref.dev?.destino_cd || 'ESTOQUE_REUTILIZACAO');
+  let qtd = divId ? alvo.quantidade : ref.raw.quantidade;
+  if (!divId && Array.isArray(ref.raw.divisoes_destino) && ref.raw.divisoes_destino.length) {
+    qtd = (parseFloat(ref.raw.quantidade) || 0) - ref.raw.divisoes_destino.reduce((s, d) => s + (parseFloat(d.quantidade) || 0), 0);
+  }
+  _renderModalBaixa({
+    titulo: `${ref.item.produto_codigo ? `[${ref.item.produto_codigo}] ` : ''}${ref.item.produto_descricao || 'Produto'}`,
+    subtitulo: `${qtd} un · ${formatarDestinoLabel(destino)}${divId ? ' · parte de item dividido' : ''}`,
+    sugerida: acaoBaixaSugerida(destino),
+    onsubmit: `handleSalvarBaixaItem(event, '${itemId}', '${devId}', '${divId || ''}')`
+  });
+}
+
+function _renderModalBaixa({ titulo, subtitulo, sugerida, onsubmit }) {
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+  const opcoes = Object.entries(ACOES_BAIXA_DESTINO).filter(([k]) => k !== 'NAO_RETORNOU');
+  modal.innerHTML = `
+    <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-slate-900 border border-emerald-800/70 rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4 animate-fadeIn">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <h3 class="text-sm font-extrabold text-white flex items-center gap-2">✅ Dar Baixa</h3>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+        </div>
+        <div class="p-2 bg-slate-950 border border-slate-800 rounded text-xs">
+          <div class="font-bold text-emerald-400">${titulo}</div>
+          <div class="text-slate-400 mt-0.5">${subtitulo}</div>
+        </div>
+        <p class="text-[11px] text-slate-400 -mt-1">A baixa registra que a ação foi feita. O item sai da Destinação de Itens e passa para <b>Baixas Realizadas</b>, onde pode ser consultado ou desfeito.</p>
+        <form onsubmit="${onsubmit}" class="space-y-3 text-xs">
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Ação realizada *</label>
+            <select id="baixa-acao" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 font-bold">
+              ${opcoes.map(([k, v]) => `<option value="${k}" ${k === sugerida ? 'selected' : ''}>${v}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Data da ação *</label>
+            <input type="date" id="baixa-data" required value="${hojeIsoBrasilia()}" max="${hojeIsoBrasilia()}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2">
+          </div>
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">Observação</label>
+            <input type="text" id="baixa-obs" placeholder="Ex: Vendido para funcionário, descarte com coleta..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
+          </div>
+          <div class="pt-2 flex gap-2">
+            <button type="button" onclick="closeModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2 rounded-lg">Cancelar</button>
+            <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg shadow">✅ Confirmar Baixa</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+
+function _lerFormBaixa() {
+  const acao = document.getElementById('baixa-acao')?.value || '';
+  const data = document.getElementById('baixa-data')?.value || '';
+  const obs = (document.getElementById('baixa-obs')?.value || '').trim();
+  if (!acao || !/^\d{4}-\d{2}-\d{2}$/.test(data)) { alert('⚠️ Informe a ação e a data.'); return null; }
+  return { acao, data, obs };
+}
+
+function _gravarBaixa(alvo, { acao, data, obs }) {
+  alvo.baixa_acao = acao;
+  alvo.baixa_data = data;
+  alvo.baixa_em = agoraIsoBrasilia();
+  alvo.baixa_por = db.currentUser ? db.currentUser.nome : 'SISTEMA';
+  alvo.baixa_obs = obs;
+}
+
+function handleSalvarBaixaItem(e, itemId, devId, divId) {
+  e.preventDefault();
+  const form = _lerFormBaixa();
+  if (!form) return;
+  const ref = resolverItemDestino(itemId, devId);
+  const alvo = ref && _alvoDaBaixa(ref, divId);
+  if (!alvo) { alert('Item não encontrado para dar baixa.'); return; }
+  _gravarBaixa(alvo, form);
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
+  const salvou = db.save();
+  closeModal();
+  showToast(salvou ? `✅ Baixa registrada: ${formatarAcaoBaixaLabel(form.acao)}` : 'Não foi possível salvar a baixa neste dispositivo.', salvou ? 'success' : 'error');
+  renderApp();
+}
+
+// ---- Baixa em lote (checkbox da tabela) ----
+window._cdBaixaSelecao = window._cdBaixaSelecao || new Set();
+function _chaveSelecaoBaixa(itemId, devId) { return `${devId}|${itemId}`; }
+
+function toggleSelecaoBaixa(itemId, devId, marcado) {
+  const k = _chaveSelecaoBaixa(itemId, devId);
+  if (marcado) window._cdBaixaSelecao.add(k); else window._cdBaixaSelecao.delete(k);
+  renderApp();
+}
+
+function toggleSelecaoBaixaTodos(marcado) {
+  const { itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+  itensDestinadosFiltrados
+    .filter(i => !(Array.isArray(i.divisoes_destino) && i.divisoes_destino.length))
+    .forEach(i => {
+      const k = _chaveSelecaoBaixa(i.id, i.devId);
+      if (marcado) window._cdBaixaSelecao.add(k); else window._cdBaixaSelecao.delete(k);
+    });
+  renderApp();
+}
+
+// A seleção só vale para o que ainda está na fila e visível no filtro.
+function _selecaoBaixaValida() {
+  const { itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+  return itensDestinadosFiltrados.filter(i =>
+    !(Array.isArray(i.divisoes_destino) && i.divisoes_destino.length) &&
+    window._cdBaixaSelecao.has(_chaveSelecaoBaixa(i.id, i.devId)));
+}
+
+function abrirModalBaixaLote() {
+  const sel = _selecaoBaixaValida();
+  if (sel.length === 0) { alert('Selecione ao menos um item na lista.'); return; }
+  const destinos = [...new Set(sel.map(i => i.destino))];
+  _renderModalBaixa({
+    titulo: `${sel.length} item(ns) selecionado(s)`,
+    subtitulo: destinos.map(formatarDestinoLabel).join(' · '),
+    sugerida: destinos.length === 1 ? acaoBaixaSugerida(destinos[0]) : 'DESCARTADO',
+    onsubmit: 'handleSalvarBaixaLote(event)'
+  });
+}
+
+function handleSalvarBaixaLote(e) {
+  e.preventDefault();
+  const form = _lerFormBaixa();
+  if (!form) return;
+  const sel = _selecaoBaixaValida();
+  let n = 0;
+  sel.forEach(i => {
+    const ref = resolverItemDestino(i.id, i.devId);
+    if (!ref) return;
+    _gravarBaixa(ref.raw, form);
+    db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
+    n++;
+  });
+  window._cdBaixaSelecao.clear();
+  const salvou = db.save();
+  closeModal();
+  showToast(salvou ? `✅ Baixa registrada em ${n} item(ns): ${formatarAcaoBaixaLabel(form.acao)}` : 'Não foi possível salvar as baixas neste dispositivo.', salvou ? 'success' : 'error');
+  renderApp();
+}
+
+// Desfazer: o item volta para a fila. Baixa automática (pelo status de
+// negociação) volta o status para "Em Negociação" — e o destino Vendido,
+// que a graduação criou, volta a ser Produtos para Negociação.
+function desfazerBaixaItem(itemId, devId, divId) {
+  if (!confirm('Desfazer a baixa? O item volta para a Destinação de Itens.')) return;
+  const ref = resolverItemDestino(itemId, devId);
+  const alvo = ref && _alvoDaBaixa(ref, divId);
+  if (!alvo) { alert('Item não encontrado.'); return; }
+  if (alvo.baixa_acao) {
+    alvo.baixa_acao = null;
+    alvo.baixa_data = null;
+    alvo.baixa_em = null;
+    alvo.baixa_por = null;
+    alvo.baixa_obs = null;
+  } else {
+    if (['DESCARTADO', 'VENDA_NEGOCIADA', 'ENVIADO_CONSUMO'].includes(alvo.status_negociacao)) alvo.status_negociacao = 'EM_NEGOCIACAO';
+    if (divId) { if (alvo.destino === 'VENDIDO') alvo.destino = 'PRODUTOS_NEGOCIACAO'; }
+    else if (alvo.destino_item === 'VENDIDO') alvo.destino_item = 'PRODUTOS_NEGOCIACAO';
+  }
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
+  const salvou = db.save();
+  showToast(salvou ? '↩️ Baixa desfeita — item de volta à Destinação.' : 'Não foi possível salvar neste dispositivo.', salvou ? 'success' : 'error');
+  renderApp();
+}
+
+function limparFiltrosBaixaCd() {
+  window._cdBaixaBusca = '';
+  window._cdBaixaAcao = '';
+  window._cdBaixaDataDe = '';
+  window._cdBaixaDataAte = '';
+  renderApp();
 }
 
 // ===== MÓDULO: RECEPÇÃO NO CD =====
@@ -8434,8 +11363,57 @@ function diasParadoNoCd(d, viagemJaResolvida) {
   return Math.max(0, Math.round(ms / 86400000));
 }
 
-// Busca única sobre a fila: nº DEV, placa, rota, carga, motorista, cliente, NF
-// e descrição dos itens. Termos separados por espaço somam (E), então
+// Causa vigente da devolução para a grade do Retorno Físico (19/10/2026).
+//
+// Pedido do Tiago: algumas causas (falta, qualidade, erro da indústria) pedem
+// análise antes da conferência física, e o CD precisa saber se a causa que
+// está vendo é a palavra do cliente/motorista ou já passou pelo monitoramento.
+//
+// Não há coluna nova: a abertura grava motivo_reclamado e o monitoramento
+// grava motivo_real_causa_raiz (+ responsavel_analise) por updateInvestigacao.
+// "Confirmada" é o monitoramento ter apurado a MESMA causa da abertura;
+// "alterada" é ter apurado outra. A data sai do audit_logs
+// (EDICAO_INVESTIGACAO), e não de atualizado_em, porque atualizado_em muda a
+// cada edição de qualquer pessoa — inclusive a entrada no CD. O audit_logs
+// local guarda só os 1000 mais recentes: sem a linha, a data fica de fora em
+// vez de ser inventada.
+function causaVigenteDevolucao(d) {
+  const abertura = String(d.motivo_reclamado || '').trim();
+  const apurada  = String(d.motivo_real_causa_raiz || '').trim();
+  if (!apurada || apurada.toUpperCase() === 'PENDENTE') {
+    return { origem: 'ABERTURA', causa: abertura, abertura };
+  }
+  const norm = s => s.toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+  const log = (db.data.audit_logs || []).find(l =>
+    l.acao === 'EDICAO_INVESTIGACAO' && l.modulo === 'ocorrencias_devolucao' && String(l.registro_id) === String(d.id));
+  return {
+    origem: norm(apurada) === norm(abertura) ? 'CONFIRMADA' : 'ALTERADA',
+    causa: apurada,
+    abertura,
+    quem: d.responsavel_analise || log?.usuario_nome || '',
+    quando: log?.data_hora || ''
+  };
+}
+
+function renderCausaDevolucaoCd(d) {
+  const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const c = causaVigenteDevolucao(d);
+  if (!c.causa) return '<span class="text-slate-500 text-[10px] italic">Sem causa informada</span>';
+  const rodape = [c.quem, c.quando ? formatarDataHora(c.quando, '') : ''].filter(Boolean).join(' · ');
+  const selo = c.origem === 'ABERTURA'
+    ? '<span class="inline-block mt-1 bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Causa informada na abertura (cliente/motorista). O monitoramento ainda não apurou.">📝 Da abertura · sem análise</span>'
+    : c.origem === 'CONFIRMADA'
+      ? `<span class="inline-block mt-1 bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="O monitoramento apurou a mesma causa da abertura">✅ Confirmada pelo monitoramento</span>`
+      : `<span class="inline-block mt-1 bg-sky-950 text-sky-300 border border-sky-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="O monitoramento apurou uma causa diferente da abertura">🔄 Alterada pelo monitoramento</span>`;
+  return `
+    <div class="font-bold text-white text-[11px]">${esc(c.causa)}</div>
+    ${selo}
+    ${c.origem === 'ALTERADA' && c.abertura ? `<div class="text-[9px] text-slate-500 mt-0.5">Abertura: <s>${esc(c.abertura)}</s></div>` : ''}
+    ${rodape ? `<div class="text-[9px] text-slate-500 mt-0.5">👤 ${esc(rodape)}</div>` : ''}`;
+}
+
+// Busca única sobre a fila: nº DEV, placa, rota, carga, motorista, cliente, NF,
+// causa (abertura e apurada) e descrição dos itens. Termos separados por espaço somam (E), então
 // "colinas truck" filtra as duas coisas ao mesmo tempo.
 function pendenteCasaComBusca(d, termo) {
   const t = String(termo || '').trim().toLowerCase();
@@ -8443,6 +11421,7 @@ function pendenteCasaComBusca(d, termo) {
   const alvo = [
     d.numero_devolucao, d.numero_protocolo, d.veiculo_placa, d.veiculo_modelo,
     d.carga_rota, d.carga_numero, d.motorista_nome, d.cliente_nome, d.nota_fiscal,
+    d.motivo_reclamado, d.motivo_real_causa_raiz,
     ...(Array.isArray(d.itens) ? d.itens.map(i => `${i.produto_codigo || ''} ${i.produto_descricao || ''}`) : [])
   ].join(' ').toLowerCase();
   return t.split(/\s+/).filter(Boolean).every(p => alvo.includes(p));
@@ -8501,12 +11480,17 @@ function renderCdRecepcaoView() {
   if (fRota)    historico = historico.filter(d => (d.carga_rota||'').toLowerCase().includes(fRota.toLowerCase()));
   if (fCarga)   historico = historico.filter(d => String(d.carga_numero||'').includes(fCarga));
 
-  const { todosItensDestinados, itensDestinadosFiltrados } = getItensDestinadosFiltrados();
+  const { todosItensDestinados, itensDestinadosFiltrados, baixasTodas, baixasFiltradas } = getItensDestinadosFiltrados();
+  // Seleção do lote: só conta o que ainda está na fila e visível no filtro.
+  const selecionaveis = itensDestinadosFiltrados.filter(i => !(Array.isArray(i.divisoes_destino) && i.divisoes_destino.length));
+  const qtdSelecionados = selecionaveis.filter(i => window._cdBaixaSelecao.has(_chaveSelecaoBaixa(i.id, i.devId))).length;
+  const todosSelecionados = selecionaveis.length > 0 && qtdSelecionados === selecionaveis.length;
   const fCdDestinoProduto = window._cdDestinoFiltroProduto || '';
   const fCdDestinoTipo    = window._cdDestinoFiltroTipo    || '';
 
   const rowCols = `<th class="p-3">Nº Dev / Placa / Rota / Motorista</th>
                    <th class="p-3 hidden sm:table-cell">NF & Cliente</th>
+                   <th class="p-3 hidden sm:table-cell" title="Causa vigente: a da abertura, ou a apurada pelo monitoramento">Causa</th>
                    <th class="p-3 hidden md:table-cell">Itens</th>`;
 
   const buildRow = (d, showBtn) => {
@@ -8536,6 +11520,7 @@ function renderCdRecepcaoView() {
           ? `<span class="block mt-1 bg-orange-950 text-orange-300 border border-orange-800 px-2 py-0.5 rounded text-[9px] font-bold">⏱ parado há ${diasParado} dias</span>`
           : `<span class="block mt-1 text-slate-500 text-[9px] font-semibold">⏱ ${diasParado === 0 ? 'voltou hoje' : 'há 1 dia'}</span>`
     );
+    const causaHtml = renderCausaDevolucaoCd(d);
     return `
     <tr class="hover:bg-slate-800/40">
       <td class="p-3">
@@ -8544,11 +11529,13 @@ function renderCdRecepcaoView() {
         <div class="text-[10px] text-slate-400">📍 ${d.carga_rota} | ${d.carga_numero}</div>
         <div class="text-[10px] text-slate-400">👤 ${d.motorista_nome}</div>
         ${statusViagemBadge}
+        <div class="sm:hidden mt-1.5">${causaHtml}</div>
       </td>
       <td class="p-3 hidden sm:table-cell">
         <div class="font-bold text-white text-[11px]">${d.cliente_nome}</div>
         ${d.nota_fiscal ? `<div class="text-emerald-400 font-semibold">NF: ${d.nota_fiscal}</div>` : '<div class="text-slate-500 text-[10px]">Sem NF</div>'}
       </td>
+      <td class="p-3 hidden sm:table-cell max-w-[220px]">${causaHtml}</td>
       <td class="p-3 hidden md:table-cell text-[11px]">
         ${d.sem_itens
           ? `<span class="text-amber-300 italic">Sem itens: ${d.observacao_sem_itens||''}</span>`
@@ -8570,7 +11557,8 @@ function renderCdRecepcaoView() {
                  <button onclick="gerarAdiantamentoDivergenciaPdf('${d.id}')" class="bg-amber-500 hover:bg-amber-400 text-slate-950 px-2.5 py-1 rounded font-bold text-[11px] shadow inline-flex items-center gap-1" title="Emitir Adiantamento (PDF)">
                    <span>📄</span> Adiantamento (PDF)
                  </button>` : ''}
-               <span class="text-[10px] text-slate-500">${(d.data_entrada_cd||d.criado_em||'').split('T')[0]}</span>`}
+               <span class="text-[10px] text-slate-500">${(d.data_entrada_cd||d.criado_em||'').split('T')[0]}</span>
+               <button onclick="openCdModal('${d.id}', { edicao: true })" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-2 py-1 rounded border border-slate-600 text-[11px] shadow-sm transition shrink-0" title="Corrigir a conferência (destino, validade, divergência)">✏️</button>`}
           <button onclick="deleteDevolucaoSac('${d.id}')" class="bg-red-950/60 hover:bg-red-900/80 text-red-300 font-bold px-2 py-1 rounded border border-red-800 text-[11px] shadow-sm transition shrink-0" title="Mover para a Lixeira (Soft Delete)">
             🗑️
           </button>
@@ -8596,6 +11584,9 @@ function renderCdRecepcaoView() {
           </button>
           <button onclick="switchCdSubTab('destinacao')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeCdSubTab === 'destinacao' ? 'bg-emerald-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
             <span>📋</span> Destinação de Itens (${todosItensDestinados.length})
+          </button>
+          <button onclick="switchCdSubTab('baixas')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeCdSubTab === 'baixas' ? 'bg-sky-700 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+            <span>✅</span> Baixas Realizadas (${baixasTodas.length})
           </button>
         </div>
       </div>
@@ -8655,7 +11646,7 @@ function renderCdRecepcaoView() {
               </thead>
               <tbody class="divide-y divide-slate-800">
                 ${pendentesFiltrados.length === 0
-                  ? `<tr><td colspan="6" class="p-6 text-center text-slate-500">${pendentes.length === 0
+                  ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">${pendentes.length === 0
                       ? '✅ Nenhum retorno pendente.'
                       : 'Nenhum pendente encontrado para o filtro aplicado. <button onclick="limparFiltrosPendCd()" class="underline text-amber-400 font-bold">Limpar filtros</button>'}</td></tr>`
                   : pendentesFiltrados.map(d => buildRow(d, true)).join('')}
@@ -8701,13 +11692,13 @@ function renderCdRecepcaoView() {
               </thead>
               <tbody class="divide-y divide-slate-800">
                 ${historico.length === 0
-                  ? `<tr><td colspan="6" class="p-6 text-center text-slate-500">Nenhum registro encontrado.</td></tr>`
+                  ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">Nenhum registro encontrado.</td></tr>`
                   : historico.map(d => buildRow(d, false)).join('')}
               </tbody>
             </table>
           </div>
         </div>`
-      : `
+      : activeCdSubTab === 'baixas' ? renderCdBaixasPainel(baixasTodas, baixasFiltradas) : `
         <!-- SUBABA 2: EVIDENCIAÇÃO DE DESTINAÇÃO DE PRODUTOS POR ITEM -->
         <div class="bg-slate-900 border border-emerald-900/60 rounded-xl overflow-hidden shadow-2xl space-y-4 p-5">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
@@ -8715,7 +11706,7 @@ function renderCdRecepcaoView() {
               <h3 class="font-bold text-white text-sm flex items-center gap-2">
                 <span>📋</span> Quadro Geral de Destinação dos Produtos (Item a Item)
               </h3>
-              <p class="text-xs text-slate-400">Listagem completa dos itens recebidos com data de validade, observações e marcações de negociação</p>
+              <p class="text-xs text-slate-400">Itens aguardando a ação no CD. Concluída a ação (descarte, venda, reintegração), dê <b>baixa</b>: o item sai daqui e vai para <b>Baixas Realizadas</b>.</p>
             </div>
             <div class="flex items-center gap-2 flex-wrap">
               <button onclick="abrirModalItemAvulso()" class="bg-violet-700 hover:bg-violet-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Adicionar item sem devolução associada (outras formas de avaria)">
@@ -8743,13 +11734,24 @@ function renderCdRecepcaoView() {
               <option value="AVARIA_DESCARTE" ${fCdDestinoTipo==='AVARIA_DESCARTE'?'selected':''}>🔴 Avaria / Descarte</option>
               <option value="PRODUTOS_NEGOCIACAO" ${fCdDestinoTipo==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟡 Produtos para Negociação</option>
               <option value="VENDIDO" ${fCdDestinoTipo==='VENDIDO'?'selected':''}>💰 Vendido</option>
+              <option value="FALTA_SEM_RETORNO" ${fCdDestinoTipo==='FALTA_SEM_RETORNO'?'selected':''}>📭 Falta — Não Retorna Produto</option>
             </select>
           </div>
+
+          ${qtdSelecionados > 0 ? `
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-950/50 border border-emerald-700 rounded-lg px-3 py-2">
+            <span class="text-xs text-emerald-200 font-bold">${qtdSelecionados} item(ns) selecionado(s)</span>
+            <div class="flex gap-2">
+              <button onclick="window._cdBaixaSelecao.clear(); renderApp()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold px-3 py-1.5 rounded-lg text-xs">Limpar seleção</button>
+              <button onclick="abrirModalBaixaLote()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow">✅ Dar baixa nos selecionados</button>
+            </div>
+          </div>` : ''}
 
           <div class="overflow-x-auto rounded-xl border border-slate-800">
             <table class="w-full text-left text-xs text-slate-300 border-collapse">
               <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] border-b border-slate-800">
                 <tr>
+                  <th class="p-3 w-8"><input type="checkbox" ${todosSelecionados ? 'checked' : ''} ${selecionaveis.length ? '' : 'disabled'} onchange="toggleSelecaoBaixaTodos(this.checked)" title="Selecionar todos os itens visíveis (itens divididos ficam de fora: a baixa deles é por parte)" class="accent-emerald-500"></th>
                   <th class="p-3">Produto</th>
                   <th class="p-3 text-center">Quantidade</th>
                   <th class="p-3">Destino do Produto</th>
@@ -8761,7 +11763,7 @@ function renderCdRecepcaoView() {
               </thead>
               <tbody class="divide-y divide-slate-800 text-xs">
                 ${itensDestinadosFiltrados.length === 0
-                  ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">${todosItensDestinados.length === 0 ? 'Nenhum item destinado até o momento.' : 'Nenhum item encontrado para o filtro aplicado.'}</td></tr>`
+                  ? `<tr><td colspan="8" class="p-6 text-center text-slate-500">${todosItensDestinados.length === 0 ? '✅ Nenhum item aguardando destinação.' : 'Nenhum item encontrado para o filtro aplicado.'}</td></tr>`
                   : itensDestinadosFiltrados.map(item => {
                     const isNegociacao = item.destino === 'PRODUTOS_NEGOCIACAO';
                     const negociacaoBadges = {
@@ -8771,19 +11773,40 @@ function renderCdRecepcaoView() {
                       'DESCARTADO': '<span class="bg-red-950 text-red-300 border border-red-700 px-2 py-0.5 rounded text-[10px] font-bold">🗑️ Descarte</span>'
                     };
                     const temDivisoes = Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0;
+                    // Fotos do avulso (migration 47): miniatura por caminho
+                    // do Storage + aviso de quantas ainda estão só no
+                    // aparelho que fotografou. Item de devolução não tem
+                    // foto própria — a prova dele está no protocolo.
+                    const isAvulso = String(item.devId) === '__AVULSO__';
+                    const estFotos = (isAvulso && db && typeof db.estadoFotos === 'function')
+                      ? db.estadoFotos(item, 'foto', 'avulsos') : null;
+                    const fotosHtml = !estFotos || !estFotos.temAlguma ? '' : `
+                          <div class="flex items-center gap-1 mt-1 flex-wrap">
+                            ${estFotos.paths.map(p => {
+                              const u = window.fotoStore ? window.fotoStore.urlPublica(p) : p;
+                              return `<a href="${u}" target="_blank" rel="noopener" title="Abrir foto"><img src="${u}" loading="lazy" class="w-9 h-9 object-cover rounded border border-slate-700"></a>`;
+                            }).join('')}
+                            ${estFotos.pendentes > 0 ? `<span class="text-[9px] text-amber-300 font-bold" title="Ainda no aparelho que fotografou, aguardando rede">📷 ${estFotos.pendentes} a enviar</span>` : ''}
+                          </div>`;
 
                     return `
                       <tr class="hover:bg-slate-800/40">
+                        <td class="p-3 w-8">${temDivisoes ? '' : `<input type="checkbox" ${window._cdBaixaSelecao.has(_chaveSelecaoBaixa(item.id, item.devId)) ? 'checked' : ''} onchange="toggleSelecaoBaixa('${item.id}', '${item.devId}', this.checked)" class="accent-emerald-500">`}</td>
                         <td class="p-3">
                           <div class="font-bold text-white">${item.produto_codigo ? `<span class="text-emerald-400 font-mono">[${item.produto_codigo}]</span> ` : ''}${item.produto_descricao || 'Produto'}</div>
-                          <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}</div>
+                          <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}</div>${fotosHtml}
                         </td>
-                        <td class="p-3 text-center font-bold text-amber-400 text-sm">${item.quantidade} un</td>
+                        <td class="p-3 text-center font-bold text-amber-400 text-sm">${item.quantidade}</td>
                         <td class="p-3 font-semibold text-emerald-300">
                           ${temDivisoes
                             ? `<div class="space-y-0.5">
                                  <span class="inline-block bg-violet-950 text-violet-300 border border-violet-700 px-1.5 py-0.5 rounded text-[9px] font-bold mb-0.5">🔀 Dividido</span>
-                                 ${item.divisoes_destino.map(dv => `<div class="text-[10px] text-slate-300">${dv.quantidade} un → ${formatarDestinoLabel(dv.destino)}</div>`).join('')}
+                                 ${item._partes.map(pt => `<div class="text-[10px] ${pt.baixa ? 'text-slate-500' : 'text-slate-300'} flex items-center gap-1 flex-wrap">
+                                   <span>${pt.quantidade} → ${formatarDestinoLabel(pt.destino)}${pt.tipo === 'restante' ? ' <i>(não dividido)</i>' : ''}</span>
+                                   ${pt.baixa
+                                     ? `<span class="text-sky-300 font-bold">✔ ${formatarAcaoBaixaLabel(pt.baixa.acao)}</span>`
+                                     : `<button onclick="abrirModalBaixaItem('${item.id}', '${item.devId}', '${pt.divId}')" class="bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Dar baixa nesta parte">✅ Baixa</button>`}
+                                 </div>`).join('')}
                                </div>`
                             : formatarDestinoLabel(item.destino)}
                         </td>
@@ -8804,8 +11827,10 @@ function renderCdRecepcaoView() {
                         </td>
                         <td class="p-3 text-center">
                           <div class="flex items-center justify-center gap-1.5 flex-wrap">
+                            ${temDivisoes ? '' : `<button onclick="abrirModalBaixaItem('${item.id}', '${item.devId}', '')" class="bg-emerald-800/70 hover:bg-emerald-700 text-emerald-100 border border-emerald-600 px-2 py-1 rounded text-[10px] font-bold transition" title="Registrar que a ação foi feita e tirar o item da fila">✅ Dar baixa</button>`}
                             <button onclick="openEditarItemDestinoModal('${item.id}', '${item.devId}')" class="bg-blue-900/60 hover:bg-blue-800 text-blue-200 border border-blue-700 px-2 py-1 rounded text-[10px] font-bold transition">✏️ Editar</button>
                             <button onclick="abrirModalDivisaoDestino('${item.id}', '${item.devId}')" class="bg-violet-900/60 hover:bg-violet-800 text-violet-200 border border-violet-700 px-2 py-1 rounded text-[10px] font-bold transition">🔀 Dividir</button>
+                            ${isAvulso ? `<button onclick="adicionarFotoItemAvulso('${item.id}')" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 px-2 py-1 rounded text-[10px] font-bold transition" title="Anexar foto da avaria a este item">📷 Foto</button>` : ''}
                             <button onclick="excluirItemDestino('${item.id}', '${item.devId}')" class="bg-red-900/60 hover:bg-red-800 text-red-200 border border-red-700 px-2 py-1 rounded text-[10px] font-bold transition">🗑️ Excluir</button>
                           </div>
                         </td>
@@ -8818,6 +11843,179 @@ function renderCdRecepcaoView() {
     </div>`;
 }
 
+// Subaba 3 (6.8.5): o que já saiu da Destinação — descartado, vendido,
+// consumido, reintegrado. Uma linha por parte baixada.
+function renderCdBaixasPainel(baixasTodas, baixasFiltradas) {
+  const fBxBusca = window._cdBaixaBusca   || '';
+  const fBxAcao  = window._cdBaixaAcao    || '';
+  const fBxDe    = window._cdBaixaDataDe  || '';
+  const fBxAte   = window._cdBaixaDataAte || '';
+  const filtroAtivo = !!(fBxBusca || fBxAcao || fBxDe || fBxAte);
+
+  const totais = {};
+  baixasFiltradas.forEach(({ parte }) => {
+    const t = totais[parte.baixa.acao] || (totais[parte.baixa.acao] = { linhas: 0, qtd: 0 });
+    t.linhas++;
+    t.qtd += parte.quantidade || 0;
+  });
+  const fmtQtd = n => (Math.round(n * 100) / 100).toLocaleString('pt-BR');
+  const fmtData = iso => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso)) ? iso.slice(0, 10).split('-').reverse().join('/') : '—';
+
+  return `
+    <div class="bg-slate-900 border border-sky-900/60 rounded-xl overflow-hidden shadow-2xl space-y-4 p-5">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="font-bold text-white text-sm flex items-center gap-2"><span>✅</span> Baixas Realizadas</h3>
+          <p class="text-xs text-slate-400">Itens que já saíram da Destinação: descartados, vendidos, consumidos, reintegrados ou devolvidos ao fornecedor.</p>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <button onclick="gerarRelatorioBaixasPdf()" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Imprimir (respeitando os filtros)"><span>🖨️</span> Imprimir</button>
+          <button onclick="exportarBaixasCsv()" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow flex items-center gap-1.5 transition" title="Exportar CSV (respeitando os filtros)"><span>⬇️</span> CSV</button>
+          <span class="bg-sky-950 text-sky-300 border border-sky-700 px-3 py-1 rounded-full text-xs font-black">${baixasFiltradas.length} de ${baixasTodas.length} baixa(s)</span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-5 gap-2">
+        <input type="text" value="${fBxBusca}" placeholder="🔎 Produto, código ou Nº DEV..."
+          class="sm:col-span-2 bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs"
+          onchange="forcarMaiuscula(this); window._cdBaixaBusca=this.value; renderApp()">
+        <select onchange="window._cdBaixaAcao=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-sky-300 font-bold rounded-lg p-2 text-xs">
+          <option value="">Todas as ações</option>
+          ${Object.entries(ACOES_BAIXA_DESTINO).map(([k, v]) => `<option value="${k}" ${fBxAcao === k ? 'selected' : ''}>${v}</option>`).join('')}
+        </select>
+        <input type="date" value="${fBxDe}" title="Data da ação — de" onchange="window._cdBaixaDataDe=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+        <input type="date" value="${fBxAte}" title="Data da ação — até" onchange="window._cdBaixaDataAte=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+      </div>
+      ${filtroAtivo ? `<div class="-mt-2"><button onclick="limparFiltrosBaixaCd()" class="text-[11px] underline text-sky-400 font-bold">✖ Limpar filtros</button> <span class="text-[10px] text-slate-500">· baixa sem data (automática, de registro antigo) não entra no filtro de período</span></div>` : ''}
+
+      ${Object.keys(totais).length ? `
+      <div class="flex flex-wrap gap-2">
+        ${Object.entries(totais).map(([acao, t]) => `
+          <div class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs">
+            <div class="font-bold text-white">${formatarAcaoBaixaLabel(acao)}</div>
+            <div class="text-slate-400">${t.linhas} linha(s) · <span class="text-amber-400 font-bold">${fmtQtd(t.qtd)} un</span></div>
+          </div>`).join('')}
+      </div>` : ''}
+
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-xs text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+            <tr>
+              <th class="p-3">Produto</th>
+              <th class="p-3 text-center">Qtd</th>
+              <th class="p-3">Destino</th>
+              <th class="p-3">Ação</th>
+              <th class="p-3 text-center">Data</th>
+              <th class="p-3">Responsável / Obs.</th>
+              <th class="p-3 text-center"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            ${baixasFiltradas.length === 0
+              ? `<tr><td colspan="7" class="p-6 text-center text-slate-500">${baixasTodas.length === 0 ? 'Nenhuma baixa registrada ainda.' : 'Nenhuma baixa encontrada para o filtro aplicado.'}</td></tr>`
+              : baixasFiltradas.map(({ item, parte }) => {
+                  const b = parte.baixa;
+                  const podeDesfazer = b.acao !== 'NAO_RETORNOU';
+                  return `
+                  <tr class="hover:bg-slate-800/40">
+                    <td class="p-3">
+                      <div class="font-bold text-white">${item.produto_codigo ? `<span class="text-emerald-400 font-mono">[${item.produto_codigo}]</span> ` : ''}${item.produto_descricao || 'Produto'}</div>
+                      <div class="text-[10px] text-slate-400">${item.protocolo} • ${item.cliente_nome}${parte.tipo !== 'item' ? ' • <span class="text-violet-300">parte de item dividido</span>' : ''}</div>
+                    </td>
+                    <td class="p-3 text-center font-bold text-amber-400">${fmtQtd(parte.quantidade)}</td>
+                    <td class="p-3 text-[11px] text-slate-300">${formatarDestinoLabel(parte.destino)}</td>
+                    <td class="p-3 font-bold text-sky-300">${formatarAcaoBaixaLabel(b.acao)}${b.automatica ? '<div class="text-[9px] text-slate-500 font-normal" title="Saiu da fila pelo status de negociação ou pelo destino, sem baixa manual">automática</div>' : ''}</td>
+                    <td class="p-3 text-center font-mono text-slate-200">${fmtData(b.data)}</td>
+                    <td class="p-3 text-[11px]">
+                      <div class="text-slate-200">${b.por || '—'}</div>
+                      ${b.obs ? `<div class="text-[10px] text-slate-400 italic">${b.obs}</div>` : ''}
+                    </td>
+                    <td class="p-3 text-center">
+                      ${podeDesfazer ? `<button onclick="desfazerBaixaItem('${item.id}', '${item.devId}', '${parte.divId}')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-600 px-2 py-1 rounded text-[10px] font-bold transition" title="Devolver o item para a Destinação de Itens">↩️ Desfazer</button>` : ''}
+                    </td>
+                  </tr>`;
+                }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function _linhasBaixasExport() {
+  const { baixasFiltradas } = getItensDestinadosFiltrados();
+  return baixasFiltradas.map(({ item, parte }) => ({
+    protocolo: item.devId === '__AVULSO__' ? 'AVULSO' : (item.protocolo || ''),
+    codigo: item.produto_codigo || '',
+    descricao: item.produto_descricao || item.descricao || '',
+    quantidade: parte.quantidade,
+    destino: formatarDestinoLabel(parte.destino),
+    acao: formatarAcaoBaixaLabel(parte.baixa.acao),
+    data: parte.baixa.data ? parte.baixa.data.split('-').reverse().join('/') : '',
+    por: parte.baixa.por || (parte.baixa.automatica ? 'AUTOMÁTICA' : ''),
+    obs: parte.baixa.obs || '',
+    cliente: item.cliente_nome || ''
+  }));
+}
+
+function exportarBaixasCsv() {
+  const linhas = _linhasBaixasExport();
+  if (linhas.length === 0) { alert('Nenhuma baixa encontrada para exportar com os filtros atuais.'); return; }
+  const headers = ['Protocolo', 'Cod Produto', 'Descricao Produto', 'Quantidade', 'Destino', 'Acao', 'Data Acao', 'Responsavel', 'Observacao', 'Cliente/Motivo'];
+  const csvRows = [headers.map(h => `"${h}"`).join(';')];
+  linhas.forEach(l => {
+    csvRows.push([l.protocolo, l.codigo, l.descricao, String(l.quantidade).replace('.', ','), l.destino, l.acao, l.data, l.por, l.obs, l.cliente]
+      .map(v => `"${String(v).replace(/"/g, '""')}"`).join(';'));
+  });
+  const blob = new Blob(['﻿' + csvRows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `JR_Baixas_Destinacao_${agoraIsoBrasilia().slice(0,10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function gerarRelatorioBaixasPdf() {
+  const linhas = _linhasBaixasExport();
+  const qtdTotal = linhas.reduce((s, l) => s + (parseFloat(l.quantidade) || 0), 0);
+  const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8"><title>BAIXAS DA DESTINAÇÃO — JR DISTRIBUIDORA</title>
+<style>
+  @media print { @page { margin: 10mm; size: A4 landscape; } body { -webkit-print-color-adjust: exact; } }
+  body { font-family: Arial, sans-serif; padding: 20px; color: #0f172a; background: #fff; }
+  .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #0369a1; padding-bottom: 10px; margin-bottom: 15px; }
+  .logo { height: 60px; }
+  .title-area { text-align: right; }
+  .title-area h1 { margin: 0; font-size: 20px; color: #0c4a6e; text-transform: uppercase; }
+  .title-area p { margin: 2px 0 0; font-size: 11px; color: #64748b; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 10px; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
+  th { background: #0c4a6e; color: #fff; text-transform: uppercase; font-size: 9px; }
+  tr:nth-child(even) { background: #f8fafc; }
+</style></head><body>
+  <div class="header">
+    <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
+    <div class="title-area">
+      <h1>Baixas da Destinação — Retorno Físico CD</h1>
+      <p>JR Distribuidora • ${linhas.length} linha(s) • ${qtdTotal.toLocaleString('pt-BR')} un • Emissão: ${new Date().toLocaleString('pt-BR')}</p>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Protocolo</th><th>Produto</th><th>Qtd</th><th>Destino</th><th>Ação</th><th>Data</th><th>Responsável</th><th>Observação</th></tr></thead>
+    <tbody>
+      ${linhas.length === 0 ? '<tr><td colspan="8" style="text-align:center;">Nenhuma baixa encontrada.</td></tr>'
+        : linhas.map(l => `<tr><td>${esc(l.protocolo)}</td><td>${l.codigo ? `[${esc(l.codigo)}] ` : ''}${esc(l.descricao)}</td><td>${esc(l.quantidade)}</td><td>${esc(l.destino)}</td><td>${esc(l.acao)}</td><td>${esc(l.data || '—')}</td><td>${esc(l.por || '—')}</td><td>${esc(l.obs || '—')}</td></tr>`).join('')}
+    </tbody>
+  </table>
+  <script>window.onload = function() { setTimeout(function(){ window.print(); }, 500); }<\/script>
+</body></html>`;
+  const win = window.open('', '_blank', 'width=1000,height=800');
+  if (win) { win.document.write(html); win.document.close(); }
+  else alert('Permita pop-ups no navegador para visualizar o relatório de Baixas.');
+}
+
 function formatarDestinoLabel(val) {
   switch(val) {
     case 'ESTOQUE_REUTILIZACAO': return '🟢 Reutilização / Estoque';
@@ -8827,6 +12025,14 @@ function formatarDestinoLabel(val) {
     case 'PRODUTOS_NEGOCIACAO': return '🟡 Produtos para Negociação';
     case 'VENDIDO': return '💰 Vendido';
     case 'RENEGOCIADO_ROTA': return '🚚 Renegociado em Rota (Não retorna ao CD)';
+    // FALTA SEM RETORNO (08/09/2026). Produto lançado como falta nunca chega
+    // ao CD: não existe caixa para conferir, destinar ou dar validade. Antes
+    // deste destino a ocorrência só saía de PENDENTE_FISICO se o conferente
+    // inventasse um destino e uma data de validade — como ninguém inventa,
+    // ela ficava pendente para sempre, envenenando o contador do CD, o selo
+    // da Largada e o sininho. Agora o supervisor carimba o que de fato
+    // aconteceu, com nome e data, e a fila fica limpa.
+    case 'FALTA_SEM_RETORNO': return '📭 Falta — Não Retorna Produto';
     default: return val || '—';
   }
 }
@@ -8835,21 +12041,26 @@ function atualizarStatusNegociacaoItem(itemId, devId, novoStatus) {
   const ref = resolverItemDestino(itemId, devId);
   if (!ref) { alert('Item não encontrado.'); return; }
 
-  ref.item.status_negociacao = novoStatus;
-  ref.item.data_negociacao = agoraIsoBrasilia();
+  ref.raw.status_negociacao = novoStatus;
+  ref.raw.data_negociacao = agoraIsoBrasilia();
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
 
   // Mesma "graduação" de destino aplicada na tela de Editar: Vendido gera
   // seu próprio destino "Vendido"; Descartado entra na lista de Avaria/
   // Descarte — para o select rápido da tabela se comportar igual ao modal.
   if (novoStatus === 'VENDA_NEGOCIADA') {
-    ref.item.destino_item = 'VENDIDO';
+    ref.raw.destino_item = 'VENDIDO';
   } else if (novoStatus === 'DESCARTADO') {
-    ref.item.destino_item = 'AVARIA_DESCARTE';
+    ref.raw.destino_item = 'AVARIA_DESCARTE';
   }
 
   const salvou = db.save();
   if (salvou) {
-    showToast('✅ Status de negociação do item atualizado!');
+    // Vendido / Descartado / Consumo já são a ação concluída: o item sai da
+    // fila sozinho (baixaDaParte) — o aviso diz para onde ele foi.
+    showToast(['VENDA_NEGOCIADA', 'DESCARTADO', 'ENVIADO_CONSUMO'].includes(novoStatus)
+      ? '✅ Item concluído — movido para Baixas Realizadas.'
+      : '✅ Status de negociação do item atualizado!');
     renderApp();
   } else {
     showToast('Não foi possível salvar a alteração neste dispositivo.', 'error');
@@ -8864,14 +12075,27 @@ function resolverItemDestino(itemId, devId) {
   if (String(devId) === '__AVULSO__') {
     const item = (db.data.itens_avulsos_destinacao || []).find(i => String(i.id) === String(itemId) && !i.is_deleted);
     if (!item) return null;
-    return { item, isAvulso: true, dev: null };
+    // No avulso a lista JÁ é o registro real, então ler e escrever são o
+    // mesmo objeto — por isso o avulso sempre salvou e a devolução não.
+    return { item, raw: item, isAvulso: true, dev: null };
   }
   const devs = db.getDevolucoes();
   const dev = devs.find(d => String(d.id) === String(devId));
   if (!dev || !Array.isArray(dev.itens)) return null;
   const item = dev.itens.find(i => String(i.id) === String(itemId));
   if (!item) return null;
-  return { item, isAvulso: false, dev };
+
+  // O DEFEITO DE "EDITAR DESTINO NÃO SALVA" (08/09/2026).
+  // getDevolucoes() não devolve os registros: ele MONTA cópias na hora
+  // (`{...i}` em store.js:1537) para juntar código/descrição do produto.
+  // Escrever em `item` mudava essa cópia, o db.save() gravava db.data
+  // intacto e o renderApp() logo em seguida remontava tudo do zero — a
+  // tela voltava ao valor antigo e parecia que o botão não fazia nada.
+  // `raw` é o registro de verdade, em db.data.itens_devolucao: toda
+  // ESCRITA vai nele; `item` continua servindo só para EXIBIR.
+  const raw = (db.data.itens_devolucao || []).find(i => String(i.id) === String(itemId) && !i.is_deleted);
+  if (!raw) return null;
+  return { item, raw, isAvulso: false, dev };
 }
 
 function openEditarItemDestinoModal(itemId, devId) {
@@ -8919,7 +12143,10 @@ function openEditarItemDestinoModal(itemId, devId) {
               <option value="RETRABALHO_REEMBALAGEM" ${item.destino_item==='RETRABALHO_REEMBALAGEM'?'selected':''}>🟠 Retrabalho / Reembalagem</option>
               <option value="DEVOLUCAO_FORNECEDOR" ${item.destino_item==='DEVOLUCAO_FORNECEDOR'?'selected':''}>🔵 Devolução ao Fornecedor</option>
               <option value="AVARIA_DESCARTE" ${item.destino_item==='AVARIA_DESCARTE'?'selected':''}>🔴 Descarte / Avaria</option>
-              <option value="PRODUTOS_NEGOCIACAO" ${item.destino_item==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟣 Produtos para Negociação em Rota</option>
+              <option value="PRODUTOS_NEGOCIACAO" ${item.destino_item==='PRODUTOS_NEGOCIACAO'?'selected':''}>🟡 Produtos para Negociação</option>
+              <option value="RENEGOCIADO_ROTA" ${item.destino_item==='RENEGOCIADO_ROTA'?'selected':''}>🚚 Renegociado em Rota (Não retorna ao CD)</option>
+              <option value="VENDIDO" ${item.destino_item==='VENDIDO'?'selected':''}>💰 Vendido</option>
+              <option value="FALTA_SEM_RETORNO" ${item.destino_item==='FALTA_SEM_RETORNO'?'selected':''}>📭 Falta — Não Retorna Produto</option>
             </select>
           </div>
 
@@ -8951,10 +12178,23 @@ function openEditarItemDestinoModal(itemId, devId) {
 function handleSalvarEdicaoItemDestino(e, itemId, devId) {
   e.preventDefault();
   const ref = resolverItemDestino(itemId, devId);
-  if (!ref) return;
-  const item = ref.item;
+  if (!ref) { alert('Item não encontrado para salvar.'); return; }
+  const item = ref.raw;
   item.quantidade = parseFloat(document.getElementById('edit-item-qtd')?.value || '1') || 1;
-  item.data_validade = document.getElementById('edit-item-validade')?.value || '';
+  // null, NAO '' (22/09/2026). Este formulario serve aos DOIS tipos de item da
+  // Destinacao, e a coluna data_validade nao tem o mesmo tipo nos dois:
+  // itens_devolucao.data_validade e VARCHAR (a migration 26 a criou assim
+  // justamente porque este campo chegava vazio), mas
+  // itens_avulsos_destinacao.data_validade e DATE. Um <input type="date"> em
+  // branco devolve "", e "" numa coluna DATE e HTTP 400 "invalid input syntax
+  // for type date" — que no upsert derruba o LOTE INTEIRO da tabela, nao so
+  // este registro. Foi o que travou a Destinacao de Itens em 21/09/2026 as
+  // 14:28: a partir da primeira edicao que deixou a validade em branco, NENHUM
+  // item avulso daquele aparelho subiu mais — 36 itens e 39 fotos ficaram so
+  // no navegador, com o indicador de nuvem verde. Mesma classe do achado do
+  // sinistro na 6.7.6; ver a lista branca de itens_avulsos_destinacao em
+  // js/cloudStore.js, que fecha a porta tambem para o "" ja gravado em cache.
+  item.data_validade = document.getElementById('edit-item-validade')?.value || null;
   item.observacao = document.getElementById('edit-item-obs')?.value || '';
 
   let destinoSelecionado = document.getElementById('edit-item-destino')?.value || 'ESTOQUE_REUTILIZACAO';
@@ -8974,8 +12214,19 @@ function handleSalvarEdicaoItemDestino(e, itemId, devId) {
 
   item.destino_item = destinoSelecionado;
   item.status_negociacao = statusNegociacao;
-  db.save();
+  // carimbarEdicao() em vez de escrever atualizado_em direto: é a lista
+  // COLECOES_COM_ATUALIZADO_EM que sabe qual tabela tem a coluna — uma chave
+  // a mais derrubaria o lote inteiro da tabela no POST (PGRST204). O avulso
+  // só entrou nessa lista na 6.7.3 (migration 47).
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', item);
+
+  const salvou = db.save();
   closeModal();
+  if (salvou) {
+    showToast('✅ Item do retorno físico atualizado!');
+  } else {
+    showToast('Não foi possível salvar a alteração neste dispositivo.', 'error');
+  }
   renderApp();
 }
 
@@ -8986,13 +12237,17 @@ function excluirItemDestino(itemId, devId) {
     renderApp();
     return;
   }
-  const devs = db.getDevolucoes();
-  const dev = devs.find(d => String(d.id) === String(devId));
-  if (dev && Array.isArray(dev.itens)) {
-    dev.itens = dev.itens.filter(i => String(i.id) !== String(itemId));
-    db.save();
-    renderApp();
-  }
+  // Mesmo motivo do resolverItemDestino: dev.itens de getDevolucoes() é uma
+  // lista montada na hora — filtrar ela não apagava nada. A exclusão é uma
+  // lápide (is_deleted) no registro real, igual ao resto do sistema.
+  const raw = (db.data.itens_devolucao || []).find(i => String(i.id) === String(itemId));
+  if (!raw) { alert('Item não encontrado.'); return; }
+  raw.is_deleted = true;
+  raw.deleted_at = agoraIsoBrasilia();
+  db.carimbarEdicao('itens_devolucao', raw);
+  const salvou = db.save();
+  showToast(salvou ? '🗑️ Item removido do retorno físico.' : 'Não foi possível salvar a exclusão.', salvou ? 'success' : 'error');
+  renderApp();
 }
 
 // ===== DIVISÃO DE DESTINO POR ITEM (item 2.1 da auditoria de 17/08/2026) =====
@@ -9003,10 +12258,11 @@ function excluirItemDestino(itemId, devId) {
 function abrirModalDivisaoDestino(itemId, devId) {
   const ref = resolverItemDestino(itemId, devId);
   if (!ref) { alert('Item não encontrado.'); return; }
-  const item = ref.item;
+  const item = ref.item;      // só para exibir código/descrição do produto
+  const dados = ref.raw;      // fonte de verdade das quantidades e divisões
 
-  const divisoes = Array.isArray(item.divisoes_destino) ? item.divisoes_destino : [];
-  const qtdTotal = parseFloat(item.quantidade) || 0;
+  const divisoes = Array.isArray(dados.divisoes_destino) ? dados.divisoes_destino : [];
+  const qtdTotal = parseFloat(dados.quantidade) || 0;
   const qtdJaDividida = divisoes.reduce((s, d) => s + (parseFloat(d.quantidade) || 0), 0);
   const qtdRestante = qtdTotal - qtdJaDividida;
 
@@ -9032,7 +12288,7 @@ function abrirModalDivisaoDestino(itemId, devId) {
             ${divisoes.map(dv => `
               <div class="flex items-center justify-between bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-2 text-xs">
                 <div>
-                  <span class="font-bold text-white">${dv.quantidade} un</span>
+                  <span class="font-bold text-white">${dv.quantidade}</span>
                   <span class="text-slate-400"> → </span>
                   <span class="font-semibold text-emerald-300">${formatarDestinoLabel(dv.destino)}</span>
                   ${dv.destino === 'PRODUTOS_NEGOCIACAO' ? `<span class="ml-1 text-[10px] text-amber-300">(${formatarStatusNegociacaoLabel(dv.status_negociacao)})</span>` : ''}
@@ -9059,7 +12315,8 @@ function abrirModalDivisaoDestino(itemId, devId) {
                   <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
                   <option value="DEVOLUCAO_FORNECEDOR">🔵 Devolução ao Fornecedor</option>
                   <option value="AVARIA_DESCARTE">🔴 Descarte / Avaria</option>
-                  <option value="PRODUTOS_NEGOCIACAO">🟣 Produtos para Negociação</option>
+                  <option value="PRODUTOS_NEGOCIACAO">🟡 Produtos para Negociação</option>
+                  <option value="FALTA_SEM_RETORNO">📭 Falta — Não Retorna Produto</option>
                 </select>
               </div>
             </div>
@@ -9100,8 +12357,8 @@ function formatarStatusNegociacaoLabel(val) {
 function handleAdicionarDivisaoDestino(e, itemId, devId) {
   e.preventDefault();
   const ref = resolverItemDestino(itemId, devId);
-  if (!ref) return;
-  const item = ref.item;
+  if (!ref) { alert('Item não encontrado para dividir.'); return; }
+  const item = ref.raw;
 
   const qtd = parseFloat(document.getElementById('div-dest-qtd')?.value || '0');
   const destino = document.getElementById('div-dest-destino')?.value || 'ESTOQUE_REUTILIZACAO';
@@ -9129,6 +12386,7 @@ function handleAdicionarDivisaoDestino(e, itemId, devId) {
     criado_em: agoraIsoBrasilia(),
     criado_por: db.currentUser ? db.currentUser.nome : 'SISTEMA'
   });
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', item);
 
   db.save();
   abrirModalDivisaoDestino(itemId, devId);
@@ -9138,9 +12396,10 @@ function handleAdicionarDivisaoDestino(e, itemId, devId) {
 function removerDivisaoDestino(itemId, devId, divisaoId) {
   if (!confirm('Deseja remover esta divisão? A quantidade voltará a ficar disponível para redividir.')) return;
   const ref = resolverItemDestino(itemId, devId);
-  if (!ref || !Array.isArray(ref.item.divisoes_destino)) return;
+  if (!ref || !Array.isArray(ref.raw.divisoes_destino)) return;
 
-  ref.item.divisoes_destino = ref.item.divisoes_destino.filter(dv => String(dv.id) !== String(divisaoId));
+  ref.raw.divisoes_destino = ref.raw.divisoes_destino.filter(dv => String(dv.id) !== String(divisaoId));
+  db.carimbarEdicao(ref.isAvulso ? 'itens_avulsos_destinacao' : 'itens_devolucao', ref.raw);
   db.save();
   abrirModalDivisaoDestino(itemId, devId);
   renderApp();
@@ -9199,13 +12458,20 @@ function abrirModalItemAvulso() {
               <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
               <option value="DEVOLUCAO_FORNECEDOR">🔵 Devolução ao Fornecedor</option>
               <option value="AVARIA_DESCARTE">🔴 Descarte / Avaria</option>
-              <option value="PRODUTOS_NEGOCIACAO">🟣 Produtos para Negociação em Rota</option>
+              <option value="PRODUTOS_NEGOCIACAO">🟡 Produtos para Negociação</option>
             </select>
           </div>
 
           <div>
             <label class="block font-bold text-slate-300 mb-1">Observações do CD</label>
             <input type="text" id="avulso-obs" placeholder="Ex: Caixa avariada, reembalado..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2" oninput="forcarMaiuscula(this)">
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-300 mb-1">📷 Fotos da Avaria (opcional — pode selecionar várias)</label>
+            <input type="file" id="avulso-foto-file" accept="image/*" multiple onchange="handleFotoAvulsoUpload(this)"
+              class="w-full bg-slate-800 border border-slate-700 text-white rounded-lg p-1.5 text-xs file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-violet-700 file:text-white hover:file:bg-violet-600">
+            <div id="avulso-foto-preview" class="hidden mt-1 flex gap-2 flex-wrap"></div>
           </div>
 
           <div class="pt-2 flex gap-2">
@@ -9215,7 +12481,56 @@ function abrirModalItemAvulso() {
         </form>
       </div>
     </div>`;
+  window._fotosAvulso = [];
   modal.classList.remove('hidden');
+}
+
+// Fotos do item avulso (18/09/2026, migration 47). Mesmo caminho da devolução:
+// comprimirImagem() (1280 px / JPEG 75%), o base64 fica SÓ nesta lista em
+// memória enquanto o modal está aberto, e depois de salvar vai para a fila
+// do IndexedDB → Storage. Nunca entra no registro nem no localStorage.
+window._fotosAvulso = [];
+function handleFotoAvulsoUpload(inputEl) {
+  const files = Array.from(inputEl.files || []);
+  if (!files.length) return;
+  const container = document.getElementById('avulso-foto-preview');
+  files.forEach(file => {
+    comprimirImagem(file).then(dataUrl => {
+      window._fotosAvulso.push(dataUrl);
+      if (container) {
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        img.className = 'w-16 h-16 object-cover rounded-lg border border-slate-700 shadow';
+        container.appendChild(img);
+        container.classList.remove('hidden');
+      }
+    }).catch(err => {
+      console.warn('[Foto Avulso] Falha ao processar imagem:', err.message);
+      showToast('Não foi possível processar uma das fotos selecionadas.', 'error');
+    });
+  });
+}
+
+// Anexar foto a um avulso que JÁ existe, direto da linha da Destinação. O CD
+// lança o item na conferência e fotografa depois, ou fotografa de outro
+// aparelho — a fila aceita foto a qualquer momento, desde que haja um id.
+function adicionarFotoItemAvulso(itemId) {
+  const item = (db.data.itens_avulsos_destinacao || []).find(i => String(i.id) === String(itemId) && !i.is_deleted);
+  if (!item) { alert('Item avulso não encontrado.'); return; }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.multiple = true;
+  input.onchange = async () => {
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    const fotos = (await Promise.all(files.map(f => comprimirImagem(f).catch(() => null)))).filter(Boolean);
+    if (!fotos.length) { showToast('Não foi possível processar as fotos selecionadas.', 'error'); return; }
+    const n = await _enfileirarFotosDevolucao(item, 'foto', fotos, 'avulsos');
+    if (n > 0) showToast(`📷 ${n} foto(s) guardada(s). Sobem sozinhas quando houver rede.`);
+    renderApp();
+  };
+  input.click();
 }
 
 function autoFillProdutoAvulso(val) {
@@ -9228,7 +12543,7 @@ function autoFillProdutoAvulso(val) {
   }
 }
 
-function handleSalvarItemAvulso(e) {
+async function handleSalvarItemAvulso(e) {
   e.preventDefault();
   const motivo = document.getElementById('avulso-motivo')?.value?.trim();
   const cod = document.getElementById('avulso-cod')?.value?.trim();
@@ -9250,6 +12565,15 @@ function handleSalvarItemAvulso(e) {
     observacao: obs,
     motivo_avulso: motivo
   });
+
+  // A foto só pode ir para a fila agora: antes disto não havia id para ela
+  // apontar. Se falhar, o item JÁ ESTÁ GRAVADO — o aviso do helper diz
+  // exatamente isso. Foto é opcional: sem foto, o helper sai calado.
+  const fotos = Array.isArray(window._fotosAvulso) ? window._fotosAvulso.filter(Boolean) : [];
+  window._fotosAvulso = [];
+  if (res.success && fotos.length) {
+    await _enfileirarFotosDevolucao(res.item, 'foto', fotos, 'avulsos');
+  }
 
   closeModal();
   if (!res.success) {
@@ -9331,9 +12655,9 @@ function gerarRelatorioDestinacaoPdf() {
           <tr>
             <td>${item.devId === '__AVULSO__' ? '<span class="badge-avulso">AVULSO</span>' : (item.protocolo || '—')}</td>
             <td>${item.produto_codigo ? `[${item.produto_codigo}] ` : ''}${item.produto_descricao || item.descricao || 'Produto'}</td>
-            <td>${item.quantidade} un</td>
+            <td>${item.quantidade}</td>
             <td>${Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0
-                ? item.divisoes_destino.map(dv => `${dv.quantidade}un: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
+                ? item.divisoes_destino.map(dv => `${dv.quantidade}: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
                 : formatarDestinoLabel(item.destino)}</td>
             <td>${item.validade || '—'}</td>
             <td>${item.cliente_nome || '—'}</td>
@@ -9369,7 +12693,7 @@ function exportarDestinacaoCsv() {
 
   itensDestinadosFiltrados.forEach(item => {
     const destinoTxt = Array.isArray(item.divisoes_destino) && item.divisoes_destino.length > 0
-      ? item.divisoes_destino.map(dv => `${dv.quantidade}un: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
+      ? item.divisoes_destino.map(dv => `${dv.quantidade}: ${formatarDestinoLabel(dv.destino)}`).join(' | ')
       : formatarDestinoLabel(item.destino);
     const linha = [
       item.devId === '__AVULSO__' ? 'AVULSO' : (item.protocolo || ''),
@@ -9623,7 +12947,7 @@ function exportarMedidasDisciplinaresCsv() {
   document.body.removeChild(link);
 }
 
-function openCdModal(devId) {
+function openCdModal(devId, { edicao = false } = {}) {
   const devs = db.getDevolucoes();
   const dev = devs.find(d => d.id == devId);
   if (!dev) return;
@@ -9632,10 +12956,37 @@ function openCdModal(devId) {
 
   const temItens = dev.itens && dev.itens.length > 0;
 
+  // MODO EDIÇÃO (25/09/2026): a conferência já foi confirmada e alguém
+  // errou um campo (o caso que trouxe isto: quantidade recebida errada na
+  // divergência). O modal reabre com o que está gravado — destino, validade
+  // e observação de cada item, e a divergência do último relatório — e o
+  // submit corrige o relatório existente em vez de criar outro.
+  const relAtual = edicao ? relatorioDivergenciaDaDevolucao(devId) : null;
+  const escAttr = v => String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const pre = (item) => {
+    if (!edicao) return { destino: 'ESTOQUE_REUTILIZACAO', validade: '', obs: '', div: null };
+    return {
+      destino: item.destino_item || dev.destino_cd || 'ESTOQUE_REUTILIZACAO',
+      validade: String(item.data_validade || '').split('T')[0],
+      obs: item.observacao || '',
+      div: relAtual ? itemDivergenteCorrespondente(relAtual, item) : null
+    };
+  };
+  const semValidade = d => d === 'AVARIA_DESCARTE' || d === 'RENEGOCIADO_ROTA' || d === 'FALTA_SEM_RETORNO';
+  const opcoesDestino = [
+    ['ESTOQUE_REUTILIZACAO',   '🟢 Reutilização / Estoque'],
+    ['AVARIA_DESCARTE',        '🔴 Avaria / Descarte'],
+    ['DEVOLUCAO_FORNECEDOR',   '🔵 Devolução ao Fornecedor'],
+    ['RETRABALHO_REEMBALAGEM', '🟠 Retrabalho / Reembalagem'],
+    ['PRODUTOS_NEGOCIACAO',    '🟡 Produtos para Negociação'],
+    ['RENEGOCIADO_ROTA',       '🚚 Renegociado em Rota (Não retorna CD)'],
+    ['FALTA_SEM_RETORNO',      '📭 Falta — Não Retorna Produto']
+  ];
+
   const itensHtml = temItens ? `
     <div class="bg-slate-950 p-3 rounded-lg border border-slate-700 space-y-3">
       <div class="font-bold text-emerald-400 text-xs mb-1 uppercase tracking-wider">📦 Defina o destino de cada produto individualmente:</div>
-      ${dev.itens.map((item, idx) => `
+      ${dev.itens.map((item, idx) => { const p = pre(item); return `
         <div class="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-2" id="item-card-${idx}">
           <div class="flex items-center justify-between gap-3 border-b border-slate-800 pb-2">
             <div class="flex-1 text-xs">
@@ -9644,10 +12995,10 @@ function openCdModal(devId) {
             </div>
             <div class="flex gap-2 shrink-0">
               <label class="flex items-center gap-1 text-[11px] cursor-pointer">
-                <input type="radio" name="item-status-${idx}" value="ok" checked class="text-emerald-500" onchange="toggleItemDivergenciaInputs(${idx})"> <span class="text-emerald-300 font-bold">OK</span>
+                <input type="radio" name="item-status-${idx}" value="ok" ${p.div ? '' : 'checked'} class="text-emerald-500" onchange="toggleItemDivergenciaInputs(${idx})"> <span class="text-emerald-300 font-bold">OK</span>
               </label>
               <label class="flex items-center gap-1 text-[11px] cursor-pointer">
-                <input type="radio" name="item-status-${idx}" value="divergente" class="text-red-500" onchange="toggleItemDivergenciaInputs(${idx})"> <span class="text-red-400 font-bold">Divergência</span>
+                <input type="radio" name="item-status-${idx}" value="divergente" ${p.div ? 'checked' : ''} class="text-red-500" onchange="toggleItemDivergenciaInputs(${idx})"> <span class="text-red-400 font-bold">Divergência</span>
               </label>
             </div>
           </div>
@@ -9657,44 +13008,39 @@ function openCdModal(devId) {
             <div>
               <label class="block text-[10px] text-amber-400 font-bold mb-1">Destino do Produto *</label>
               <select id="item-destino-${idx}" onchange="toggleValidadeExigencia(${idx})" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs font-bold">
-                <option value="ESTOQUE_REUTILIZACAO" selected>🟢 Reutilização / Estoque</option>
-                <option value="AVARIA_DESCARTE">🔴 Avaria / Descarte</option>
-                <option value="DEVOLUCAO_FORNECEDOR">🔵 Devolução ao Fornecedor</option>
-                <option value="RETRABALHO_REEMBALAGEM">🟠 Retrabalho / Reembalagem</option>
-                <option value="PRODUTOS_NEGOCIACAO">🟡 Produtos para Negociação</option>
-                <option value="RENEGOCIADO_ROTA">🚚 Renegociado em Rota (Não retorna CD)</option>
+                ${opcoesDestino.map(([v, l]) => `<option value="${v}" ${p.destino === v ? 'selected' : ''}>${l}</option>`).join('')}
               </select>
             </div>
 
-            <div id="validade-box-${idx}">
+            <div id="validade-box-${idx}" class="${semValidade(p.destino) ? 'opacity-50' : ''}">
               <label class="block text-[10px] text-emerald-400 font-bold mb-1">Data de Validade *</label>
-              <input type="date" id="item-validade-${idx}" required class="w-full bg-slate-800 border border-emerald-600 text-white font-bold rounded p-1.5 text-xs">
+              <input type="date" id="item-validade-${idx}" value="${escAttr(p.validade)}" ${semValidade(p.destino) ? '' : 'required'} class="w-full bg-slate-800 border border-emerald-600 text-white font-bold rounded p-1.5 text-xs">
             </div>
           </div>
 
           <div>
             <label class="block text-[10px] text-slate-400 mb-1">Observação do Item (opcional)</label>
-            <input type="text" id="item-obs-geral-${idx}" placeholder="Ex: Lote 45B - Embalagem amassada" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
+            <input type="text" id="item-obs-geral-${idx}" value="${escAttr(p.obs)}" placeholder="Ex: Lote 45B - Embalagem amassada" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)">
           </div>
 
           <!-- Área expandida de Divergência FÍSICA -->
-          <div id="item-div-box-${idx}" class="hidden pt-2 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950 p-2 rounded">
+          <div id="item-div-box-${idx}" class="${p.div ? '' : 'hidden '}pt-2 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-2 bg-slate-950 p-2 rounded">
             <div>
               <label class="block text-[10px] text-slate-400 font-bold mb-0.5">Qtd Recebida (Esperado: ${item.quantidade})</label>
-              <input type="number" id="item-qtd-rec-${idx}" min="0" max="${item.quantidade}" step="0.01" value="0" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1 text-xs">
+              <input type="number" id="item-qtd-rec-${idx}" min="0" max="${item.quantidade}" step="0.01" value="${p.div ? escAttr(p.div.quantidade_recebida ?? 0) : 0}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1 text-xs">
             </div>
             <div>
               <label class="block text-[10px] text-slate-400 font-bold mb-0.5">Observação da Falta</label>
-              <input type="text" id="item-obs-${idx}" placeholder="Ex: Produto faltante na carga" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
+              <input type="text" id="item-obs-${idx}" value="${escAttr(p.div ? p.div.observacao : '')}" placeholder="Ex: Produto faltante na carga" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1 text-xs" oninput="forcarMaiuscula(this)">
             </div>
           </div>
-        </div>`).join('')}
+        </div>`; }).join('')}
     </div>` : (dev.sem_itens ? `<div class="bg-amber-900/30 border border-amber-700/50 rounded-lg p-3 text-xs text-amber-300">⚠️ Sem itens: ${dev.observacao_sem_itens}</div>` : '<div class="text-slate-500 text-xs">Nenhum item para validar.</div>');
 
   modalContainer.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-2xl w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+    <div onclick="event.stopPropagation()" class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-2xl w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
       <div class="flex justify-between items-center border-b border-slate-800 pb-3">
-        <h3 class="font-bold text-white text-base">Recepção no CD • Conferência Item a Item — ${dev.numero_devolucao||dev.numero_protocolo}</h3>
+        <h3 class="font-bold text-white text-base">${edicao ? '✏️ Corrigir Conferência' : 'Recepção no CD • Conferência Item a Item'} — ${dev.numero_devolucao||dev.numero_protocolo}</h3>
         <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-xl leading-none">✕</button>
       </div>
 
@@ -9714,12 +13060,16 @@ function openCdModal(devId) {
         ${renderGaleriaMidia(dev, { titulo: '📎 Histórico de Mídia da Ocorrência (Abertura + Investigação)' })}
       </div>
 
-      <form onsubmit="handleCdModalSubmit(event, '${dev.id}')" class="space-y-4 text-xs">
+      ${edicao ? `<div class="bg-amber-950/40 border border-amber-700/60 rounded-lg p-3 text-[11px] text-amber-200">
+        ✏️ Você está corrigindo uma conferência já confirmada${dev.data_entrada_cd ? ` em ${new Date(dev.data_entrada_cd).toLocaleDateString('pt-BR')}` : ''}. A data de entrada no CD não muda${relAtual ? ', e o relatório de divergência existente é corrigido (não sai um segundo)' : ''}.
+      </div>` : ''}
+
+      <form onsubmit="handleCdModalSubmit(event, '${dev.id}', ${edicao ? 'true' : 'false'})" class="space-y-4 text-xs">
         ${itensHtml}
 
         <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
           <button type="button" onclick="closeModal()" class="bg-slate-800 text-slate-300 font-bold px-4 py-2 rounded">Cancelar</button>
-          <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-2 rounded shadow text-xs">Confirmar Entrada no CD</button>
+          <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-2 rounded shadow text-xs">${edicao ? 'Salvar Correção' : 'Confirmar Entrada no CD'}</button>
         </div>
       </form>
     </div>`;
@@ -9731,7 +13081,7 @@ function toggleValidadeExigencia(idx) {
   const valBox = document.getElementById(`validade-box-${idx}`);
   const valInput = document.getElementById(`item-validade-${idx}`);
   if (valBox && valInput) {
-    if (dest === 'AVARIA_DESCARTE' || dest === 'RENEGOCIADO_ROTA') {
+    if (dest === 'AVARIA_DESCARTE' || dest === 'RENEGOCIADO_ROTA' || dest === 'FALTA_SEM_RETORNO') {
       valBox.classList.add('opacity-50');
       valInput.required = false;
       valInput.value = '';
@@ -9801,7 +13151,26 @@ function getValorUnitarioProduto(item, dev = null) {
   return 0;
 }
 
-function handleCdModalSubmit(e, devId) {
+// Último relatório de divergência da devolução — o mesmo critério que
+// gerarAdiantamentoDivergenciaPdf usa para achar os itens do recibo.
+function relatorioDivergenciaDaDevolucao(devId) {
+  const rels = db.data.relatorios_divergencia || [];
+  return rels.slice().reverse().find(r => String(r.ocorrencia_id) === String(devId)) || null;
+}
+
+// O relatório guarda cópia do item, não o id de itens_devolucao: casa por
+// produto_id e, na falta dele, por código ou descrição.
+function itemDivergenteCorrespondente(rel, item) {
+  const lista = Array.isArray(rel?.itens_divergentes) ? rel.itens_divergentes : [];
+  const cod  = String(item.produto_codigo || item.codigo_produto || '');
+  const desc = String(item.produto_descricao || item.descricao || '').toUpperCase();
+  return lista.find(i => item.produto_id != null && String(i.produto_id) === String(item.produto_id))
+      || lista.find(i => cod && String(i.codigo_produto) === cod)
+      || lista.find(i => desc && String(i.descricao_produto || '').toUpperCase() === desc)
+      || null;
+}
+
+function handleCdModalSubmit(e, devId, edicao = false) {
   e.preventDefault();
   const devs = db.getDevolucoes ? db.getDevolucoes() : [];
   const dev = devs.find(d => d.id == devId) || (db.data.ocorrencias_devolucao || []).find(d => d.id == devId);
@@ -9819,8 +13188,10 @@ function handleCdModalSubmit(e, devId) {
 
       if (idx === 0) destinoPrincipal = dest;
 
-      // Validação de data de validade condicional (exceto Descarte e Renegociado em Rota)
-      if (dest !== 'AVARIA_DESCARTE' && dest !== 'RENEGOCIADO_ROTA' && !validade) {
+      // Validação de data de validade condicional. Fora Descarte e
+      // Renegociado em Rota, agora também Falta — Não Retorna Produto:
+      // não existe embalagem na mão do conferente para ler a data.
+      if (dest !== 'AVARIA_DESCARTE' && dest !== 'RENEGOCIADO_ROTA' && dest !== 'FALTA_SEM_RETORNO' && !validade) {
         alert(`Por favor, preencha a Data de Validade para o item: ${item.produto_descricao || 'Produto'}`);
         return;
       }
@@ -9857,6 +13228,11 @@ function handleCdModalSubmit(e, devId) {
     }
   }
 
+  if (edicao) {
+    salvarCorrecaoConferenciaCd(devId, dev, destinoPrincipal, itensDestinos, itensDivergentes);
+    return;
+  }
+
   db.updateDestinoCd(devId, destinoPrincipal, 'RECEBIDO_CD', itensDestinos);
 
   if (itensDivergentes.length > 0) {
@@ -9869,7 +13245,13 @@ function handleCdModalSubmit(e, devId) {
 
     const tipoErroUpper = String(dev?.tipo_erro || '').toUpperCase();
     if (tipoErroUpper.includes('MOTORISTA')) {
-      alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA em ocorrência de ERRO MOTORISTA!\nValor total apurado da falta: R$ ${valorTotalDivergencia.toLocaleString('pt-BR', {minimumFractionDigits: 2})}.\n\nGerando Recibo de Adiantamento Operacional (Rateio 50% Motorista / 50% Ajudante)...`);
+      // O aviso dizia "Rateio 50% Motorista / 50% Ajudante" sempre — mesmo sem
+      // ajudante nenhum, e mesmo com dois. Agora diz quantas folhas vão sair.
+      const equipeAviso = equipeComPapel(dev);
+      const rateioAviso = equipeAviso.length > 1
+        ? `Rateio de ${Math.round(100 / equipeAviso.length)}% entre ${equipeAviso.length} integrantes: ${equipeAviso.map(p => p.nome).join(', ')}`
+        : `100% do valor no motorista (nenhum ajudante vinculado a esta carga)`;
+      alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA em ocorrência de ERRO MOTORISTA!\nValor total apurado da falta: R$ ${valorTotalDivergencia.toLocaleString('pt-BR', {minimumFractionDigits: 2})}.\n\nGerando Recibo de Adiantamento Operacional (${rateioAviso})...`);
       gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes, valorTotalDivergencia);
     } else {
       alert(`⚠️ ${itensDivergentes.length} item(ns) com DIVERGÊNCIA!\nRelatório de quantidades faltantes gerado para o Financeiro.\n\nEntrada confirmada no CD.`);
@@ -9880,6 +13262,72 @@ function handleCdModalSubmit(e, devId) {
     alert(`✅ Entrada confirmada no CD!\nDestinação registrada item a item com sucesso.`);
   }
   renderApp();
+}
+
+// Correção de uma conferência já confirmada (botão ✏️ do Histórico de
+// Entradas). Diferenças para a primeira conferência:
+//  - data_entrada_cd fica como está (updateDestinoCd com { edicao: true });
+//  - o relatório de divergência existente é CORRIGIDO no mesmo id, senão o
+//    Financeiro passaria a ver dois relatórios da mesma devolução;
+//  - se a divergência deixou de existir, o relatório sai dos dois lados
+//    (local e nuvem), do mesmo jeito que a exclusão definitiva faz;
+//  - o recibo/relatório só é reemitido se o usuário pedir.
+async function salvarCorrecaoConferenciaCd(devId, dev, destinoPrincipal, itensDestinos, itensDivergentes) {
+  db.data.relatorios_divergencia = db.data.relatorios_divergencia || [];
+  const relAtual = relatorioDivergenciaDaDevolucao(devId);
+  const valorTotalDivergencia = itensDivergentes.reduce((acc, i) => acc + (parseFloat(i.valor_total) || 0), 0);
+  let relFinal = null;
+
+  // Nuvem primeiro, como no hardDelete (store.js): apagar só aqui faria o
+  // pull seguinte trazer o relatório de volta. Se a nuvem recusar, nada é
+  // gravado e o modal continua aberto para tentar de novo.
+  if (itensDivergentes.length === 0 && relAtual
+      && window.cloudStore && typeof window.cloudStore.apagarRegistro === 'function') {
+    const r = await window.cloudStore.apagarRegistro('relatorios_divergencia', relAtual.id);
+    if (!r || !r.success) {
+      alert(`⚠️ A correção NÃO foi salva.\n\nPara retirar a divergência é preciso apagar o relatório antigo na nuvem, e ela não confirmou.\n${(r && r.message) || ''}\n\nTente de novo com o aparelho conectado.`);
+      return;
+    }
+  }
+
+  db.updateDestinoCd(devId, destinoPrincipal, dev?.status_fechamento || 'RECEBIDO_CD', itensDestinos, { edicao: true });
+
+  if (itensDivergentes.length > 0) {
+    if (relAtual) {
+      relAtual.itens_divergentes = itensDivergentes;
+      relAtual.valor_total_divergencia = valorTotalDivergencia;
+      relFinal = relAtual;
+    } else {
+      relFinal = gerarRelatorioDivergencia(devId, itensDivergentes, dev, valorTotalDivergencia);
+      db.data.relatorios_divergencia.push(relFinal);
+    }
+  } else if (relAtual) {
+    db.data.relatorios_divergencia = db.data.relatorios_divergencia.filter(r => r !== relAtual);
+  }
+
+  if (typeof db.logAudit === 'function') {
+    db.logAudit({
+      acao: 'CORRECAO_CONFERENCIA_CD', modulo: 'RETORNO_CD', registro_id: devId,
+      diff: { destinos: itensDestinos, divergencias: itensDivergentes }
+    });
+  }
+  db.save();
+  closeModal();
+  renderApp();
+
+  if (!relFinal) {
+    alert(relAtual
+      ? '✅ Conferência corrigida.\nA divergência foi retirada e o relatório antigo apagado.'
+      : '✅ Conferência corrigida.');
+    return;
+  }
+
+  const valorFmt = valorTotalDivergencia.toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+  const ehMotorista = String(dev?.tipo_erro || '').toUpperCase().includes('MOTORISTA');
+  const reemitir = confirm(`✅ Conferência corrigida.\n${itensDivergentes.length} item(ns) com divergência — valor apurado: R$ ${valorFmt}.\n\nDeseja reemitir ${ehMotorista ? 'o Recibo de Adiantamento (PDF)' : 'o relatório de divergência'} com os valores corrigidos?`);
+  if (!reemitir) return;
+  if (ehMotorista) gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes, valorTotalDivergencia);
+  else baixarRelatorioDivergencia(relFinal);
 }
 
 function gerarRelatorioDivergencia(devId, itensDivergentes, dev, valorTotalDivergencia = 0) {
@@ -9953,11 +13401,13 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
   const dtCriacao = dev.criado_em ? new Date(dev.criado_em).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
   const dtEntradaCd = dev.data_entrada_cd ? new Date(dev.data_entrada_cd).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR');
 
-  // Rateio 50/50 quando existe ajudante vinculado
-  const ajudanteNomeBruto = String(dev.ajudante_nome || '').trim();
-  const temAjudante = !!(ajudanteNomeBruto && ajudanteNomeBruto.toUpperCase() !== 'AJUDANTE' && ajudanteNomeBruto.toUpperCase() !== 'NÃO INFORMADO' && ajudanteNomeBruto.toUpperCase() !== 'SEM AJUDANTE');
-  const valorPorPessoa = (temAjudante ? (totalValor / 2) : totalValor).toFixed(2);
-  const percentualLabel = temAjudante ? '50%' : '100%';
+  // Uma folha por pessoa da equipe, cada uma com a sua cota. Mesmas correções
+  // do recibo de adiantamento (gerarAdiantamentoPdf): eram duas folhas fixas,
+  // as duas imprimindo a cota do motorista, e o percentual escrito à mão.
+  const folhas = equipeComPapel(dev);
+  const cotas  = ratearValor(totalValor, folhas.length);
+  const rateado = folhas.length > 1;
+  const percentualLabel = Math.round(100 / folhas.length) + '%';
 
   const itensTableHtml = divItens.length === 0 ? `
     <div style="padding: 10px; text-align: center; color: #64748b; font-style: italic; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc;">
@@ -9997,9 +13447,14 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
       </tbody>
     </table>`;
 
-  const via2AjudanteHtml = !temAjudante ? '' : `
-  <!-- PÁGINA 2: VIA DO AJUDANTE -->
-  <div class="page-container page-break">
+  const paginasHtml = folhas.map((pessoa, idx) => {
+    const cotaFmt = (cotas[idx] || 0).toLocaleString('pt-BR', {minimumFractionDigits: 2});
+    const papelTitulo = pessoa.papel === 'MOTORISTA' ? 'Motorista' : 'Ajudante';
+    const papelAssin  = pessoa.papel === 'MOTORISTA' ? 'MOTORISTA / PRESTADOR' : 'AJUDANTE / COLABORADOR';
+    const outros = folhas.filter((_, i) => i !== idx).map(p => p.nome).join('  •  ');
+    return `
+  <!-- PÁGINA ${idx + 1}: VIA DE ${pessoa.nome} -->
+  <div class="page-container${idx > 0 ? ' page-break' : ''}">
     <div>
       <div class="header">
         <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
@@ -10009,17 +13464,17 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
         </div>
       </div>
 
-      <div class="badge-via">RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — VIA DO AJUDANTE (PÁGINA 2 - 50%)</div>
+      <div class="badge-via">RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — VIA DO ${pessoa.papel} (PÁGINA ${idx + 1} DE ${folhas.length} — ${percentualLabel})</div>
 
       <div class="section-title">📋 DADOS DA OCORRÊNCIA & CONFERÊNCIA FÍSICA NO CD</div>
       <div class="grid">
-        <div class="field"><div class="field-lbl">Colaborador / Ajudante</div><div class="field-val">${dev.ajudante_nome}</div></div>
+        <div class="field"><div class="field-lbl">Colaborador / ${papelTitulo}</div><div class="field-val">${pessoa.nome || 'NÃO INFORMADO'}</div></div>
         <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Conferência: ${dtEntradaCd})</div></div>
         <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
         <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
         <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
         <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
-        <div class="field" style="grid-column: span 2;"><div class="field-lbl">Motorista Vinculado (Rateio 50%)</div><div class="field-val">${dev.motorista_nome}</div></div>
+        ${outros ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Demais integrantes da equipe (Rateio ${percentualLabel} cada)</div><div class="field-val">${outros}</div></div>` : ''}
       </div>
 
       <div class="motivo-box">
@@ -10035,20 +13490,20 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
 
     <div>
       <div class="val-highlight">
-        <div class="val-lbl">VALOR DO ADIANTAMENTO DO AJUDANTE (50% do total da divergência R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
-        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
+        <div class="val-lbl">VALOR DO ADIANTAMENTO DO ${pessoa.papel} (${percentualLabel} do total da divergência R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
+        <div class="val-amt">R$ ${cotaFmt}</div>
       </div>
 
       <div class="termo">
         <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO OPERACIONAL:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> (correspondente a 50% da divergência física de produtos apurada no retorno ao CD) referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Rota: <b>${dev.carga_rota || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
+        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${cotaFmt}</b> ${rateado ? `(correspondente a ${percentualLabel} da divergência física de produtos apurada no retorno ao CD, rateada entre os ${folhas.length} integrantes da equipe)` : '(100% integral da divergência física de produtos apurada no retorno ao CD)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Rota: <b>${dev.carga_rota || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
       </div>
 
       <div class="sigs">
         <div>
           <div class="sig-space"></div>
           <div class="sig-line"></div>
-          <div class="sig-lbl">${dev.ajudante_nome}<br>(AJUDANTE / COLABORADOR)</div>
+          <div class="sig-lbl">${pessoa.nome || 'ASSINATURA'}<br>(${papelAssin})</div>
         </div>
         <div>
           <div class="sig-space"></div>
@@ -10058,6 +13513,7 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
       </div>
     </div>
   </div>`;
+  }).join('');
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -10100,68 +13556,7 @@ function gerarAdiantamentoDivergenciaPdf(devId, itensDivergentes = null, valorTo
   </style>
 </head>
 <body>
-  <!-- PÁGINA 1: VIA DO MOTORISTA -->
-  <div class="page-container">
-    <div>
-      <div class="header">
-        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
-        <div class="header-title">
-          <h2>JR DISTRIBUIDORA</h2>
-          <p>Logística Corporativa • Retorno Físico CD & Conferência</p>
-        </div>
-      </div>
-
-      <div class="badge-via">RECIBO DE ADIANTAMENTO OPERACIONAL (DIVERGÊNCIA CD) — VIA DO MOTORISTA (PÁGINA 1 - ${percentualLabel})</div>
-
-      <div class="section-title">📋 DADOS DA OCORRÊNCIA & CONFERÊNCIA FÍSICA NO CD</div>
-      <div class="grid">
-        <div class="field"><div class="field-lbl">Colaborador / Motorista</div><div class="field-val">${dev.motorista_nome || 'NÃO INFORMADO'}</div></div>
-        <div class="field"><div class="field-lbl">Nº Protocolo / Devolução</div><div class="field-val">${dev.numero_devolucao || dev.numero_protocolo} (Conferência: ${dtEntradaCd})</div></div>
-        <div class="field"><div class="field-lbl">Veículo / Rota</div><div class="field-val">${dev.veiculo_placa || '—'} — Rota: ${dev.carga_rota || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Nº Carga</div><div class="field-val">${dev.carga_numero || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
-        <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal ? `NF: ${dev.nota_fiscal}` : 'NÃO INFORMADA'}</div></div>
-        ${temAjudante ? `<div class="field" style="grid-column: span 2;"><div class="field-lbl">Ajudante Vinculado (Rateio 50%)</div><div class="field-val">${dev.ajudante_nome}</div></div>` : ''}
-      </div>
-
-      <div class="motivo-box">
-        <div class="motivo-lbl">MOTIVO & APURAÇÃO DA DIVERGÊNCIA NO CD</div>
-        <div class="motivo-txt">ERRO MOTORISTA — Divergência física/falta de produtos apurada na conferência de retorno ao CD</div>
-      </div>
-
-      <div class="products-section">
-        <div class="section-title">📦 ITENS COM DIVERGÊNCIA / FALTA APURADA NO RECEBIMENTO (${divItens.length})</div>
-        ${itensTableHtml}
-      </div>
-    </div>
-
-    <div>
-      <div class="val-highlight">
-        <div class="val-lbl">VALOR DO ADIANTAMENTO DO MOTORISTA (${percentualLabel} do total da divergência R$ ${totalValor.toLocaleString('pt-BR', {minimumFractionDigits: 2})}):</div>
-        <div class="val-amt">R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</div>
-      </div>
-
-      <div class="termo">
-        <b>DECLARAÇÃO DE RECEBIMENTO DE ADIANTAMENTO OPERACIONAL:</b><br>
-        Declaro para os devidos fins que recebi da empresa <b>JR Distribuidora</b> a título de adiantamento operacional o valor de <b>R$ ${parseFloat(valorPorPessoa).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</b> ${temAjudante ? '(correspondente a 50% da divergência física de produtos apurada no retorno ao CD)' : '(100% integral)'} referente ao protocolo <b>${dev.numero_devolucao || dev.numero_protocolo}</b> (Carga: <b>${dev.carga_numero || '—'}</b>, Rota: <b>${dev.carga_rota || '—'}</b>, Cliente: <b>${dev.cliente_nome || '—'}</b>).
-      </div>
-
-      <div class="sigs">
-        <div>
-          <div class="sig-space"></div>
-          <div class="sig-line"></div>
-          <div class="sig-lbl">${dev.motorista_nome || 'ASSINATURA MOTORISTA'}<br>(MOTORISTA / PRESTADOR)</div>
-        </div>
-        <div>
-          <div class="sig-space"></div>
-          <div class="sig-line"></div>
-          <div class="sig-lbl">SUPERVISOR CD / LOGÍSTICA<br>(JR DISTRIBUIDORA)</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  ${via2AjudanteHtml}
+  ${paginasHtml}
 
   <script>
     window.onload = function() {
@@ -10327,59 +13722,47 @@ function baixarRelatorioDivergencia(relatorio) {
 // ===== MÓDULO: CONTROLE DE VIAGENS (LARGADAS & OCORRÊNCIAS OPERACIONAIS) =====
 let activeViagensSubTab = 'largada';
 
+// 6.7.0: a subaba virou tela. Mantida por compatibilidade com os botões
+// que ainda chamam switchViagensSubTab('reentregas') etc.
 function switchViagensSubTab(sub) {
-  activeViagensSubTab = sub;
-  renderApp();
+  switchTabViagensSub(sub);
 }
 window.switchViagensSubTab = switchViagensSubTab;
 
+// Cabeçalho comum das quatro telas que eram subabas de Controle de Viagens.
+function renderTelaFrota(icone, titulo, subtitulo, contentHtml) {
+  return `
+    <div class="space-y-5">
+      <div>
+        <h1 class="text-xl font-black text-white flex items-center gap-2">
+          <span>${icone}</span> ${titulo}
+        </h1>
+        <p class="text-xs text-slate-400">${subtitulo}</p>
+      </div>
+      <div>${contentHtml}</div>
+    </div>`;
+}
+
+// Controle de Viagens É a Largada (decisão 4 do plano, 6.7.0): sem barra de
+// subabas — Oc. Operacional, Oc. em Rota, Reentregas e Troca de Veículos são
+// telas irmãs no menu.
 function renderControleViagensView() {
-  let contentHtml = renderViagensLargadaSubTab();
-  if (activeViagensSubTab === 'operacional' || activeViagensSubTab === 'ocorrencias') {
-    contentHtml = renderViagensOcorrenciasSubTab();
-  } else if (activeViagensSubTab === 'frota_rota') {
-    contentHtml = renderRotaOcorrenciasView();
-  } else if (activeViagensSubTab === 'troca_veiculos') {
-    contentHtml = renderViagensTrocaVeiculosSubTab();
-  } else if (activeViagensSubTab === 'reentregas') {
-    contentHtml = renderViagensReentregasSubTab();
-  }
+  const contentHtml = renderViagensLargadaSubTab();
 
   return `
     <div class="space-y-5">
-      <!-- TOPO E NAVEGAÇÃO ENTRE SUB-ABAS -->
       <div class="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
         <div>
           <h1 class="text-xl font-black text-white flex items-center gap-2">
             <span>🚍</span> Controle de Viagens
           </h1>
-          <p class="text-xs text-slate-400">Escala de largada, trocas, ocorrências e reentregas</p>
+          <p class="text-xs text-slate-400">Escala de largada e retorno das viagens</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
-          <!-- Botão Relatório de Largada -->
           <div class="flex gap-2"><button onclick="gerarRelatorioLargadaOperacaoModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow flex items-center gap-1.5" title="Relatório Corporativo de Largada">
             <span>📄</span> Relatório de Largada
           </button>${btnCompartilharPdf('gerarRelatorioLargadaOperacaoModal', 'Boletim de Largada')}</div>
-
-          <!-- SELETOR DE SUB-ABAS -->
-          <div class="flex flex-wrap gap-1 bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg">
-            <button onclick="switchViagensSubTab('largada')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='largada'?'bg-emerald-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🚩</span> Largada
-            </button>
-            <button onclick="switchViagensSubTab('operacional')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${(activeViagensSubTab==='operacional'||activeViagensSubTab==='ocorrencias')?'bg-amber-700 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>⚠️</span> Oc. Operacional
-            </button>
-            <button onclick="switchViagensSubTab('frota_rota')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='frota_rota'?'bg-red-800 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🚚</span> Oc. em Rota
-            </button>
-            <button onclick="switchViagensSubTab('troca_veiculos')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='troca_veiculos'?'bg-purple-800 text-white shadow-lg':'text-slate-400 hover:text-white'}">
-              <span>🔄</span> Trocas de veículos
-            </button>
-            <button onclick="switchViagensSubTab('reentregas')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${activeViagensSubTab==='reentregas'?'bg-purple-700 text-white shadow-lg border border-purple-500':'text-slate-400 hover:text-white'}">
-              <span>🔄</span> Reentregas
-            </button>
-          </div>
         </div>
       </div>
 
@@ -10610,6 +13993,74 @@ const VG_STATUS_OPCOES = [
   { val: 'ADIADA',                cls: 'text-orange-400'  },
   { val: 'REENTREGA',             cls: 'text-purple-400'  }
 ];
+
+// VIAGEM EM ABERTO — o caminhão que ainda está na rua. 08/09/2026.
+//
+// Estes três status são um fato do PRESENTE, não do passado: a viagem não
+// acabou, logo ela NÃO TEM data de retorno e nunca vai ter enquanto estiver
+// assim. Filtrar essas viagens por "Data de Retorno entre X e Y" é perguntar
+// por uma data que ainda não existe — e a resposta certa não é "some da
+// tela", é "aparece, porque ela É a operação de agora".
+//
+// É isso que faz "o que finalizou hoje" e "o que ainda está rodando" caberem
+// na mesma tela sem um filtro anular o outro. Ver vgFiltrarViagens().
+const VG_STATUS_EM_ABERTO = ['EM ANDAMENTO', 'EM ANDAMENTO (PALMAS)', 'EM RETORNO'];
+function vgViagemEmAberto(v) {
+  return VG_STATUS_EM_ABERTO.includes(String(v?.status_viagem || '').trim().toUpperCase());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEITURA DOS CHECKLISTS DE LARGADA (SAÍDA E CHEGADA) — 01/09/2026
+// ─────────────────────────────────────────────────────────────────────────────
+// São TRÊS estados, não dois: REALIZADO, NÃO REALIZADO e NÃO INFORMADO (célula
+// vazia na escala importada). Por isso as duas funções abaixo são independentes
+// em vez de uma ser a negação da outra: um valor em branco responde  às
+// DUAS, e é isso que mantém o não informado fora das duas contagens. Misturar
+// o branco no "não realizado" faria um checklist sem apontamento ser contado
+// como falha do motorista — a tabela da tela já pinta o vazio como "—", sem
+// cor, e quem conta faz o mesmo.
+//
+// A comparação passa por normalizeStr() porque o valor vem de planilha: a
+// mesma coluna já chegou como "NÃO INICIADO", "NAO INICIADO" e "Não iniciado".
+function checklistFoiRealizado(valor) {
+  const v = normalizeStr(valor);
+  return v === 'INICIADO' || v === 'REALIZADO' || v === 'OK' || v === 'SIM';
+}
+
+function checklistNaoRealizado(valor) {
+  const v = normalizeStr(valor);
+  return v === 'NAO INICIADO' || v === 'NAO REALIZADO' || v === 'PENDENTE' || v === 'NAO';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PALETA ÚNICA DO STATUS DA VIAGEM — tela e papel (01/09/2026)
+// ─────────────────────────────────────────────────────────────────────────────
+// A cor do status existia só na tabela da tela, escrita como seis `if` soltos
+// dentro do map das linhas. O Relatório de Largada imprimia o status como texto
+// preto sobre branco: quem recebia o PDF perdia justamente a leitura que a tela
+// dá de relance — o que está em andamento, o que finalizou, o que foi adiado.
+//
+// A cor virou dado, num lugar só, com as duas formas de que o app precisa:
+//   cls — classes Tailwind, para a tabela da tela;
+//   css — o MESMO tom em hexadecimal, para os relatórios impressos, que abrem
+//         em janela nova sem o Tailwind carregado e por isso não podem usar cls.
+// Status novo entra aqui uma vez e aparece colorido nos dois lugares.
+const VG_STATUS_CORES = {
+  'EM ANDAMENTO':          { cls: 'bg-amber-300 text-slate-950',                                      css: 'background:#fcd34d;color:#020617;' },
+  'EM ANDAMENTO (PALMAS)': { cls: 'bg-amber-300 text-slate-950',                                      css: 'background:#fcd34d;color:#020617;' },
+  'EM RETORNO':            { cls: 'bg-blue-900 text-white',                                           css: 'background:#1e3a8a;color:#ffffff;' },
+  'FINALIZADO':            { cls: 'bg-emerald-700 text-white',                                        css: 'background:#047857;color:#ffffff;' },
+  'ADIADA':                { cls: 'bg-orange-800 text-orange-200 border border-orange-600',           css: 'background:#9a3412;color:#fed7aa;border:1px solid #ea580c;' },
+  'REENTREGA':             { cls: 'bg-purple-900 text-purple-200 border border-purple-600 font-black', css: 'background:#581c87;color:#e9d5ff;border:1px solid #9333ea;font-weight:900;' }
+};
+
+// Status fora da lista (importado de planilha com grafia diferente, por
+// exemplo) cai no âmbar de "em andamento", que é como a tela já se comportava.
+const VG_STATUS_COR_PADRAO = { cls: 'bg-amber-300 text-slate-950', css: 'background:#fcd34d;color:#020617;' };
+
+function corStatusViagem(status) {
+  return VG_STATUS_CORES[String(status || '').trim().toUpperCase()] || VG_STATUS_COR_PADRAO;
+}
 
 const VG_FILTROS_MULTI = {
   status: {
@@ -10866,6 +14317,8 @@ function limparFiltrosViagens() {
   window._vgFiltroSaidaAte = '';
   window._vgFiltroRetornoDe = '';
   window._vgFiltroRetornoAte = '';
+  window._vgFiltroIncluirSemRetorno = false;
+  window._vgFiltroForaCadastro = false;
   window._vgFiltroStatus = [];
   window._vgFiltroRota = [];
   window._vgFiltroSetor = [];
@@ -10897,6 +14350,17 @@ function renderRetornoFisicoBadge(v) {
   if (dev.status_fechamento === 'PENDENTE_FISICO') {
     return `<button onclick="event.stopPropagation(); window._cdDestinoFiltroProduto=''; window._cdDestinoFiltroTipo=''; switchTab('cd_recepcao'); switchCdSubTab('recepcao')" class="mt-1 inline-block bg-amber-950 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded text-[9px] font-bold hover:bg-amber-900 transition" title="Clique para abrir o Retorno Físico CD desta carga">⏳ Retorno Pendente CD</button>`;
   }
+  // "✅ Retorno Conferido" numa carga em que TODO item foi carimbado como
+  // Falta — Não Retorna Produto seria mentira: nada voltou, não houve o que
+  // conferir. A baixa é legítima e a fila sai limpa, mas o selo precisa dizer
+  // a verdade para quem lê a Largada.
+  const itensDev = (db.data.itens_devolucao || [])
+    .filter(i => i.ocorrencia_devolucao_id == dev.id && !i.is_deleted);
+  const soFalta = itensDev.length > 0 && itensDev.every(i => i.destino_item === 'FALTA_SEM_RETORNO');
+  if (soFalta) {
+    return `<span class="mt-1 inline-block bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Baixado no CD como falta: nenhum produto retornou fisicamente">📭 Sem Retorno (Falta)</span>`;
+  }
+
   return `<span class="mt-1 inline-block bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Retorno físico já conferido no CD">✅ Retorno Conferido</span>`;
 }
 
@@ -10933,6 +14397,7 @@ function vgFiltrarViagens(lista) {
   const fSaidaAte   = window._vgFiltroSaidaAte   || '';
   const fRetornoDe  = window._vgFiltroRetornoDe  || '';
   const fRetornoAte = window._vgFiltroRetornoAte || '';
+  const fSemRetorno = !!window._vgFiltroIncluirSemRetorno;
   const fStatusList    = vgListaFiltro('status');
   const fRotaList      = vgListaFiltro('rota');
   const fSetorList     = vgListaFiltro('setor');
@@ -10943,7 +14408,13 @@ function vgFiltrarViagens(lista) {
 
   return (lista || []).filter(v => {
     const dSaida = v.data_saida || '';
-    const dRetorno = v.data_retorno || v.data_entrega || v.data_saida || '';
+    // SO a data de retorno de verdade. Ate 05/09/2026 esta linha caia para
+    // data_entrega e depois para data_saida quando o retorno estava em
+    // branco - ou seja, INVENTAVA um retorno para viagem que ainda nao
+    // voltou. Com "Retorno de/ate = hoje" o filtro entao mostrava caminhao
+    // que SAIU hoje e continua na rua, e escondia o que FINALIZOU hoje sem
+    // ninguem ter digitado a data. As duas metades do mesmo defeito.
+    const dRetorno = v.data_retorno || '';
 
     if (fCarga) {
       const fcRaw = fCarga.toLowerCase().trim().replace(/^#/, '');
@@ -10960,8 +14431,32 @@ function vgFiltrarViagens(lista) {
     }
     if (fSaidaDe && dSaida < fSaidaDe) return false;
     if (fSaidaAte && dSaida > fSaidaAte) return false;
-    if (fRetornoDe && dRetorno < fRetornoDe) return false;
-    if (fRetornoAte && dRetorno > fRetornoAte) return false;
+    // O PERIODO DE RETORNO NAO PODE MATAR O "EM ANDAMENTO" - 08/09/2026.
+    //
+    // Sao DUAS perguntas diferentes numa tela so, e a de cima estava comendo
+    // a de baixo: "quem finalizou hoje?" (data de retorno) e "quem ainda
+    // esta na rua?" (status). Um caminhao EM ANDAMENTO nao tem data de
+    // retorno - nao e dado faltando, e a viagem que nao acabou. Compara-lo
+    // com um intervalo de retorno so podia dar falso, e ele sumia. Resultado:
+    // marcar "Retorno = hoje" com EM ANDAMENTO + FINALIZADO selecionados
+    // devolvia so os finalizados, e a operacao do dia aparecia pela metade.
+    //
+    // Agora o periodo de retorno vale SO para quem ja voltou. Quem esta em
+    // aberto passa direto e quem decide se ele aparece e o filtro de STATUS,
+    // que e onde essa escolha sempre morou. Marcou EM ANDAMENTO, ve os que
+    // estao rodando; nao marcou, nao ve. Um filtro nao anula mais o outro.
+    //
+    // Sobra o terceiro caso, que o checkbox resolve: viagem FINALIZADA (ou
+    // ADIADA/REENTREGA) sem data digitada. Essa nao esta em aberto e nao tem
+    // retorno - continua sendo uma escolha visivel, nunca um sumico calado.
+    if ((fRetornoDe || fRetornoAte) && !vgViagemEmAberto(v)) {
+      if (!dRetorno) {
+        if (!fSemRetorno) return false;
+      } else {
+        if (fRetornoDe  && dRetorno < fRetornoDe)  return false;
+        if (fRetornoAte && dRetorno > fRetornoAte) return false;
+      }
+    }
 
     if (fStatusList.length > 0 && !fStatusList.includes(v.status_viagem)) return false;
 
@@ -10974,6 +14469,10 @@ function vgFiltrarViagens(lista) {
     if (fChkSaida && v.checklist_saida !== fChkSaida) return false;
     if (fChkChegada && v.checklist_chegada !== fChkChegada) return false;
     if (fFusion && v.fusion !== fFusion) return false;
+
+    // O contador de "gente fora do cadastro" e um filtro como os outros: e
+    // clicando nele que a lista vira a lista de trabalho.
+    if (window._vgFiltroForaCadastro && jrPendenciasDaViagem(v).length === 0) return false;
 
     return true;
   });
@@ -10991,6 +14490,13 @@ function vgResumoDosFiltros() {
   add('Saída até', window._vgFiltroSaidaAte);
   add('Retorno de', window._vgFiltroRetornoDe);
   add('Retorno até', window._vgFiltroRetornoAte);
+  // O PDF precisa dizer isso na primeira folha: quem le o Boletim tem de
+  // saber que o periodo recortou os RETORNOS e nao os caminhoes na rua.
+  if (window._vgFiltroRetornoDe || window._vgFiltroRetornoAte) {
+    partes.push('Período de retorno vale só para viagens já encerradas (as em aberto seguem pelo Status)');
+  }
+  if (window._vgFiltroIncluirSemRetorno) partes.push('Incluindo viagens encerradas sem data de retorno');
+  if (window._vgFiltroForaCadastro) partes.push('Só viagens com gente fora do cadastro');
   lista('Status', vgListaFiltro('status'));
   lista('Rota', vgListaFiltro('rota'));
   lista('Setor', vgListaFiltro('setor'));
@@ -11042,6 +14548,24 @@ function renderViagensLargadaSubTab() {
   // acima: enquanto isto aqui era uma cópia à mão da regra, o relatório
   // ficou para trás e saía com a operação inteira.
   let viagens = vgFiltrarViagens(todasViagens);
+  // O NUMERO NA CAIXA e o que impede o filtro de esconder em silencio: ele
+  // diz, antes de qualquer coisa, quantas viagens NAO tem data de retorno.
+  // Sem ele a pessoa nao tem como saber que existe uma segunda metade.
+  const fSemRetorno   = !!window._vgFiltroIncluirSemRetorno;
+  // Duas contas diferentes, porque sao dois casos diferentes (ver o bloco do
+  // periodo de retorno em vgFiltrarViagens): a viagem EM ABERTO nao tem
+  // retorno porque nao acabou - e o filtro de status que manda nela. A conta
+  // do checkbox e so a do terceiro caso, a viagem que ACABOU e ficou sem a
+  // data digitada. Somar as duas era o que fazia o checkbox parecer a unica
+  // saida para ver os caminhoes na rua.
+  const emAbertoQtd   = todasViagens.filter(v => vgViagemEmAberto(v)).length;
+  const semRetornoQtd = todasViagens.filter(v => !v.data_retorno && !vgViagemEmAberto(v)).length;
+
+  // GENTE FORA DO CADASTRO (v6.6.0 — Bloco C). O contador existe porque um
+  // aviso espalhado pelas linhas some no meio das viagens e ninguem age: e
+  // ele que junta as viagens num lugar so e abre a lista delas.
+  const foraCadastroQtd = jrViagensComPendencia(todasViagens).length;
+  const fForaCadastro   = !!window._vgFiltroForaCadastro;
 
   const temFiltroAtivo = vgResumoDosFiltros().length > 0;
 
@@ -11081,6 +14605,18 @@ function renderViagensLargadaSubTab() {
 
         ${renderChipsFiltrosViagem()}
 
+        ${foraCadastroQtd === 0 ? '' : `
+        <button type="button"
+                onclick="window._vgFiltroForaCadastro = !window._vgFiltroForaCadastro; renderApp()"
+                class="w-full flex items-center gap-2 border rounded-lg px-3 py-2 text-left transition ${fForaCadastro ? 'bg-amber-950/70 border-amber-500' : 'bg-slate-950 border-amber-800/60 hover:border-amber-600'}">
+          <span class="text-sm">⚠️</span>
+          <span class="flex-1 text-[11px] leading-tight">
+            <b class="text-amber-300">${foraCadastroQtd} viagem(ns) com gente fora do cadastro.</b>
+            <span class="text-slate-400">${fForaCadastro ? 'Mostrando só elas — clique para ver todas de novo.' : 'Clique para ver só elas.'}</span>
+          </span>
+          <span class="text-[10px] font-bold ${fForaCadastro ? 'text-amber-300' : 'text-slate-500'}">${fForaCadastro ? 'FILTRADO' : 'VER'}</span>
+        </button>`}
+
         <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-xs">
           <!-- Filtro Número da Carga -->
           <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
@@ -11119,6 +14655,22 @@ function renderViagensLargadaSubTab() {
                 <input type="date" id="vg-filtro-retorno-ate" value="${fRetornoAte}" onchange="window._vgFiltroRetornoAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1 text-[11px]">
               </div>
             </div>
+            ${(fRetornoDe || fRetornoAte) ? `
+            <p class="text-[9px] text-amber-400/90 leading-tight pt-1"
+               title="Viagem que não acabou não tem data de retorno para comparar. Quem decide se ela aparece é o filtro de Status.">
+              ⓘ As <b>${emAbertoQtd} viagem(ns) em aberto</b> (em andamento / em retorno) não são
+              cortadas por este período — quem manda nelas é o filtro <b>Status</b>.
+            </p>` : ''}
+            ${semRetornoQtd > 0 ? `
+            <label class="flex items-start gap-1.5 pt-1 cursor-pointer select-none"
+                   title="Viagem que já acabou, mas ninguém digitou a data de retorno">
+              <input type="checkbox" ${fSemRetorno ? 'checked' : ''}
+                onchange="window._vgFiltroIncluirSemRetorno=this.checked; renderApp()"
+                class="mt-0.5 rounded border-slate-700 bg-slate-900 text-blue-500 w-3.5 h-3.5 cursor-pointer shrink-0">
+              <span class="text-[9px] text-slate-400 leading-tight">
+                Incluir as ${semRetornoQtd} viagem(ns) <b class="text-slate-300">encerradas sem data de retorno</b>
+              </span>
+            </label>` : ''}
           </div>
 
           <!-- Filtros de multisseleção suspensos (Status, Rota, Setor, Motorista) -->
@@ -11195,18 +14747,22 @@ function renderViagensLargadaSubTab() {
             </div>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <!-- Motorista e ajudante enxergam a MESMA lista (jrOpcoesEquipe):
+                 em emergencia um motorista sai como ajudante de outro. E o
+                 ajudante deixou de ser obrigatorio — ha viagem que sai so com
+                 o motorista, e o recibo ja cobra 100% dele nesse caso. -->
             <div>
               <label class="block text-[10px] text-slate-300 mb-1">Motorista *</label>
               <select id="vg-motorista" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
                 <option value="">-- Selecione --</option>
-                ${motoristas.map(m => `<option value="${m.nome}">${m.nome}</option>`).join('')}
+                ${jrOpcoesEquipe('')}
               </select>
             </div>
             <div>
-              <label class="block text-[10px] text-slate-300 mb-1">Ajudante *</label>
-              <select id="vg-ajudante" required class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
-                <option value="">-- Selecione --</option>
-                ${ajudantes.map(a => `<option value="${a.nome}">${a.nome}</option>`).join('')}
+              <label class="block text-[10px] text-slate-300 mb-1">Ajudante</label>
+              <select id="vg-ajudante" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs">
+                <option value="">-- Sem ajudante --</option>
+                ${jrOpcoesEquipe('')}
               </select>
             </div>
           </div>
@@ -11286,12 +14842,7 @@ function renderViagensLargadaSubTab() {
                 });
 
                 return viagens.map(v => {
-                  let statusBg = 'bg-amber-300 text-slate-950';
-                  if (v.status_viagem === 'EM ANDAMENTO' || v.status_viagem === 'EM ANDAMENTO (PALMAS)') statusBg = 'bg-amber-300 text-slate-950';
-                  if (v.status_viagem === 'EM RETORNO') statusBg = 'bg-blue-900 text-white';
-                  if (v.status_viagem === 'FINALIZADO') statusBg = 'bg-emerald-700 text-white';
-                  if (v.status_viagem === 'ADIADA') statusBg = 'bg-orange-800 text-orange-200 border border-orange-600';
-                  if (v.status_viagem === 'REENTREGA') statusBg = 'bg-purple-900 text-purple-200 border border-purple-600 font-black';
+                  const statusBg = corStatusViagem(v.status_viagem).cls;
 
                   const cKey = String(v.carga || '').trim().toUpperCase();
                   const isCargaDuplicada = cKey && (cargaCounts[cKey] > 1);
@@ -11306,8 +14857,11 @@ function renderViagensLargadaSubTab() {
                       </td>
                       <td class="p-2 border-r border-slate-800 font-semibold text-slate-200">${v.rota}</td>
                     <td class="p-2 border-r border-slate-800 font-bold text-white">${v.placa}</td>
-                    <td class="p-2 border-r border-slate-800 text-slate-300">${v.motorista}</td>
-                    <td class="p-2 border-r border-slate-800 text-slate-300">${v.ajudante}</td>
+                    <td class="p-2 border-r border-slate-800 text-slate-300">${v.motorista}${jrSeloPendencia(jrPendenciaDoCampo(v, 'ed-vg-motorista'))}</td>
+                    <td class="p-2 border-r border-slate-800 text-slate-300">
+                      ${v.ajudante}${jrSeloPendencia(jrPendenciaDoCampo(v, 'ed-vg-ajudante'))}
+                      ${v.ajudante_2 ? `<div class="text-[10px] text-emerald-400 font-semibold" title="2º ajudante">+ ${v.ajudante_2}</div>${jrSeloPendencia(jrPendenciaDoCampo(v, 'ed-vg-ajudante-2'))}` : ''}
+                    </td>
                     <td class="p-2 border-r border-slate-800 font-bold text-slate-400 text-[10px]">${v.setor||'FRIO'}</td>
                     
                     <td class="p-2 border-r border-slate-800 text-center text-[10px]">
@@ -11404,7 +14958,10 @@ function handleNovaViagemSubmit(e) {
   renderApp();
 
   if (status_viagem === 'REENTREGA') {
-    abrirModalNovaReentrega({ carga, rota, motorista, placa, data: data_saida });
+    // O ajudante vai junto: a viagem acabou de dizer quem estava nela. Aqui e
+    // so um, porque a tela de cadastro nao tem o segundo campo — ele e coisa
+    // da edicao, como decidido no plano da v6.6.0.
+    abrirModalNovaReentrega({ carga, rota, motorista, ajudante, placa, data: data_saida });
   }
 }
 
@@ -11415,6 +14972,24 @@ function deleteViagem(id) {
   }
 }
 
+// O SEGUNDO AJUDANTE E OPCIONAL, e o normal e nao ter. Enquanto ninguem clicar
+// no botao, o campo nem existe na tela. "Remover" LIMPA o campo antes de
+// esconde-lo: sem isso, um clique por engano deixaria gravado um nome que
+// ninguem quis, e escondido justamente onde ninguem olharia.
+//
+// prefix serve as tres telas que ganham o botao: 'ed-vg' (editar viagem),
+// 'md-re' e 'ed-re' (reentrega).
+function toggleSegundoAjudante(prefix, mostrar) {
+  const wrap = document.getElementById(`${prefix}-aju2-wrap`);
+  const btn  = document.getElementById(`${prefix}-aju2-btn`);
+  const sel  = document.getElementById(`${prefix}-ajudante-2`);
+  if (!wrap || !btn) return;
+  wrap.classList.toggle('hidden', !mostrar);
+  btn.classList.toggle('hidden', mostrar);
+  if (!mostrar && sel) sel.value = '';
+}
+window.toggleSegundoAjudante = toggleSegundoAjudante;
+
 function editarViagemModal(id) {
   const v = db.getControleViagens().find(x => x.id == id);
   if (!v) return;
@@ -11423,17 +14998,14 @@ function editarViagemModal(id) {
   if (!modalContainer) return;
 
   const veiculos = db.data.veiculos || [];
-  const motoristas = db.data.motoristas || [];
-  const ajudantes = db.data.ajudantes || [];
 
   const veiculosOpts = veiculos.map(veic => veic.placa);
   if (v.placa && !veiculosOpts.includes(v.placa)) veiculosOpts.push(v.placa);
 
-  const motoristasOpts = motoristas.map(m => m.nome);
-  if (v.motorista && !motoristasOpts.includes(v.motorista)) motoristasOpts.push(v.motorista);
-
-  const ajudantesOpts = ajudantes.map(a => a.nome);
-  if (v.ajudante && !ajudantesOpts.includes(v.ajudante)) ajudantesOpts.push(v.ajudante);
+  // Motorista, ajudante e 2o ajudante partem da MESMA lista (18/09/2026, ver
+  // jrEquipeCadastrada). Quem ja esta gravado na viagem aparece mesmo sem
+  // estar no cadastro — senao reabrir a viagem apagaria o nome em silencio;
+  // jrOpcoesEquipe(atual) cuida disso.
 
   modalContainer.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl space-y-4">
@@ -11443,6 +15015,7 @@ function editarViagemModal(id) {
       </div>
 
       <form onsubmit="handleSalvarEdicaoViagem(event, '${v.id}')" class="space-y-3 text-xs">
+        ${jrAvisoPendenciasHtml(v)}
         <div class="grid grid-cols-2 gap-2">
           <div>
             <label class="block text-[10px] text-emerald-400 font-bold mb-1">Data de Saída *</label>
@@ -11471,17 +15044,32 @@ function editarViagemModal(id) {
             <label class="block text-[10px] text-emerald-400 font-bold mb-1">Motorista *</label>
             <select id="ed-vg-motorista" required class="w-full bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
               <option value="">-- Selecione Motorista --</option>
-              ${motoristasOpts.map(m => `<option value="${m}" ${m === v.motorista ? 'selected' : ''}>${m}</option>`).join('')}
+              ${jrOpcoesEquipe(v.motorista)}
             </select>
           </div>
           <div>
-            <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ajudante *</label>
-            <select id="ed-vg-ajudante" required class="w-full bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
-              <option value="">-- Selecione Ajudante --</option>
-              ${ajudantesOpts.map(a => `<option value="${a}" ${a === v.ajudante ? 'selected' : ''}>${a}</option>`).join('')}
+            <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ajudante</label>
+            <select id="ed-vg-ajudante" class="w-full bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
+              <option value="">-- Sem ajudante --</option>
+              ${jrOpcoesEquipe(v.ajudante)}
             </select>
           </div>
         </div>
+
+        <!-- SEGUNDO AJUDANTE (v6.6.0). Algumas rotas saem com dois, e a dupla
+             muda por dia. Fica SO na edicao, e escondido ate alguem pedir: quem
+             faz viagem de um ajudante so nao ve diferenca nenhuma. -->
+        <div id="ed-vg-aju2-wrap" class="${v.ajudante_2 ? '' : 'hidden'}">
+          <label class="block text-[10px] text-emerald-400 font-bold mb-1">2º Ajudante</label>
+          <div class="flex gap-2">
+            <select id="ed-vg-ajudante-2" class="flex-1 bg-slate-800 border border-slate-700 text-white font-bold rounded p-1.5">
+              <option value="">-- Selecione o 2º Ajudante --</option>
+              ${jrOpcoesEquipe(v.ajudante_2)}
+            </select>
+            <button type="button" onclick="toggleSegundoAjudante('ed-vg', false)" class="bg-slate-800 border border-slate-700 text-slate-300 hover:text-red-300 font-bold px-3 rounded shrink-0">Remover</button>
+          </div>
+        </div>
+        <button type="button" id="ed-vg-aju2-btn" onclick="toggleSegundoAjudante('ed-vg', true)" class="${v.ajudante_2 ? 'hidden' : ''} text-[11px] text-emerald-400 hover:text-emerald-300 font-bold">+ Adicionar 2º ajudante</button>
 
         <div class="grid grid-cols-2 gap-2">
           <div>
@@ -11576,12 +15164,31 @@ function handleSalvarEdicaoViagem(e, id) {
   const placa = document.getElementById('ed-vg-placa').value;
   const motorista = document.getElementById('ed-vg-motorista').value;
   const ajudante = document.getElementById('ed-vg-ajudante').value;
+  // Vazio quando ninguem abriu o campo, e vazio tambem depois do "Remover".
+  const ajudante_2 = document.getElementById('ed-vg-ajudante-2')?.value || '';
   const status_viagem = document.getElementById('ed-vg-status').value;
   const setor = document.getElementById('ed-vg-setor').value;
   const data_entrega = document.getElementById('ed-vg-data-ent').value;
   const hora_entrega = document.getElementById('ed-vg-hora-ent').value;
-  const data_retorno = document.getElementById('ed-vg-data-ret').value;
-  const hora_retorno = document.getElementById('ed-vg-hora-ret').value;
+  let data_retorno = document.getElementById('ed-vg-data-ret').value;
+  let hora_retorno = document.getElementById('ed-vg-hora-ret').value;
+
+  // FINALIZADO SEM DATA DE RETORNO era o buraco do filtro (ver B.1): a viagem
+  // terminava, o status virava FINALIZADO e o campo ficava em branco, porque
+  // ninguem digita o que o sistema ja sabe. Depois "Retorno = hoje" nao
+  // achava essa viagem, e a pessoa concluia que o filtro estava quebrado.
+  // Agora o proprio ato de finalizar carimba a data de hoje e a hora.
+  //
+  // SO QUANDO ESTAO VAZIAS. Data digitada a mao - uma viagem que voltou
+  // sabado e so foi baixada na segunda - nunca e sobrescrita.
+  if (status_viagem === 'FINALIZADO' && !data_retorno) {
+    data_retorno = hojeIsoBrasilia();
+    if (!hora_retorno) {
+      hora_retorno = new Date().toLocaleTimeString('pt-BR', {
+        hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo'
+      });
+    }
+  }
   const fusion = document.getElementById('ed-vg-fusion').value;
   const checklist_saida = document.getElementById('ed-vg-chk-saida').value;
   const checklist_chegada = document.getElementById('ed-vg-chk-chegada').value;
@@ -11595,6 +15202,7 @@ function handleSalvarEdicaoViagem(e, id) {
     placa,
     motorista,
     ajudante,
+    ajudante_2,
     status_viagem,
     setor,
     data_entrega,
@@ -11611,7 +15219,9 @@ function handleSalvarEdicaoViagem(e, id) {
   renderApp();
 
   if (status_viagem === 'REENTREGA') {
-    abrirModalNovaReentrega({ carga, rota, motorista, placa, data: data_saida });
+    // A equipe inteira vai junto — a reentrega e a mesma carga. Sem isto, quem
+    // abre a reentrega por este caminho teria de escolher os nomes de novo.
+    abrirModalNovaReentrega({ carga, rota, motorista, ajudante, ajudante_2, placa, data: data_saida });
   }
 }
 
@@ -11720,6 +15330,23 @@ function autoPreencherDadosCargaReentrega(cargaNum, prefix = 'md-re') {
       }
     }
 
+    // O SEGUNDO AJUDANTE DA VIAGEM, quando houver (v6.6.0). Alem de preencher,
+    // precisa ABRIR o campo: ele nasce escondido, e um valor selecionado dentro
+    // de uma <div class="hidden"> seria gravado sem ninguem nunca ter visto.
+    const aju2Sel = document.getElementById(`${prefix}-ajudante-2`);
+    if (aju2Sel && info.ajudante2Name) {
+      const nAju2 = norm(info.ajudante2Name);
+      let opt2 = Array.from(aju2Sel.options).find(o => norm(o.value) === nAju2 || norm(o.textContent) === nAju2);
+      if (!opt2) {
+        opt2 = document.createElement('option');
+        opt2.value = info.ajudante2Name;
+        opt2.textContent = info.ajudante2Name;
+        aju2Sel.appendChild(opt2);
+      }
+      aju2Sel.value = opt2.value;
+      if (typeof toggleSegundoAjudante === 'function') toggleSegundoAjudante(prefix, true);
+    }
+
     // Auto-preencher Data (se campo estiver vazio)
     const dataEl = document.getElementById(`${prefix}-data`);
     if (dataEl && info.data && !dataEl.value) {
@@ -11773,6 +15400,7 @@ function abrirModalNovaReentrega(dados = {}) {
   const defaultRota = dados.rota || dados.rota_nome || '';
   const defaultMotorista = dados.motorista || dados.motorista_nome || '';
   const defaultAjudante = dados.ajudante || dados.ajudante_nome || '';
+  const defaultAjudante2 = dados.ajudante_2 || '';
   const defaultPlaca = dados.placa || '';
   const defaultSaiu = parseInt(dados.entregas_saiu) || 0;
   const defaultFeitas = parseInt(dados.entregas_feitas) || 0;
@@ -11786,6 +15414,7 @@ function abrirModalNovaReentrega(dados = {}) {
 
   const ajudantesOpts = ajudantes.map(a => a.nome || a);
   if (defaultAjudante && !ajudantesOpts.includes(defaultAjudante)) ajudantesOpts.push(defaultAjudante);
+  if (defaultAjudante2 && !ajudantesOpts.includes(defaultAjudante2)) ajudantesOpts.push(defaultAjudante2);
 
   const veiculosOpts = veiculos.map(v => v.placa || v);
   if (defaultPlaca && !veiculosOpts.includes(defaultPlaca)) veiculosOpts.push(defaultPlaca);
@@ -11848,6 +15477,18 @@ function abrirModalNovaReentrega(dados = {}) {
             </select>
           </div>
         </div>
+
+        <div id="md-re-aju2-wrap" class="${defaultAjudante2 ? '' : 'hidden'}">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">2º Ajudante</label>
+          <div class="flex gap-2">
+            <select id="md-re-ajudante-2" class="flex-1 bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+              <option value="">-- Selecione o 2º Ajudante --</option>
+              ${ajudantesOpts.map(a => `<option value="${a}" ${a === defaultAjudante2 ? 'selected' : ''}>${a}</option>`).join('')}
+            </select>
+            <button type="button" onclick="toggleSegundoAjudante('md-re', false)" class="bg-slate-800 border border-slate-700 text-slate-300 hover:text-red-300 font-bold px-3 rounded shrink-0 text-xs">Remover</button>
+          </div>
+        </div>
+        <button type="button" id="md-re-aju2-btn" onclick="toggleSegundoAjudante('md-re', true)" class="${defaultAjudante2 ? 'hidden' : ''} text-[11px] text-emerald-400 hover:text-emerald-300 font-bold">+ Adicionar 2º ajudante</button>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Novo Motorista (Opcional)</label>
@@ -11913,7 +15554,11 @@ function handleSalvarNovaReentregaModal(e) {
     rota_nome: document.getElementById('md-re-rota').value,
     placa: document.getElementById('md-re-placa').value,
     motorista_nome: document.getElementById('md-re-motorista').value,
-    ajudante_nome: document.getElementById('md-re-ajudante')?.value || null,
+    // 'ajudante' / 'ajudante_2', e nao 'ajudante_nome': sao os nomes das
+    // colunas. Ate a v6.5.1 este campo era coletado aqui e descartado no
+    // store, que montava o registro sem ele.
+    ajudante: document.getElementById('md-re-ajudante')?.value || null,
+    ajudante_2: document.getElementById('md-re-ajudante-2')?.value || null,
     novo_motorista: document.getElementById('md-re-novo-motorista').value || null,
     entregas_saiu: parseInt(document.getElementById('md-re-ent-saiu').value) || 0,
     entregas_feitas: parseInt(document.getElementById('md-re-ent-feitas').value) || 0,
@@ -11957,7 +15602,8 @@ function abrirModalEditarReentrega(id) {
     "OUTROS"
   ];
 
-  const defaultAjudante = item.ajudante_nome || item.ajudante || '';
+  const defaultAjudante = item.ajudante || item.ajudante_nome || '';
+  const defaultAjudante2 = item.ajudante_2 || '';
 
   const rotasOpts = [...rotas];
   if (item.rota_nome && !rotasOpts.includes(item.rota_nome)) rotasOpts.push(item.rota_nome);
@@ -11967,6 +15613,7 @@ function abrirModalEditarReentrega(id) {
 
   const ajudantesOpts = ajudantes.map(a => a.nome || a);
   if (defaultAjudante && !ajudantesOpts.includes(defaultAjudante)) ajudantesOpts.push(defaultAjudante);
+  if (defaultAjudante2 && !ajudantesOpts.includes(defaultAjudante2)) ajudantesOpts.push(defaultAjudante2);
 
   const veiculosOpts = veiculos.map(v => v.placa || v);
   if (item.placa && !veiculosOpts.includes(item.placa)) veiculosOpts.push(item.placa);
@@ -12030,6 +15677,18 @@ function abrirModalEditarReentrega(id) {
           </div>
         </div>
 
+        <div id="ed-re-aju2-wrap" class="${defaultAjudante2 ? '' : 'hidden'}">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">2º Ajudante</label>
+          <div class="flex gap-2">
+            <select id="ed-re-ajudante-2" class="flex-1 bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+              <option value="">-- Selecione o 2º Ajudante --</option>
+              ${ajudantesOpts.map(a => `<option value="${a}" ${a === defaultAjudante2 ? 'selected' : ''}>${a}</option>`).join('')}
+            </select>
+            <button type="button" onclick="toggleSegundoAjudante('ed-re', false)" class="bg-slate-800 border border-slate-700 text-slate-300 hover:text-red-300 font-bold px-3 rounded shrink-0 text-xs">Remover</button>
+          </div>
+        </div>
+        <button type="button" id="ed-re-aju2-btn" onclick="toggleSegundoAjudante('ed-re', true)" class="${defaultAjudante2 ? 'hidden' : ''} text-[11px] text-emerald-400 hover:text-emerald-300 font-bold">+ Adicionar 2º ajudante</button>
+
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Novo Motorista (Opcional)</label>
           <select id="ed-re-novo-motorista" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
@@ -12090,7 +15749,8 @@ function handleSalvarEdicaoReentrega(e, id) {
     rota_nome: document.getElementById('ed-re-rota').value,
     placa: document.getElementById('ed-re-placa').value,
     motorista_nome: document.getElementById('ed-re-motorista').value,
-    ajudante_nome: document.getElementById('ed-re-ajudante')?.value || null,
+    ajudante: document.getElementById('ed-re-ajudante')?.value || null,
+    ajudante_2: document.getElementById('ed-re-ajudante-2')?.value || null,
     novo_motorista: document.getElementById('ed-re-novo-motorista').value || null,
     entregas_saiu: parseInt(document.getElementById('ed-re-ent-saiu').value) || 0,
     entregas_feitas: parseInt(document.getElementById('ed-re-ent-feitas').value) || 0,
@@ -12156,6 +15816,55 @@ function reentregaEmAberto(r) {
 
 function reentregaConcluida(r) {
   return normalizarStatusReentrega(r && r.status) === 'REALIZADA';
+}
+
+// =============================================================================
+// PENDÊNCIA É FOTO DO AGORA, NÃO DO PERÍODO (01/09/2026)
+//
+// O card "Auditoria & Pendências em Aberto" do Boletim (tela e PDF) contava as
+// pendências DENTRO do período filtrado. Com o Boletim aberto em D-1, o card
+// dizia "0 Pendência(s)" enquanto existiam 12 devoluções em PENDENTE_FISICO no
+// banco, a mais antiga parada desde 26/08 — nenhuma tinha sido ABERTA em D-1.
+// O mesmo valia para o KPI "Pendente Físico CD" da seção 2.
+//
+// É a mesma decisão já tomada no Dashboard em 23/08 (ver o bloco "ALERTA NÃO SE
+// FILTRA POR PERÍODO", perto de allDevs/pendCdAlerta): KPI responde "como foi no
+// período que escolhi"; pendência em aberto responde "o que está parado AGORA".
+// Filtrar a segunda esconde justamente a pendência mais antiga, que é a que mais
+// precisa de cobrança. O Boletim tinha o recorte errado nos dois lugares.
+//
+// Duas contas estavam erradas por conta própria, além do período:
+//
+//   REENTREGA — era `re.status === 'PENDENTE'`, comparação crua. Reentrega que
+//   já andou uma etapa (RECEBIDA_CD, AGUARDANDO_DESPACHO) continua EM ABERTO e
+//   sumia da contagem. Passa a usar reentregaEmAberto(), como o Dashboard.
+//
+//   SOCORRO — era `r.status_veiculo !== 'Liberado'`, e 'Liberado' NÃO É UM
+//   STATUS que o store grave: addOcorrenciaRota nasce em 'Aguardando Manutenção'
+//   e o encerramento escreve 'Em Rota' + status 'RESOLVIDO' (js/store.js:2046 e
+//   2124-2130). Ou seja, o teste dava verdadeiro para TODO socorro, inclusive os
+//   já resolvidos — defeito que ficava escondido enquanto o filtro de período
+//   esvaziava a lista. Passa a usar o mesmo teste do Dashboard.
+//
+// Uma função só, chamada pela tela e pelo PDF, porque foi a duplicação do bloco
+// entre os dois que deixou os números divergirem em silêncio.
+// =============================================================================
+function pendenciasEmAbertoBoletim() {
+  const devs = typeof db.getDevolucoes === 'function' ? db.getDevolucoes() : [];
+  const rotas = typeof db.getOcorrenciasRota === 'function' ? db.getOcorrenciasRota() : [];
+  const reentregas = typeof db.getReentregas === 'function' ? db.getReentregas() : [];
+  const filaGestor = tratativasPendentesGestor(devs);
+  return {
+    pendFisicoCd: devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length,
+    reentregasAbertas: reentregas.filter(reentregaEmAberto).length,
+    socorrosEmAberto: rotas.filter(r => r.veiculo_parado && r.status !== 'RESOLVIDO').length,
+    // A fila do Gestor entrou aqui em 01/09/2026: o card se chama "Pendências
+    // em Aberto" e era a maior fila do sistema (15 chamados) justamente a que
+    // faltava. maisAntigaGestor acompanha para o boletim dizer HÁ QUANTO TEMPO,
+    // que é o que sustenta a cobrança — contagem sozinha não cobra ninguém.
+    tratativasGestor: filaGestor.length,
+    maisAntigaGestor: getMaisAntigaPendente(filaGestor, CAMPOS_SLA_TRATATIVA_GESTOR, { atencao: 24, estourado: 48 })
+  };
 }
 
 function badgeStatusReentrega(status) {
@@ -12287,6 +15996,78 @@ function _galeriaFotosReentrega(r, etapa) {
           : ''}
       </span>
     </div>`;
+}
+
+// -----------------------------------------------------------------------------
+// GALERIA DE QUALQUER MODULO DA FILA (21/09/2026)
+//
+// A mesma leitura em tres lugares da galeria da reentrega acima, so que
+// perguntando ao db.estadoFotos(item, etapa, modulo) — serve a ocorrencia em
+// rota (migration 41) e o sinistro (migration 42), que foram os dois ultimos
+// a sair do base64. Para o sinistro a "etapa" e o grupo de foto.
+//
+// opcoes: titulo (cabecalho com contagem), cor (do cabecalho), compacta (sem
+// cabecalho, sem "sem foto"), classeThumb (borda das miniaturas).
+// -----------------------------------------------------------------------------
+function _galeriaFotosModulo(item, etapa, modulo, opcoes = {}) {
+  const { titulo = null, cor = 'emerald', compacta = false, classeThumb = 'border border-slate-700' } = opcoes;
+  if (!window.fotoStore) {
+    return '<div class="text-[10px] text-amber-400 mt-1">⚠️ Recarregue a página (Ctrl+Shift+R): falta um arquivo desta versão.</div>';
+  }
+  const est = (db && typeof db.estadoFotos === 'function') ? db.estadoFotos(item, etapa, modulo) : null;
+  if (!est || !est.temAlguma) return '';
+
+  const idLocais = `fotos-locais-${modulo}-${etapa}-${item.id}`;
+  const thumb = (src, tit, classe) =>
+    `<div class="w-16 h-16 rounded-lg overflow-hidden ${classe} bg-black cursor-pointer hover:border-${cor}-500 transition shrink-0" onclick="visualizarMidiaModal('${src}', 'image')" title="${tit}">
+       <img src="${src}" class="w-full h-full object-cover hover:scale-105 transition duration-200">
+     </div>`;
+
+  const nuvem =
+      est.paths.map(p => thumb(window.fotoStore.urlPublica(p), 'Arquivada no servidor', classeThumb)).join('')
+    + est.legado.map(b => thumb(b, 'Formato antigo (imagem dentro do banco)', 'border border-slate-600 opacity-90')).join('');
+
+  // Contador compartilhado (sinistro): o numero e do registro inteiro, entao
+  // o aviso numerico nao se repete grupo a grupo — cada grupo so mostra as
+  // miniaturas locais que forem dele.
+  const compartilhado = (typeof Store !== 'undefined' && typeof Store._contadorFotoCompartilhado === 'function') && Store._contadorFotoCompartilhado(modulo);
+  if (est.pendentes > 0) setTimeout(() => _preencherFotosLocaisModulo(item.id, etapa, modulo, idLocais), 0);
+
+  const aviso = (est.pendentes > 0 && !compartilhado)
+    ? `<span class="text-[10px] font-bold text-amber-300 bg-amber-950/70 border border-amber-700 rounded px-1.5 py-1"
+             title="A foto existe, mas ainda está no aparelho de quem fotografou. Sobe sozinha quando aquele aparelho tiver rede.">📷 ${est.pendentes} aguardando envio</span>`
+    : '';
+
+  const cabecalho = (titulo && !compacta)
+    ? `<div class="font-bold text-${cor}-400 text-[11px] mb-1.5 flex items-center gap-1"><span>📷</span> ${titulo} (${est.total}):</div>`
+    : '';
+
+  return `
+    ${compacta ? '' : '<div class="pt-2 border-t border-slate-800">'}
+      ${cabecalho}
+      <div class="flex flex-wrap gap-2 mt-1.5 items-center">
+        ${nuvem}
+        <span id="${idLocais}" class="flex gap-2 flex-wrap items-center">${aviso}</span>
+      </div>
+    ${compacta ? '' : '</div>'}`;
+}
+
+async function _preencherFotosLocaisModulo(registroId, etapa, modulo, containerId) {
+  if (!window.fotoStore || !window.fotoStore.disponivel()) return;
+  let regs = [];
+  try { regs = await window.fotoStore.listarDoAlvo(registroId, etapa, modulo); } catch (e) { return; }
+  if (!regs.length) return;
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  box.innerHTML = regs.map(reg => {
+    const u = window.fotoStore.urlLocal(reg);
+    return `<span class="relative inline-block">
+        <img src="${u}" onclick="visualizarMidiaModal('${u}', 'image')"
+             title="Ainda só neste aparelho — aguardando rede para subir"
+             class="w-16 h-16 object-cover rounded-lg border-2 border-amber-500 cursor-pointer">
+        <span class="absolute -top-1 -right-1 bg-amber-500 text-slate-950 text-[9px] font-black rounded-full w-4 h-4 flex items-center justify-center">↑</span>
+      </span>`;
+  }).join('');
 }
 
 // Troca o aviso "aguardando envio" pelas miniaturas de verdade, quando as
@@ -12548,6 +16329,64 @@ async function handleSalvarDespachoReentrega(e, id) {
 // O conferente pode fechar o app, ficar sem sinal a tarde inteira e ainda
 // assim ter a prova — ela está no aparelho, visível na tela, e sobe quando der.
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// FOTOS DA DEVOLUÇÃO → FILA (04/09/2026, migration 38)
+//
+// O irmão logo abaixo (_salvarEtapaComFotos) é da reentrega, onde a foto é
+// OBRIGATÓRIA e a etapa não existe sem ela. Na devolução a foto sempre foi
+// opcional — 19 das 30 devoluções de 04/09/2026 não têm nenhuma — e por isso
+// aqui não há recusa por falta de foto: sem foto, a função sai calada.
+//
+// A diferença que importa é a outra ponta: quando HÁ foto e não há onde
+// guardá-la, isto avisa e desiste em vez de cair no base64 às escondidas. Foi
+// exatamente o base64 "às escondidas" que encheu a cota e custou a tratativa
+// da DEV-024.
+//
+// Chamado sempre DEPOIS de o registro estar gravado, porque a fila precisa de
+// um id para apontar.
+// -----------------------------------------------------------------------------
+//
+// `modulo` (18/09/2026, migration 47): o item avulso da Destinação entra na
+// mesma fila com modulo 'avulsos'. O nome da função ficou — são três
+// chamadas da devolução que nada têm a ganhar com um rename — e o padrão
+// mantém as três exatamente como eram.
+async function _enfileirarFotosDevolucao(dev, etapa, fotos, modulo = 'devolucoes') {
+  const lista = (fotos || []).filter(Boolean);
+  if (!dev || !dev.id || lista.length === 0) return 0;
+
+  if (!window.fotoStore || !window.fotoStore.disponivel()) {
+    alert('⚠️ A ocorrência foi gravada, mas a(s) ' + lista.length + ' foto(s) NÃO puderam ser guardadas: '
+        + 'este navegador não permite armazenamento local (IndexedDB). '
+        + 'Se estiver em aba anônima, saia dela e anexe a foto de novo pela edição.');
+    return 0;
+  }
+
+  let enfileiradas = [];
+  try {
+    for (const dataUrl of lista) {
+      enfileiradas.push(await window.fotoStore.enfileirar({
+        registro_id: dev.id, etapa, dataUrl, modulo
+      }));
+    }
+  } catch (err) {
+    for (const x of enfileiradas) { try { await window.fotoStore.remover(x); } catch (e) {} }
+    alert('⚠️ A ocorrência foi gravada, mas não consegui guardar a(s) foto(s) neste aparelho: ' + err.message);
+    return 0;
+  }
+
+  // O contador é o que faz a pendência VIAJAR: sobe para a nuvem e aparece
+  // para quem não tirou a foto. Sem ele, uma foto ainda na fila deste
+  // aparelho seria invisível para todo mundo — inclusive para quem cobra.
+  if (typeof db.ajustarFotosPendentes === 'function') {
+    db.ajustarFotosPendentes(dev.id, etapa, enfileiradas.length, modulo);
+  }
+  if (typeof window.atualizarTarjaFotosPendentes === 'function') window.atualizarTarjaFotosPendentes();
+
+  // Sem await: a tela não espera a rede.
+  window.fotoStore.processarFila().catch(() => {});
+  return enfileiradas.length;
+}
+
 async function _salvarEtapaComFotos({ id, etapa, dados, gravar, sucesso }) {
   const fotos = (window._fotosReentrega || []).filter(Boolean);
   if (fotos.length === 0) {
@@ -13303,6 +17142,17 @@ function handleNovaOcViagemSubmit(e) {
   const acao = (document.getElementById('ocv-acao')?.value || '').trim();
   const status = (ocorrencia && acao) ? 'FINALIZADA' : 'PENDENTE';
 
+  // 6.7.0 (Bloco E): o datalist filtra por função, mas não rejeita nome
+  // digitado fora da lista — e nome fora do cadastro nunca casa com o Dossiê
+  // Prestador nem com o Acompanhamento. Só vale nome que está no cadastro
+  // daquela função.
+  const funcaoSel = (document.getElementById('ocv-funcao')?.value || '').trim();
+  const funcDigitado = (document.getElementById('ocv-funcionario')?.value || '').trim().toUpperCase();
+  if (funcDigitado && !getFuncionariosPorFuncao(funcaoSel).includes(funcDigitado)) {
+    alert(`⚠️ "${funcDigitado}" não está no cadastro de ${funcaoSel || 'colaboradores'}. Selecione um nome da lista sugerida — ou cadastre a pessoa em Cadastros Mestres.`);
+    return;
+  }
+
   db.addOcorrenciaViagem({
     data: document.getElementById('ocv-data').value,
     carga: document.getElementById('ocv-carga').value,
@@ -13951,20 +17801,13 @@ function renderRotaOcorrenciasView() {
                   </div>
                   <div class="text-slate-300 bg-slate-900/60 p-2.5 rounded-lg border border-slate-800 leading-relaxed">${r.descricao}</div>
 
-                  <!-- MÍDIAS ANEXADAS -->
-                  ${Array.isArray(r.midia_fotos) && r.midia_fotos.length > 0 ? `
-                    <div class="pt-2 border-t border-slate-800">
-                      <div class="font-bold text-emerald-400 text-[11px] mb-1.5 flex items-center gap-1">
-                        <span>📷</span> Fotos Anexadas (${r.midia_fotos.length}):
-                      </div>
-                      <div class="flex flex-wrap gap-2">
-                        ${r.midia_fotos.map(img => `
-                          <div class="w-16 h-16 rounded-lg overflow-hidden border border-slate-700 bg-black cursor-pointer hover:border-emerald-500 transition shrink-0" onclick="visualizarMidiaModal('${img}', 'image')">
-                            <img src="${img}" class="w-full h-full object-cover hover:scale-105 transition duration-200" title="Clique para ampliar">
-                          </div>
-                        `).join('')}
-                      </div>
-                    </div>` : ''}
+                  <!-- MÍDIAS ANEXADAS — caminho no Storage primeiro (migration
+                       41), base64 legado depois, e o que ainda está só no
+                       aparelho que fotografou. Antes disto o teste era
+                       Array.isArray(r.midia_fotos), e midia_fotos volta da
+                       nuvem como STRING (coluna TEXT): todo aparelho que não
+                       fosse o que abriu o chamado via zero foto. -->
+                  ${_galeriaFotosModulo(r, 'fotos', 'rota', { titulo: 'Fotos Anexadas', cor: 'emerald' })}
 
                   ${Array.isArray(r.midia_videos) && r.midia_videos.length > 0 ? `
                     <div class="pt-2 border-t border-slate-800">
@@ -14783,8 +18626,9 @@ function renderViagensReentregasSubTab() {
                 return `
                   <tr class="hover:bg-slate-800/60 transition">
                     <td class="p-2.5 border-r border-slate-800 text-center font-medium text-slate-300 whitespace-nowrap">${fmtData(r.data)}</td>
-                    <td class="p-2.5 border-r border-slate-800 font-bold text-white flex items-center gap-1.5">
-                      <span>👤</span> ${r.motorista_nome || '—'}
+                    <td class="p-2.5 border-r border-slate-800 font-bold text-white">
+                      <div class="flex items-center gap-1.5"><span>👤</span> ${r.motorista_nome || '—'}</div>
+                      ${(r.ajudante || r.ajudante_2) ? `<div class="text-[10px] font-semibold text-slate-400 pl-5 mt-0.5" title="Ajudantes da reentrega">🙋 ${[r.ajudante, r.ajudante_2].filter(Boolean).join(' + ')}</div>` : ''}
                     </td>
                     <td class="p-2.5 border-r border-slate-800 text-center font-mono font-bold text-purple-400 bg-slate-950/40">${r.carga_numero || '—'}</td>
                     <td class="p-2.5 border-r border-slate-800 font-semibold text-slate-200">${r.rota_nome || '—'}</td>
@@ -14918,9 +18762,29 @@ function emitirRelatorioReentregasA4(filtro = null) {
       margin: 8mm 10mm 8mm 10mm;
     }
     @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      /* O padding do body sobrevivia a impressao e valia ~10,6mm - o suficiente
+         para estourar os 190mm uteis de um A4 deitado e criar uma folha 2 com
+         o rodape sozinho. */
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact;
+             background: #fff !important; padding: 0 !important; }
       .no-print { display: none !important; }
-      .page-container { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+      /* min-height zerada: a folha passa a ter a altura do conteudo, e nao
+         190mm fixos. display:block desliga o flex + space-between, que
+         empurrava o rodape para a borda de baixo mesmo com a tabela curta -
+         agora o rodape vem logo depois da tabela, onde ela terminar. */
+      .page-container { box-shadow: none !important; border: none !important;
+                        margin: 0 !important; padding: 0 !important;
+                        width: 100% !important; max-width: 100% !important;
+                        min-height: 0 !important; display: block !important; }
+
+      /* E QUANDO A LISTA FOR GRANDE DE VERDADE e a folha 2 for necessaria: o
+         cabecalho verde da tabela se repete no alto dela, e nenhuma linha e
+         cortada no meio. */
+      thead { display: table-header-group; }
+      tr, .kpi-strip, .header-box, .report-banner, .footer-box {
+        page-break-inside: avoid; break-inside: avoid;
+      }
+      .footer-box { margin-top: 10px !important; }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -15250,9 +19114,17 @@ function gerarRelatorioLargadaOperacaoModal() {
 
   const totViagens = filtradas.length;
   const totFusionOk = filtradas.filter(v => v.fusion === 'INICIADO').length;
-  const totChkOk = filtradas.filter(v => v.checklist_saida === 'INICIADO').length;
-  const totChkChegadaOk = filtradas.filter(v => v.checklist_chegada === 'INICIADO').length;
+  // Mesma régua do Dashboard (checklistFoiRealizado): a coluna vem de
+  // planilha e já chegou com e sem acento, em maiúscula e em caixa mista.
+  const totChkOk = filtradas.filter(v => checklistFoiRealizado(v.checklist_saida)).length;
+  const totChkChegadaOk = filtradas.filter(v => checklistFoiRealizado(v.checklist_chegada)).length;
   const totObs = filtradas.filter(v => v.observacao && v.observacao.trim() !== '').length;
+
+  // Status que de fato aparecem no recorte impresso, na ordem canônica do
+  // filtro da tela — alimenta a legenda de cores logo abaixo dos KPIs.
+  const statusPresentes = VG_STATUS_OPCOES
+    .map(o => o.val)
+    .filter(st => filtradas.some(v => String(v.status_viagem || '').trim().toUpperCase() === st));
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -15281,6 +19153,9 @@ function gerarRelatorioLargadaOperacaoModal() {
     tr:nth-child(even) { background: #f8fafc; }
     .badge-ok { background: #dcfce7; color: #14532d; font-weight: bold; padding: 2px 4px; border-radius: 3px; }
     .badge-nok { background: #fee2e2; color: #7f1d1d; font-weight: bold; padding: 2px 4px; border-radius: 3px; }
+    /* A cor de fundo vem inline, de corStatusViagem() — a mesma tabela que
+       pinta o status na tela do Controle de Viagens. Aqui fica só a forma. */
+    .badge-status { display: inline-block; font-weight: 900; padding: 2px 6px; border-radius: 3px; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -15312,6 +19187,15 @@ function gerarRelatorioLargadaOperacaoModal() {
     <div class="kpi-box"><div class="kpi-num" style="color: #0891b2;">${totChkChegadaOk}</div><div class="kpi-label">Checklist Chegada OK</div></div>
     <div class="kpi-box"><div class="kpi-num" style="color: #b45309;">${totObs}</div><div class="kpi-label">Ocorrências Largada</div></div>
   </div>
+
+  <!-- Legenda das cores de status. No papel não há tooltip nem filtro: se a
+       cor não vier explicada, quem lê o PDF só vê retângulos coloridos.
+       Lista apenas os status presentes NESTE recorte. -->
+  ${statusPresentes.length ? `
+  <div style="font-size:9px;color:#475569;margin-bottom:4px;">
+    <strong style="text-transform:uppercase;color:#064e3b;">Status:</strong>
+    ${statusPresentes.map(st => `<span class="badge-status" style="${corStatusViagem(st).css}margin-left:4px;">${st}</span>`).join('')}
+  </div>` : ''}
 
   <table>
     <thead>
@@ -15349,10 +19233,10 @@ function gerarRelatorioLargadaOperacaoModal() {
               <td>${v.rota}</td>
               <td><b>${v.placa}</b></td>
               <td>${v.motorista}</td>
-              <td>${v.ajudante}</td>
+              <td>${v.ajudante}${v.ajudante_2 ? `<br><span style="font-size:9.5px;color:#047857;font-weight:bold;">+ ${v.ajudante_2}</span>` : ''}</td>
               <td>${v.setor||'FRIO'}</td>
               <td>${(v.data_saida || v.hora_saida) ? `${formatarData(v.data_saida)} ${v.hora_saida||'—'}` : '—'}</td>
-              <td>${v.status_viagem || '—'}</td>
+              <td>${v.status_viagem ? `<span class="badge-status" style="${corStatusViagem(v.status_viagem).css}">${v.status_viagem}</span>` : '—'}</td>
               <td>${v.fusion ? `<span class="${v.fusion==='INICIADO'?'badge-ok':'badge-nok'}">${v.fusion}</span>` : '—'}</td>
               <td>${v.checklist_saida ? `<span class="${v.checklist_saida==='INICIADO'?'badge-ok':'badge-nok'}">${v.checklist_saida}</span>` : '—'}</td>
               <td>${v.checklist_chegada ? `<span class="${v.checklist_chegada==='INICIADO'?'badge-ok':'badge-nok'}">${v.checklist_chegada}</span>` : '—'}</td>
@@ -15806,7 +19690,7 @@ async function handleNovaRotaSubmit(e) {
     try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
   }
 
-  db.addOcorrenciaRota({
+  const novaRota = db.addOcorrenciaRota({
     carga_numero: cargaNum,
     veiculo_id: veicSel ? veicSel.value : null,
     veiculo_placa: veicOpt?.getAttribute('data-placa') || '',
@@ -15817,9 +19701,19 @@ async function handleNovaRotaSubmit(e) {
     status_veiculo: statusVeic,
     localizacao: loc.trim(),
     descricao: desc.trim(),
-    midia_fotos: [...uploadedRotaFotos],
+    // FOTO NAO VAI MAIS AQUI (21/09/2026, migration 41 — aplicada em 07/09 e
+    // ociosa desde entao). midia_fotos em base64 era o que fazia UM chamado
+    // com 4 fotos pesar 619 KB no localStorage de todo aparelho. A foto vai
+    // para a fila do fotoStore logo abaixo, depois de o registro existir; o
+    // video continua por aqui porque ja sobe para o Storage desde a v5.1.0.
+    midia_fotos: [],
     midia_videos: [...uploadedRotaVideos]
   });
+
+  // DEPOIS do registro existir, porque a fila precisa de um id para apontar.
+  if (novaRota && novaRota.id) {
+    await _enfileirarFotosDevolucao(novaRota, 'fotos', uploadedRotaFotos, 'rota');
+  }
 
   uploadedRotaFotos = [];
   uploadedRotaVideos = [];
@@ -16092,12 +19986,12 @@ function editarDevolucaoSacModal(id) {
   const dev = (db.getDevolucoes ? db.getDevolucoes() : []).find(d => d.id == id);
   if (!dev) { alert('Devolução não localizada.'); return; }
 
-  // A mesma porta que updateDevolucaoSac() fecha no store. Aqui é só para o
-  // usuário ler o motivo antes de digitar tudo; a trava que vale é a de lá.
-  if ((dev.status_fechamento || 'PENDENTE_FISICO') !== 'PENDENTE_FISICO') {
-    alert('⚠️ O CD já recebeu o retorno físico desta devolução.\n\nOs itens têm destino, validade e negociação registrados com a mercadoria na mão — reescrevê-los aqui apagaria essa conferência.\n\nA correção agora é feita na tela "Retorno Físico CD", no ✏️ do próprio item.');
-    return;
-  }
+  // Já foi um `return` com alert: recebido o retorno físico, a devolução
+  // virava só-leitura. Agora abre sempre e só avisa, porque a única coisa que
+  // a conferência do CD perde aqui é o destino de uma linha que trocar de
+  // produto — e updateDevolucaoSac trata isso linha a linha, sem barrar a
+  // correção do cliente, da NF ou do motivo por causa disso.
+  const cdJaRecebeu = (dev.status_fechamento || 'PENDENTE_FISICO') !== 'PENDENTE_FISICO';
 
   const container = document.getElementById('modal-container');
   if (!container) return;
@@ -16133,6 +20027,16 @@ function editarDevolucaoSacModal(id) {
       ${temAnalise ? `
       <div class="bg-amber-950/40 border border-amber-700/60 rounded-lg p-3 text-[11px] text-amber-200 font-semibold">
         ⚠️ Esta devolução já tem causa raiz apurada (<b>${dev.motivo_real_causa_raiz}</b>). A apuração foi feita sobre os itens atuais, então salvar a correção devolve o chamado para as <b>Tratativas do Gestor</b>.
+      </div>` : ''}
+
+      ${cdJaRecebeu ? `
+      <div class="bg-blue-950/40 border border-blue-700/60 rounded-lg p-3 text-[11px] text-blue-200 space-y-1">
+        <div class="font-bold">📦 O CD já conferiu o retorno físico desta devolução (<b>${dev.status_fechamento}</b>).</div>
+        <div class="text-blue-300/90 font-normal">
+          Cliente, NF, motivo, valor, quantidade e detalhamento podem ser corrigidos normalmente — nada disso mexe na conferência.
+          A conferência de um item (destino, validade, negociação) só cai se você <b>trocar o produto daquela linha</b>: aí o destino era do produto antigo,
+          e o item volta para a fila de <b>Destinação de Itens</b> para o CD decidir de novo.
+        </div>
       </div>` : ''}
 
       <form onsubmit="handleSalvarEdicaoDevolucaoSac(event, '${dev.id}')" class="space-y-5 text-xs">
@@ -16340,6 +20244,26 @@ function handleSalvarEdicaoDevolucaoSac(e, id) {
   }
 
   closeModal();
+
+  // Correção depois do CD receber é permitida, mas quando ela desfaz alguma
+  // decisão tomada com a mercadoria na mão o aviso é um alert, não um toast:
+  // isso é trabalho que voltou para a fila de outro setor, e toast some.
+  const impacto = [];
+  (res.conferenciaCaiu || []).forEach(c =>
+    impacto.push(`• ${c.de}\n  virou ${c.para} — destino, validade e negociação deste item foram zerados.`));
+  (res.criadosSemConferencia || []).forEach(p =>
+    impacto.push(`• ${p} entrou agora e o CD nunca o conferiu — aparece na Destinação herdando o destino geral da devolução.`));
+  (res.removidosConferidos || []).forEach(p =>
+    impacto.push(`• ${p} foi retirado da devolução e saiu junto da lista de Destinação, com o destino que tinha.`));
+
+  if (impacto.length) {
+    alert(
+      `✏️ ${res.protocolo} corrigida.\n\n`
+      + `⚠️ Esta devolução já estava ${res.statusFechamento}, e a correção mexeu na conferência do CD:\n\n`
+      + impacto.join('\n')
+      + `\n\nAvise o CD para revisar em "Retorno Físico CD → Destinação de Itens".`
+    );
+  }
 
   const partes = [];
   if (res.atualizados) partes.push(`${res.atualizados} item(ns) alterado(s)`);
@@ -16712,13 +20636,16 @@ function abrirModalEditarColaboradorCD(id) {
     "GERENTE DE CD"
   ];
 
-  const secoesDisponiveis = [
-    "CARREGAMENTO FRIOS - 1 TURNO",
-    "CARREGAMENTO FRIOS - 2 TURNO",
-    "CARREGAMENTO FRIOS - 3 TURNO",
-    "CARREGAMENTO SECOS",
-    "CARREGAMENTO"
-  ];
+  // O 3º TURNO saiu daqui em 22/09/2026: não existe na operação, é nomenclatura
+  // de DP. Os 5 colaboradores que estavam nele foram migrados para o 2º turno
+  // no mesmo dia (e nenhuma outra tabela — resumo, ocorrências, cortes, medidas
+  // — tinha uma linha sequer com 3º turno).
+  //
+  // A opção volta SOZINHA para quem ainda estiver gravado nela, via
+  // secoesParaColaborador(). Sem isso, abrir o cadastro de uma dessas pessoas
+  // num aparelho com cache antigo mostraria o <select> na PRIMEIRA opção — e
+  // salvar qualquer outro campo mudaria a seção dela para o 1º turno, calado.
+  const secoesDisponiveis = secoesParaColaborador(item);
 
   const container = document.getElementById('modal-container');
   if (!container) return;
@@ -16899,13 +20826,9 @@ function renderCadSubTabContent() {
       "GERENTE DE CD"
     ];
 
-    const secoesDisponiveis = [
-      "CARREGAMENTO FRIOS - 1 TURNO",
-      "CARREGAMENTO FRIOS - 2 TURNO",
-      "CARREGAMENTO FRIOS - 3 TURNO",
-      "CARREGAMENTO SECOS",
-      "CARREGAMENTO"
-    ];
+    // Formulário de cadastro NOVO: sem o 3º turno, que deixou de existir em
+    // 22/09/2026 (ver secoesParaColaborador). Ninguém novo nasce nele.
+    const secoesDisponiveis = secoesParaColaborador(null);
 
     return `
       <div class="space-y-5">
@@ -17279,215 +21202,60 @@ function downloadSqlScript() { window.open('./database/schema.sql','_blank'); }
 function copyJsonData() { navigator.clipboard.writeText(JSON.stringify(db.data,null,2)).then(()=>alert('✅ JSON copiado!')); }
 
 // ===== MÓDULO: RESUMO DIÁRIO CD & GESTÃO DE OCORRÊNCIAS =====
-function getTodasOcorrenciasCD() {
-  const list = [];
-  if (!db.data || !db.data.resumo_diario_cd) return list;
-
-  db.data.resumo_diario_cd.forEach(r => {
-    // 1. Ocorrências Gerais (Item 3)
-    if (Array.isArray(r.ocorrencias)) {
-      r.ocorrencias.forEach((o, idx) => {
-        list.push({
-          _parentData: r.data,
-          _parentTurno: r.turno,
-          _type: 'operacional',
-          _index: idx,
-          id: o.id || `op_${r.data}_${r.turno}_${idx}`,
-          data: r.data,
-          turno: r.turno,
-          gestor: r.gestor || '',
-          titulo: o.ocorrencia || 'OCORRÊNCIA OPERACIONAL',
-          colaborador: o.funcionario || 'OPERAÇÃO CD',
-          causa: o.causa || '',
-          acao: o.acao || '',
-          status: o.status || 'PENDENTE'
-        });
-      });
-    }
-    // 2. Ocorrências Colaboradores (Item 5)
-    if (Array.isArray(r.ocorrencias_colaboradores)) {
-      r.ocorrencias_colaboradores.forEach((oc, idx) => {
-        list.push({
-          _parentData: r.data,
-          _parentTurno: r.turno,
-          _type: 'colaborador',
-          _index: idx,
-          id: oc.id || `col_${r.data}_${r.turno}_${idx}`,
-          data: oc.data || r.data,
-          turno: r.turno,
-          gestor: r.gestor || '',
-          titulo: oc.requisito || 'APONTAMENTO COLABORADOR',
-          colaborador: oc.funcionario || '-',
-          causa: oc.detalhamento || '',
-          acao: oc.acao || '',
-          peso: oc.peso || '',
-          carga: oc.carga || '',
-          status: oc.status || 'PENDENTE'
-        });
-      });
-    }
-  });
-
-  return list;
+// OCORRÊNCIA COLABORADOR (6.7.0) — a antiga subaba "Ocorrências CD" virou
+// tela própria e lê só ocorrencias_colaborador. Aqui há pessoa, e ela é CLT:
+// mantém Pendentes + Fechadas, filtros, PDF, Excel e os botões
+// disciplinares. Cada registro é endereçado pelo id — acabou o
+// (data, turno, tipo, índice). getTodasOcorrenciasCD() deixou de existir: era
+// ela que forçava dois formatos na mesma tabela e imprimia "OPERAÇÃO CD" na
+// coluna Funcionário.
+function listarOcorrenciasColaboradorView() {
+  return db.getOcorrenciasColaborador().map(oc => ({
+    id: oc.id,
+    data: oc.data,
+    turno: oc.turno,
+    gestor: oc.gestor || '',
+    titulo: oc.requisito || 'APONTAMENTO COLABORADOR',
+    colaborador: oc.funcionario || '-',
+    causa: oc.detalhamento || '',
+    acao: oc.acao || '',
+    peso: (oc.peso === null || oc.peso === undefined) ? '' : oc.peso,
+    carga: oc.carga || '',
+    status: oc.status || 'PENDENTE',
+    medida_disciplinar: oc.medida_disciplinar || '',
+    dias_suspensao: oc.dias_suspensao || ''
+  }));
 }
 
-function alterarStatusOcorrenciaCD(parentData, parentTurno, type, index, novoStatus) {
-  const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-  if (type === 'operacional' && resumo.ocorrencias?.[index]) {
-    resumo.ocorrencias[index].status = novoStatus;
-  } else if (type === 'colaborador' && resumo.ocorrencias_colaboradores?.[index]) {
-    resumo.ocorrencias_colaboradores[index].status = novoStatus;
-  }
-  db.saveResumoDiarioCD(resumo);
+function alterarStatusOcorrenciaColaborador(id, novoStatus) {
+  const res = db.updateOcorrenciaColaborador(id, { status: novoStatus });
+  if (!res.success) { alert(res.message); return; }
   renderApp();
 }
 
-function removerOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
-  if (!confirm('Excluir esta ocorrência do CD?')) return;
-  const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-  if (type === 'operacional' && resumo.ocorrencias) {
-    resumo.ocorrencias.splice(index, 1);
-  } else if (type === 'colaborador' && resumo.ocorrencias_colaboradores) {
-    resumo.ocorrencias_colaboradores.splice(index, 1);
-  }
-  db.saveResumoDiarioCD(resumo);
+function removerOcorrenciaColaborador(id) {
+  if (!confirm('Excluir esta ocorrência do colaborador?')) return;
+  const res = db.deleteOcorrenciaColaborador(id);
+  if (!res.success) { alert(res.message); return; }
   renderApp();
 }
 
-function editarOcorrenciaCDSubaba(parentData, parentTurno, type, index) {
+// Um formulário só para criar e editar. Data e Turno editáveis e efetivos.
+function _modalOcorrenciaColaborador({ titulo, data, turno, item, onSalvar, rotuloBotao }) {
   const container = document.getElementById('modal-container');
   if (!container) return;
-
-  const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-  let item = null;
-  if (type === 'colaborador') item = resumo.ocorrencias_colaboradores?.[index];
-  else if (type === 'operacional') item = resumo.ocorrencias?.[index];
-  if (!item) return;
-
   const colabs = getListaTodosColaboradores();
-  const funcAtual = item.funcionario || item.colaborador || '';
-  const reqAtual = item.requisito || item.ocorrencia || 'OUTRO';
+  const funcAtual = (item && item.funcionario) || '';
+  const reqAtual = (item && item.requisito) || '';
+  const requisitos = getRequisitosFalhaCD();
+  const reqForaDaLista = reqAtual && !requisitos.includes(reqAtual);
+  const esc = v => String(v == null ? '' : v).replace(/"/g, '&quot;');
 
   container.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4">
       <div class="flex items-center justify-between border-b border-slate-800 pb-3">
         <h3 class="text-sm font-bold text-amber-400 uppercase flex items-center gap-2">
-          <span>✏️</span> Editar Ocorrência do CD
-        </h3>
-        <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
-      </div>
-
-      <div class="space-y-3 text-xs">
-        <div class="grid grid-cols-3 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data</label>
-            <input type="date" id="md-edit-data" value="${item.data || parentData}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor</label>
-            <input type="text" readonly value="${parentTurno}" class="w-full bg-slate-800/60 border border-slate-700 text-slate-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status *</label>
-            <select id="md-edit-status" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-extrabold">
-              <option value="PENDENTE" ${item.status==='PENDENTE'?'selected':''}>PENDENTE</option>
-              <option value="FECHADO" ${item.status==='FECHADO'?'selected':''}>FECHADO</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Funcionário / Envolvido *</label>
-            <select id="md-edit-colab" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
-              <option value="">-- Selecione o Colaborador --</option>
-              ${colabs.map(c => `<option value="${c}" ${c === funcAtual ? 'selected' : ''}>${c}</option>`).join('')}
-            </select>
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha *</label>
-            <input type="text" id="md-edit-req" value="${reqAtual}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
-            <input type="text" id="md-edit-carga" list="cargas-list-mdedit" value="${item.carga || ''}" placeholder="ex: 7689"
-              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-edit-carga','md-edit-carga-aviso',this.value)"
-              onchange="atualizarAvisoCargaNaoEncontrada('md-edit-carga','md-edit-carga-aviso',this.value)"
-              class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-            ${renderDatalistCargas('cargas-list-mdedit')}
-            <div id="md-edit-carga-aviso" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Peso em Kg (Se houver)</label>
-            <input type="number" step="0.01" id="md-edit-peso" value="${item.peso || ''}" placeholder="ex: 15.50" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-edit-causa" rows="3" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.detalhamento || item.causa || ''}</textarea>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-edit-acao" rows="2" class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${item.acao || ''}</textarea>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
-        <div class="flex items-center gap-1.5">
-          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
-          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Advertência CLT">⚠️ Advertência</button>
-          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${parentData}', parentTurno:'${parentTurno}', type:'${type}', index:${index}, colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${(item.detalhamento||item.causa||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Suspensão CLT">⛔ Suspensão</button>
-        </div>
-        <div class="flex items-center gap-2">
-          <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-          <button onclick="confirmarEditarOcorrenciaCD('${parentData}', '${parentTurno}', '${type}', ${index})" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Alterações</button>
-        </div>
-      </div>
-    </div>`;
-  container.classList.remove('hidden');
-}
-
-function confirmarEditarOcorrenciaCD(parentData, parentTurno, type, index) {
-  const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-  let item = null;
-  if (type === 'colaborador') item = resumo.ocorrencias_colaboradores?.[index];
-  else if (type === 'operacional') item = resumo.ocorrencias?.[index];
-  if (!item) return;
-
-  item.data = document.getElementById('md-edit-data')?.value || item.data;
-  item.status = document.getElementById('md-edit-status')?.value || item.status;
-  item.funcionario = (document.getElementById('md-edit-colab')?.value || item.funcionario || '').toUpperCase().trim();
-  const reqVal = (document.getElementById('md-edit-req')?.value || '').toUpperCase().trim();
-  if (type === 'colaborador') item.requisito = reqVal;
-  else item.ocorrencia = reqVal;
-
-  item.carga = (document.getElementById('md-edit-carga')?.value || '').trim();
-  item.peso = (document.getElementById('md-edit-peso')?.value || '').trim();
-  const causaVal = (document.getElementById('md-edit-causa')?.value || '').trim();
-  if (type === 'colaborador') item.detalhamento = causaVal;
-  else item.causa = causaVal;
-  item.acao = (document.getElementById('md-edit-acao')?.value || '').trim();
-
-  db.saveResumoDiarioCD(resumo);
-  fecharModalResumo();
-  renderApp();
-}
-
-function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
-  const container = document.getElementById('modal-container');
-  if (!container) return;
-  const colabs = getListaTodosColaboradores();
-
-  container.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-emerald-400 uppercase flex items-center gap-2">
-          <span>📢</span> Registrar Ocorrência do CD (Item 5)
+          <span>👤</span> ${titulo}
         </h3>
         <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
       </div>
@@ -17496,21 +21264,17 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
         <div class="grid grid-cols-3 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
-            <input type="date" id="md-oc2-data" value="${defaultData || hojeIsoBrasilia()}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <input type="date" id="md-occ-data" value="${data || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor *</label>
-            <select id="md-oc2-turno" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
-              <option value="SECO" ${defaultTurno==='SECO'?'selected':''}>SECO</option>
-              <option value="1º TURNO - FRIO" ${defaultTurno==='1º TURNO - FRIO'?'selected':''}>1º TURNO - FRIO</option>
-              <option value="2º TURNO - FRIO" ${defaultTurno==='2º TURNO - FRIO'?'selected':''}>2º TURNO - FRIO</option>
-            </select>
+            ${_selectTurnoResumo('md-occ-turno', turno)}
           </div>
           <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status Inicial *</label>
-            <select id="md-oc2-status" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-extrabold">
-              <option value="PENDENTE" selected>PENDENTE</option>
-              <option value="FECHADO">FECHADO</option>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Status *</label>
+            <select id="md-occ-status" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-extrabold">
+              <option value="PENDENTE" ${(!item || item.status !== 'FECHADO') ? 'selected' : ''}>PENDENTE</option>
+              <option value="FECHADO" ${(item && item.status === 'FECHADO') ? 'selected' : ''}>FECHADO</option>
             </select>
           </div>
         </div>
@@ -17518,15 +21282,16 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Funcionário / Envolvido *</label>
-            <select id="md-oc2-colab" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+            <select id="md-occ-func" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
               <option value="">-- Selecione o Colaborador --</option>
-              ${colabs.map(c => `<option value="${c}">${c}</option>`).join('')}
+              ${colabs.map(c => `<option value="${esc(c)}" ${c === funcAtual ? 'selected' : ''}>${c}</option>`).join('')}
             </select>
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha *</label>
-            <select id="md-oc2-titulo" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
-              ${renderOptionsRequisitoFalhaCD()}
+            <select id="md-occ-req" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
+              ${reqForaDaLista ? `<option value="${esc(reqAtual)}" selected>${reqAtual}</option>` : ''}
+              ${requisitos.map(r => `<option value="${esc(r)}" ${r === reqAtual ? 'selected' : ''}>${r}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -17534,73 +21299,95 @@ function abrirModalNovaOcorrenciaCD(defaultData, defaultTurno) {
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
-            <input type="text" id="md-oc2-carga" list="cargas-list-mdoc2" placeholder="ex: 7689"
-              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-oc2-carga','md-oc2-carga-aviso',this.value)"
-              onchange="atualizarAvisoCargaNaoEncontrada('md-oc2-carga','md-oc2-carga-aviso',this.value)"
+            <input type="text" id="md-occ-carga" list="cargas-list-mdocc" value="${esc(item && item.carga)}" placeholder="ex: 7689"
+              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
+              onchange="atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
               class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-            ${renderDatalistCargas('cargas-list-mdoc2')}
-            <div id="md-oc2-carga-aviso" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
+            ${renderDatalistCargas('cargas-list-mdocc')}
+            <div id="md-occ-carga-aviso" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Peso em Kg (Se houver)</label>
-            <input type="number" step="0.01" id="md-oc2-peso" placeholder="ex: 15.50" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+            <input type="number" step="0.01" id="md-occ-peso" value="${item && item.peso != null ? item.peso : ''}" placeholder="ex: 15.50" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
           </div>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-oc2-causa" rows="3" placeholder="Descreva os detalhes da ocorrência..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <textarea id="md-occ-detalhamento" rows="3" placeholder="Descreva os detalhes da ocorrência ocorrida com o colaborador..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${(item && item.detalhamento) || ''}</textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-oc2-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <textarea id="md-occ-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${(item && item.acao) || ''}</textarea>
         </div>
       </div>
 
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-        <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarNovaOcorrenciaCD()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Ocorrência</button>
+      <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
+        <div class="flex items-center gap-1.5">
+          ${item ? `
+          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', ocorrenciaId:'${item.id}', dataOcorrencia:'${item.data||''}', colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${((item.detalhamento)||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
+          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', ocorrenciaId:'${item.id}', dataOcorrencia:'${item.data||''}', colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${((item.detalhamento)||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Advertência CLT">⚠️ Advertência</button>
+          <button type="button" onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', ocorrenciaId:'${item.id}', dataOcorrencia:'${item.data||''}', colabNome:'${(funcAtual||'').replace(/'/g, "\\'")}', motivo:'${((item.detalhamento)||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold px-2.5 py-1.5 rounded text-xs shadow transition" title="Emitir Suspensão CLT">⛔ Suspensão</button>
+          ` : ''}
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
+          <button onclick="${onSalvar}" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">${rotuloBotao}</button>
+        </div>
       </div>
     </div>`;
   container.classList.remove('hidden');
 }
 
-function confirmarSalvarNovaOcorrenciaCD() {
-  const dt = document.getElementById('md-oc2-data')?.value;
-  const turno = document.getElementById('md-oc2-turno')?.value;
-  const status = document.getElementById('md-oc2-status')?.value || 'PENDENTE';
-  const colab = document.getElementById('md-oc2-colab')?.value || 'OPERAÇÃO CD';
-  const titulo = document.getElementById('md-oc2-titulo')?.value || 'OUTRO';
-
-  if (!dt || !turno) { alert('Preencha a data e turno!'); return; }
-
-  const carga = document.getElementById('md-oc2-carga')?.value || '';
-  const peso = document.getElementById('md-oc2-peso')?.value || '';
-  const causa = document.getElementById('md-oc2-causa')?.value || '';
-  const acao = document.getElementById('md-oc2-acao')?.value || '';
-
-  const resumo = db.getResumoDiarioCD(dt, turno);
-  if (!resumo.ocorrencias_colaboradores) resumo.ocorrencias_colaboradores = [];
-  resumo.ocorrencias_colaboradores.push({
-    id: db.gerarIdUnico(),
-    data: dt,
-    funcionario: colab.toUpperCase().trim(),
-    requisito: titulo.toUpperCase().trim(),
-    carga: carga.trim(),
-    detalhamento: causa.trim(),
-    acao: acao.trim(),
-    peso: peso ? String(peso).trim() : '',
-    status: status
+function adicionarOcorrenciaColaboradorModal(data, turno) {
+  _modalOcorrenciaColaborador({
+    titulo: 'Registrar Ocorrência do Colaborador',
+    data: data || hojeIsoBrasilia(),
+    turno: turno || turnoResumoAtual() || '',
+    item: null,
+    onSalvar: 'confirmarSalvarOcorrenciaColaborador()',
+    rotuloBotao: 'Salvar Ocorrência'
   });
+}
 
-  db.saveResumoDiarioCD(resumo);
+function editarOcorrenciaColaboradorModal(id) {
+  const item = db.getFilhoResumoPorId('colaborador', id);
+  if (!item) { alert('Ocorrência não encontrada.'); return; }
+  _modalOcorrenciaColaborador({
+    titulo: 'Editar Ocorrência do Colaborador',
+    data: item.data, turno: item.turno, item,
+    onSalvar: `confirmarSalvarOcorrenciaColaborador('${item.id}')`,
+    rotuloBotao: 'Salvar Alterações'
+  });
+}
+
+function confirmarSalvarOcorrenciaColaborador(editId) {
+  const data = document.getElementById('md-occ-data')?.value;
+  const turno = document.getElementById('md-occ-turno')?.value;
+  const funcionario = document.getElementById('md-occ-func')?.value;
+  if (!data) { alert('Informe a data!'); return; }
+  if (!turno) { alert('Selecione o turno!'); return; }
+  // Sem valor por omissão: era o 'OPERAÇÃO CD' gravado quando ninguém
+  // selecionava — o duplicado que este formulário substitui.
+  if (!funcionario) { alert('Selecione o funcionário!'); return; }
+  const dados = {
+    data, turno, funcionario,
+    requisito: document.getElementById('md-occ-req')?.value || 'OUTRO',
+    carga: (document.getElementById('md-occ-carga')?.value || '').trim(),
+    peso: document.getElementById('md-occ-peso')?.value || '',
+    detalhamento: (document.getElementById('md-occ-detalhamento')?.value || '').trim(),
+    acao: (document.getElementById('md-occ-acao')?.value || '').trim(),
+    status: document.getElementById('md-occ-status')?.value || 'PENDENTE'
+  };
+  const res = editId ? db.updateOcorrenciaColaborador(editId, dados) : db.addOcorrenciaColaborador(dados);
+  if (!res || !res.success) { alert(res && res.message ? res.message : 'Não foi possível salvar.'); return; }
   fecharModalResumo();
   renderApp();
 }
 
 function exportarOcorrenciasExcel() {
-  const todas = getTodasOcorrenciasCD();
+  const todas = listarOcorrenciasColaboradorView();
   const busca = (window._ocFiltroBusca || '').toLowerCase().trim();
   const fData = window._ocFiltroData || '';
   const fTurno = window._ocFiltroTurno || 'TODOS';
@@ -17649,7 +21436,7 @@ function exportarOcorrenciasExcel() {
 }
 
 function gerarRelatorioOcorrenciasPdf() {
-  const todas = getTodasOcorrenciasCD();
+  const todas = listarOcorrenciasColaboradorView();
   const busca = (window._ocFiltroBusca || '').toLowerCase().trim();
   const fData = window._ocFiltroData || '';
   const fTurno = window._ocFiltroTurno || 'TODOS';
@@ -17754,8 +21541,8 @@ function renderDisponibilidadeFrotaView() {
   const nRetidos   = retencoes.filter(r => r.status === 'RETIDO').length;
   const nLiberados = retencoes.filter(r => r.status === 'LIBERADO').length;
 
-  const retidosCriticos8h = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'CRITICO_8H');
-  const retidosAlerta4h = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'ALERTA_4H');
+  const retidosCriticos = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'CRITICO');
+  const retidosAtencao = retencoes.filter(r => r.status === 'RETIDO' && calcularSlaManutencao(r).nivel === 'ATENCAO');
 
   // Cálculo do MTTR Operacional da Frota (em hh:mm:ss)
   let totalMttrMs = 0;
@@ -17826,19 +21613,19 @@ function renderDisponibilidadeFrotaView() {
           <div class="text-2xl font-black text-white mt-1">${nRetidos}</div>
           <div class="text-[10px] text-slate-500 mt-0.5">Atualmente na oficina</div>
         </div>
-        <div class="bg-slate-900 border border-red-900/70 p-3.5 rounded-xl shadow ${retidosCriticos8h.length > 0 ? 'animate-pulse' : ''}">
+        <div class="bg-slate-900 border border-red-900/70 p-3.5 rounded-xl shadow ${retidosCriticos.length > 0 ? 'animate-pulse' : ''}">
           <div class="text-[10px] text-red-400 font-bold uppercase flex items-center gap-1">
-            <span>🔴</span> SLA Crítico &gt;8h
+            <span>🔴</span> SLA Crítico &gt;72h
           </div>
-          <div class="text-2xl font-black text-red-300 mt-1">${retidosCriticos8h.length}</div>
-          <div class="text-[10px] text-red-400/80 mt-0.5">Parados há mais de 8h</div>
+          <div class="text-2xl font-black text-red-300 mt-1">${retidosCriticos.length}</div>
+          <div class="text-[10px] text-red-400/80 mt-0.5">Parados há mais de 3 dias</div>
         </div>
         <div class="bg-slate-900 border border-amber-900/70 p-3.5 rounded-xl shadow">
           <div class="text-[10px] text-amber-400 font-bold uppercase flex items-center gap-1">
-            <span>🟡</span> SLA Atenção &gt;4h
+            <span>🟡</span> SLA Atenção &gt;24h
           </div>
-          <div class="text-2xl font-black text-amber-300 mt-1">${retidosAlerta4h.length}</div>
-          <div class="text-[10px] text-amber-400/80 mt-0.5">Parados entre 4h e 8h</div>
+          <div class="text-2xl font-black text-amber-300 mt-1">${retidosAtencao.length}</div>
+          <div class="text-[10px] text-amber-400/80 mt-0.5">Parados entre 1 e 3 dias</div>
         </div>
         <div class="bg-slate-900 border border-emerald-900/70 p-3.5 rounded-xl shadow">
           <div class="text-[10px] text-emerald-400 font-bold uppercase flex items-center gap-1">
@@ -18702,6 +22489,22 @@ function emitirRelatorioFrota(tipo) {
         }
       }).join('');
 
+  // ATE 18 LINHAS CABEM NUM A4 DEITADO com o corpo atual. Acima disso, em vez
+  // de estourar para a folha 2, o relatorio aperta: fonte e altura de linha
+  // menores, e os KPIs de apoio encolhem. E o que uma planilha impressa faz -
+  // ninguem quer duas folhas para 20 veiculos.
+  const denso = lista.length > 18;
+  const cssDenso = !denso ? '' : `
+    table { font-size: 8.4px; }
+    th, td { padding: 2.6px 4px; }
+    th { font-size: 8px; }
+    .kpi-card-val { font-size: 12px; }
+    .kpi-card { padding: 2px 6px; }
+    .kpi-strip { margin-bottom: 5px; }
+    .header-box { padding-bottom: 5px; margin-bottom: 5px; }
+    .logo-img { height: 40px; }
+    .report-banner { padding: 4px 10px; margin-bottom: 5px; }`;
+
   const htmlContent = `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -18714,9 +22517,29 @@ function emitirRelatorioFrota(tipo) {
       margin: 10mm 12mm 10mm 12mm;
     }
     @media print {
-      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      /* O padding do body sobrevivia a impressao e valia ~10,6mm - o suficiente
+         para estourar os 190mm uteis de um A4 deitado e criar uma folha 2 com
+         o rodape sozinho. */
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact;
+             background: #fff !important; padding: 0 !important; }
       .no-print { display: none !important; }
-      .page-container { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+      /* min-height zerada: a folha passa a ter a altura do conteudo, e nao
+         190mm fixos. display:block desliga o flex + space-between, que
+         empurrava o rodape para a borda de baixo mesmo com a tabela curta -
+         agora o rodape vem logo depois da tabela, onde ela terminar. */
+      .page-container { box-shadow: none !important; border: none !important;
+                        margin: 0 !important; padding: 0 !important;
+                        width: 100% !important; max-width: 100% !important;
+                        min-height: 0 !important; display: block !important; }
+
+      /* E QUANDO A LISTA FOR GRANDE DE VERDADE e a folha 2 for necessaria: o
+         cabecalho verde da tabela se repete no alto dela, e nenhuma linha e
+         cortada no meio. */
+      thead { display: table-header-group; }
+      tr, .kpi-strip, .header-box, .report-banner, .footer-box {
+        page-break-inside: avoid; break-inside: avoid;
+      }
+      .footer-box { margin-top: 10px !important; }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -18924,6 +22747,7 @@ function emitirRelatorioFrota(tipo) {
     .footer-box strong {
       color: #000000;
     }
+    ${cssDenso}
   </style>
 </head>
 <body>
@@ -19547,7 +23371,23 @@ function emitirRelatorioChamadosRotaA4(filtro = null) {
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #fff !important; padding: 0 !important; }
       .no-print { display: none !important; }
-      .page-container { box-shadow: none !important; border: none !important; margin: 0 !important; padding: 0 !important; width: 100% !important; max-width: 100% !important; }
+      /* min-height zerada: a folha passa a ter a altura do conteudo, e nao
+         190mm fixos. display:block desliga o flex + space-between, que
+         empurrava o rodape para a borda de baixo mesmo com a tabela curta -
+         agora o rodape vem logo depois da tabela, onde ela terminar. */
+      .page-container { box-shadow: none !important; border: none !important;
+                        margin: 0 !important; padding: 0 !important;
+                        width: 100% !important; max-width: 100% !important;
+                        min-height: 0 !important; display: block !important; }
+
+      /* E QUANDO A LISTA FOR GRANDE DE VERDADE e a folha 2 for necessaria: o
+         cabecalho verde da tabela se repete no alto dela, e nenhuma linha e
+         cortada no meio. */
+      thead { display: table-header-group; }
+      tr, .kpi-strip, .header-box, .report-banner, .footer-box {
+        page-break-inside: avoid; break-inside: avoid;
+      }
+      .footer-box { margin-top: 10px !important; }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -19753,17 +23593,58 @@ function emitirRelatorioChamadosRotaA4(filtro = null) {
 }
 
 
+// TURNO PADRÃO PELO CADASTRO DO USUÁRIO LOGADO (6.7.0, decisão de 09/09/2026).
+// Antes a tela abria sempre em 2º TURNO - FRIO para qualquer pessoa, e o
+// supervisor do 1º turno que não trocasse o seletor lançava no turno errado.
+// A chave é a `secao` do colaboradores_cd — dado que alguém preencheu de
+// propósito e que continua certo se o supervisor mudar de turno. Nome de
+// login foi descartado: o mesmo supervisor aparece grafado de três jeitos.
+// Devolve null quando não dá para saber (não é supervisor, seção genérica,
+// 3º turno sem turno correspondente) — e null NÃO vira chute: a tela pede a
+// escolha.
+function turnoPadraoDoUsuario() {
+  try {
+    const nome = db.currentUser && db.currentUser.nome;
+    if (!nome) return null;
+    // Lê colaboradores_cd DIRETO, com casamento exato e depois por
+    // substring — e nada mais. getDadosColaboradorMestre() não serve aqui:
+    // ela casa por tokens soltos e, sem seção, INVENTA 'CARREGAMENTO SECOS'
+    // (é uma função de preenchimento de formulário, não de identificação).
+    // Um chute aqui é lançamento no turno errado, que é o que este código
+    // veio impedir.
+    const alvo = normalizeStr(nome);
+    if (!alvo) return null;
+    const colabs = (db.data.colaboradores_cd || []).filter(c => c && c.nome && !c.is_deleted && c.ativo !== false);
+    let colab = colabs.find(c => normalizeStr(c.nome) === alvo);
+    if (!colab) colab = colabs.find(c => { const n = normalizeStr(c.nome); return n.length > 5 && (n.includes(alvo) || alvo.includes(n)); });
+    const secao = colab && colab.secao ? normalizeStr(colab.secao) : '';
+    if (!secao) return null;
+    if (secao.includes('SECO')) return 'SECO';
+    if (/\b1\s*TURNO/.test(secao)) return '1º TURNO - FRIO';
+    if (/\b2\s*TURNO/.test(secao)) return '2º TURNO - FRIO';
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// O turno em uso na tela: o escolhido no seletor, senão o do cadastro do
+// usuário, senão null (seletor sem pré-seleção). Nunca chuta um turno.
+function turnoResumoAtual() {
+  if (window._resumoFiltroTurno) return window._resumoFiltroTurno;
+  return turnoPadraoDoUsuario();
+}
+
 function renderResumoDiarioCdView() {
 
   const fData = window._resumoFiltroData || hojeIsoBrasilia();
-  const fTurno = window._resumoFiltroTurno || '2º TURNO - FRIO';
+  const fTurno = turnoResumoAtual();
 
-  const resumo = db.getResumoDiarioCD(fData, fTurno);
+  // Sem turno não há envelope para ler: mostra a tela vazia com o aviso e
+  // o botão de salvar bloqueado (ver renderSubabaResumoDiario).
+  const resumo = fTurno ? db.getResumoDiarioCD(fData, fTurno) : db.getResumoDiarioCD(fData, '__SEM_TURNO__');
 
-  let gestorNome = resumo.gestor;
-  if (fTurno === 'SECO') gestorNome = 'MARCOS ADRIANO';
-  else if (fTurno === '1º TURNO - FRIO') gestorNome = 'MELQUIADES NETO';
-  else if (fTurno === '2º TURNO - FRIO') gestorNome = 'GUSTAVO CAMARA';
+  const gestorNome = fTurno ? (resumo.gestor || db.gestorPadraoDoTurno(fTurno)) : '';
 
   const rec = resumo.movimentacao?.recebimento || { peso: 0, aux_junior: 0, movimentador: 0, conferente: 0, empilhador: 0, cargas_previstas: 0, cargas_realizadas: 0, cargas_veiculos: 0 };
   const exp = resumo.movimentacao?.expedicao || { peso: 0, aux_junior: 0, movimentador: 0, conferente: 0, empilhador: 0, cargas_previstas: 0, cargas_realizadas: 0, cargas_veiculos: 0 };
@@ -19786,34 +23667,19 @@ function renderResumoDiarioCdView() {
   const totReal = (parseInt(rec.cargas_realizadas)||0) + (parseInt(exp.cargas_realizadas)||0);
   const totVeic = (parseInt(rec.cargas_veiculos)||0) + (parseInt(exp.cargas_veiculos)||0);
 
+  // Faltas continuam no envelope; ocorrências e cortes vêm das coleções
+  // próprias (6.7.0). A aparência dos Itens 3 e 4 não muda — só de onde lê.
   const faltas = resumo.faltas_condutas || [];
-  const ocorrencias = resumo.ocorrencias || [];
-  const cortes = resumo.cortes || [];
+  const ocorrencias = fTurno ? db.getOcorrenciasCD({ data: fData, turno: fTurno }).slice().reverse() : [];
+  const cortes = fTurno ? db.getCortesCD({ data: fData, turno: fTurno }).slice().reverse() : [];
 
   const valorTotalCortes = cortes.reduce((acc, c) => acc + (parseFloat(c.valor)||0), 0);
-  const ocColaboradores = resumo.ocorrencias_colaboradores || [];
 
-  const todasOcorrencias = getTodasOcorrenciasCD();
-  const pendentesTotais = todasOcorrencias.filter(o => o.status === 'PENDENTE').length;
-
+  // A barra de subabas saiu (6.7.0): Ocorrência Colaborador virou tela
+  // própria no menu, e o Resumo Diário voltou a ser uma tela só.
   return `
     <div class="space-y-5">
-      <!-- BARRA DE SUBABAS: RESUMO DIÁRIO CD vs OCORRÊNCIAS -->
-      <div class="flex items-center justify-between bg-slate-900 border border-slate-800 p-1.5 rounded-xl shadow-lg">
-        <div class="flex items-center gap-2">
-          <button onclick="switchResumoSubTab('resumo')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeResumoSubTab === 'resumo' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800'}">
-            <span>📋</span> Resumo Diário
-          </button>
-          <button onclick="switchResumoSubTab('ocorrencias')" class="px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 transition ${activeResumoSubTab === 'ocorrencias' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800'}">
-            <span>🚨</span> Ocorrências CD ${pendentesTotais > 0 ? `<span class="bg-amber-500 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-full">${pendentesTotais}</span>` : ''}
-          </button>
-        </div>
-        <div class="text-[11px] text-slate-400 font-medium hidden sm:block pr-2">
-          JR Distribuidora • Gestão Integrada de CD
-        </div>
-      </div>
-
-      ${activeResumoSubTab === 'resumo' ? renderSubabaResumoDiario({ fData, fTurno, gestorNome, rec, exp, recQtdFunc, expQtdFunc, recTonH, expTonH, totPeso, totAux, totMov, totConf, totEmp, totFunc, totTonH, totPrev, totReal, totVeic, faltas, ocorrencias, cortes, valorTotalCortes, ocColaboradores }) : renderSubabaOcorrenciasCD({ fData, fTurno })}
+      ${renderSubabaResumoDiario({ fData, fTurno, gestorNome, rec, exp, recQtdFunc, expQtdFunc, recTonH, expTonH, totPeso, totAux, totMov, totConf, totEmp, totFunc, totTonH, totPrev, totReal, totVeic, faltas, ocorrencias, cortes, valorTotalCortes })}
     </div>
   `;
 }
@@ -19843,8 +23709,9 @@ function renderSubabaResumoDiario(p) {
 
           <!-- SELETOR DE TURNO -->
           <div class="bg-slate-900/90 p-2 rounded-lg border border-slate-700">
-            <label class="block text-[9px] text-emerald-400 font-bold uppercase">Turno / Setor</label>
-            <select onchange="window._resumoFiltroTurno=this.value; renderApp()" class="bg-slate-800 border border-slate-600 text-amber-300 text-xs rounded p-1 font-bold">
+            <label class="block text-[9px] ${p.fTurno ? 'text-emerald-400' : 'text-amber-400'} font-bold uppercase">Turno / Setor${p.fTurno ? '' : ' — selecione o turno'}</label>
+            <select onchange="window._resumoFiltroTurno=this.value; renderApp()" class="bg-slate-800 border ${p.fTurno ? 'border-slate-600' : 'border-amber-500 ring-2 ring-amber-500/40'} text-amber-300 text-xs rounded p-1 font-bold">
+              ${p.fTurno ? '' : '<option value="" selected disabled>-- selecione o turno --</option>'}
               <option value="SECO" ${p.fTurno==='SECO'?'selected':''}>SECO (Marcos Adriano)</option>
               <option value="1º TURNO - FRIO" ${p.fTurno==='1º TURNO - FRIO'?'selected':''}>1º TURNO - FRIO (Melquiades Neto)</option>
               <option value="2º TURNO - FRIO" ${p.fTurno==='2º TURNO - FRIO'?'selected':''}>2º TURNO - FRIO (Gustavo Camara)</option>
@@ -19857,7 +23724,7 @@ function renderSubabaResumoDiario(p) {
             <input type="text" id="rs-gestor" value="${p.gestorNome}" class="bg-slate-800 border border-slate-600 text-white text-xs rounded p-1 font-bold uppercase w-36" oninput="forcarMaiuscula(this)">
           </div>
 
-          <button onclick="salvarResumoDiarioCdCurrent()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
+          <button onclick="salvarResumoDiarioCdCurrent()" ${p.fTurno ? '' : 'disabled title="Selecione o turno antes de salvar"'} class="${p.fTurno ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-700 cursor-not-allowed opacity-60'} text-white font-bold px-4 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
             💾 Salvar Resumo
           </button>
 
@@ -19954,7 +23821,7 @@ function renderSubabaResumoDiario(p) {
               <h3 class="text-xs font-bold text-amber-400 uppercase flex items-center gap-1.5">
                 <span>⚠️</span> 2. GESTÃO DE FALTAS, CONDUTAS & AUSÊNCIAS
               </h3>
-              <button onclick="adicionarFaltaResumo('${p.fData}', '${p.fTurno}')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Falta</button>
+              <button onclick="adicionarFaltaResumo('${p.fData}', '${p.fTurno || ''}')" ${p.fTurno ? '' : 'disabled'} class="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Falta</button>
             </div>
 
             <div class="overflow-x-auto">
@@ -19998,7 +23865,7 @@ function renderSubabaResumoDiario(p) {
                 </h3>
                 <span class="text-[9px] text-slate-400">Apontamentos sobre a Operação Geral do CD</span>
               </div>
-              <button onclick="adicionarOcorrenciaResumo('${p.fData}', '${p.fTurno}')" class="bg-blue-700 hover:bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Ocorrência Operacional</button>
+              <button onclick="adicionarOcorrenciaResumo('${p.fData}', '${p.fTurno || ''}')" ${p.fTurno ? '' : 'disabled'} class="bg-blue-700 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Ocorrência Operacional</button>
             </div>
 
             <div class="overflow-x-auto">
@@ -20013,14 +23880,14 @@ function renderSubabaResumoDiario(p) {
                 </thead>
                 <tbody class="divide-y divide-slate-800 text-xs">
                   ${p.ocorrencias.length === 0 ? '<tr><td colspan="4" class="p-4 text-center text-slate-500 text-[11px]">Nenhuma ocorrência operacional geral registrada.</td></tr>' :
-                  p.ocorrencias.map((o, idx) => `
+                  p.ocorrencias.map(o => `
                     <tr>
-                      <td class="p-1.5 font-bold text-white uppercase">${o.ocorrencia}</td>
-                      <td class="p-1.5 text-slate-300 leading-tight text-[11px]">${o.causa}</td>
-                      <td class="p-1.5 text-emerald-300 font-medium text-[11px]">${o.acao}</td>
+                      <td class="p-1.5 font-bold text-white uppercase">${o.ocorrencia || ''}</td>
+                      <td class="p-1.5 text-slate-300 leading-tight text-[11px]">${o.causa || ''}</td>
+                      <td class="p-1.5 text-emerald-300 font-medium text-[11px]">${o.acao || ''}</td>
                       <td class="p-1.5 text-center whitespace-nowrap">
-                        <button onclick="editarOcorrenciaResumoModal('${p.fData}', '${p.fTurno}', ${idx})" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
-                        <button onclick="removerOcorrenciaResumo('${p.fData}', '${p.fTurno}', ${idx})" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
+                        <button onclick="editarOcorrenciaResumoModal('${o.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
+                        <button onclick="removerOcorrenciaResumo('${o.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
                       </td>
                     </tr>
                   `).join('')}
@@ -20040,7 +23907,7 @@ function renderSubabaResumoDiario(p) {
               <span class="bg-red-950 text-red-300 border border-red-800 text-xs font-extrabold px-2.5 py-1 rounded">
                 Total: R$ ${p.valorTotalCortes.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
               </span>
-              <button onclick="adicionarCorteResumo('${p.fData}', '${p.fTurno}')" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Corte</button>
+              <button onclick="adicionarCorteResumo('${p.fData}', '${p.fTurno || ''}')" ${p.fTurno ? '' : 'disabled'} class="bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-[10px] px-2.5 py-1 rounded shadow">+ Adicionar Corte</button>
             </div>
           </div>
 
@@ -20057,15 +23924,15 @@ function renderSubabaResumoDiario(p) {
               </thead>
               <tbody class="divide-y divide-slate-800 text-xs">
                 ${p.cortes.length === 0 ? '<tr><td colspan="5" class="p-4 text-center text-slate-500 text-[11px]">Nenhum corte de produto registrado neste turno.</td></tr>' :
-                p.cortes.map((c, idx) => `
+                p.cortes.map(c => `
                   <tr>
-                    <td class="p-1.5 font-bold text-emerald-400">${c.codigo_item}</td>
-                    <td class="p-1.5 font-bold text-white uppercase">${c.descricao}</td>
+                    <td class="p-1.5 font-bold text-emerald-400">${c.codigo_item || ''}</td>
+                    <td class="p-1.5 font-bold text-white uppercase">${c.descricao || ''}</td>
                     <td class="p-1.5 text-center font-bold text-amber-300">${_qtdCorteNumero(c.quantidade)}</td>
                     <td class="p-1.5 text-right font-extrabold text-red-400">R$ ${(parseFloat(c.valor)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
                     <td class="p-1.5 text-center whitespace-nowrap">
-                      <button onclick="editarCorteResumoModal('${p.fData}', '${p.fTurno}', ${idx})" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
-                      <button onclick="removerCorteResumo('${p.fData}', '${p.fTurno}', ${idx})" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
+                      <button onclick="editarCorteResumoModal('${c.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
+                      <button onclick="removerCorteResumo('${c.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
                     </td>
                   </tr>
                 `).join('')}
@@ -20078,8 +23945,8 @@ function renderSubabaResumoDiario(p) {
   `;
 }
 
-function renderSubabaOcorrenciasCD({ fData, fTurno }) {
-  const todas = getTodasOcorrenciasCD();
+function renderOcorrenciaColaboradorView() {
+  const todas = listarOcorrenciasColaboradorView();
 
   const busca = (window._ocFiltroBusca || '').toLowerCase().trim();
   const filtroData = window._ocFiltroData !== undefined ? window._ocFiltroData : '';
@@ -20099,31 +23966,78 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
     return true;
   });
 
+  const botoesDisciplinares = o => `
+    <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', ocorrenciaId:'${o.id}', dataOcorrencia:'${o.data||''}', colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
+    <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', ocorrenciaId:'${o.id}', dataOcorrencia:'${o.data||''}', colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Advertência CLT">⚠️ Gerar Advertência</button>
+    <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', ocorrenciaId:'${o.id}', dataOcorrencia:'${o.data||''}', colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Suspensão CLT">⛔ Gerar Suspensão</button>
+    <button onclick="editarOcorrenciaColaboradorModal('${o.id}')" class="text-blue-400 hover:text-blue-300 p-1 text-xs" title="Editar Ocorrência">✏️</button>`;
+
+  const marcaDisciplinar = o => `
+    ${o.medida_disciplinar === 'ORIENTACAO_VERBAL' ? '<div class="mt-1"><span class="bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">🗣️ Orientado</span></div>' : ''}
+    ${o.medida_disciplinar === 'ADVERTENCIA' ? '<div class="mt-1"><span class="bg-purple-950 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⚠️ Adv. Emitida</span></div>' : ''}
+    ${o.medida_disciplinar === 'SUSPENSAO' ? `<div class="mt-1"><span class="bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⛔ Susp. (${o.dias_suspensao||1}d)</span></div>` : ''}`;
+
+  const linha = (o, fechada) => `
+    <tr class="hover:bg-slate-800/40">
+      <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">
+        <div class="font-bold">${formatarData(o.data)}</div>
+        <div class="text-[10px] ${fechada ? 'text-emerald-400' : 'text-amber-400'} font-semibold">${o.turno}</div>
+      </td>
+      <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.colaborador}</td>
+      <td class="p-2 border-r border-slate-800 font-bold text-amber-300">${o.titulo}</td>
+      <td class="p-2 border-r border-slate-800 text-center font-bold text-slate-300">${o.carga || '-'}</td>
+      <td class="p-2 border-r border-slate-800 text-slate-300 leading-tight text-[11px]">${o.causa}</td>
+      <td class="p-2 border-r border-slate-800 text-emerald-300 font-medium leading-tight text-[11px]">${o.acao || '-'}</td>
+      <td class="p-2 border-r border-slate-800 text-right font-bold text-slate-300">${o.peso !== '' ? `${o.peso} Kg` : '-'}</td>
+      <td class="p-2 border-r border-slate-800 text-center whitespace-nowrap">
+        ${fechada
+          ? '<span class="bg-emerald-950 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">FECHADO</span>'
+          : '<span class="bg-amber-950 text-amber-300 border border-amber-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">PENDENTE</span>'}
+        ${marcaDisciplinar(o)}
+      </td>
+      <td class="p-2 text-center whitespace-nowrap space-x-1">
+        ${botoesDisciplinares(o)}
+        ${fechada
+          ? `<button onclick="alterarStatusOcorrenciaColaborador('${o.id}', 'PENDENTE')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[10px] px-2 py-1 rounded border border-amber-500/40 shadow transition" title="Reabrir Ocorrência">🔄 Reabrir</button>`
+          : `<button onclick="alterarStatusOcorrenciaColaborador('${o.id}', 'FECHADO')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Concluir Ocorrência">✔️ Fechar</button>`}
+        <button onclick="removerOcorrenciaColaborador('${o.id}')" class="text-red-400 hover:text-red-300 p-1 text-xs" title="Excluir">🗑️</button>
+      </td>
+    </tr>`;
+
+  const cabecalho = `
+    <tr>
+      <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data / Turno</th>
+      <th class="p-2 border-r border-slate-800 min-w-[150px]">Funcionário</th>
+      <th class="p-2 border-r border-slate-800 font-bold text-amber-400">Requisito / Falha</th>
+      <th class="p-2 border-r border-slate-800 text-center">Carga</th>
+      <th class="p-2 border-r border-slate-800 min-w-[200px]">Detalhamento</th>
+      <th class="p-2 border-r border-slate-800 min-w-[180px] text-emerald-400">Ação Corretiva</th>
+      <th class="p-2 border-r border-slate-800 text-right">Peso (Kg)</th>
+      <th class="p-2 border-r border-slate-800 text-center">Status</th>
+      <th class="p-2 text-center min-w-[120px]">Ações</th>
+    </tr>`;
+
   return `
     <div class="space-y-5">
-      <!-- HEADER SUBABA OCORRÊNCIAS -->
       <div class="bg-gradient-to-r from-slate-900 via-amber-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-amber-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
         <div class="flex items-center gap-3">
-          <div class="bg-amber-600/30 p-2.5 rounded-xl border border-amber-500/40 text-2xl">🚨</div>
+          <div class="bg-amber-600/30 p-2.5 rounded-xl border border-amber-500/40 text-2xl">👤</div>
           <div>
             <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
-              GESTÃO DE OCORRÊNCIAS DO CD
-              <span class="bg-amber-800 text-amber-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">OCORRÊNCIAS POR COLABORADOR & OPERAÇÃO</span>
+              OCORRÊNCIA COLABORADOR
+              <span class="bg-amber-800 text-amber-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">CENTRO DE DISTRIBUIÇÃO</span>
             </h2>
-            <p class="text-[11px] text-slate-300 font-medium">Controle unificado de apontamentos, ações corretivas e encerramento de ocorrências do CD</p>
+            <p class="text-[11px] text-slate-300 font-medium">Apontamentos por colaborador, ações corretivas e medidas disciplinares</p>
           </div>
         </div>
-
         <div class="flex flex-wrap items-center gap-2">
-          <button onclick="abrirModalNovaOcorrenciaCD('${fData}', '${fTurno}')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
+          <button onclick="adicionarOcorrenciaColaboradorModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">
             + Nova Ocorrência
           </button>
         </div>
       </div>
 
-      <!-- PAINÉIS DIVIDIDOS: PENDENTES E FECHADAS -->
       <div class="space-y-6">
-        <!-- PAINEL 1: OCORRÊNCIAS PENDENTES -->
         <div class="bg-slate-900 border border-amber-800/60 rounded-xl p-4 shadow-xl space-y-3">
           <div class="flex items-center justify-between border-b border-slate-800 pb-2">
             <h3 class="text-sm font-extrabold text-amber-400 uppercase flex items-center gap-2">
@@ -20132,60 +24046,16 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
             </h3>
             <span class="text-[10px] text-amber-300/80 font-medium">Ocorrências aguardando providência ou finalização</span>
           </div>
-
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs border-collapse">
-              <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
-                <tr>
-                  <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data / Turno</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[150px]">Funcionário</th>
-                  <th class="p-2 border-r border-slate-800 font-bold text-amber-400">Requisito / Falha</th>
-                  <th class="p-2 border-r border-slate-800 text-center">Carga</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[200px]">Detalhamento</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[180px] text-emerald-400">Ação Corretiva</th>
-                  <th class="p-2 border-r border-slate-800 text-right">Peso (Kg)</th>
-                  <th class="p-2 border-r border-slate-800 text-center">Status</th>
-                  <th class="p-2 text-center min-w-[120px]">Ações</th>
-                </tr>
-              </thead>
+              <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">${cabecalho}</thead>
               <tbody class="divide-y divide-slate-800 text-xs">
-                ${pendentes.length === 0 ? '<tr><td colspan="9" class="p-6 text-center text-slate-500 text-xs font-medium">Nenhuma ocorrência pendente no momento.</td></tr>' :
-                pendentes.map(o => `
-                  <tr class="hover:bg-slate-800/40">
-                    <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">
-                      <div class="font-bold">${formatarData(o.data)}</div>
-                      <div class="text-[10px] text-amber-400 font-semibold">${o.turno}</div>
-                    </td>
-                    <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.colaborador}</td>
-                    <td class="p-2 border-r border-slate-800 font-bold text-amber-300">${o.titulo}</td>
-                    <td class="p-2 border-r border-slate-800 text-center font-bold text-slate-300">${o.carga || '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-slate-300 leading-tight text-[11px]">${o.causa}</td>
-                    <td class="p-2 border-r border-slate-800 text-emerald-300 font-medium leading-tight text-[11px]">${o.acao || '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-right font-bold text-slate-300">${o.peso ? `${o.peso} Kg` : '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-center whitespace-nowrap">
-                      <span class="bg-amber-950 text-amber-300 border border-amber-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">PENDENTE</span>
-                      ${o.medida_disciplinar === 'ORIENTACAO_VERBAL' ? '<div class="mt-1"><span class="bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">🗣️ Orientado</span></div>' : ''}
-                      ${o.medida_disciplinar === 'ADVERTENCIA' ? '<div class="mt-1"><span class="bg-purple-950 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⚠️ Adv. Emitida</span></div>' : ''}
-                      ${o.medida_disciplinar === 'SUSPENSAO' ? `<div class="mt-1"><span class="bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⛔ Susp. (${o.dias_suspensao||1}d)</span></div>` : ''}
-                    </td>
-                    <td class="p-2 text-center whitespace-nowrap space-x-1">
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Advertência CLT">⚠️ Gerar Advertência</button>
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Suspensão CLT">⛔ Gerar Suspensão</button>
-                      <button onclick="editarOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-blue-400 hover:text-blue-300 p-1 text-xs" title="Editar Ocorrência">✏️</button>
-                      <button onclick="alterarStatusOcorrenciaCD('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index}, 'FECHADO')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Concluir Ocorrência">
-                        ✔️ Fechar
-                      </button>
-                      <button onclick="removerOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-red-400 hover:text-red-300 p-1 text-xs" title="Excluir">🗑️</button>
-                    </td>
-                  </tr>
-                `).join('')}
+                ${pendentes.length === 0 ? '<tr><td colspan="9" class="p-6 text-center text-slate-500 text-xs font-medium">Nenhuma ocorrência pendente no momento.</td></tr>' : pendentes.map(o => linha(o, false)).join('')}
               </tbody>
             </table>
           </div>
         </div>
 
-        <!-- PAINEL 2: OCORRÊNCIAS FECHADAS (COM BARRA DE BUSCA, FILTROS E EXPORTAÇÃO) -->
         <div class="bg-slate-900 border border-emerald-800/60 rounded-xl p-4 shadow-xl space-y-4">
           <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-slate-800 pb-3 gap-3">
             <div>
@@ -20195,18 +24065,12 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
               </h3>
               <p class="text-[10px] text-emerald-300/80 font-medium">Consulte, filtre e exporte relatórios de ocorrências finalizadas</p>
             </div>
-
             <div class="flex items-center gap-2 shrink-0">
-              <button onclick="gerarRelatorioOcorrenciasPdf()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5" title="Imprimir Relatório de Fechadas">
-                🖨️ Imprimir PDF (Fechadas)
-              </button>
-              <button onclick="exportarOcorrenciasExcel()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5" title="Exportar Excel/CSV">
-                📊 Exportar Excel
-              </button>
+              <button onclick="gerarRelatorioOcorrenciasPdf()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5" title="Imprimir Relatório de Fechadas">🖨️ Imprimir PDF (Fechadas)</button>
+              <button onclick="exportarOcorrenciasExcel()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5" title="Exportar Excel/CSV">📊 Exportar Excel</button>
             </div>
           </div>
 
-          <!-- BARRA DE FILTROS DEDICADA ÀS OCORRÊNCIAS FECHADAS -->
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-4 gap-3 items-center">
             <div class="sm:col-span-2">
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Pesquisar em Fechadas (Funcionário, Falha, Carga ou Solução)</label>
@@ -20229,51 +24093,9 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
 
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs border-collapse">
-              <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
-                <tr>
-                  <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data / Turno</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[150px]">Funcionário</th>
-                  <th class="p-2 border-r border-slate-800 font-bold text-amber-400">Requisito / Falha</th>
-                  <th class="p-2 border-r border-slate-800 text-center">Carga</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[200px]">Detalhamento</th>
-                  <th class="p-2 border-r border-slate-800 min-w-[180px] text-emerald-400">Ação Corretiva Tomada</th>
-                  <th class="p-2 border-r border-slate-800 text-right">Peso (Kg)</th>
-                  <th class="p-2 border-r border-slate-800 text-center">Status</th>
-                  <th class="p-2 text-center min-w-[120px]">Ações</th>
-                </tr>
-              </thead>
+              <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">${cabecalho.replace('Ação Corretiva<', 'Ação Corretiva Tomada<')}</thead>
               <tbody class="divide-y divide-slate-800 text-xs">
-                ${fechadas.length === 0 ? '<tr><td colspan="9" class="p-6 text-center text-slate-500 text-xs font-medium">Nenhuma ocorrência fechada encontrada para os filtros aplicados.</td></tr>' :
-                fechadas.map(o => `
-                  <tr class="hover:bg-slate-800/40">
-                    <td class="p-2 border-r border-slate-800 whitespace-nowrap text-slate-300">
-                      <div class="font-bold">${formatarData(o.data)}</div>
-                      <div class="text-[10px] text-emerald-400 font-semibold">${o.turno}</div>
-                    </td>
-                    <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.colaborador}</td>
-                    <td class="p-2 border-r border-slate-800 font-bold text-amber-300">${o.titulo}</td>
-                    <td class="p-2 border-r border-slate-800 text-center font-bold text-slate-300">${o.carga || '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-slate-300 leading-tight text-[11px]">${o.causa}</td>
-                    <td class="p-2 border-r border-slate-800 text-emerald-300 font-medium leading-tight text-[11px]">${o.acao || '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-right font-bold text-slate-300">${o.peso ? `${o.peso} Kg` : '-'}</td>
-                    <td class="p-2 border-r border-slate-800 text-center whitespace-nowrap">
-                      <span class="bg-emerald-950 text-emerald-300 border border-emerald-700/80 px-2 py-0.5 rounded text-[10px] font-extrabold uppercase">FECHADO</span>
-                      ${o.medida_disciplinar === 'ORIENTACAO_VERBAL' ? '<div class="mt-1"><span class="bg-slate-800 text-slate-300 border border-slate-600 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">🗣️ Orientado</span></div>' : ''}
-                      ${o.medida_disciplinar === 'ADVERTENCIA' ? '<div class="mt-1"><span class="bg-purple-950 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⚠️ Adv. Emitida</span></div>' : ''}
-                      ${o.medida_disciplinar === 'SUSPENSAO' ? `<div class="mt-1"><span class="bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase">⛔ Susp. (${o.dias_suspensao||1}d)</span></div>` : ''}
-                    </td>
-                    <td class="p-2 text-center whitespace-nowrap space-x-1">
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ORIENTACAO_VERBAL', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-slate-700 hover:bg-slate-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Registrar Orientação Verbal no histórico">🗣️ Orientação Verbal</button>
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'ADVERTENCIA', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Advertência CLT">⚠️ Gerar Advertência</button>
-                      <button onclick="abrirModalEmissaoDisciplinarCD({ tipo:'SUSPENSAO', parentData:'${o._parentData}', parentTurno:'${o._parentTurno}', type:'${o._type}', index:${o._index}, colabNome:'${(o.colaborador||'').replace(/'/g, "\\'")}', motivo:'${(o.causa||o.titulo||'').replace(/'/g, "\\'")}' })" class="bg-red-700 hover:bg-red-600 text-white font-bold text-[10px] px-2 py-1 rounded shadow transition" title="Gerar Suspensão CLT">⛔ Gerar Suspensão</button>
-                      <button onclick="editarOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-blue-400 hover:text-blue-300 p-1 text-xs" title="Editar Ocorrência">✏️</button>
-                      <button onclick="alterarStatusOcorrenciaCD('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index}, 'PENDENTE')" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[10px] px-2 py-1 rounded border border-amber-500/40 shadow transition" title="Reabrir Ocorrência">
-                        🔄 Reabrir
-                      </button>
-                      <button onclick="removerOcorrenciaCDSubaba('${o._parentData}', '${o._parentTurno}', '${o._type}', ${o._index})" class="text-red-400 hover:text-red-300 p-1 text-xs" title="Excluir">🗑️</button>
-                    </td>
-                  </tr>
-                `).join('')}
+                ${fechadas.length === 0 ? '<tr><td colspan="9" class="p-6 text-center text-slate-500 text-xs font-medium">Nenhuma ocorrência fechada encontrada para os filtros aplicados.</td></tr>' : fechadas.map(o => linha(o, true)).join('')}
               </tbody>
             </table>
           </div>
@@ -20283,9 +24105,236 @@ function renderSubabaOcorrenciasCD({ fData, fTurno }) {
   `;
 }
 
+// ===== OCORRÊNCIA CD (tela própria, 6.7.0) =====
+// Lista corrida do Item 3 do Resumo Diário: sem funcionário, sem carga, sem
+// peso, sem status, sem botão disciplinar (decisões 1 e 2 do plano).
+function _filtrosOcorrenciaCD() {
+  return {
+    dataDe: window._occdFiltroDe || '',
+    dataAte: window._occdFiltroAte || '',
+    turno: window._occdFiltroTurno || 'TODOS',
+    busca: (window._occdBusca || '').toLowerCase().trim()
+  };
+}
+
+function listarOcorrenciasCDFiltradas() {
+  const f = _filtrosOcorrenciaCD();
+  return db.getOcorrenciasCD({ dataDe: f.dataDe, dataAte: f.dataAte, turno: f.turno }).filter(o => {
+    if (!f.busca) return true;
+    return `${o.data} ${o.turno} ${o.ocorrencia || ''} ${o.causa || ''} ${o.acao || ''} ${o.gestor || ''}`.toLowerCase().includes(f.busca);
+  });
+}
+
+function _barraFiltrosPeriodoTurno({ prefixo, de, ate, turno, busca, placeholderBusca }) {
+  return `
+    <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+      <div class="sm:col-span-2">
+        <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Pesquisar</label>
+        <input type="text" placeholder="${placeholderBusca}" value="${busca || ''}" oninput="forcarMaiuscula(this); window.${prefixo}Busca=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-medium focus:border-emerald-500 focus:outline-none">
+      </div>
+      <div>
+        <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">De</label>
+        <input type="date" value="${de || ''}" onchange="window.${prefixo}FiltroDe=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-bold">
+      </div>
+      <div>
+        <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Até</label>
+        <input type="date" value="${ate || ''}" onchange="window.${prefixo}FiltroAte=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-bold">
+      </div>
+      <div>
+        <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Turno</label>
+        <select onchange="window.${prefixo}FiltroTurno=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-amber-300 text-xs rounded-lg p-2 font-bold">
+          <option value="TODOS" ${turno==='TODOS'?'selected':''}>TODOS OS TURNOS</option>
+          ${(Store.TURNOS_RESUMO_DIARIO || []).map(t => `<option value="${t}" ${turno===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+}
+
+function renderOcorrenciaCDView() {
+  const f = _filtrosOcorrenciaCD();
+  const lista = listarOcorrenciasCDFiltradas();
+
+  return `
+    <div class="space-y-5">
+      <div class="bg-gradient-to-r from-slate-900 via-blue-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-blue-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+        <div class="flex items-center gap-3">
+          <div class="bg-blue-600/30 p-2.5 rounded-xl border border-blue-500/40 text-2xl">📢</div>
+          <div>
+            <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+              OCORRÊNCIA CD
+              <span class="bg-blue-800 text-blue-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">OPERAÇÃO GERAL DO CD</span>
+            </h2>
+            <p class="text-[11px] text-slate-300 font-medium">Ocorrências operacionais do armazém — o mesmo Item 3 do Resumo Diário, em lista corrida</p>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button onclick="gerarRelatorioOcorrenciasCdPdf({ lista: listarOcorrenciasCDFiltradas(), fDe: window._occdFiltroDe, fAte: window._occdFiltroAte })" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5">🖨️ Imprimir PDF</button>
+          <button onclick="exportarOcorrenciasCDCsv()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-2 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5">📊 Exportar CSV</button>
+          <button onclick="adicionarOcorrenciaResumo()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">+ Nova Ocorrência</button>
+        </div>
+      </div>
+
+      ${_barraFiltrosPeriodoTurno({ prefixo: '_occd', de: f.dataDe, ate: f.dataAte, turno: f.turno, busca: window._occdBusca, placeholderBusca: '🔎 Ocorrência, causa, ação ou gestor...' })}
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <h3 class="text-xs font-bold text-blue-400 uppercase flex items-center gap-1.5"><span>📢</span> Ocorrências <span class="bg-blue-950 text-blue-300 border border-blue-800/80 text-[10px] font-black px-2 py-0.5 rounded-full">${lista.length}</span></h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr>
+                <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data</th>
+                <th class="p-2 border-r border-slate-800 whitespace-nowrap">Turno</th>
+                <th class="p-2 border-r border-slate-800 w-1/5">Ocorrência</th>
+                <th class="p-2 border-r border-slate-800 w-2/5">Causa / Detalhamento</th>
+                <th class="p-2 border-r border-slate-800 w-1/5">Ação Tomada</th>
+                <th class="p-2 text-center">Ações</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-xs">
+              ${lista.length === 0 ? '<tr><td colspan="6" class="p-6 text-center text-slate-500 text-[11px]">Nenhuma ocorrência encontrada para os filtros informados.</td></tr>' :
+              lista.map(o => `
+                <tr class="hover:bg-slate-800/40">
+                  <td class="p-2 border-r border-slate-800 font-bold text-slate-200 whitespace-nowrap">${formatarData(o.data)}</td>
+                  <td class="p-2 border-r border-slate-800 text-[10px] text-amber-400 font-semibold whitespace-nowrap">${o.turno}</td>
+                  <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${o.ocorrencia || ''}</td>
+                  <td class="p-2 border-r border-slate-800 text-slate-300 leading-tight text-[11px]">${o.causa || ''}</td>
+                  <td class="p-2 border-r border-slate-800 text-emerald-300 font-medium text-[11px]">${o.acao || ''}</td>
+                  <td class="p-2 text-center whitespace-nowrap">
+                    <button onclick="editarOcorrenciaResumoModal('${o.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
+                    <button onclick="removerOcorrenciaResumo('${o.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
+                  </td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+function exportarOcorrenciasCDCsv() {
+  const lista = listarOcorrenciasCDFiltradas();
+  if (lista.length === 0) { alert('Nenhuma ocorrência para exportar com os filtros atuais.'); return; }
+  const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  const linhas = [['Data', 'Turno', 'Ocorrência', 'Causa / Detalhamento', 'Ação Tomada', 'Gestor'].map(esc).join(';')];
+  lista.forEach(o => linhas.push([formatarData(o.data), o.turno, o.ocorrencia, o.causa, o.acao, o.gestor].map(esc).join(';')));
+  baixarCsv('ocorrencias_cd.csv', linhas.join('\n'));
+}
+
+// ===== CORTE (tela própria, 6.7.0) =====
+// A mesma tabela do Item 4 do Resumo Diário, com filtro por período e o
+// total em R$ do período.
+function _filtrosCorteCD() {
+  return {
+    dataDe: window._corteFiltroDe || '',
+    dataAte: window._corteFiltroAte || '',
+    turno: window._corteFiltroTurno || 'TODOS',
+    busca: (window._corteBusca || '').toLowerCase().trim()
+  };
+}
+
+function listarCortesCDFiltrados() {
+  const f = _filtrosCorteCD();
+  return db.getCortesCD({ dataDe: f.dataDe, dataAte: f.dataAte, turno: f.turno }).filter(c => {
+    if (!f.busca) return true;
+    return `${c.data} ${c.turno} ${c.codigo_item || ''} ${c.descricao || ''}`.toLowerCase().includes(f.busca);
+  });
+}
+
+function renderCorteCDView() {
+  const f = _filtrosCorteCD();
+  const lista = listarCortesCDFiltrados();
+  const total = lista.reduce((acc, c) => acc + (parseFloat(c.valor) || 0), 0);
+
+  return `
+    <div class="space-y-5">
+      <div class="bg-gradient-to-r from-slate-900 via-red-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-red-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+        <div class="flex items-center gap-3">
+          <div class="bg-red-600/30 p-2.5 rounded-xl border border-red-500/40 text-2xl">✂️</div>
+          <div>
+            <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+              CORTE
+              <span class="bg-red-800 text-red-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">CORTES DE PRODUTO DO CD</span>
+            </h2>
+            <p class="text-[11px] text-slate-300 font-medium">O mesmo Item 4 do Resumo Diário, por período</p>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="bg-red-950 text-red-300 border border-red-800 text-xs font-extrabold px-2.5 py-1.5 rounded">Total do período: R$ ${total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+          <button onclick="gerarRelatorioCortesCdPdf({ lista: listarCortesCDFiltrados(), fDe: window._corteFiltroDe, fAte: window._corteFiltroAte })" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-2 rounded-lg text-xs border border-amber-500/50 shadow flex items-center gap-1.5">🖨️ Imprimir PDF</button>
+          <button onclick="exportarCortesCDCsv()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-2 rounded-lg text-xs border border-emerald-500/50 shadow flex items-center gap-1.5">📊 Exportar CSV</button>
+          <button onclick="adicionarCorteResumo()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-3.5 py-2 rounded-lg text-xs shadow-lg flex items-center gap-1.5 transition">+ Novo Corte</button>
+        </div>
+      </div>
+
+      ${_barraFiltrosPeriodoTurno({ prefixo: '_corte', de: f.dataDe, ate: f.dataAte, turno: f.turno, busca: window._corteBusca, placeholderBusca: '🔎 Código ou descrição do produto...' })}
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl space-y-3">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+          <h3 class="text-xs font-bold text-red-400 uppercase flex items-center gap-1.5"><span>✂️</span> Cortes <span class="bg-red-950 text-red-300 border border-red-800/80 text-[10px] font-black px-2 py-0.5 rounded-full">${lista.length}</span></h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr>
+                <th class="p-2 border-r border-slate-800 whitespace-nowrap">Data</th>
+                <th class="p-2 border-r border-slate-800 whitespace-nowrap">Turno</th>
+                <th class="p-2 border-r border-slate-800">Cód Item</th>
+                <th class="p-2 border-r border-slate-800">Descrição do Produto</th>
+                <th class="p-2 border-r border-slate-800 font-bold text-amber-300 text-center">Qtd Cortada</th>
+                <th class="p-2 border-r border-slate-800 text-right">Valor (R$)</th>
+                <th class="p-2 text-center">Ações</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800 text-xs">
+              ${lista.length === 0 ? '<tr><td colspan="7" class="p-6 text-center text-slate-500 text-[11px]">Nenhum corte encontrado para os filtros informados.</td></tr>' :
+              lista.map(c => `
+                <tr class="hover:bg-slate-800/40">
+                  <td class="p-2 border-r border-slate-800 font-bold text-slate-200 whitespace-nowrap">${formatarData(c.data)}</td>
+                  <td class="p-2 border-r border-slate-800 text-[10px] text-amber-400 font-semibold whitespace-nowrap">${c.turno}</td>
+                  <td class="p-2 border-r border-slate-800 font-bold text-emerald-400">${c.codigo_item || ''}</td>
+                  <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${c.descricao || ''}</td>
+                  <td class="p-2 border-r border-slate-800 text-center font-bold text-amber-300">${_qtdCorteNumero(c.quantidade)}</td>
+                  <td class="p-2 border-r border-slate-800 text-right font-extrabold text-red-400">R$ ${(parseFloat(c.valor)||0).toLocaleString('pt-BR', {minimumFractionDigits:2})}</td>
+                  <td class="p-2 text-center whitespace-nowrap">
+                    <button onclick="editarCorteResumoModal('${c.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-xs" title="Editar">✏️</button>
+                    <button onclick="removerCorteResumo('${c.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-xs" title="Excluir">🗑️</button>
+                  </td>
+                </tr>`).join('')}
+            </tbody>
+            ${lista.length > 0 ? `<tfoot><tr class="bg-red-950/40 font-bold text-red-200 border-t-2 border-red-800"><td colspan="5" class="p-2 uppercase text-right">Total do período</td><td class="p-2 text-right text-red-300 font-extrabold">R$ ${total.toLocaleString('pt-BR', {minimumFractionDigits:2})}</td><td></td></tr></tfoot>` : ''}
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+function exportarCortesCDCsv() {
+  const lista = listarCortesCDFiltrados();
+  if (lista.length === 0) { alert('Nenhum corte para exportar com os filtros atuais.'); return; }
+  const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  const linhas = [['Data', 'Turno', 'Cód Item', 'Descrição', 'Qtd Cortada', 'Valor (R$)', 'Gestor'].map(esc).join(';')];
+  lista.forEach(c => linhas.push([formatarData(c.data), c.turno, c.codigo_item, c.descricao, _qtdCorteNumero(c.quantidade), (parseFloat(c.valor)||0).toFixed(2).replace('.', ','), c.gestor].map(esc).join(';')));
+  baixarCsv('cortes_cd.csv', linhas.join('\n'));
+}
+
+// Download de CSV com BOM (o Excel em pt-BR abre com acentos certos).
+function baixarCsv(nomeArquivo, conteudo) {
+  const blob = new Blob(['\ufeff' + conteudo], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nomeArquivo;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function salvarResumoDiarioCdCurrent(showAlert = true) {
   const fData = window._resumoFiltroData || hojeIsoBrasilia();
-  const fTurno = window._resumoFiltroTurno || '2º TURNO - FRIO';
+  // Sem turno não se grava: o chute em 2º TURNO - FRIO era o que fazia o
+  // supervisor do 1º turno lançar no envelope errado (6.7.0).
+  const fTurno = turnoResumoAtual();
+  if (!fTurno) { alert('Selecione o turno antes de salvar o Resumo.'); return; }
 
   const resumo = db.getResumoDiarioCD(fData, fTurno);
   resumo.gestor = document.getElementById('rs-gestor')?.value || resumo.gestor;
@@ -20338,7 +24387,10 @@ function fecharModalResumo() {
   }
 }
 
+const CONDUTAS_RESUMO = ['FALTA INJUSTIFICADA', 'FALTA COM ATESTADO', 'FÉRIAS', 'SAÍDA ANTECIPADA', 'ATRASO NA CHEGADA'];
+
 function adicionarFaltaResumo(data, turno) {
+  if (!turno) { alert('Selecione o turno antes de lançar uma falta.'); return; }
   const colabs = getListaTodosColaboradores();
   const container = document.getElementById('modal-container');
   if (!container) return;
@@ -20364,10 +24416,9 @@ function adicionarFaltaResumo(data, turno) {
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência *</label>
           <select id="md-fl-conduta" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
-            <option value="FALTA INJUSTIFICADA">FALTA INJUSTIFICADA</option>
-            <option value="SAÍDA ANTECIPADA">SAÍDA ANTECIPADA</option>
-            <option value="ATRASO NA CHEGADA">ATRASO NA CHEGADA</option>
+            ${CONDUTAS_RESUMO.map(c => `<option value="${c}">${c}</option>`).join('')}
           </select>
+          <p class="text-[9px] text-blue-300 mt-1">Falta com atestado: ao salvar, abre o atestado médico, que vai para o Acompanhamento de Funcionário.</p>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -20411,17 +24462,119 @@ function confirmarSalvarFaltaResumo(data, turno) {
   const periodo = document.getElementById('md-fl-periodo')?.value || 'Integral';
   const compensar = document.getElementById('md-fl-compensar')?.value || 'SIM';
 
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (!resumo.faltas_condutas) resumo.faltas_condutas = [];
-  resumo.faltas_condutas.push({
+  const falta = {
     id: db.gerarIdUnico(),
     nome: nome.toUpperCase().trim(),
     conduta: conduta.toUpperCase().trim(),
     avisado: avisado.toUpperCase().trim(),
     periodo: periodo.trim(),
     compensar: compensar.toUpperCase().trim()
-  });
+  };
+
+  // Falta com atestado: nada é gravado ainda — o pop-up do atestado grava a
+  // falta e o atestado juntos, para não sobrar um sem o outro se cancelar.
+  if (falta.conduta === 'FALTA COM ATESTADO') {
+    window._faltaAtestadoPendente = { data, turno, falta };
+    abrirModalAtestadoFaltaResumo();
+    return;
+  }
+
+  gravarFaltaResumo(data, turno, falta);
+  fecharModalResumo();
+  renderApp();
+}
+
+function gravarFaltaResumo(data, turno, falta) {
+  const resumo = db.getResumoDiarioCD(data, turno);
+  if (!resumo.faltas_condutas) resumo.faltas_condutas = [];
+  resumo.faltas_condutas.push(falta);
   db.saveResumoDiarioCD(resumo);
+}
+
+// Mesmos campos do bloco "Atestados Médicos" do Acompanhamento de Funcionário
+// (renderBlocoAtestadosMedicos), com a data do Resumo Diário já preenchida.
+function abrirModalAtestadoFaltaResumo() {
+  const p = window._faltaAtestadoPendente;
+  const container = document.getElementById('modal-container');
+  if (!p || !container) return;
+  const integral = String(p.falta.periodo || '').toUpperCase() === 'INTEGRAL';
+
+  container.innerHTML = `
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-bold text-blue-400 uppercase flex items-center gap-2">
+          <span>🏥</span> Atestado Médico
+        </h3>
+        <button onclick="cancelarAtestadoFaltaResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
+      </div>
+      <p class="text-[10px] text-slate-400">${p.falta.nome} — o atestado entra no Acompanhamento de Funcionário.</p>
+
+      <div class="grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
+          <input type="date" id="md-am-data" value="${p.data}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+        </div>
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Parcial/Integral</label>
+          <select id="md-am-tipo" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+            <option value="PARCIAL" ${integral ? '' : 'selected'}>Parcial</option>
+            <option value="INTEGRAL" ${integral ? 'selected' : ''}>Integral</option>
+          </select>
+        </div>
+        <div class="col-span-2">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Motivo</label>
+          <input type="text" id="md-am-motivo" placeholder="Motivo do atestado" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+        </div>
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">CID</label>
+          <input type="text" id="md-am-cid" placeholder="Ex: M54" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+        </div>
+        <div>
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">CRM/CRO</label>
+          <input type="text" id="md-am-crm" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+        </div>
+        <div class="col-span-2">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Médico</label>
+          <input type="text" id="md-am-medico" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)">
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+        <button onclick="cancelarAtestadoFaltaResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
+        <button onclick="confirmarAtestadoFaltaResumo()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Lançar Atestado</button>
+      </div>
+    </div>
+  `;
+  container.classList.remove('hidden');
+}
+
+function cancelarAtestadoFaltaResumo() {
+  window._faltaAtestadoPendente = null;
+  fecharModalResumo();
+}
+
+function confirmarAtestadoFaltaResumo() {
+  const p = window._faltaAtestadoPendente;
+  if (!p) { fecharModalResumo(); return; }
+  const dataAtestado = document.getElementById('md-am-data')?.value;
+  if (!dataAtestado) { alert('Informe a data do atestado!'); return; }
+
+  const res = db.addAtestadoMedico({
+    colaborador_tipo: 'CD',
+    colaborador_nome: p.falta.nome,
+    data: dataAtestado,
+    tipo_afastamento: document.getElementById('md-am-tipo')?.value,
+    motivo: document.getElementById('md-am-motivo')?.value,
+    cid: document.getElementById('md-am-cid')?.value,
+    medico: document.getElementById('md-am-medico')?.value,
+    crm_cro: document.getElementById('md-am-crm')?.value
+  });
+  if (!res.success) { showToast(res.message, 'error'); return; }
+
+  p.falta.atestado_id = res.registro.id;
+  gravarFaltaResumo(p.data, p.turno, p.falta);
+  window._faltaAtestadoPendente = null;
+  showToast('✅ Falta e atestado registrados!');
   fecharModalResumo();
   renderApp();
 }
@@ -20430,6 +24583,9 @@ function removerFaltaResumo(data, turno, index) {
   if (!confirm('Excluir esta falta/conduta registrada?')) return;
   const resumo = db.getResumoDiarioCD(data, turno);
   if (resumo.faltas_condutas) {
+    // O atestado lançado junto com a falta sai com ela do Acompanhamento.
+    const atestadoId = resumo.faltas_condutas[index]?.atestado_id;
+    if (atestadoId) db.excluirAtestadoMedico(atestadoId);
     resumo.faltas_condutas.splice(index, 1);
     db.saveResumoDiarioCD(resumo);
     renderApp();
@@ -20466,10 +24622,8 @@ function editarFaltaResumoModal(data, turno, index) {
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência *</label>
           <select id="md-fl-conduta" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold uppercase">
-            <option value="FALTA INJUSTIFICADA" ${item.conduta === 'FALTA INJUSTIFICADA' ? 'selected' : ''}>FALTA INJUSTIFICADA</option>
-            <option value="SAÍDA ANTECIPADA" ${item.conduta === 'SAÍDA ANTECIPADA' ? 'selected' : ''}>SAÍDA ANTECIPADA</option>
-            <option value="ATRASO NA CHEGADA" ${item.conduta === 'ATRASO NA CHEGADA' ? 'selected' : ''}>ATRASO NA CHEGADA</option>
-            ${!['FALTA INJUSTIFICADA', 'SAÍDA ANTECIPADA', 'ATRASO NA CHEGADA'].includes(item.conduta) && item.conduta ? `<option value="${item.conduta}" selected>${item.conduta}</option>` : ''}
+            ${CONDUTAS_RESUMO.map(c => `<option value="${c}" ${item.conduta === c ? 'selected' : ''}>${c}</option>`).join('')}
+            ${!CONDUTAS_RESUMO.includes(item.conduta) && item.conduta ? `<option value="${item.conduta}" selected>${item.conduta}</option>` : ''}
           </select>
         </div>
 
@@ -20528,219 +24682,185 @@ function confirmarEditarFaltaResumo(data, turno, index) {
   renderApp();
 }
 
-function adicionarOcorrenciaResumo(data, turno) {
+// Um formulário só para criar e editar a Ocorrência do CD (Item 3), com Data
+// e Turno editáveis e EFETIVOS (6.7.0): o registro tem data própria, então
+// mudar a data move o registro de dia — antes isso exigia tirar de um array
+// e pôr em outro, e nenhum código fazia. Sem funcionário, sem status: são
+// decisões 1 e 2 do plano de reorganização.
+function _selectTurnoResumo(id, turnoAtual) {
+  const turnos = (typeof Store !== 'undefined' && Store.TURNOS_RESUMO_DIARIO) ? Store.TURNOS_RESUMO_DIARIO : ['SECO', '1º TURNO - FRIO', '2º TURNO - FRIO'];
+  return `<select id="${id}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
+    ${turnoAtual ? '' : '<option value="" selected disabled>-- selecione --</option>'}
+    ${turnos.map(t => `<option value="${t}" ${t === turnoAtual ? 'selected' : ''}>${t}</option>`).join('')}
+  </select>`;
+}
+
+function _modalOcorrenciaCD({ titulo, data, turno, o, onSalvar, rotuloBotao, cor }) {
   const container = document.getElementById('modal-container');
   if (!container) return;
-
   container.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
       <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-blue-400 uppercase flex items-center gap-2">
-          <span>📢</span> Registrar Ocorrência Operacional do CD
+        <h3 class="text-sm font-bold text-${cor}-400 uppercase flex items-center gap-2">
+          <span>📢</span> ${titulo}
         </h3>
         <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
       </div>
 
       <div class="space-y-3 text-xs">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
+            <input type="date" id="md-oc-data" value="${data || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          </div>
+          <div>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor *</label>
+            ${_selectTurnoResumo('md-oc-turno', turno)}
+          </div>
+        </div>
+
         <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Título / Tipo de Ocorrência *</label>
-          <input type="text" id="md-oc-titulo" placeholder="ex: QUEBRA DE EMPILHADEIRA, QUEDA DE ENERGIA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
+          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ocorrência *</label>
+          <input type="text" id="md-oc-titulo" value="${(o && o.ocorrencia) || ''}" placeholder="ex: QUEBRA DE EMPILHADEIRA, QUEDA DE ENERGIA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Causa / Detalhamento</label>
-          <textarea id="md-oc-causa" rows="3" placeholder="Descreva os detalhes e causas do ocorrido..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <textarea id="md-oc-causa" rows="3" placeholder="Descreva os detalhes e causas do ocorrido..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${(o && o.causa) || ''}</textarea>
         </div>
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Tomada / Solução</label>
-          <textarea id="md-oc-acao" rows="2" placeholder="Descreva a solução ou encaminhamento realizado..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
+          <textarea id="md-oc-acao" rows="2" placeholder="Descreva a solução ou encaminhamento realizado..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${(o && o.acao) || ''}</textarea>
         </div>
       </div>
 
       <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
         <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarOcorrenciaResumo('${data}', '${turno}')" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Ocorrência</button>
+        <button onclick="${onSalvar}" class="bg-${cor}-600 hover:bg-${cor}-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">${rotuloBotao}</button>
       </div>
     </div>`;
   container.classList.remove('hidden');
 }
 
-function confirmarSalvarOcorrenciaResumo(data, turno, editIndex = -1) {
-  const titulo = document.getElementById('md-oc-titulo')?.value;
-  if (!titulo) { alert('Informe o título da ocorrência!'); return; }
-  const causa = document.getElementById('md-oc-causa')?.value || '';
-  const acao = document.getElementById('md-oc-acao')?.value || '';
+function adicionarOcorrenciaResumo(data, turno) {
+  _modalOcorrenciaCD({
+    titulo: 'Registrar Ocorrência do CD',
+    data: data || hojeIsoBrasilia(),
+    turno: turno || turnoResumoAtual() || '',
+    o: null,
+    onSalvar: "confirmarSalvarOcorrenciaResumo()",
+    rotuloBotao: 'Salvar Ocorrência',
+    cor: 'blue'
+  });
+}
 
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (!resumo.ocorrencias) resumo.ocorrencias = [];
+function editarOcorrenciaResumoModal(id) {
+  const o = db.getFilhoResumoPorId('ocorrencia', id);
+  if (!o) { alert('Ocorrência não encontrada.'); return; }
+  _modalOcorrenciaCD({
+    titulo: 'Editar Ocorrência do CD',
+    data: o.data, turno: o.turno, o,
+    onSalvar: `confirmarSalvarOcorrenciaResumo('${o.id}')`,
+    rotuloBotao: 'Salvar Edição',
+    cor: 'blue'
+  });
+}
 
-  const item = {
-    id: editIndex >= 0 ? resumo.ocorrencias[editIndex].id : Date.now(),
-    ocorrencia: titulo.toUpperCase().trim(),
-    causa: causa.trim(),
-    acao: acao.trim()
+function _lerFormOcorrenciaCD() {
+  const data = document.getElementById('md-oc-data')?.value;
+  const turno = document.getElementById('md-oc-turno')?.value;
+  const ocorrencia = (document.getElementById('md-oc-titulo')?.value || '').trim();
+  if (!data) { alert('Informe a data da ocorrência!'); return null; }
+  if (!turno) { alert('Selecione o turno!'); return null; }
+  if (!ocorrencia) { alert('Informe a ocorrência!'); return null; }
+  return {
+    data, turno, ocorrencia,
+    causa: (document.getElementById('md-oc-causa')?.value || '').trim(),
+    acao: (document.getElementById('md-oc-acao')?.value || '').trim()
   };
+}
 
-  if (editIndex >= 0) {
-    resumo.ocorrencias[editIndex] = item;
-  } else {
-    resumo.ocorrencias.push(item);
-  }
-
-  db.saveResumoDiarioCD(resumo);
+function confirmarSalvarOcorrenciaResumo(editId) {
+  const dados = _lerFormOcorrenciaCD();
+  if (!dados) return;
+  const res = editId ? db.updateOcorrenciaCD(editId, dados) : db.addOcorrenciaCD(dados);
+  if (!res || !res.success) { alert(res && res.message ? res.message : 'Não foi possível salvar.'); return; }
   fecharModalResumo();
   renderApp();
 }
 
-function editarOcorrenciaResumoModal(data, turno, index) {
-  const resumo = db.getResumoDiarioCD(data, turno);
-  const o = resumo.ocorrencias?.[index];
-  if (!o) return;
-
-  const container = document.getElementById('modal-container');
-  if (!container) return;
-
-  container.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-blue-400 uppercase flex items-center gap-2">
-          <span>✏️</span> Editar Ocorrência Operacional do CD
-        </h3>
-        <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
-      </div>
-
-      <div class="space-y-3 text-xs">
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Título / Tipo de Ocorrência *</label>
-          <input type="text" id="md-oc-titulo" value="${o.ocorrencia}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Causa / Detalhamento</label>
-          <textarea id="md-oc-causa" rows="3" class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${o.causa||''}</textarea>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Tomada / Solução</label>
-          <textarea id="md-oc-acao" rows="2" class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)">${o.acao||''}</textarea>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-        <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarOcorrenciaResumo('${data}', '${turno}', ${index})" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Edição</button>
-      </div>
-    </div>`;
-  container.classList.remove('hidden');
-}
-
-function removerOcorrenciaResumo(data, turno, index) {
+function removerOcorrenciaResumo(id) {
   if (!confirm('Excluir esta ocorrência do CD?')) return;
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (resumo.ocorrencias) {
-    resumo.ocorrencias.splice(index, 1);
-    db.saveResumoDiarioCD(resumo);
-    renderApp();
-  }
+  const res = db.deleteOcorrenciaCD(id);
+  if (!res.success) { alert(res.message); return; }
+  renderApp();
 }
 
-function editarCorteResumoModal(data, turno, index) {
-  const resumo = db.getResumoDiarioCD(data, turno);
-  const c = resumo.cortes?.[index];
-  if (!c) return;
-
-  const prods = db.data.produtos || [];
+function _modalCorteCD({ titulo, data, turno, c, onSalvar, rotuloBotao }) {
   const container = document.getElementById('modal-container');
   if (!container) return;
-
   container.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
       <div class="flex items-center justify-between border-b border-slate-800 pb-3">
         <h3 class="text-sm font-bold text-red-400 uppercase flex items-center gap-2">
-          <span>✏️</span> Editar Corte de Produto
+          <span>✂️</span> ${titulo}
         </h3>
         <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
       </div>
 
       <div class="space-y-3 text-xs">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data *</label>
+            <input type="date" id="md-cr-data" value="${data || ''}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+          </div>
+          <div>
+            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Turno / Setor *</label>
+            ${_selectTurnoResumo('md-cr-turno', turno)}
+          </div>
+        </div>
+
         <div class="grid grid-cols-3 gap-2">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Cód Item</label>
-            <input type="text" id="md-cr-cod" list="produtos-list-corte" value="${c.codigo_item}" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this); autoFillProdutoCorte(this.value)">
+            <input type="text" id="md-cr-cod" list="produtos-list-corte" value="${(c && c.codigo_item) || ''}" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this); autoFillProdutoCorte(this.value)">
             ${renderDatalistProdutos('produtos-list-corte')}
           </div>
           <div class="col-span-2">
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Descrição do Produto</label>
-            <input type="text" id="md-cr-desc" value="${c.descricao}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
+            <input type="text" id="md-cr-desc" value="${(c && c.descricao) || ''}" placeholder="ex: MEIO DA ASA C/PONTA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada</label>
-            <input type="text" id="md-cr-qtd" value="${_qtdCorteNumero(c.quantidade)}" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
+            <input type="text" id="md-cr-qtd" value="${c ? _qtdCorteNumero(c.quantidade) : ''}" placeholder="ex: 45.00 ou 15,5" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
           </div>
           <div>
             <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Valor Total (R$)</label>
-            <input type="number" step="0.01" id="md-cr-valor" value="${c.valor||0}" class="w-full bg-slate-800 border border-slate-700 text-red-400 rounded p-2 text-xs font-extrabold">
+            <input type="number" step="0.01" id="md-cr-valor" value="${c ? (c.valor || 0) : ''}" placeholder="0.00" class="w-full bg-slate-800 border border-slate-700 text-red-400 rounded p-2 text-xs font-extrabold">
           </div>
         </div>
       </div>
 
       <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
         <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarCorteResumo('${data}', '${turno}', ${index})" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Edição</button>
+        <button onclick="${onSalvar}" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">${rotuloBotao}</button>
       </div>
     </div>`;
   container.classList.remove('hidden');
+}
+
+function editarCorteResumoModal(id) {
+  const c = db.getFilhoResumoPorId('corte', id);
+  if (!c) { alert('Corte não encontrado.'); return; }
+  _modalCorteCD({ titulo: 'Editar Corte de Produto', data: c.data, turno: c.turno, c, onSalvar: `confirmarSalvarCorteResumo('${c.id}')`, rotuloBotao: 'Salvar Edição' });
 }
 
 function adicionarCorteResumo(data, turno) {
-  const container = document.getElementById('modal-container');
-  if (!container) return;
-
-  container.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl text-white space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-red-400 uppercase flex items-center gap-2">
-          <span>✂️</span> Registrar Corte de Produto
-        </h3>
-        <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
-      </div>
-
-      <div class="space-y-3 text-xs">
-        <div class="grid grid-cols-3 gap-2">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Cód Item</label>
-            <input type="text" id="md-cr-cod" list="produtos-list-corte" placeholder="ex: 27392" class="w-full bg-slate-800 border border-slate-700 text-emerald-400 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this); autoFillProdutoCorte(this.value)">
-            ${renderDatalistProdutos('produtos-list-corte')}
-          </div>
-          <div class="col-span-2">
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Descrição do Produto</label>
-            <input type="text" id="md-cr-desc" placeholder="ex: MEIO DA ASA C/PONTA" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase" oninput="forcarMaiuscula(this)">
-          </div>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Qtd Cortada</label>
-            <input type="text" id="md-cr-qtd" placeholder="ex: 45.00 ou 15,5" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold" oninput="forcarMaiuscula(this)">
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Valor Total (R$)</label>
-            <input type="number" step="0.01" id="md-cr-valor" placeholder="0.00" class="w-full bg-slate-800 border border-slate-700 text-red-400 rounded p-2 text-xs font-extrabold">
-          </div>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-        <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarCorteResumo('${data}', '${turno}')" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Corte</button>
-      </div>
-    </div>
-  `;
-  container.classList.remove('hidden');
+  _modalCorteCD({ titulo: 'Registrar Corte de Produto', data: data || hojeIsoBrasilia(), turno: turno || turnoResumoAtual() || '', c: null, onSalvar: 'confirmarSalvarCorteResumo()', rotuloBotao: 'Salvar Corte' });
 }
 
 // Preenche automaticamente a Descrição quando o código digitado bate com um
@@ -20783,158 +24903,32 @@ function _qtdCorteNumero(valor) {
 }
 window._qtdCorteNumero = _qtdCorteNumero;
 
-function confirmarSalvarCorteResumo(data, turno, editIndex = -1) {
+function confirmarSalvarCorteResumo(editId) {
+  const data = document.getElementById('md-cr-data')?.value;
+  const turno = document.getElementById('md-cr-turno')?.value;
   const codigo = document.getElementById('md-cr-cod')?.value;
+  if (!data) { alert('Informe a data do corte!'); return; }
+  if (!turno) { alert('Selecione o turno!'); return; }
   if (!codigo) { alert('Informe o código ou selecione um produto!'); return; }
   const descricao = document.getElementById('md-cr-desc')?.value || '';
   // A UNIDADE SAIU DAQUI EM 26/08/2026. Este campo carimbava " Kg" no valor
   // salvo, e nem todo produto do CD e vendido por peso - tem pack e tem
-  // unidade. "36,00 Kg" num item que sai em pack de 12 nao e formatacao
-  // errada, e informacao errada, e ela viajava para o PDF e para a exportacao.
-  // Agora guarda so o numero; quem sabe a unidade e o cadastro do produto.
-  let quantidade = document.getElementById('md-cr-qtd')?.value || '0.00';
-  quantidade = _qtdCorteNumero(quantidade);
+  // unidade. Agora guarda so o numero; quem sabe a unidade e o cadastro do produto.
+  const quantidade = _qtdCorteNumero(document.getElementById('md-cr-qtd')?.value || '0.00');
   const valor = parseFloat(document.getElementById('md-cr-valor')?.value) || 0;
 
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (!resumo.cortes) resumo.cortes = [];
-
-  const item = {
-    id: editIndex >= 0 ? resumo.cortes[editIndex].id : Date.now(),
-    codigo_item: codigo.trim(),
-    descricao: descricao.toUpperCase().trim(),
-    quantidade: quantidade.trim(),
-    valor: valor
-  };
-
-  if (editIndex >= 0) {
-    resumo.cortes[editIndex] = item;
-  } else {
-    resumo.cortes.push(item);
-  }
-
-  db.saveResumoDiarioCD(resumo);
+  const dados = { data, turno, codigo_item: codigo.trim(), descricao, quantidade: quantidade.trim(), valor };
+  const res = editId ? db.updateCorteCD(editId, dados) : db.addCorteCD(dados);
+  if (!res || !res.success) { alert(res && res.message ? res.message : 'Não foi possível salvar.'); return; }
   fecharModalResumo();
   renderApp();
 }
 
-function removerCorteResumo(data, turno, index) {
+function removerCorteResumo(id) {
   if (!confirm('Excluir este corte de produto?')) return;
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (resumo.cortes) {
-    resumo.cortes.splice(index, 1);
-    db.saveResumoDiarioCD(resumo);
-    renderApp();
-  }
-}
-
-function adicionarOcorrenciaColaboradorResumo(data, turno) {
-  const colabs = getListaTodosColaboradores();
-  const container = document.getElementById('modal-container');
-  if (!container) return;
-
-  container.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl text-white space-y-4">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-        <h3 class="text-sm font-bold text-emerald-400 uppercase flex items-center gap-2">
-          <span>👤</span> Apontamento por Colaborador (SAC / Supervisão)
-        </h3>
-        <button onclick="fecharModalResumo()" class="text-slate-400 hover:text-white font-bold">✕</button>
-      </div>
-
-      <div class="space-y-3 text-xs">
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Data da Ocorrência</label>
-            <input type="date" id="md-occ-data" value="${data}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Nº da Carga (Se houver)</label>
-            <input type="text" id="md-occ-carga" list="cargas-list-mdocc" placeholder="ex: 7689"
-              oninput="forcarMaiuscula(this); atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
-              onchange="atualizarAvisoCargaNaoEncontrada('md-occ-carga','md-occ-carga-aviso',this.value)"
-              class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-            ${renderDatalistCargas('cargas-list-mdocc')}
-            <div id="md-occ-carga-aviso" class="hidden text-[10px] text-amber-400 font-semibold mt-1">⚠️ Carga não localizada na Largada.</div>
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Funcionário (Dados SAC)</label>
-          <select id="md-occ-func" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
-            <option value="">-- Selecione o Colaborador --</option>
-            ${colabs.map(c => `<option value="${c}">${c}</option>`).join('')}
-          </select>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Requisito / Falha</label>
-            <select id="md-occ-req" class="w-full bg-slate-800 border border-slate-700 text-amber-300 rounded p-2 text-xs font-bold">
-              ${renderOptionsRequisitoFalhaCD()}
-            </select>
-          </div>
-          <div>
-            <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Peso em Kg (Se identificar)</label>
-            <input type="number" step="0.01" id="md-occ-peso" placeholder="ex: 15.50" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold">
-          </div>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Detalhamento da Ocorrência</label>
-          <textarea id="md-occ-detalhamento" rows="3" placeholder="Descreva os detalhes da ocorrência ocorrida com o colaborador..." class="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
-        </div>
-
-        <div>
-          <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Ação Corretiva Tomada</label>
-          <textarea id="md-occ-acao" rows="2" placeholder="Descreva a ação de orientação, instrução ou advertência realizada..." class="w-full bg-slate-800 border border-slate-700 text-emerald-300 rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-        <button onclick="fecharModalResumo()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded text-xs">Cancelar</button>
-        <button onclick="confirmarSalvarOcorrenciaColaboradorResumo('${data}', '${turno}')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs shadow">Salvar Apontamento</button>
-      </div>
-    </div>
-  `;
-  container.classList.remove('hidden');
-}
-
-function confirmarSalvarOcorrenciaColaboradorResumo(data, turno) {
-  const funcionario = document.getElementById('md-occ-func')?.value;
-  if (!funcionario) { alert('Selecione o funcionário!'); return; }
-  const dt = document.getElementById('md-occ-data')?.value || data;
-  const requisito = document.getElementById('md-occ-req')?.value || 'OUTRO';
-  const carga = document.getElementById('md-occ-carga')?.value || '';
-  const detalhamento = document.getElementById('md-occ-detalhamento')?.value || '';
-  const acao = document.getElementById('md-occ-acao')?.value || '';
-  const peso = document.getElementById('md-occ-peso')?.value || '';
-
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (!resumo.ocorrencias_colaboradores) resumo.ocorrencias_colaboradores = [];
-  resumo.ocorrencias_colaboradores.push({
-    id: db.gerarIdUnico(),
-    data: dt,
-    funcionario: funcionario.toUpperCase().trim(),
-    requisito: requisito.toUpperCase().trim(),
-    carga: carga.trim(),
-    detalhamento: detalhamento.trim(),
-    acao: acao.trim(),
-    peso: peso ? parseFloat(peso) : ''
-  });
-  db.saveResumoDiarioCD(resumo);
-  fecharModalResumo();
+  const res = db.deleteCorteCD(id);
+  if (!res.success) { alert(res.message); return; }
   renderApp();
-}
-
-function removerOcorrenciaColaboradorResumo(data, turno, index) {
-  if (!confirm('Excluir este apontamento por colaborador?')) return;
-  const resumo = db.getResumoDiarioCD(data, turno);
-  if (resumo.ocorrencias_colaboradores) {
-    resumo.ocorrencias_colaboradores.splice(index, 1);
-    db.saveResumoDiarioCD(resumo);
-    renderApp();
-  }
 }
 
 // Relatório Impresso A4 do Resumo Diário CD
@@ -20962,8 +24956,9 @@ function gerarResumoDiarioPdf(data, turno) {
   const totTonH = totFunc > 0 ? totPeso / totFunc : 0;
 
   const faltas = resumo.faltas_condutas || [];
-  const ocorrencias = resumo.ocorrencias || [];
-  const cortes = resumo.cortes || [];
+  // 6.7.0: ocorrências e cortes moram em coleção própria.
+  const ocorrencias = db.getOcorrenciasCD({ data, turno }).slice().reverse();
+  const cortes = db.getCortesCD({ data, turno }).slice().reverse();
   const totalCortes = cortes.reduce((a, b) => a + (parseFloat(b.valor)||0), 0);
 
   const htmlContent = `<!DOCTYPE html>
@@ -21378,7 +25373,7 @@ function imprimirBoletimGerencialExecutivo() {
   const trocas = allTrocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
   const reentregas = allReentregas.filter(re => registroNoPeriodo(re, 'reentregas', fDe, fAte));
 
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
+  let resumosCd = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
@@ -21410,7 +25405,6 @@ function imprimirBoletimGerencialExecutivo() {
   const qtdDevolucoes = devs.length;
   const corteValor = cortesList.reduce((acc, c) => acc + (parseFloat(c.valor)||0), 0);
   const qtdProdutosCorte = cortesList.length;
-  const totalPendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
 
   // KPIs Transporte & Rota (Ocorrências, Socorros, Trocas e Reentregas)
   const ocTransporteQtd = ocViagens.length;
@@ -21418,16 +25412,18 @@ function imprimirBoletimGerencialExecutivo() {
   const custoTotalSocorro = rotas.reduce((acc, r) => acc + (parseFloat(r.custo_socorro) || 0), 0);
   const qtdTrocasVeiculos = trocas.length;
   const qtdReentregas = reentregas.length;
-  const totalEntregasSaiu = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_saiu) || 0), 0);
-  const totalEntregasFeitas = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_feitas) || 0), 0);
   const totalEntregasReentrega = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_reentrega) || 0), 0);
-  const reentregasPendentes = reentregas.filter(re => re.status === 'PENDENTE').length;
-  const socorrosEmAberto = rotas.filter(r => r.status_veiculo !== 'Liberado').length;
+
+  // Pendência não se filtra por período — ver pendenciasEmAbertoBoletim().
+  const pend = pendenciasEmAbertoBoletim();
+  const totalPendCd = pend.pendFisicoCd;
+  const reentregasPendentes = pend.reentregasAbertas;
+  const socorrosEmAberto = pend.socorrosEmAberto;
+  const tratativasGestorPend = pend.tratativasGestor;
+  const totalPendencias = totalPendCd + reentregasPendentes + socorrosEmAberto + tratativasGestorPend;
 
   // KPIs Fechamento
   const impactoFinanceiroTotal = totalDevValor + corteValor + custoTotalSocorro;
-  const taxaSucessoEntregas = totalEntregasSaiu > 0 ? ((totalEntregasFeitas / totalEntregasSaiu) * 100).toFixed(1) : '100.0';
-  const taxaReentregas = totalEntregasSaiu > 0 ? ((totalEntregasReentrega / totalEntregasSaiu) * 100).toFixed(1) : '0.0';
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -21537,7 +25533,7 @@ function imprimirBoletimGerencialExecutivo() {
     <div class="kpi-box"><div class="kpi-label">Qtd Devoluções</div><div class="kpi-num">${qtdDevolucoes}</div></div>
     <div class="kpi-box"><div class="kpi-label">Cortes de Estoque (R$)</div><div class="kpi-num kpi-num-red">R$ ${corteValor.toLocaleString('pt-BR',{minimumFractionDigits:2})}</div></div>
     <div class="kpi-box"><div class="kpi-label">Qtd Itens Cortados</div><div class="kpi-num">${qtdProdutosCorte}</div></div>
-    <div class="kpi-box"><div class="kpi-label">Pendente Físico CD</div><div class="kpi-num ${totalPendCd>0?'kpi-num-amber':'kpi-num'}">${totalPendCd}</div></div>
+    <div class="kpi-box"><div class="kpi-label">Pendente Físico CD (total em aberto)</div><div class="kpi-num ${totalPendCd>0?'kpi-num-amber':'kpi-num'}">${totalPendCd}</div></div>
   </div>
 
   <div class="sub-title"><span>Detalhamento de Devoluções SAC (${devs.length})</span></div>
@@ -21627,24 +25623,26 @@ function imprimirBoletimGerencialExecutivo() {
         </div>
       </div>
       <div class="fechamento-card">
-        <div class="kpi-label">Eficiência Operacional de Rota</div>
-        <div class="kpi-num kpi-num-blue" style="font-size: 13px; margin: 3px 0;">${taxaSucessoEntregas}% Êxito</div>
+        <div class="kpi-label">Reentregas & Rota</div>
+        <div class="kpi-num kpi-num-blue" style="font-size: 13px; margin: 3px 0;">${qtdReentregas} rota(s) com reentrega</div>
         <div style="font-size: 7.5px; color: #64748b; line-height: 1.3;">
-          • Entregas Realizadas: <b>${totalEntregasFeitas}</b> / ${totalEntregasSaiu}<br>
-          • Taxa de Reentrega: <b>${taxaReentregas}%</b> (${totalEntregasReentrega} vols)<br>
+          • Volumes a Reentregar: <b>${totalEntregasReentrega}</b><br>
+          • Reentregas em Aberto: <b>${reentregasPendentes}</b><br>
           • Trocas de Veículo: <b>${qtdTrocasVeiculos}</b> ocorrência(s)
         </div>
       </div>
       <div class="fechamento-card">
-        <div class="kpi-label">Auditoria & Pendências em Aberto</div>
-        <div class="kpi-num ${ (totalPendCd + reentregasPendentes + socorrosEmAberto) > 0 ? 'kpi-num-amber' : 'kpi-num' }" style="font-size: 13px; margin: 3px 0;">
-          ${totalPendCd + reentregasPendentes + socorrosEmAberto} Pendência(s)
+        <div class="kpi-label">Auditoria &amp; Pendências em Aberto</div>
+        <div class="kpi-num ${ totalPendencias > 0 ? 'kpi-num-amber' : 'kpi-num' }" style="font-size: 13px; margin: 3px 0;">
+          ${totalPendencias} Pendência(s)
         </div>
         <div style="font-size: 7.5px; color: #64748b; line-height: 1.3;">
           • Devoluções Pendentes Físico CD: <b>${totalPendCd}</b><br>
+          • Tratativas do Gestor sem parecer: <b>${tratativasGestorPend}</b>${pend.maisAntigaGestor && pend.maisAntigaGestor.texto ? ` <span style="color:#b45309;">(mais antiga: ${pend.maisAntigaGestor.texto})</span>` : ''}<br>
           • Reentregas Pendentes: <b>${reentregasPendentes}</b><br>
           • Socorros Aguardando Oficina: <b>${socorrosEmAberto}</b>
         </div>
+        <div style="font-size: 7px; color: #94a3b8; margin-top: 3px; font-style: italic;">Posição atual — não filtrado pelo período</div>
       </div>
     </div>
   </div>
@@ -21675,6 +25673,7 @@ const MODULE_COLUMNS_MAP = {
     { id: 'veiculo_placa', label: 'Placa Veículo' },
     { id: 'motorista_nome', label: 'Motorista' },
     { id: 'ajudante_nome', label: 'Ajudante' },
+    { id: 'ajudante_2_nome', label: '2º Ajudante' },
     { id: 'cliente_codigo', label: 'Cód Cliente' },
     { id: 'cliente_nome', label: 'Nome Cliente' },
     { id: 'nota_fiscal', label: 'Nota Fiscal (NF)' },
@@ -21695,7 +25694,8 @@ const MODULE_COLUMNS_MAP = {
     { id: 'separador_apurado', label: 'Separador Apurado' },
     { id: 'conferente_apurado', label: 'Conferente Apurado' },
     { id: 'acao_tomada', label: 'Ação Tomada / Orientação' },
-    { id: 'descricao_monitoramento', label: 'Descrição Monitoramento' }
+    { id: 'descricao_monitoramento', label: 'Descrição Monitoramento' },
+    { id: 'nf_paths', label: 'NF em PDF (caminho)' }
   ],
   devolucao_tratativa: [
     { id: 'numero_protocolo', label: 'Protocolo Chamado' },
@@ -21703,12 +25703,14 @@ const MODULE_COLUMNS_MAP = {
     { id: 'motivo_real_causa_raiz', label: 'Causa Raiz Apurada' },
     { id: 'tipo_erro', label: 'Tipo de Erro' },
     { id: 'valor_reclamado', label: 'Valor Reclamado (R$)' },
+    { id: 'responsavel_correcao', label: 'Responsável pela Correção' },
     { id: 'status_gestao', label: 'Status Gestão' },
     { id: 'acao_gestor', label: 'Ação do Gestor' },
     { id: 'desconto_produtividade_gestor', label: 'Desconto Aplicado?' },
     { id: 'data_acao_gestor', label: 'Data Ação Gestor' },
     { id: 'separador_apurado', label: 'Separador' },
-    { id: 'conferente_apurado', label: 'Conferente' }
+    { id: 'conferente_apurado', label: 'Conferente' },
+    { id: 'nf_paths', label: 'NF em PDF (caminho)' }
   ],
   devolucao_retorno: [
     { id: 'numero_protocolo', label: 'Protocolo Chamado' },
@@ -21746,6 +25748,7 @@ const MODULE_COLUMNS_MAP = {
     { id: 'placa', label: 'Placa do Veículo' },
     { id: 'motorista', label: 'Motorista Principal' },
     { id: 'ajudante', label: 'Ajudante' },
+    { id: 'ajudante_2', label: '2º Ajudante' },
     { id: 'setor', label: 'Setor / Operação' },
     { id: 'data_saida', label: 'Data de Saída' },
     { id: 'hora_saida', label: 'Hora de Saída' },
@@ -21820,6 +25823,8 @@ const MODULE_COLUMNS_MAP = {
   transporte_reentregas: [
     { id: 'data', label: 'Data da Operação' },
     { id: 'motorista_nome', label: 'Motorista Original' },
+    { id: 'ajudante', label: 'Ajudante' },
+    { id: 'ajudante_2', label: '2º Ajudante' },
     { id: 'carga_numero', label: 'Nº Carga' },
     { id: 'rota_nome', label: 'Nome da Rota' },
     { id: 'placa', label: 'Placa' },
@@ -21838,6 +25843,7 @@ const MODULE_COLUMNS_MAP = {
     { id: 'placa', label: 'Placa do Veículo' },
     { id: 'motorista', label: 'Motorista Principal' },
     { id: 'ajudante', label: 'Ajudante' },
+    { id: 'ajudante_2', label: '2º Ajudante' },
     { id: 'data_saida', label: 'Data de Saída' },
     { id: 'hora_saida', label: 'Hora de Saída' },
     { id: 'status_viagem', label: 'Status da Viagem' },
@@ -22012,7 +26018,12 @@ const MODULE_COLUMNS_MAP = {
 // Fonte de dados crus por módulo (mesma fonte usada na exportação em CSV)
 function getRawDataParaModulo(modulo) {
   if (modulo === 'devolucoes' || modulo === 'devolucao_abertura' || modulo === 'devolucao_analise' || modulo === 'devolucao_tratativa' || modulo === 'devolucao_retorno') {
-    return db.getDevolucoes();
+    // responsavel_correcao é DERIVADO (tipo de erro, e turno do
+    // separador/conferente no carregamento) e não existe no registro — por
+    // isso é anexado aqui, na saída, e não gravado. Assim a coluna chega ao
+    // CSV e ao Power BI sem criar campo novo em ocorrencias_devolucao, que é
+    // a tabela sem lista branca no cloudStore.
+    return db.getDevolucoes().map(d => ({ ...d, responsavel_correcao: textoResponsavelDaDevolucao(d) }));
   }
   if (modulo === 'viagens' || modulo === 'transporte_largada') {
     return db.getControleViagens();
@@ -22033,10 +26044,10 @@ function getRawDataParaModulo(modulo) {
     return db.getReentregas ? db.getReentregas() : (db.data.reentregas || []);
   }
   if (modulo === 'resumos_cd' || modulo === 'cd_resumo_diario') {
-    return Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
+    return db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
   }
   if (modulo === 'cd_faltas_condutas') {
-    const list = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
+    const list = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
     const result = [];
     list.forEach(r => {
       if (r && Array.isArray(r.faltas_condutas)) {
@@ -22047,45 +26058,21 @@ function getRawDataParaModulo(modulo) {
     });
     return result;
   }
+  // 6.7.0: os três filhos do Resumo Diário têm coleção própria. data_resumo
+  // e turno_resumo continuam existindo com o mesmo nome para o layout de
+  // exportação não mudar.
   if (modulo === 'cd_outras_oc') {
-    const list = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
-    const result = [];
-    list.forEach(r => {
-      if (r && Array.isArray(r.ocorrencias)) {
-        r.ocorrencias.forEach(o => {
-          result.push({ ...o, data_resumo: r.data, turno_resumo: r.turno });
-        });
-      }
-    });
-    return result;
+    return db.getOcorrenciasCD().map(o => ({ ...o, data_resumo: o.data, turno_resumo: o.turno }));
   }
   if (modulo === 'cd_ocorrencia_colaborador') {
-    const list = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
-    const result = [];
-    list.forEach(r => {
-      if (r && Array.isArray(r.ocorrencias_colaboradores)) {
-        r.ocorrencias_colaboradores.forEach(oc => {
-          result.push({ ...oc, data_resumo: oc.data || r.data, turno_resumo: r.turno });
-        });
-      }
-    });
-    return result;
+    return db.getOcorrenciasColaborador().map(oc => ({ ...oc, data_resumo: oc.data, turno_resumo: oc.turno }));
   }
   if (modulo === 'cd_corte') {
-    const list = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || {});
-    const result = [];
-    list.forEach(r => {
-      if (r && Array.isArray(r.cortes)) {
-        r.cortes.forEach(c => {
-          // Sem o normalizador, o Power BI e o Excel recebiam "36.00 Kg" como
-          // TEXTO nos registros anteriores a 26/08/2026 — coluna que deveria
-          // somar e que não soma, além de afirmar peso num item vendido em
-          // pack ou unidade.
-          result.push({ ...c, quantidade: _qtdCorteNumero(c.quantidade), data_resumo: r.data, turno_resumo: r.turno });
-        });
-      }
-    });
-    return result;
+    // Sem o normalizador, o Power BI e o Excel recebiam "36.00 Kg" como
+    // TEXTO nos registros anteriores a 26/08/2026 — coluna que deveria
+    // somar e que não soma, além de afirmar peso num item vendido em
+    // pack ou unidade.
+    return db.getCortesCD().map(c => ({ ...c, quantidade: _qtdCorteNumero(c.quantidade), data_resumo: c.data, turno_resumo: c.turno }));
   }
   if (modulo === 'divergencia_fisica_cd') {
     const list = db.data.relatorios_divergencia || [];
@@ -22331,6 +26318,101 @@ function getRotuloAmigavelColuna(campoId, modulo) {
   return formatarRotuloCampoFallback(campoId);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// SANEAMENTO DE VALORES PARA PLANILHA (CSV / EXCEL)  — 01/09/2026
+// ═══════════════════════════════════════════════════════════════════
+// O CSV do "Banco de Dados" saía inutilizável (arquivo
+// JR_SAC_Banco_Dados_devolucao_abertura_2026-09-01.csv). Quatro causas,
+// todas tratadas aqui:
+//
+// 1) FOTO DENTRO DA CÉLULA. getColunasDisponiveisParaModulo() varre TODAS
+//    as chaves do registro. Em Devolução isso traz foto_url / assinatura,
+//    que guardam a imagem inteira em "data:image/jpeg;base64,...". São
+//    centenas de KB numa célula só — acima do limite do Excel (32.767
+//    caracteres) — e o blob arrasta o resto da linha para as linhas de
+//    baixo. Era o "espaguete" das linhas 3 a 17 do arquivo.
+// 2) [object Object]. Arrays e objetos (itens da devolução) caíam em
+//    String(obj) sem tratamento.
+// 3) NOTAÇÃO CIENTÍFICA. id, carga_id e numero_protocolo são carimbos de
+//    tempo de 13 a 15 dígitos. O Excel os lê como número e reescreve como
+//    1,79E+12 — o ID original não volta mais, e sem ele não dá para cruzar
+//    a planilha com o sistema.
+// 4) QUEBRA DE LINHA NO TEXTO. Detalhamento e observações têm \n, que
+//    parte a linha em leitores de CSV menos tolerantes.
+//
+// A régua: o que vai para planilha tem que ser TEXTO CURTO OU NÚMERO.
+// Qualquer outra coisa é reduzida a uma dessas duas formas antes de sair.
+
+// Chaves cujo conteúdo é binário/imagem — não têm representação útil em
+// planilha e ficam fora do seletor de colunas.
+const CSV_CAMPO_BINARIO_RE = /(^|_)(foto|fotos|imagem|imagens|assinatura|anexo|anexos|video|videos|base64|thumb|croqui)s?(_|$)/i;
+
+// Detecta o conteúdo binário pelo VALOR, não só pelo nome do campo — campo
+// novo com nome diferente que guarde imagem também é barrado.
+function csvValorEhBinario(val) {
+  if (typeof val !== 'string') return false;
+  if (/^data:[^,]{0,120},/i.test(val)) return true;   // data URI (imagem embutida)
+  return val.length > 3000 && !/\s/.test(val);        // blob base64 solto
+}
+
+function csvColunaEhBinaria(campoId, rawData) {
+  if (CSV_CAMPO_BINARIO_RE.test(String(campoId))) return true;
+  if (!Array.isArray(rawData)) return false;
+  return rawData.slice(0, 80).some(r => r && csvValorEhBinario(r[campoId]));
+}
+
+// Converte QUALQUER valor do banco em string curta ou número.
+// Devolve número só quando o valor é de fato numérico e não é identificador
+// (ver regra dos 9 dígitos abaixo) — assim o Excel soma valor_reclamado mas
+// não estraga carga_id.
+function sanitizarValorPlanilha(val) {
+  if (val === undefined || val === null) return '';
+  if (typeof val === 'boolean') return val ? 'SIM' : 'NÃO';
+
+  if (typeof val === 'number') {
+    if (!isFinite(val)) return '';
+    // 9+ dígitos = identificador (timestamp, protocolo), nunca quantidade.
+    // Sai como texto para o Excel não virar notação científica.
+    if (Number.isInteger(val) && Math.abs(val) >= 1e9) return String(val);
+    return val;
+  }
+
+  if (Array.isArray(val)) {
+    const partes = val.map(item => {
+      if (item === null || item === undefined) return '';
+      if (typeof item === 'object') {
+        return Object.entries(item)
+          .filter(([, v]) => v !== null && v !== undefined && v !== '' &&
+                             typeof v !== 'object' && !csvValorEhBinario(v))
+          .map(([k, v]) => `${formatarRotuloCampoFallback(k)}: ${v}`)
+          .join(', ');
+      }
+      return String(item);
+    }).filter(p => p !== '');
+    return partes.join(' | ');
+  }
+
+  if (typeof val === 'object') return sanitizarValorPlanilha([val]);
+
+  let txt = String(val);
+  if (csvValorEhBinario(txt)) return '[ANEXO — ver no sistema]';
+  txt = txt.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (txt.length > 4000) txt = txt.slice(0, 3997) + '...';
+  return txt;
+}
+
+// Monta uma célula de CSV. Cadeias longas de dígitos e números com zero à
+// esquerda saem como ="..." — a única forma de o Excel aceitá-los como
+// texto e preservar o valor exato (NF 0012345 continua 0012345).
+function formatarCelulaCsv(val) {
+  if (typeof val === 'number') {
+    return `"${(Number.isInteger(val) ? String(val) : val.toFixed(2)).replace('.', ',')}"`;
+  }
+  const s = String(val);
+  if (/^\d{9,}$/.test(s) || /^0\d+$/.test(s)) return `="${s}"`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
 // Retorna apenas as colunas do módulo dinamicamente inspecionando chaves dos dados reais,
 // mantendo a ordem das colunas prioritárias e traduzindo chaves desconhecidas com fallback.
 function getColunasDisponiveisParaModulo(modulo) {
@@ -22339,12 +26421,17 @@ function getColunasDisponiveisParaModulo(modulo) {
 
   const colsMap = new Map();
 
-  // 1. Registra colunas pré-definidas para manter a ordem lógica recomendada
+  // 1. Registra colunas pré-definidas para manter a ordem lógica recomendada.
+  //    São as colunas de negócio do módulo — as únicas marcadas por padrão
+  //    (`principal`). Antes TUDO vinha marcado, então bastava clicar em
+  //    exportar para levar junto foto_url, assinatura e os IDs internos.
   predefined.forEach(c => {
-    colsMap.set(c.id, { id: c.id, label: c.label || getRotuloAmigavelColuna(c.id, modulo) });
+    colsMap.set(c.id, { id: c.id, label: c.label || getRotuloAmigavelColuna(c.id, modulo), principal: true });
   });
 
-  // 2. Inspeciona dinamicamente novas chaves presentes nos registros reais
+  // 2. Inspeciona dinamicamente novas chaves presentes nos registros reais.
+  //    Continuam disponíveis (campo novo no banco aparece sozinho no
+  //    seletor), mas entram desmarcadas — quem quiser, marca.
   if (Array.isArray(rawData) && rawData.length > 0) {
     rawData.forEach(row => {
       if (row && typeof row === 'object' && !Array.isArray(row)) {
@@ -22353,7 +26440,10 @@ function getColunasDisponiveisParaModulo(modulo) {
           if (!colsMap.has(key)) {
             colsMap.set(key, {
               id: key,
-              label: getRotuloAmigavelColuna(key, modulo)
+              label: getRotuloAmigavelColuna(key, modulo),
+              // Módulo sem lista pré-definida: não há como distinguir
+              // principal de acessória, então tudo entra marcado.
+              principal: predefined.length === 0
             });
           }
         });
@@ -22361,7 +26451,10 @@ function getColunasDisponiveisParaModulo(modulo) {
     });
   }
 
-  const allCols = Array.from(colsMap.values());
+  // 3. Descarta colunas de imagem/anexo. Uma foto em base64 não cabe numa
+  //    célula (limite de 32.767 caracteres no Excel) e corrompe o arquivo
+  //    inteiro — não é caso de deixar o usuário escolher.
+  const allCols = Array.from(colsMap.values()).filter(c => !csvColunaEhBinaria(c.id, rawData));
 
   // Sem registros ainda: mantém a lista pré-definida
   if (!rawData || rawData.length === 0) return allCols;
@@ -22376,8 +26469,8 @@ function updateCsvColumnsUI(moduloVal) {
   if (!container) return;
   const cols = getColunasDisponiveisParaModulo(moduloVal);
   container.innerHTML = cols.map(c => `
-    <label class="flex items-center gap-2 text-xs text-white cursor-pointer hover:text-emerald-300 transition">
-      <input type="checkbox" name="csv-col" value="${c.id}" checked class="text-emerald-500 rounded focus:ring-0">
+    <label class="flex items-center gap-2 text-xs cursor-pointer hover:text-emerald-300 transition ${c.principal ? 'text-white' : 'text-slate-400'}" title="${c.principal ? 'Coluna padrão do relatório' : 'Campo extra do banco — marque se precisar'}">
+      <input type="checkbox" name="csv-col" value="${c.id}" ${c.principal ? 'checked' : ''} class="text-emerald-500 rounded focus:ring-0">
       <span>${c.label}</span>
     </label>
   `).join('');
@@ -22412,7 +26505,7 @@ function renderBoletimGerencialView() {
   const trocas = allTrocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
   const reentregas = allReentregas.filter(re => registroNoPeriodo(re, 'reentregas', fDe, fAte));
 
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
+  let resumosCd = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
@@ -22444,7 +26537,6 @@ function renderBoletimGerencialView() {
   const qtdDevolucoes = devs.length;
   const corteValor = cortesList.reduce((acc, c) => acc + (parseFloat(c.valor)||0), 0);
   const qtdProdutosCorte = cortesList.length;
-  const totalPendCd = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO').length;
 
   // KPIs Transporte & Rota (Ocorrências, Socorros, Trocas e Reentregas)
   const ocTransporteQtd = ocViagens.length;
@@ -22452,20 +26544,26 @@ function renderBoletimGerencialView() {
   const custoTotalSocorro = rotas.reduce((acc, r) => acc + (parseFloat(r.custo_socorro) || 0), 0);
   const qtdTrocasVeiculos = trocas.length;
   const qtdReentregas = reentregas.length;
-  const totalEntregasSaiu = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_saiu) || 0), 0);
-  const totalEntregasFeitas = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_feitas) || 0), 0);
   const totalEntregasReentrega = reentregas.reduce((acc, re) => acc + (parseInt(re.entregas_reentrega) || 0), 0);
-  const reentregasPendentes = reentregas.filter(re => re.status === 'PENDENTE').length;
-  const socorrosEmAberto = rotas.filter(r => r.status_veiculo !== 'Liberado').length;
+
+  // Pendência não se filtra por período — ver pendenciasEmAbertoBoletim().
+  const pend = pendenciasEmAbertoBoletim();
+  const totalPendCd = pend.pendFisicoCd;
+  const reentregasPendentes = pend.reentregasAbertas;
+  const socorrosEmAberto = pend.socorrosEmAberto;
+  const tratativasGestorPend = pend.tratativasGestor;
+  const totalPendencias = totalPendCd + reentregasPendentes + socorrosEmAberto + tratativasGestorPend;
 
   // KPIs Fechamento
   const impactoFinanceiroTotal = totalDevValor + corteValor + custoTotalSocorro;
-  const taxaSucessoEntregas = totalEntregasSaiu > 0 ? ((totalEntregasFeitas / totalEntregasSaiu) * 100).toFixed(1) : '100.0';
-  const taxaReentregas = totalEntregasSaiu > 0 ? ((totalEntregasReentrega / totalEntregasSaiu) * 100).toFixed(1) : '0.0';
 
   const isD1Active = (fDe === dMenosUmStr && fAte === dMenosUmStr);
 
-  const activeBolSubTab = window._activeBolSubTab || 'executiva';
+  // 6.7.0: a subaba é decidida pelo item do menu que abriu a tela.
+  const activeBolSubTab = activeTab === 'boletim_export_csv' ? 'export_csv'
+    : activeTab === 'boletim_pdfs' ? 'relatorios_pdf'
+    : 'executiva';
+  window._activeBolSubTab = activeBolSubTab;
 
   return `
     <div class="space-y-8 max-w-7xl mx-auto pb-12">
@@ -22481,17 +26579,8 @@ function renderBoletimGerencialView() {
           </div>
         </div>
 
-        <!-- SUBABAS BOLETIM GERENCIAL -->
-        <div class="flex gap-1 bg-slate-950 border border-slate-800 p-1.5 rounded-xl shadow-lg shrink-0 no-print">
-          <button onclick="switchBolSubTab('executiva')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'executiva' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📊</span> Visão Executiva
-          </button>
-          <button onclick="switchBolSubTab('export_csv')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'export_csv' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📥</span> Exportação CSV
-          </button>
-          <button onclick="switchBolSubTab('relatorios_pdf')" class="px-3.5 py-2 rounded-lg text-xs font-extrabold flex items-center gap-1.5 transition ${activeBolSubTab === 'relatorios_pdf' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
-            <span>📄</span> Central de PDFs
-          </button>
+        <div class="text-[11px] text-slate-400 font-bold uppercase shrink-0 no-print">
+          ${activeBolSubTab === 'executiva' ? '📊 Visão Executiva' : activeBolSubTab === 'export_csv' ? '📥 Exportação CSV' : '📄 Central de PDFs'}
         </div>
       </div>
 
@@ -22625,6 +26714,7 @@ function renderBoletimGerencialView() {
               <div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl text-center">
                 <div class="text-[10px] text-slate-400 font-bold uppercase">Pendente Físico CD</div>
                 <div class="text-base font-black ${totalPendCd>0?'text-amber-400':'text-emerald-400'} mt-1">${totalPendCd}</div>
+                <div class="text-[9px] text-slate-500 italic leading-tight mt-0.5">total em aberto, não filtrado pelo período</div>
               </div>
             </div>
 
@@ -22852,15 +26942,15 @@ function renderBoletimGerencialView() {
                 </div>
               </div>
 
-              <!-- CARD 2: EFICIÊNCIA OPERACIONAL DE ROTA -->
+              <!-- CARD 2: REENTREGAS & ROTA -->
               <div class="bg-slate-900 border border-blue-900/60 rounded-xl p-4 shadow-lg flex flex-col justify-between space-y-3">
                 <div>
-                  <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Eficiência de Entregas & Rota</div>
-                  <div class="text-xl font-black text-blue-400 mt-1">${taxaSucessoEntregas}% de Êxito</div>
+                  <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Reentregas & Rota</div>
+                  <div class="text-xl font-black text-blue-400 mt-1">${qtdReentregas} rota(s) com reentrega</div>
                 </div>
                 <div class="space-y-1 text-xs border-t border-slate-800 pt-2 text-slate-300">
-                  <div class="flex justify-between"><span>• Entregas Realizadas:</span><b class="text-emerald-400">${totalEntregasFeitas} / ${totalEntregasSaiu}</b></div>
-                  <div class="flex justify-between"><span>• Taxa de Reentrega:</span><b class="text-amber-400">${taxaReentregas}% (${totalEntregasReentrega} vols)</b></div>
+                  <div class="flex justify-between"><span>• Volumes a Reentregar:</span><b class="text-amber-400">${totalEntregasReentrega}</b></div>
+                  <div class="flex justify-between"><span>• Reentregas em Aberto:</span><b class="${reentregasPendentes>0?'text-amber-400':'text-white'}">${reentregasPendentes}</b></div>
                   <div class="flex justify-between"><span>• Trocas de Caminhão:</span><b class="text-purple-400">${qtdTrocasVeiculos} ocorrência(s)</b></div>
                 </div>
               </div>
@@ -22869,14 +26959,17 @@ function renderBoletimGerencialView() {
               <div class="bg-slate-900 border border-amber-900/60 rounded-xl p-4 shadow-lg flex flex-col justify-between space-y-3">
                 <div>
                   <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Auditoria & Pendências em Aberto</div>
-                  <div class="text-xl font-black ${(totalPendCd + reentregasPendentes + socorrosEmAberto) > 0 ? 'text-amber-400' : 'text-emerald-400'} mt-1">
-                    ${totalPendCd + reentregasPendentes + socorrosEmAberto} Pendência(s)
+                  <div class="text-xl font-black ${totalPendencias > 0 ? 'text-amber-400' : 'text-emerald-400'} mt-1">
+                    ${totalPendencias} Pendência(s)
                   </div>
                 </div>
                 <div class="space-y-1 text-xs border-t border-slate-800 pt-2 text-slate-300">
                   <div class="flex justify-between"><span>• Devoluções Pend. Físico CD:</span><b class="${totalPendCd>0?'text-amber-400':'text-white'}">${totalPendCd}</b></div>
+                  <div class="flex justify-between"><span>• Tratativas do Gestor sem parecer:</span><b class="${tratativasGestorPend>0?'text-sky-300':'text-white'}">${tratativasGestorPend}</b></div>
+                  ${pend.maisAntigaGestor && pend.maisAntigaGestor.texto ? `<div class="text-[10px] text-slate-500 -mt-0.5 pl-2">↳ mais antiga: ${pend.maisAntigaGestor.texto}</div>` : ''}
                   <div class="flex justify-between"><span>• Reentregas Pendentes:</span><b class="${reentregasPendentes>0?'text-amber-400':'text-white'}">${reentregasPendentes}</b></div>
                   <div class="flex justify-between"><span>• Socorros Aguardando Oficina:</span><b class="${socorrosEmAberto>0?'text-amber-400':'text-white'}">${socorrosEmAberto}</b></div>
+                  <div class="text-[10px] text-slate-500 italic pt-1">Posição atual — não filtrado pelo período</div>
                 </div>
               </div>
             </div>
@@ -22950,18 +27043,33 @@ function renderBoletimGerencialView() {
                   <button type="button" onclick="toggleSelectAllCsvCols(false)" class="text-slate-400 hover:underline">Desmarcar Todas</button>
                 </div>
               </div>
+              <p class="text-[10px] text-slate-500 mb-2">Em <span class="text-white font-bold">branco</span>, as colunas padrão do módulo (já marcadas). Em <span class="text-slate-400 font-bold">cinza</span>, campos extras do banco — marque se precisar. Colunas de foto/assinatura não aparecem: são imagens e não cabem em planilha.</p>
               <div id="csv-columns-grid" class="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-950 p-4 rounded-xl border border-slate-800">
                 ${getColunasDisponiveisParaModulo(window._csvModuloSelecionado || 'devolucoes').map(c => `
-                  <label class="flex items-center gap-2 text-xs text-white cursor-pointer hover:text-emerald-300 transition">
-                    <input type="checkbox" name="csv-col" value="${c.id}" checked class="text-emerald-500 rounded focus:ring-0">
+                  <label class="flex items-center gap-2 text-xs cursor-pointer hover:text-emerald-300 transition ${c.principal ? 'text-white' : 'text-slate-400'}" title="${c.principal ? 'Coluna padrão do relatório' : 'Campo extra do banco — marque se precisar'}">
+                    <input type="checkbox" name="csv-col" value="${c.id}" ${c.principal ? 'checked' : ''} class="text-emerald-500 rounded focus:ring-0">
                     <span>${c.label}</span>
                   </label>
                 `).join('')}
               </div>
             </div>
 
+            <div>
+              <label class="block text-xs font-bold text-slate-300 mb-1">Formato do arquivo</label>
+              <div class="flex flex-wrap gap-4 bg-slate-950 p-3 rounded-xl border border-slate-800">
+                <label class="flex items-center gap-2 text-xs text-white cursor-pointer">
+                  <input type="radio" name="csv-formato" value="xlsx" checked class="text-emerald-500 focus:ring-0">
+                  <span><b>Excel (.xlsx)</b> — recomendado: preserva IDs, protocolos e acentuação</span>
+                </label>
+                <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input type="radio" name="csv-formato" value="csv" class="text-emerald-500 focus:ring-0">
+                  <span>CSV (.csv) — texto puro, separado por ponto e vírgula</span>
+                </label>
+              </div>
+            </div>
+
             <button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold py-3 rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-sm">
-              <span>📥</span> Baixar Relatório Extraído do Banco em CSV (.csv)
+              <span>📥</span> Baixar Relatório Extraído do Banco
             </button>
           </form>
         </div>`
@@ -23082,7 +27190,15 @@ function renderBoletimGerencialView() {
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-3 hover:border-emerald-700/60 transition">
                   <div>
                     <div class="text-xs font-bold text-emerald-300 uppercase flex items-center gap-1"><span>📑</span> Ficha Individual de Devolução</div>
-                    <div class="text-[11px] text-slate-400 mt-1">Impressão da ficha completa do protocolo com fotos, produtos e tratativa.</div>
+                    <!-- Este card PASSOU A IMPRIMIR A TRATATIVA (22/09/2026).
+                         Antes chamava imprimirFichaDevolucaoPdf, que só tirava o
+                         cabeçalho da abertura e os itens — e o texto aqui dizia
+                         "ficha completa com fotos, produtos e tratativa", que
+                         nunca foi verdade. Em vez de conviverem dois botões
+                         quase iguais na mesma tela, a ficha é a impressão das
+                         três etapas: é a folha que alguém leva para a reunião.
+                         A função antiga foi apagada junto. -->
+                    <div class="text-[11px] text-slate-400 mt-1">Abertura, Análise e Tratativa do Gestor em blocos separados, cada um com quem respondeu e quando. Sem fotos.</div>
                   </div>
                   <button onclick="openPdfFilterModal('ficha_devolucao')" class="w-full bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold py-2 rounded-lg text-xs border border-emerald-700/50 flex items-center justify-center gap-1">
                     <span>🔍</span> Selecionar Ficha (PDF)
@@ -23328,6 +27444,7 @@ function handleExportCsvSubmit(e) {
   const modulo = document.getElementById('csv-modulo')?.value || 'devolucoes';
   const fDe = document.getElementById('csv-data-de')?.value || '';
   const fAte = document.getElementById('csv-data-ate')?.value || '';
+  const formato = document.querySelector('input[name="csv-formato"]:checked')?.value || 'xlsx';
 
   const checkboxes = document.querySelectorAll('input[name="csv-col"]:checked');
   const colsSelecionadas = Array.from(checkboxes).map(c => c.value);
@@ -23358,30 +27475,49 @@ function handleExportCsvSubmit(e) {
   const headerMap = {};
   colunasDisponiveis.forEach(c => { headerMap[c.id] = c.label; });
 
-  const csvRows = [];
-  csvRows.push(colsSelecionadas.map(c => `"${headerMap[c] || getRotuloAmigavelColuna(c, modulo) || c}"`).join(';'));
+  const cabecalho = colsSelecionadas.map(c => headerMap[c] || getRotuloAmigavelColuna(c, modulo) || c);
 
-  dadosFiltrados.forEach(row => {
-    const line = colsSelecionadas.map(c => {
-      let val = getValorCampoRelatorio(row, modulo, c);
+  // Matriz já saneada: cada célula é string curta ou número. Os dois
+  // formatos abaixo partem daqui — o que sai no Excel é o mesmo que sai
+  // no CSV. Ver sanitizarValorPlanilha().
+  const matriz = dadosFiltrados.map(row =>
+    colsSelecionadas.map(c => sanitizarValorPlanilha(getValorCampoRelatorio(row, modulo, c)))
+  );
 
-      if (val === undefined || val === null) val = '';
-      if (typeof val === 'number') val = val.toFixed(2).replace('.', ',');
-      if (typeof val === 'string') val = val.replace(/"/g, '""');
-      return `"${val}"`;
-    }).join(';');
-    csvRows.push(line);
-  });
+  const nomeBase = `JR_SAC_Banco_Dados_${modulo}_${agoraIsoBrasilia().slice(0,10)}`;
+
+  // ── EXCEL (.xlsx) ──────────────────────────────────────────────────
+  // Formato padrão. O Excel lê tipo por tipo do arquivo, então o que foi
+  // gravado como texto CONTINUA texto: protocolo de 15 dígitos não vira
+  // 1,79E+12 e NF com zero à esquerda não perde o zero. Também não existe
+  // questão de acento nem de separador — os dois calos crônicos do CSV.
+  if (formato === 'xlsx' && typeof XLSX !== 'undefined') {
+    const ws = XLSX.utils.aoa_to_sheet([cabecalho, ...matriz]);
+    ws['!cols'] = cabecalho.map((h, i) => {
+      const maior = matriz.reduce((max, linha) => Math.max(max, String(linha[i] ?? '').length), String(h).length);
+      return { wch: Math.min(Math.max(maior + 2, 10), 60) };
+    });
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: matriz.length, c: cabecalho.length - 1 } }) };
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Dados');
+    XLSX.writeFile(wb, `${nomeBase}.xlsx`);
+    return;
+  }
+
+  // ── CSV (.csv) ─────────────────────────────────────────────────────
+  const csvRows = [cabecalho.map(h => `"${String(h).replace(/"/g, '""')}"`).join(';')];
+  matriz.forEach(linha => csvRows.push(linha.map(formatarCelulaCsv).join(';')));
 
   const csvString = '\uFEFF' + csvRows.join('\r\n');
   const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `JR_SAC_Banco_Dados_${modulo}_${agoraIsoBrasilia().slice(0,10)}.csv`);
+  link.setAttribute('download', `${nomeBase}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 function promptEGerarValeMotorista() {
@@ -23547,6 +27683,7 @@ function openPdfFilterModal(pdfType) {
           ${devList.length === 0 ? `<option value="">Nenhuma devolução encontrada no sistema</option>` :
             devList.map(d => `<option value="${d.id}">${d.numero_devolucao || d.numero_protocolo} — Cliente: ${d.cliente_nome} (Motorista: ${d.motorista_nome || 'N/I'})</option>`).join('')}
         </select>
+        <div class="text-[10px] text-slate-400 mt-2">Sai em três blocos — Abertura, Análise e Tratativa do Gestor — cada um com quem respondeu e quando. Etapa ainda não preenchida aparece marcada como pendente.</div>
       </div>
       <div class="pt-3">
         <button onclick="confirmarEGerarPdf('ficha_devolucao')" ${devList.length === 0 ? 'disabled' : ''} class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold py-2.5 rounded-lg text-xs shadow flex items-center justify-center gap-2">
@@ -23742,9 +27879,22 @@ function confirmarEGerarPdf(pdfType) {
   closeModal();
 
   if (pdfType === 'boletim_executivo') {
-    if (fDe) window._boletimFiltroDe = fDe;
-    if (fAte) window._boletimFiltroAte = fAte;
-    imprimirBoletimGerencialExecutivo();
+    // (01/09/2026) O período escolhido AQUI é do PDF, não da tela. Antes ele
+    // era escrito em window._boletimFiltroDe/Ate e nunca devolvido: a Visão
+    // Executiva passava a abrir no período do último PDF em vez de D-1, sem
+    // nenhum aviso além dos dois campos de data lá em cima. Quem tirasse um PDF
+    // de um dia antigo via o Boletim do dia seguinte zerado e concluía que o
+    // sistema tinha perdido os lançamentos. Agora empresta e devolve.
+    const _deTela = window._boletimFiltroDe;
+    const _ateTela = window._boletimFiltroAte;
+    try {
+      if (fDe) window._boletimFiltroDe = fDe;
+      if (fAte) window._boletimFiltroAte = fAte;
+      imprimirBoletimGerencialExecutivo();
+    } finally {
+      window._boletimFiltroDe = _deTela;
+      window._boletimFiltroAte = _ateTela;
+    }
   } else if (pdfType === 'relatorio_ocorrencias') {
     gerarRelatorioOcorrenciasPdfComFiltro({ fDe, fAte, rota, status, motorista });
   } else if (pdfType === 'vale_motorista') {
@@ -23758,7 +27908,10 @@ function confirmarEGerarPdf(pdfType) {
       alert('Nenhum relatório selecionado.');
     }
   } else if (pdfType === 'ficha_devolucao') {
-    if (devId) imprimirFichaDevolucaoPdf(devId);
+    // Desde 22/09/2026 a ficha É a tratativa (as três etapas). O tipo continua
+    // 'ficha_devolucao' de propósito: é o nome do card na Central de PDFs, e
+    // trocá-lo só renomearia a mesma coisa em três lugares.
+    if (devId) imprimirTratativaDevolucaoPdf(devId);
     else alert('Selecione um protocolo válido.');
   } else if (pdfType === 'ficha_oficina') {
     if (chamadoId) imprimirFichaOficinaChamadoPdf(chamadoId);
@@ -24018,100 +28171,200 @@ function gerarRelatorioDevolucoesPorRotaPdf() {
   win.document.close();
 }
 
-function imprimirFichaDevolucaoPdf(devId) {
+// =============================================================================
+// IMPRESSÃO DA TRATATIVA, COM AS TRÊS ETAPAS SEPARADAS (22/09/2026)
+//
+// O gestor precisa levar a devolução para a mesa de reunião, e até aqui a única
+// impressão existente (imprimirFichaDevolucaoPdf) era a ficha da ABERTURA:
+// cabeçalho, motivo reclamado e itens. A análise não saía, a tratativa não
+// saía, e a causa raiz aparecia espremida na mesma linha do motivo reclamado —
+// justamente a distinção que a reunião discute.
+//
+// Aqui as três etapas são três blocos fechados, cada um com quem respondeu por
+// ele e quando. Quem lê consegue dizer, sem perguntar a ninguém, o que o
+// cliente reclamou, o que a apuração encontrou e o que o gestor decidiu.
+//
+// ESTA É A ÚNICA IMPRESSÃO DE DEVOLUÇÃO DESDE 22/09/2026. A antiga foi APAGADA
+// no mesmo dia, e não deixada de lado: a "Ficha Individual de Devolução" da
+// Central de PDFs passou a chamar esta função, e manter a outra viva só criaria
+// duas folhas parecidas com conteúdos diferentes para o mesmo protocolo — que é
+// como o texto do card foi parar em "ficha completa com fotos, produtos e
+// tratativa" descrevendo algo que nunca imprimiu nada disso.
+//
+// SEM FOTO, por decisão de 22/09/2026. Desde a migration 38 a foto é caminho no
+// Storage, não base64 no registro: entraria como <img src> remoto e só apareceria
+// no papel com o aparelho online no instante da impressão. Numa folha que vai
+// para reunião, imagem que falha às vezes é pior do que imagem nenhuma.
+//
+// SEM A FAIXA DO RESPONSÁVEL E SEM CAMPO DE ASSINATURA, também por decisão de
+// 22/09/2026 ("o importante é o corpo e a identificação da ocorrência; não há
+// necessidade de evidenciar o gestor"). A faixa roxa existiu por algumas horas
+// no topo desta folha e saiu: numa reunião, uma folha que começa apontando um
+// nome vira uma conversa sobre a pessoa antes de ser sobre o caso. O responsável
+// continua na TELA (faixa no card do gestor, filtro na Análise e na Tratativa) e
+// na coluna do CSV — é lá que ele serve para cobrar, não no papel.
+//
+// O nome de quem respondeu por cada etapa CONTINUA na tarja de cada bloco. Não é
+// a mesma coisa: ali é registro do que aconteceu, na mesma linha da data, e é
+// parte da identificação da ocorrência que a decisão manda preservar.
+// =============================================================================
+function imprimirTratativaDevolucaoPdf(devId) {
   const dev = db.getDevolucoes().find(d => d.id == devId);
   if (!dev) {
     alert('Devolução não encontrada.');
     return;
   }
-  const itens = dev.itens || [];
   const win = window.open('', '_blank', 'width=900,height=950');
   if (!win) {
     alert('Bloqueador de pop-up detectado.');
     return;
   }
+
+  const esc = v => String(v === undefined || v === null || v === '' ? '—' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const dataHora = v => v ? new Date(v).toLocaleString('pt-BR') : '—';
+  const nomeUsuario = uid => {
+    if (!uid) return '—';
+    const u = (db.data.usuarios || []).find(x => String(x.id) === String(uid));
+    return u && u.nome ? u.nome : '—';
+  };
+  const campo = (rotulo, valor) => `<div class="field"><div class="field-lbl">${rotulo}</div><div class="field-val">${esc(valor)}</div></div>`;
+  const bloco = (n, titulo, quem, quando, miolo) => `
+    <div class="etapa">
+      <div class="etapa-head">
+        <span class="etapa-num">${n}</span>
+        <span class="etapa-tit">${titulo}</span>
+        <span class="etapa-meta">${esc(quem)} · ${esc(quando)}</span>
+      </div>
+      <div class="etapa-body">${miolo}</div>
+    </div>`;
+
+  const itens = Array.isArray(dev.itens) ? dev.itens : [];
+  const numero = dev.numero_devolucao || dev.numero_protocolo || dev.id;
+  const temAnalise = !!(dev.motivo_real_causa_raiz && String(dev.motivo_real_causa_raiz).trim());
+  const temTratativa = !!(dev.acao_gestor && String(dev.acao_gestor).trim());
+
+  const tabelaItens = itens.length === 0
+    ? `<div class="vazio">${dev.sem_itens ? 'Sem itens — ' + esc(dev.observacao_sem_itens) : 'Sem itens detalhados individualmente.'}</div>`
+    : `<table>
+        <thead><tr><th>Código</th><th>Descrição do Produto</th><th class="c">Qtd</th><th class="r">Vlr. Unit.</th><th class="r">Vlr. Total</th></tr></thead>
+        <tbody>${itens.map(i => {
+          const p = getDadosProduto(i);
+          return `<tr>
+            <td><b>${esc(p.codigo)}</b></td>
+            <td>${esc(p.descricao)}</td>
+            <td class="c"><b>${esc(i.quantidade || i.qtd || 1)}</b></td>
+            <td class="r">R$ ${(parseFloat(i.valor_unitario || i.preco || 0)).toFixed(2)}</td>
+            <td class="r"><b>R$ ${(parseFloat(i.valor_total || i.valor || 0)).toFixed(2)}</b></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+
   win.document.write(`
     <!DOCTYPE html>
     <html lang="pt-BR">
     <head>
       <meta charset="UTF-8">
-      <title>FICHA INDIVIDUAL DE DEVOLUÇÃO — ${dev.numero_devolucao || dev.numero_protocolo}</title>
+      <title>TRATATIVA DA DEVOLUÇÃO ${esc(numero)}</title>
       <style>
-        @media print {
-          @page { margin: 10mm; size: A4 portrait; }
-          body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        }
+        @media print { @page { margin: 10mm; size: A4 portrait; } body { margin:0; padding:0; -webkit-print-color-adjust: exact; print-color-adjust: exact; } .etapa { break-inside: avoid; } }
         * { box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; padding: 15px; color: #0f172a; background: #fff; }
-        .page { border: 2px solid #0f172a; border-radius: 8px; padding: 18px; }
-        .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #0f172a; padding-bottom: 10px; margin-bottom: 14px; }
-        .logo { height: 45px; }
-        .header-title { text-align: right; }
-        .header-title h2 { margin: 0; font-size: 16px; color: #0f172a; font-weight: 900; }
-        .header-title p { margin: 2px 0 0; font-size: 10px; color: #475569; }
-        .badge { background: #0f172a; color: #fff; padding: 6px 12px; border-radius: 4px; font-weight: bold; font-size: 11px; text-align: center; text-transform: uppercase; margin-bottom: 14px; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-        .field { border: 1px solid #cbd5e1; padding: 6px 10px; border-radius: 4px; background: #f8fafc; }
-        .field-lbl { font-size: 8px; font-weight: bold; color: #64748b; text-transform: uppercase; }
-        .field-val { font-size: 11px; font-weight: bold; color: #0f172a; margin-top: 2px; }
-        .motivo-box { border: 1px solid #cbd5e1; background: #fffbebf5; border-left: 4px solid #f59e0b; padding: 10px; border-radius: 4px; margin-bottom: 14px; }
-        .motivo-lbl { font-size: 9px; font-weight: bold; color: #b45309; text-transform: uppercase; }
-        .motivo-txt { font-size: 11px; font-weight: bold; color: #78350f; margin-top: 2px; }
-        table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 10px; }
-        th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
-        th { background: #f1f5f9; font-weight: bold; text-transform: uppercase; }
+        body { font-family: Arial, sans-serif; padding: 14px; color: #0f172a; background: #fff; }
+        .header { display:flex; align-items:center; justify-content:space-between; border-bottom:2px solid #0f172a; padding-bottom:9px; margin-bottom:12px; }
+        .logo { height: 42px; }
+        .header-title { text-align:right; }
+        .header-title h2 { margin:0; font-size:15px; font-weight:900; }
+        .header-title p { margin:2px 0 0; font-size:9px; color:#475569; }
+        .badge { background:#0f172a; color:#fff; padding:6px 12px; border-radius:4px; font-weight:bold; font-size:12px; text-align:center; text-transform:uppercase; margin-bottom:6px; }
+        .etapa { border:1px solid #cbd5e1; border-radius:5px; margin-bottom:11px; overflow:hidden; }
+        .etapa-head { background:#0f172a; color:#fff; padding:6px 10px; display:flex; align-items:center; gap:8px; }
+        .etapa-num { background:#fff; color:#0f172a; width:17px; height:17px; border-radius:50%; font-size:10px; font-weight:900; display:inline-flex; align-items:center; justify-content:center; flex:none; }
+        .etapa-tit { font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.5px; flex:1; }
+        .etapa-meta { font-size:8px; color:#cbd5e1; text-align:right; }
+        .etapa-body { padding:9px 10px; }
+        .grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-bottom:8px; }
+        .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; }
+        .field { border:1px solid #e2e8f0; background:#f8fafc; border-radius:3px; padding:5px 8px; }
+        .field-lbl { font-size:7.5px; font-weight:bold; color:#64748b; text-transform:uppercase; }
+        .field-val { font-size:10px; font-weight:bold; margin-top:1px; word-break:break-word; }
+        .texto-lbl { font-size:7.5px; font-weight:bold; color:#64748b; text-transform:uppercase; margin:7px 0 2px; }
+        .texto { border-left:3px solid #94a3b8; background:#f8fafc; padding:6px 9px; font-size:10px; white-space:pre-line; border-radius:0 3px 3px 0; }
+        .destaque { border-left-color:#b45309; background:#fffbeb; }
+        .decisao { border-left-color:#6d28d9; background:#f5f3ff; }
+        .pendente { border:1px dashed #cbd5e1; background:#f8fafc; padding:10px; text-align:center; font-size:10px; color:#64748b; font-style:italic; border-radius:3px; }
+        .desconto-sim { background:#fef2f2; border:1px solid #b91c1c; color:#991b1b; font-weight:900; font-size:10px; padding:6px 9px; border-radius:3px; margin-top:7px; }
+        .desconto-nao { background:#f0fdf4; border:1px solid #15803d; color:#166534; font-weight:bold; font-size:10px; padding:6px 9px; border-radius:3px; margin-top:7px; }
+        table { width:100%; border-collapse:collapse; font-size:9.5px; margin-top:5px; }
+        th, td { border:1px solid #cbd5e1; padding:4px 6px; text-align:left; }
+        th { background:#f1f5f9; font-weight:bold; text-transform:uppercase; font-size:8px; }
+        td.c, th.c { text-align:center; } td.r, th.r { text-align:right; }
+        .vazio { font-size:10px; color:#64748b; font-style:italic; padding:5px 0; }
+        .rodape { margin-top:12px; border-top:1px solid #cbd5e1; padding-top:6px; font-size:8px; color:#64748b; display:flex; justify-content:space-between; }
       </style>
     </head>
     <body onload="setTimeout(function(){ window.print(); }, 400)">
-      <div class="page">
-        <div class="header">
-          <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR Logo" onerror="this.style.display='none'">
-          <div class="header-title">
-            <h2>JR DISTRIBUIDORA</h2>
-            <p>Ficha Técnica Individual de Ocorrência / SAC</p>
-          </div>
+      <div class="header">
+        <img src="${LOGO_JR_VERDE_BASE64}" class="logo" alt="JR" onerror="this.style.display='none'">
+        <div class="header-title">
+          <h2>JR DISTRIBUIDORA</h2>
+          <p>Tratativa de Devolução — Abertura, Análise e Decisão</p>
         </div>
-        <div class="badge">FICHA DE PROTOCOLO Nº ${dev.numero_devolucao || dev.numero_protocolo || dev.id}</div>
+      </div>
+
+      <div class="badge">DEVOLUÇÃO Nº ${esc(numero)}${dev.numero_protocolo && dev.numero_protocolo !== numero ? ' &nbsp;·&nbsp; PROTOCOLO ' + esc(dev.numero_protocolo) : ''}</div>
+
+      ${bloco(1, 'Abertura — o que o cliente reclamou', nomeUsuario(dev.criado_por_usuario_id), dataHora(dev.criado_em), `
         <div class="grid">
-          <div class="field"><div class="field-lbl">Cliente</div><div class="field-val">${dev.cliente_nome || '—'}</div></div>
-          <div class="field"><div class="field-lbl">Nota Fiscal</div><div class="field-val">${dev.nota_fiscal || '—'}</div></div>
-          <div class="field"><div class="field-lbl">Motorista</div><div class="field-val">${dev.motorista_nome || '—'}</div></div>
-          <div class="field"><div class="field-lbl">Carga / Rota</div><div class="field-val">${dev.carga_numero || '—'} (Rota: ${dev.carga_rota || '—'})</div></div>
-          <div class="field"><div class="field-lbl">Veículo / Placa</div><div class="field-val">${dev.veiculo_placa || '—'}</div></div>
-          <div class="field"><div class="field-lbl">Valor Reclamado</div><div class="field-val" style="color:#047857;">R$ ${(parseFloat(dev.valor_reclamado)||0).toFixed(2)}</div></div>
+          ${campo('Cliente', dev.cliente_nome)}
+          ${campo('Nota Fiscal', dev.nota_fiscal)}
+          ${campo('Valor Reclamado', 'R$ ' + (parseFloat(dev.valor_reclamado) || 0).toFixed(2))}
+          ${campo('Carga / Rota', (dev.carga_numero || '—') + ' / ' + (dev.carga_rota || '—'))}
+          ${campo('Motorista', dev.motorista_nome)}
+          ${campo('Veículo / Placa', dev.veiculo_placa)}
         </div>
-        <div class="motivo-box">
-          <div class="motivo-lbl">MOTIVO RECLAMADO DA OCORRÊNCIA</div>
-          <div class="motivo-txt">${dev.motivo_reclamado || 'NÃO INFORMADO'}${dev.motivo_real_causa_raiz ? ' — Causa Raiz Apurada: ' + dev.motivo_real_causa_raiz : ''}</div>
+        <div class="texto-lbl">Motivo reclamado</div>
+        <div class="texto destaque">${esc(dev.motivo_reclamado)}</div>
+        <div class="texto-lbl">Detalhamento da abertura</div>
+        <div class="texto">${esc(dev.detalhamento_texto)}</div>
+        <div class="texto-lbl">Itens reclamados (${itens.length}) · Forma de acerto: ${esc(dev.forma_acerto)}</div>
+        ${tabelaItens}
+      `)}
+
+      ${bloco(2, 'Análise &amp; Causa Raiz — o que a apuração encontrou',
+        dev.responsavel_analise || dev.atualizado_por || '—',
+        dataHora(dev.atualizado_em), temAnalise ? `
+        <div class="grid">
+          ${campo('Causa Raiz Apurada', dev.motivo_real_causa_raiz)}
+          ${campo('Tipo de Erro', dev.tipo_erro === 'OUTRO' && dev.tipo_erro_outro ? 'OUTRO — ' + dev.tipo_erro_outro : dev.tipo_erro)}
+          ${campo('Responsável pela Análise', dev.responsavel_analise)}
         </div>
-        <div>
-          <b style="font-size: 11px; text-transform: uppercase; color: #0f172a;">Itens / Produtos Envolvidos (${itens.length})</b>
-          <table>
-            <thead>
-              <tr>
-                <th>Código</th>
-                <th>Descrição do Produto</th>
-                <th style="text-align:center;">Qtd</th>
-                <th style="text-align:right;">Vlr. Unitário</th>
-                <th style="text-align:right;">Vlr. Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itens.length === 0 ? '<tr><td colspan="5" style="text-align:center;">Sem itens detalhados individualmente.</td></tr>' :
-                itens.map(i => {
-                  const pInfo = getDadosProduto(i);
-                  return `
-                  <tr>
-                    <td><b>${pInfo.codigo}</b></td>
-                    <td><b>${pInfo.descricao}</b></td>
-                    <td style="text-align:center; font-weight:bold; color:#b45309;">${i.quantidade || i.qtd || 1}</td>
-                    <td style="text-align:right;">R$ ${(parseFloat(i.valor_unitario||i.preco||0)).toFixed(2)}</td>
-                    <td style="text-align:right; font-weight:bold; color:#047857;">R$ ${(parseFloat(i.valor_total||i.valor||0)).toFixed(2)}</td>
-                  </tr>`;
-                }).join('')}
-            </tbody>
-          </table>
+        <div class="grid2">
+          ${campo('Separador Apurado', dev.separador_apurado || dev.separador_nome)}
+          ${campo('Conferente Apurado', dev.conferente_apurado || dev.conferente_nome)}
         </div>
+        <div class="texto-lbl">Ação tomada / encaminhamento na análise</div>
+        <div class="texto">${esc(dev.acao_tomada)}</div>
+      ` : `<div class="pendente">⏳ Ocorrência ainda sem apuração de causa raiz.</div>`)}
+
+      ${bloco(3, 'Tratativa do Gestor — o que foi decidido',
+        nomeUsuario(dev.gestor_id),
+        dataHora(dev.data_acao_gestor), temTratativa ? `
+        <div class="grid2">
+          ${campo('Status da Gestão', dev.status_gestao === 'CONCLUIDO' ? 'CONCLUÍDO' : 'PENDENTE')}
+          ${campo('Registrado em', dataHora(dev.data_acao_gestor))}
+        </div>
+        <div class="texto-lbl">Ação do gestor / encaminhamento</div>
+        <div class="texto decisao">${esc(dev.acao_gestor)}</div>
+        <div class="${dev.desconto_produtividade_gestor ? 'desconto-sim' : 'desconto-nao'}">
+          ${dev.desconto_produtividade_gestor
+            ? '⚠️ COM desconto de produtividade — remuneração variável do colaborador'
+            : '✔ SEM desconto de produtividade'}
+        </div>
+      ` : `<div class="pendente">⏳ Ocorrência ainda sem parecer do gestor.</div>`)}
+
+      <div class="rodape">
+        <span>Emitido em ${new Date().toLocaleString('pt-BR')}${db.currentUser && db.currentUser.nome ? ' por ' + esc(db.currentUser.nome) : ''}</span>
+        <span>JR Oper · Devolução ${esc(numero)}</span>
       </div>
     </body>
     </html>
@@ -24176,18 +28429,13 @@ function gerarRelatorioTrocasVeiculosPdf() {
   win.document.close();
 }
 
-function gerarRelatorioCortesCdPdf() {
-  const fDe = window._pdfFiltroDe || '';
-  const fAte = window._pdfFiltroAte || '';
-
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
-  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
-
-  let cortes = [];
-  resumosCd.forEach(r => {
-    if (r && Array.isArray(r.cortes)) cortes.push(...r.cortes);
-  });
+// 6.7.0: lê cortes_cd. Sem argumentos usa o período da Central de PDFs;
+// a tela Corte passa a lista já filtrada.
+function gerarRelatorioCortesCdPdf(opts) {
+  const fDe = (opts && opts.fDe !== undefined) ? (opts.fDe || '') : (window._pdfFiltroDe || '');
+  const fAte = (opts && opts.fAte !== undefined) ? (opts.fAte || '') : (window._pdfFiltroAte || '');
+  const cortes = (opts && Array.isArray(opts.lista)) ? opts.lista : db.getCortesCD({ dataDe: fDe, dataAte: fAte });
+  const totalCortes = cortes.reduce((acc, c) => acc + (parseFloat(c.valor) || 0), 0);
 
   const win = window.open('', '_blank');
   win.document.write(`
@@ -24210,6 +28458,8 @@ function gerarRelatorioCortesCdPdf() {
       <table>
         <thead>
           <tr>
+            <th>Data</th>
+            <th>Turno</th>
             <th>Cód. Item</th>
             <th>Descrição do Produto</th>
             <th style="text-align:center;">Quantidade Cortada</th>
@@ -24217,9 +28467,11 @@ function gerarRelatorioCortesCdPdf() {
           </tr>
         </thead>
         <tbody>
-          ${cortes.length === 0 ? '<tr><td colspan="4" style="text-align:center;">Nenhum corte de produto registrado no período.</td></tr>' :
+          ${cortes.length === 0 ? '<tr><td colspan="6" style="text-align:center;">Nenhum corte de produto registrado no período.</td></tr>' :
             cortes.map(c => `
               <tr>
+                <td>${formatarData(c.data)}</td>
+                <td>${c.turno || '-'}</td>
                 <td><b>${c.codigo_item || '-'}</b></td>
                 <td><b>${c.descricao || '-'}</b></td>
                 <td style="text-align:center; font-weight:bold; color:#b45309;">${_qtdCorteNumero(c.quantidade)}</td>
@@ -24227,6 +28479,7 @@ function gerarRelatorioCortesCdPdf() {
               </tr>
             `).join('')}
         </tbody>
+        ${cortes.length > 0 ? `<tfoot><tr><td colspan="5" style="text-align:right; font-weight:bold;">TOTAL DO PERÍODO</td><td style="text-align:right; font-weight:bold; color:#b91c1c;">R$ ${totalCortes.toFixed(2)}</td></tr></tfoot>` : ''}
       </table>
     </body>
     </html>
@@ -24234,18 +28487,12 @@ function gerarRelatorioCortesCdPdf() {
   win.document.close();
 }
 
-function gerarRelatorioOcorrenciasCdPdf() {
-  const fDe = window._pdfFiltroDe || '';
-  const fAte = window._pdfFiltroAte || '';
-
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
-  // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
-  resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
-
-  let ocs = [];
-  resumosCd.forEach(r => {
-    if (r && Array.isArray(r.ocorrencias)) ocs.push(...r.ocorrencias);
-  });
+// 6.7.0: lê ocorrencias_cd. Sem argumentos usa o período da Central de
+// PDFs; a tela Ocorrência CD passa a lista já filtrada.
+function gerarRelatorioOcorrenciasCdPdf(opts) {
+  const fDe = (opts && opts.fDe !== undefined) ? (opts.fDe || '') : (window._pdfFiltroDe || '');
+  const fAte = (opts && opts.fAte !== undefined) ? (opts.fAte || '') : (window._pdfFiltroAte || '');
+  const ocs = (opts && Array.isArray(opts.lista)) ? opts.lista : db.getOcorrenciasCD({ dataDe: fDe, dataAte: fAte });
 
   const win = window.open('', '_blank');
   win.document.write(`
@@ -24268,15 +28515,19 @@ function gerarRelatorioOcorrenciasCdPdf() {
       <table>
         <thead>
           <tr>
-            <th>Título da Ocorrência</th>
-            <th>Causa Raiz / Detalhamento</th>
+            <th>Data</th>
+            <th>Turno</th>
+            <th>Ocorrência</th>
+            <th>Causa / Detalhamento</th>
             <th>Ação Tomada</th>
           </tr>
         </thead>
         <tbody>
-          ${ocs.length === 0 ? '<tr><td colspan="3" style="text-align:center;">Nenhuma ocorrência do galpão registrada no período.</td></tr>' :
+          ${ocs.length === 0 ? '<tr><td colspan="5" style="text-align:center;">Nenhuma ocorrência do galpão registrada no período.</td></tr>' :
             ocs.map(o => `
               <tr>
+                <td>${formatarData(o.data)}</td>
+                <td>${o.turno || '-'}</td>
                 <td><b>${o.ocorrencia || '-'}</b></td>
                 <td>${o.causa || '-'}</td>
                 <td style="color:#047857; font-weight:bold;">${o.acao || '-'}</td>
@@ -24421,7 +28672,7 @@ function gerarRelatorioFaltasDisciplinarPdf() {
   const fDe = window._pdfFiltroDe || '';
   const fAte = window._pdfFiltroAte || '';
 
-  let resumosCd = Array.isArray(db.data.resumo_diario_cd) ? db.data.resumo_diario_cd : Object.values(db.data.resumo_diario_cd || db.data.resumos_cd || {});
+  let resumosCd = db.getResumosDiariosCDHidratados() /* 6.7.0: filhos vêm das coleções próprias */;
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
   resumosCd = resumosCd.filter(r => r && registroNoPeriodo(r, 'resumo_diario_cd', fDe, fAte));
 
@@ -24499,8 +28750,332 @@ function normalizeStr(str) {
   return String(str || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    // Colapsa espaco repetido (v6.6.0). Sem isto, "EDSON  DOS  SANTOS" — que
+    // esta gravado assim mesmo, com espaco duplo — nunca casava com
+    // "EDSON DOS SANTOS" do cadastro, e a pessoa aparecia como se nao
+    // existisse. Espaco a mais nao faz de alguem outra pessoa.
+    .replace(/\s+/g, ' ')
     .trim()
     .toUpperCase();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GENTE FORA DO CADASTRO (v6.6.0 — Bloco C)
+//
+// O sistema comparava o nome vindo da planilha com os do cadastro LETRA POR
+// LETRA. `JOSE` e `JOSÉ` eram pessoas diferentes para ele; sobrenome a mais,
+// abreviacao ou um espaco sobrando viravam "nao achei". E nao reclamava:
+// so aparecia "N/A" no fim da linha, sem dizer por que.
+//
+// A comparacao aqui e TOLERANTE de proposito. Se fosse letra por letra, o
+// aviso gritaria em cima de `JOSÉ` vs `JOSE`, que e a mesma pessoa, e em uma
+// semana ninguem olharia mais para ele.
+//
+// E o sistema NUNCA amarra sozinho: quando acha parecido, ele PERGUNTA.
+// Quem confirma e gente.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Distancia de edicao (Levenshtein). Nomes sao curtos; nao vale nada mais
+// esperto que isto aqui.
+function jrDistanciaNome(a, b) {
+  a = String(a || ''); b = String(b || '');
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+  const linha = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let anterior = linha[0];
+    linha[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const guardado = linha[j];
+      linha[j] = Math.min(
+        linha[j] + 1,                                 // remocao
+        linha[j - 1] + 1,                             // insercao
+        anterior + (a[i - 1] === b[j - 1] ? 0 : 1)    // troca
+      );
+      anterior = guardado;
+    }
+  }
+  return linha[b.length];
+}
+
+// Confere UM nome contra a lista do cadastro.
+//
+// Devolve { status, sugestao }:
+//   'ok'         achou (ignorando acento, caixa e espaco sobrando)
+//   'dois_nomes' ha DOIS nomes enfiados neste campo, separados por barra — o
+//                contorno que o pessoal inventou enquanto so havia uma vaga de
+//                ajudante. O conserto nao e cadastrar ninguem: e separar, no
+//                campo do 2o ajudante. Por isso e um caso a parte, com outro
+//                texto e sem sugestao de nome.
+//   'quase'      nao achou igual, mas achou parecido -> sugestao
+//   'fora'       nao achou nada parecido
+//   'vazio'      campo em branco: nao e defeito, e ausencia
+// MEMORIA DO QUE JA FOI CONFERIDO. Sem isto, desenhar a tela de viagens custa
+// caro: 197 viagens x 3 campos x ~40 nomes de cadastro, cada par passando por
+// uma distancia de edicao — e a conta roda DUAS vezes, uma para o contador e
+// outra para as linhas. Os nomes se repetem muito ("ALISON CARMO LEITE"
+// aparece 7 vezes), entao guardar o veredito por nome resolve quase tudo.
+//
+// A chave e a PROPRIA LISTA (WeakMap): trocou o array — que e o que o
+// syncCloudToLocal faz quando o cadastro muda na nuvem — o cache vai junto,
+// sozinho. O tamanho guardado cobre cadastrar e excluir gente. Renomear
+// alguem sem mudar a quantidade e o unico caso que sobrevive ao cache, e ele
+// se resolve no proximo pull ou ao recarregar o app.
+const JR_CACHE_CADASTRO = new WeakMap();
+
+function jrConferirCadastro(nome, listaNomes) {
+  const bruto = String(nome || '').trim();
+  if (!bruto) return { status: 'vazio', sugestao: '' };
+  if (bruto.includes('/')) return { status: 'dois_nomes', sugestao: '' };
+
+  const alvo = normalizeStr(bruto);
+  if (!alvo) return { status: 'vazio', sugestao: '' };
+
+  let cache = null;
+  if (listaNomes && typeof listaNomes === 'object') {
+    cache = JR_CACHE_CADASTRO.get(listaNomes);
+    if (!cache || cache.tamanho !== listaNomes.length) {
+      cache = { tamanho: listaNomes.length, mapa: new Map() };
+      JR_CACHE_CADASTRO.set(listaNomes, cache);
+    }
+    if (cache.mapa.has(alvo)) return cache.mapa.get(alvo);
+  }
+  const guardar = (r) => { if (cache) cache.mapa.set(alvo, r); return r; };
+
+  const nomes = (listaNomes || [])
+    .map(n => (n && typeof n === 'object') ? (n.nome || '') : n)
+    .filter(Boolean);
+
+  for (const n of nomes) {
+    if (normalizeStr(n) === alvo) return guardar({ status: 'ok', sugestao: n });
+  }
+
+  // Nao achou igual. Ha alguem parecido o bastante para valer a pergunta?
+  //
+  // TRES regras, e todas as tres vieram de nome que esta gravado no banco
+  // hoje — nenhuma foi inventada:
+  //
+  //   contido   -> "DOUGLAS" dentro de "DOUGLAS DA COSTA LIMA", "MARCOS ROB"
+  //                dentro de "MARCOS ROBERTO" (nome truncado no meio)
+  //   distancia -> "JOSE LEANDO" x "JOSE LEANDRO", "LUKAS CARLOS" x "LUCAS
+  //                CARLOS", "MARCOS ROBBERTO" x "MARCOS ROBERTO" (erro de digito)
+  //   pedacos   -> "ALISON CARMO LEITE" x "ALISON DO CARMO LEITE" (faltou o
+  //                "DO"), "ANOEL FILHO T. DOS SANTOS" x "ANOEL FILHO TEIXEIRA
+  //                DOS SANTOS" (nome do meio abreviado). Estes dois nao cabem
+  //                em distancia de letra nenhuma — a diferenca e de PALAVRA —
+  //                e sem esta regra apareciam como gente que nao existe.
+  //
+  // Os pisos existem para nao sugerir besteira: em nome curto, duas letras de
+  // diferenca ja e outra pessoa.
+  let melhor = '', melhorPeso = Infinity;
+  const pedacosAlvo = jrPedacosDoNome(alvo);
+  for (const n of nomes) {
+    const cand = normalizeStr(n);
+    if (!cand) continue;
+    const menor = Math.min(cand.length, alvo.length);
+    const contido = menor >= 5 && (cand.includes(alvo) || alvo.includes(cand));
+    const dist = jrDistanciaNome(alvo, cand);
+    const proximo = menor >= 6 && dist <= 2;
+    const porPedacos = jrParecemMesmoNome(pedacosAlvo, jrPedacosDoNome(cand));
+    if (!contido && !proximo && !porPedacos) continue;
+    // Peso menor = palpite melhor. A distancia de letras serve de desempate
+    // mesmo quando quem aprovou foi outra regra.
+    const peso = contido ? Math.abs(cand.length - alvo.length) : dist;
+    if (peso < melhorPeso) { melhorPeso = peso; melhor = n; }
+  }
+
+  return guardar(melhor ? { status: 'quase', sugestao: melhor } : { status: 'fora', sugestao: '' });
+}
+
+// O nome quebrado em palavras que importam. "DE", "DA", "DOS" e afins saem:
+// e justamente a palavrinha que some quando alguem digita com pressa, e a
+// presenca dela nunca distingue duas pessoas.
+function jrPedacosDoNome(nomeNormalizado) {
+  const LIGACOES = ['DE', 'DA', 'DO', 'DAS', 'DOS', 'E'];
+  return String(nomeNormalizado || '')
+    .split(' ')
+    .map(p => p.replace(/\.$/, ''))          // "T." -> "T"
+    .filter(p => p && !LIGACOES.includes(p));
+}
+
+// Duas listas de pedacos sao provavelmente a mesma pessoa?
+//
+// Exige que o PRIMEIRO NOME bata — e o pedaco que ninguem erra — e que a
+// maioria do resto tambem bata, aceitando inicial no lugar do nome inteiro
+// ("T" por "TEIXEIRA"). Nao decide nada sozinho: so autoriza a PERGUNTA.
+function jrParecemMesmoNome(a, b) {
+  if (a.length < 2 || b.length < 2) return false;
+  if (a[0] !== b[0]) return false;
+  const curto = a.length <= b.length ? a : b;
+  const longo = a.length <= b.length ? b : a;
+  const disponiveis = longo.slice();
+  let casaram = 0;
+  curto.forEach(p => {
+    const i = disponiveis.findIndex(q =>
+      q === p || (p.length === 1 && q.startsWith(p)) || (q.length === 1 && p.startsWith(q))
+    );
+    if (i >= 0) { casaram++; disponiveis.splice(i, 1); }
+  });
+  return (casaram / curto.length) >= 0.6;
+}
+
+// ===== EQUIPE DA VIAGEM: UMA LISTA SO (18/09/2026) =====
+//
+// Motorista e ajudante eram duas listas fechadas: o campo Motorista so
+// aceitava quem estava em `motoristas`, o campo Ajudante so quem estava em
+// `ajudantes`. Na operacao real isso nao fecha: em emergencia um motorista
+// sai como ajudante de outro, e a escala precisa registrar isso do jeito que
+// aconteceu. A partir daqui os tres campos da viagem (motorista, ajudante e
+// 2o ajudante) enxergam a MESMA lista — todo mundo dos dois cadastros.
+//
+// A lista continua dizendo quem e quem: cada nome carrega `origem`, e o
+// <select> agrupa em "Motoristas" / "Ajudantes" para quem digita nao se
+// perder no meio de ~90 nomes. Nome que esta nos dois cadastros entra uma
+// vez so, como motorista.
+//
+// E MEMOIZADA pelo conteudo (assinatura dos nomes), nao pela referencia:
+// jrConferirCadastro guarda cache num WeakMap chaveado pela lista, e uma
+// lista nova a cada chamada jogaria esse cache fora a cada linha da escala.
+let _jrEquipeMemo = null;
+function jrEquipeCadastrada() {
+  const motoristas = (db.data && db.data.motoristas) || [];
+  const ajudantes  = (db.data && db.data.ajudantes)  || [];
+  const nomeDe = (p) => String((p && p.nome) || '').trim();
+  const assinatura = motoristas.map(nomeDe).join('|') + '#' + ajudantes.map(nomeDe).join('|');
+  if (_jrEquipeMemo && _jrEquipeMemo.assinatura === assinatura) return _jrEquipeMemo.lista;
+
+  const vistos = new Set();
+  const lista = [];
+  const incluir = (nome, origem) => {
+    const chave = normalizeStr(nome);
+    if (!chave || vistos.has(chave)) return;
+    vistos.add(chave);
+    lista.push({ nome, origem });
+  };
+  motoristas.forEach(m => incluir(nomeDe(m), 'MOTORISTA'));
+  ajudantes.forEach(a => incluir(nomeDe(a), 'AJUDANTE'));
+  lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+  _jrEquipeMemo = { assinatura, lista };
+  return lista;
+}
+
+// As <option>s de um campo de equipe, agrupadas por origem. `atual` e o nome
+// que ja esta gravado na viagem: se ele nao estiver em cadastro nenhum,
+// aparece mesmo assim, no fim — reabrir a viagem nunca pode apagar um nome
+// em silencio (mesma regra que a edicao ja seguia).
+function jrOpcoesEquipe(atual) {
+  const lista = jrEquipeCadastrada();
+  const opt = (nome) => `<option value="${vgEscTxt(nome)}" ${nome === atual ? 'selected' : ''}>${vgEscTxt(nome)}</option>`;
+  const grupo = (rotulo, origem) => {
+    const nomes = lista.filter(p => p.origem === origem).map(p => p.nome);
+    return nomes.length ? `<optgroup label="${rotulo}">${nomes.map(opt).join('')}</optgroup>` : '';
+  };
+  let html = grupo('Motoristas', 'MOTORISTA') + grupo('Ajudantes', 'AJUDANTE');
+  const atualLimpo = String(atual || '').trim();
+  if (atualLimpo && !lista.some(p => p.nome === atualLimpo)) {
+    html += `<optgroup label="Fora do cadastro">${opt(atualLimpo)}</optgroup>`;
+  }
+  return html;
+}
+
+// As pendencias de cadastro de UMA viagem — motorista e os dois ajudantes.
+// Vazio quando esta tudo certo, que e o caso normal.
+//
+// Os tres campos conferem contra a lista UNIDA (jrEquipeCadastrada). Antes
+// cada um olhava so o seu cadastro, e um motorista lancado como ajudante
+// numa emergencia acenderia "fora do cadastro" sem estar.
+function jrPendenciasDaViagem(v) {
+  if (!v) return [];
+  const equipe = jrEquipeCadastrada();
+  const campos = [
+    { rotulo: 'Motorista',   valor: v.motorista,  lista: equipe, campoId: 'ed-vg-motorista' },
+    { rotulo: 'Ajudante',    valor: v.ajudante,   lista: equipe, campoId: 'ed-vg-ajudante' },
+    { rotulo: '2º Ajudante', valor: v.ajudante_2, lista: equipe, campoId: 'ed-vg-ajudante-2' }
+  ];
+  const pendencias = [];
+  campos.forEach(c => {
+    const r = jrConferirCadastro(c.valor, c.lista);
+    // 'vazio' fica de fora: ajudante em branco e o caso normal de quem faz
+    // viagem sem ajudante, e o motorista em branco o formulario ja barra.
+    if (r.status === 'ok' || r.status === 'vazio') return;
+    pendencias.push({ rotulo: c.rotulo, valor: String(c.valor || '').trim(), campoId: c.campoId, status: r.status, sugestao: r.sugestao });
+  });
+  return pendencias;
+}
+
+// Quantas viagens da lista tem gente fora do cadastro. Sem este contador o
+// aviso vira enfeite: some no meio das viagens e ninguem age.
+function jrViagensComPendencia(lista) {
+  return (lista || []).filter(v => jrPendenciasDaViagem(v).length > 0);
+}
+
+// O selo que aparece na lista, embaixo do nome. Curto de proposito: a coluna
+// e estreita, e o texto inteiro fica no title.
+function jrSeloPendencia(p) {
+  if (!p) return '';
+  const rotulo = { dois_nomes: 'dois nomes', quase: 'conferir', fora: 'fora do cadastro' }[p.status];
+  if (!rotulo) return '';
+  const dica = p.status === 'dois_nomes'
+      ? 'Há dois nomes neste campo. Abra a viagem e separe usando o 2º ajudante.'
+      : p.status === 'quase'
+        ? `Não está no cadastro. Parece ser ${p.sugestao} — abra a viagem para confirmar.`
+        : 'Esta pessoa não está no cadastro.';
+  return `<div class="text-[9px] font-bold text-amber-400 mt-0.5 leading-tight" title="${vgEscAttr(dica)}">⚠️ ${rotulo}</div>`;
+}
+
+// A pendencia de UM campo da viagem, ou null. Usada pela lista, que precisa
+// marcar a celula certa.
+function jrPendenciaDoCampo(v, campoId) {
+  return jrPendenciasDaViagem(v).find(p => p.campoId === campoId) || null;
+}
+
+// O clique do "é ele?". NAO SALVA — so preenche o campo e diz que falta
+// salvar. Quem confirma e gente, e confirmar e apertar Salvar.
+function jrAplicarSugestao(campoId, nome, avisoId) {
+  const sel = document.getElementById(campoId);
+  if (!sel) return;
+  let opt = Array.from(sel.options).find(o => o.value === nome);
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.value = nome;
+    opt.textContent = nome;
+    sel.appendChild(opt);
+  }
+  sel.value = nome;
+  // Se a sugestao for para o 2o ajudante, o campo pode estar escondido —
+  // preencher sem abrir gravaria um nome que ninguem viu.
+  if (campoId.endsWith('-ajudante-2')) toggleSegundoAjudante(campoId.slice(0, -('-ajudante-2'.length)), true);
+  const linha = document.getElementById(avisoId);
+  if (linha) linha.innerHTML = `<span class="text-emerald-400 font-bold">✔ ${nome} — falta apertar “Salvar Atualização”.</span>`;
+}
+window.jrAplicarSugestao = jrAplicarSugestao;
+
+// O bloco de aviso da tela de edicao. Vazio quando esta tudo certo — que e o
+// caso normal, e por isso a tela nao muda para quem nao tem pendencia.
+function jrAvisoPendenciasHtml(v) {
+  const pend = jrPendenciasDaViagem(v);
+  if (!pend.length) return '';
+  const linhas = pend.map((p, i) => {
+    const id = `ed-vg-aviso-${i}`;
+    if (p.status === 'dois_nomes') {
+      return `<li id="${id}">Há <b>dois nomes</b> no campo ${p.rotulo}: <b class="text-white">${p.valor}</b>.
+              Deixe só um aqui e ponha o outro no <b>2º ajudante</b>.</li>`;
+    }
+    if (p.status === 'quase') {
+      return `<li id="${id}">${p.rotulo} <b class="text-white">${p.valor}</b> não está no cadastro.
+              Parece ser <b class="text-amber-200">${p.sugestao}</b> — é ele?
+              <button type="button" onclick="jrAplicarSugestao('${p.campoId}','${vgEscAttr(p.sugestao)}','${id}')"
+                class="ml-1 bg-amber-900/70 hover:bg-amber-800 border border-amber-600 text-amber-100 font-bold px-2 py-0.5 rounded text-[10px]">Sim, é ele</button></li>`;
+    }
+    return `<li id="${id}">${p.rotulo} <b class="text-white">${p.valor}</b> não está no cadastro.
+            Enquanto não for cadastrado, não aparece na lista para ser escolhido.</li>`;
+  }).join('');
+  return `
+    <div class="bg-amber-950/40 border border-amber-700/70 rounded-lg p-2.5">
+      <div class="text-[10px] font-bold text-amber-300 uppercase mb-1">⚠️ Gente fora do cadastro</div>
+      <ul class="text-[11px] text-amber-100/90 space-y-1 list-disc list-inside leading-snug">${linhas}</ul>
+    </div>`;
 }
 
 function getDadosColaboradorMestre(nomeOuChapa) {
@@ -24680,10 +29255,9 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
         <form onsubmit="handleConfirmarEmissaoDisciplinar(event)" class="space-y-4 text-xs">
           <input type="hidden" id="disc-tipo" value="${tipo}">
           <input type="hidden" id="disc-gerar-pdf" value="${isVerbal ? 'false' : 'true'}">
-          <input type="hidden" id="disc-parent-data" value="${options.parentData||''}">
-          <input type="hidden" id="disc-parent-turno" value="${options.parentTurno||''}">
-          <input type="hidden" id="disc-parent-type" value="${options.type||''}">
-          <input type="hidden" id="disc-parent-index" value="${options.index!==undefined?options.index:''}">
+          <!-- 6.7.0: a ocorrência de origem é endereçada pelo id do registro em
+               ocorrencias_colaborador, não mais por data+turno+tipo+índice. -->
+          <input type="hidden" id="disc-ocorrencia-id" value="${options.ocorrenciaId||''}">
 
           <!-- COLABORADOR DO CD (CADASTRO MESTRE) -->
           <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
@@ -24747,7 +29321,7 @@ function abrirModalEmissaoDisciplinarCD(options = {}) {
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Data da Ocorrência *</label>
-              <input type="date" id="disc-data" value="${options.parentData || agoraIsoBrasilia().slice(0,10)}" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-xs font-bold">
+              <input type="date" id="disc-data" value="${options.dataOcorrencia || agoraIsoBrasilia().slice(0,10)}" required class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 text-xs font-bold">
             </div>
             <div class="sm:col-span-2">
               <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Gestor Emissor / Responsável *</label>
@@ -24810,10 +29384,7 @@ async function handleConfirmarEmissaoDisciplinar(e) {
   const gestor = (document.getElementById('disc-gestor')?.value || '').trim().toUpperCase();
   const motivo = (document.getElementById('disc-motivo')?.value || '').trim();
 
-  const parentData = document.getElementById('disc-parent-data')?.value;
-  const parentTurno = document.getElementById('disc-parent-turno')?.value;
-  const parentType = document.getElementById('disc-parent-type')?.value;
-  const parentIndexStr = document.getElementById('disc-parent-index')?.value;
+  const ocorrenciaId = document.getElementById('disc-ocorrencia-id')?.value;
 
   if (!nome || !motivo) {
     alert('Preencha o nome do colaborador e o detalhamento do motivo.');
@@ -24832,20 +29403,14 @@ async function handleConfirmarEmissaoDisciplinar(e) {
     try { await window.cloudStore.syncCloudToLocal(); } catch(errSync) {}
   }
 
-  if (parentData && parentTurno && parentType && parentIndexStr !== '') {
-    const parentIndex = parseInt(parentIndexStr, 10);
-    const resumo = db.getResumoDiarioCD(parentData, parentTurno);
-    let item = null;
-    if (parentType === 'colaborador') item = resumo.ocorrencias_colaboradores?.[parentIndex];
-    else if (parentType === 'operacional') item = resumo.ocorrencias?.[parentIndex];
-    
-    if (item) {
-      item.medida_disciplinar = tipo;
-      item.alinea_clt = alineasSelecionadasKeys.join(', ');
-      if (tipo === 'SUSPENSAO') item.dias_suspensao = diasSuspensao;
-      item.disciplinar_gerada_em = agoraIsoBrasilia();
-      db.saveResumoDiarioCD(resumo);
-    }
+  if (ocorrenciaId) {
+    const marca = {
+      medida_disciplinar: tipo,
+      alinea_clt: alineasSelecionadasKeys.join(', '),
+      disciplinar_gerada_em: agoraIsoBrasilia()
+    };
+    if (tipo === 'SUSPENSAO') marca.dias_suspensao = diasSuspensao;
+    db.updateOcorrenciaColaborador(ocorrenciaId, marca);
   }
 
   // Orientação Verbal não é mais uma medida administrativa (pedido de
@@ -25145,3 +29710,573 @@ ${dados.motivo}
 }
 
 
+
+// ===== TELA: PRODUTIVIDADE CD (6.9.0) =====
+// Visao geral, linha a linha, por colaborador e por mes de fechamento.
+// - Pontos e producao: Power BI (modelo "Produtividade"), gravados na nuvem
+//   pela Edge Function sync-produtividade em prod_pontuacao (06h e 13h). Sao
+//   lidos direto da nuvem quando a tela abre; NAO entram no armazenamento
+//   local nem na sincronizacao do app (a tabela e somente leitura para o app).
+// - Ocorrencias: as do proprio Jr-Oper — devolucoes ERRO CARREGAMENTO em que
+//   a pessoa foi apontada como separador/conferente (mesma regra da aba
+//   Ocorrencia da planilha de produtividade e do Acompanhamento do
+//   Funcionario; separador/conferente vem preenchido em TODA devolucao, ate
+//   nas de erro de motorista ou industria, entao nao da para contar todas),
+//   Ocorrencia Colaborador e Medidas Disciplinares.
+// - Mes de fechamento: 26 do mes anterior a 25 do mes (o corte e no dia 25).
+//   Mes 'aberto' e previa e muda a cada sincronizacao; 'fechado' fica
+//   congelado (o Power BI recalcula o passado com o cadastro de hoje).
+// - Por decisao do gestor (20/10/2026) esta tela NUNCA mostra valores em R$.
+// - Ligacao pontos x ocorrencias e pelo NOME (normalizeStr): a chapa do
+//   cadastro do Jr-Oper nao e a matricula do WMS. Ocorrencia cujo nome nao
+//   casa com ninguem dos pontos aparece no quadro "sem correspondencia".
+window._prodCD = window._prodCD || {
+  periodos: null, pontos: {}, ultimaSync: null,
+  carregando: false, erro: '', mes: null,
+  busca: '', setor: 'TODOS', funcao: 'TODAS', ordem: 'pontuacao', aberto: {}
+};
+
+function prodEsc(v) {
+  return String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function prodNum(v, casas = 0) {
+  if (v === null || v === undefined || v === '' || isNaN(Number(v))) return '—';
+  return Number(v).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
+}
+
+async function carregarProdutividadeCD(forcar = false) {
+  const st = window._prodCD;
+  if (st.carregando) return;
+  if (!window.cloudStore || !window.cloudStore.isConfigured()) {
+    st.erro = 'Sem conexão com a nuvem configurada neste aparelho.';
+    renderApp();
+    return;
+  }
+  st.carregando = true; st.erro = '';
+  try {
+    if (forcar || !st.periodos) {
+      const per = await window.cloudStore._getPagina('prod_periodos_resumo', 'order=ano_mes.desc');
+      if (!per) throw new Error('Não foi possível ler os períodos de fechamento.');
+      st.periodos = per.filter(p => p.status === 'aberto' || Number(p.colaboradores) > 0);
+      const log = await window.cloudStore._getPagina('prod_sync_log', 'status=eq.ok&order=id.desc&limit=1');
+      st.ultimaSync = log && log[0] ? log[0].finalizado_em : null;
+      if (!st.mes || !st.periodos.some(p => p.ano_mes === st.mes)) {
+        st.mes = st.periodos.length ? st.periodos[0].ano_mes : null;
+      }
+    }
+    if (st.mes && (forcar || !st.pontos[st.mes])) {
+      const linhas = await window.cloudStore._getPagina('prod_pontuacao', `ano_mes=eq.${st.mes}&order=nome.asc`);
+      if (!linhas) throw new Error('Não foi possível ler os pontos do mês.');
+      st.pontos[st.mes] = linhas;
+    }
+  } catch (e) {
+    st.erro = e.message || String(e);
+  } finally {
+    st.carregando = false;
+    renderApp();
+  }
+}
+window.carregarProdutividadeCD = carregarProdutividadeCD;
+
+function prodSelecionarMes(valor) {
+  window._prodCD.mes = Number(valor);
+  window._prodCD.aberto = {};
+  if (!window._prodCD.pontos[window._prodCD.mes]) carregarProdutividadeCD();
+  else renderApp();
+}
+window.prodSelecionarMes = prodSelecionarMes;
+
+function prodAlternarLinha(chave) {
+  window._prodCD.aberto[chave] = !window._prodCD.aberto[chave];
+  renderApp();
+}
+window.prodAlternarLinha = prodAlternarLinha;
+
+// A busca re-renderiza a tela inteira; devolve o foco ao campo para dar
+// para continuar digitando.
+function prodBuscar(valor) {
+  window._prodCD.busca = valor;
+  renderApp();
+  const el = document.getElementById('prod-busca');
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+window.prodBuscar = prodBuscar;
+
+// Ocorrencias do periodo [inicio, fim], agrupadas pelo nome normalizado.
+function prodOcorrenciasDoPeriodo(inicio, fim) {
+  const dentro = d => d && d >= inicio && d <= fim;
+  const porNome = {};
+  const pegar = nome => {
+    const k = normalizeStr(nome);
+    if (!k) return null;
+    if (!porNome[k]) porNome[k] = { nome: String(nome).trim(), sac: [], colab: [], medidas: [] };
+    return porNome[k];
+  };
+
+  db.getDevolucoes().forEach(d => {
+    if (String(d.tipo_erro || "").trim().toUpperCase() !== "ERRO CARREGAMENTO") return;
+    const data = String(d.data_abertura || d.criado_em || '').slice(0, 10);
+    if (!dentro(data)) return;
+    const sep = (d.separador_apurado || d.separador_nome || '').trim();
+    const conf = (d.conferente_apurado || d.conferente_nome || '').trim();
+    const reg = papel => ({
+      data, papel,
+      protocolo: d.numero_devolucao || d.numero_protocolo || '—',
+      cliente: d.cliente_nome || '—',
+      motivo: d.motivo_real_causa_raiz || d.motivo_reclamado || '—',
+      tipo_erro: d.tipo_erro || '—',
+      tratativa: d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'
+    });
+    if (sep && conf && normalizeStr(sep) === normalizeStr(conf)) {
+      const p = pegar(sep); if (p) p.sac.push(reg('Separador e Conferente'));
+      return;
+    }
+    if (sep) { const p = pegar(sep); if (p) p.sac.push(reg('Separador')); }
+    if (conf) { const p = pegar(conf); if (p) p.sac.push(reg('Conferente')); }
+  });
+
+  db.getOcorrenciasColaborador().forEach(o => {
+    if (o.is_deleted || !dentro(o.data)) return;
+    const p = pegar(o.funcionario || '');
+    if (p) p.colab.push({ data: o.data, requisito: o.requisito || '—', detalhamento: o.detalhamento || '', status: o.status || 'PENDENTE' });
+  });
+
+  db.getMedidasDisciplinares().forEach(m => {
+    const data = String(m.data_ocorrencia || '').slice(0, 10);
+    if (!dentro(data)) return;
+    const p = pegar(m.colaborador_nome || '');
+    if (p) p.medidas.push({ data, tipo: m.tipo || '—', numero: m.numero_medida || '—', motivo: m.motivo || '', dias: m.dias_suspensao || '' });
+  });
+
+  return porNome;
+}
+
+function prodMontarLinhas(periodo) {
+  const st = window._prodCD;
+  const pontos = st.pontos[periodo.ano_mes] || [];
+  const ocs = prodOcorrenciasDoPeriodo(String(periodo.inicio).slice(0, 10), String(periodo.fim).slice(0, 10));
+  const usados = {};
+  const linhas = pontos.map(p => {
+    const k = normalizeStr(p.nome);
+    const o = ocs[k] || { sac: [], colab: [], medidas: [] };
+    usados[k] = true;
+    return { ...p, chave: 'm' + p.matricula, sac: o.sac, colab: o.colab, medidas: o.medidas };
+  });
+  const semCorrespondencia = Object.keys(ocs).filter(k => !usados[k]).map(k => ocs[k]);
+  return { linhas, semCorrespondencia };
+}
+
+function prodDetalheHtml(l) {
+  const vazio = txt => `<div class="text-[11px] text-slate-500 italic">${txt}</div>`;
+  const sac = l.sac.length === 0 ? vazio('Nenhuma devolução por erro de carregamento no período.') : `
+    <table class="w-full text-[11px] text-slate-300"><thead class="text-[9px] uppercase text-slate-500"><tr>
+      <th class="p-1 text-left">Data</th><th class="p-1 text-left">Protocolo</th><th class="p-1 text-left">Papel</th>
+      <th class="p-1 text-left">Tipo de erro</th><th class="p-1 text-left">Motivo</th><th class="p-1 text-left">Cliente</th><th class="p-1 text-left">Tratativa</th></tr></thead>
+      <tbody>${l.sac.map(s => `<tr class="border-t border-slate-800">
+        <td class="p-1 whitespace-nowrap">${formatarData(s.data)}</td><td class="p-1 font-bold text-emerald-400">${prodEsc(s.protocolo)}</td>
+        <td class="p-1">${prodEsc(s.papel)}</td><td class="p-1">${prodEsc(s.tipo_erro)}</td><td class="p-1">${prodEsc(s.motivo)}</td>
+        <td class="p-1">${prodEsc(s.cliente)}</td><td class="p-1 ${s.tratativa === 'Concluída' ? 'text-emerald-400' : 'text-amber-400'} font-bold">${s.tratativa}</td></tr>`).join('')}</tbody></table>`;
+  const colab = l.colab.length === 0 ? vazio('Nenhuma ocorrência de colaborador no período.') : l.colab.map(c => `
+    <div class="text-[11px] text-slate-300 border-t border-slate-800 py-1"><span class="font-bold">${formatarData(c.data)}</span> · <span class="text-amber-300 font-bold">${prodEsc(c.requisito)}</span> · ${prodEsc(c.status)}${c.detalhamento ? `<div class="text-slate-400">${prodEsc(c.detalhamento)}</div>` : ''}</div>`).join('');
+  const med = l.medidas.length === 0 ? vazio('Nenhuma medida disciplinar no período.') : l.medidas.map(m => `
+    <div class="text-[11px] text-slate-300 border-t border-slate-800 py-1"><span class="font-bold">${formatarData(m.data)}</span> · <span class="text-red-300 font-bold">${prodEsc(m.tipo)}${m.dias ? ` (${prodEsc(m.dias)}d)` : ''}</span> · ${prodEsc(m.numero)}${m.motivo ? `<div class="text-slate-400">${prodEsc(m.motivo)}</div>` : ''}</div>`).join('');
+  const prod = l.matricula !== undefined ? `
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
+      ${[['OS', prodNum(l.qtd_os)], ['Apanhos', prodNum(l.qtd_apanhos)], ['Kg Expedição', prodNum(l.kg_total, 2)], ['Kg Entrada', prodNum(l.kg_entrada, 2)], ['Kg Carne', prodNum(l.kg_carne, 2)]]
+        .map(([r, v]) => `<div class="bg-slate-900 border border-slate-800 rounded-lg p-2"><div class="text-[9px] uppercase text-slate-500 font-bold">${r}</div><div class="font-bold text-white">${v}</div></div>`).join('')}
+    </div>` : '';
+  return `
+    <div class="space-y-3 p-3 bg-slate-950/60">
+      ${prod}
+      <div><div class="text-[10px] font-black text-red-400 uppercase mb-1">📦 Ocorrências SAC — ${l.sac.length}</div>${sac}</div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div><div class="text-[10px] font-black text-amber-400 uppercase mb-1">👤 Ocorrência Colaborador — ${l.colab.length}</div>${colab}</div>
+        <div><div class="text-[10px] font-black text-purple-400 uppercase mb-1">⚖️ Medidas Disciplinares — ${l.medidas.length}</div>${med}</div>
+      </div>
+    </div>`;
+}
+
+function exportarProdutividadeCDCsv() {
+  const st = window._prodCD;
+  const periodo = (st.periodos || []).find(p => p.ano_mes === st.mes);
+  if (!periodo) return;
+  const { linhas } = prodMontarLinhas(periodo);
+  const cab = ['MES', 'MATRICULA', 'NOME', 'FUNCAO', 'SETOR', 'PONTUACAO', 'QTD_OS', 'QTD_APANHOS', 'KG_EXPEDICAO', 'KG_ENTRADA', 'KG_CARNE', 'OC_SAC', 'OC_COLABORADOR', 'MEDIDAS_DISCIPLINARES'];
+  const n = v => (v === null || v === undefined || v === '') ? '' : String(v).replace('.', ',');
+  const cel = v => `"${String(v === null || v === undefined ? '' : v).replace(/"/g, '""')}"`;
+  const csv = [cab.join(';')].concat(linhas.map(l => [periodo.rotulo, l.matricula, l.nome, l.cargo, l.setor,
+    n(l.pontuacao), n(l.qtd_os), n(l.qtd_apanhos), n(l.kg_total), n(l.kg_entrada), n(l.kg_carne),
+    l.sac.length, l.colab.length, l.medidas.length].map(cel).join(';'))).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `produtividade_cd_${periodo.ano_mes}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+window.exportarProdutividadeCDCsv = exportarProdutividadeCDCsv;
+
+function renderProdutividadeCDView() {
+  const st = window._prodCD;
+  const cabecalhoTela = (extra = '') => `
+    <div class="bg-gradient-to-r from-slate-900 via-emerald-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-emerald-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+      <div class="flex items-center gap-3">
+        <div class="bg-emerald-600/30 p-2.5 rounded-xl border border-emerald-500/40 text-2xl">🏆</div>
+        <div>
+          <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+            PRODUTIVIDADE
+            <span class="bg-emerald-800 text-emerald-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">CENTRO DE DISTRIBUIÇÃO</span>
+          </h2>
+          <p class="text-[11px] text-slate-300 font-medium">Pontos (Power BI), ocorrências SAC, ocorrência colaborador e medidas disciplinares — período de 26 a 25</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">${extra}</div>
+    </div>`;
+
+  if (!st.periodos) {
+    if (!st.carregando && !st.erro) setTimeout(() => carregarProdutividadeCD(), 0);
+    return `<div class="space-y-5">${cabecalhoTela()}
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">
+        ${st.erro ? `<div class="text-red-400 font-bold mb-3">⚠️ ${prodEsc(st.erro)}</div><button onclick="carregarProdutividadeCD(true)" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">Tentar de novo</button>` : '⏳ Carregando pontos da nuvem...'}
+      </div></div>`;
+  }
+
+  const periodo = st.periodos.find(p => p.ano_mes === st.mes);
+  const botoes = `
+    <button onclick="carregarProdutividadeCD(true)" class="bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/40 shadow" ${st.carregando ? 'disabled' : ''}>${st.carregando ? '⏳ Atualizando...' : '🔄 Atualizar'}</button>
+    <button onclick="exportarProdutividadeCDCsv()" class="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold px-3 py-1.5 rounded-lg text-xs border border-emerald-500/50 shadow">📊 Exportar Excel</button>`;
+
+  if (!periodo) {
+    return `<div class="space-y-5">${cabecalhoTela(botoes)}
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">Nenhum período com pontos disponível.</div></div>`;
+  }
+  if (!st.pontos[periodo.ano_mes] && !st.carregando && !st.erro) setTimeout(() => carregarProdutividadeCD(), 0);
+
+  const { linhas: todas, semCorrespondencia } = prodMontarLinhas(periodo);
+  const busca = normalizeStr(st.busca || '');
+  const setores = Array.from(new Set(todas.map(l => (l.setor || '').trim()).filter(Boolean))).sort();
+  // Funcao = cargo que vem do Power BI junto com os pontos.
+  const funcoes = Array.from(new Set(todas.map(l => (l.cargo || '').trim()).filter(Boolean))).sort();
+  if (!st.funcao) st.funcao = 'TODAS';
+  const totalOc = l => l.sac.length + l.colab.length + l.medidas.length;
+  const linhas = todas
+    .filter(l => st.setor === 'TODOS' || (l.setor || '').trim() === st.setor)
+    .filter(l => st.funcao === 'TODAS' || (l.cargo || '').trim() === st.funcao)
+    .filter(l => !busca || normalizeStr(`${l.nome} ${l.matricula} ${l.cargo}`).includes(busca))
+    .sort((a, b) => {
+      if (st.ordem === 'nome') return String(a.nome).localeCompare(String(b.nome));
+      if (st.ordem === 'ocorrencias') return (totalOc(b) - totalOc(a)) || String(a.nome).localeCompare(String(b.nome));
+      const pa = a.pontuacao === null ? -1 : Number(a.pontuacao);
+      const pb = b.pontuacao === null ? -1 : Number(b.pontuacao);
+      return pb - pa;
+    });
+
+  const comPontos = linhas.filter(l => l.pontuacao !== null && l.pontuacao !== undefined);
+  const media = comPontos.length ? comPontos.reduce((s, l) => s + Number(l.pontuacao), 0) / comPontos.length : null;
+  const soma = campo => linhas.reduce((s, l) => s + l[campo].length, 0);
+  const aberto = periodo.status === 'aberto';
+  const ultima = st.ultimaSync ? new Date(st.ultimaSync).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
+  const card = (rotulo, valor, cor) => `
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+      <div class="text-[9px] uppercase font-bold text-slate-500">${rotulo}</div>
+      <div class="text-xl font-black ${cor}">${valor}</div>
+    </div>`;
+
+  const badge = (n, cor) => n === 0 ? '<span class="text-slate-600">0</span>' : `<span class="${cor} font-black">${n}</span>`;
+
+  const linhaHtml = l => {
+    const aberta = !!st.aberto[l.chave];
+    return `
+      <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="prodAlternarLinha('${prodEsc(l.chave)}')">
+        <td class="p-2 border-r border-slate-800 text-slate-500">${aberta ? '▾' : '▸'}</td>
+        <td class="p-2 border-r border-slate-800 font-bold text-slate-300">${prodEsc(l.matricula)}</td>
+        <td class="p-2 border-r border-slate-800 font-bold text-white uppercase">${prodEsc(l.nome)}</td>
+        <td class="p-2 border-r border-slate-800 text-slate-300 text-[11px]">${prodEsc(l.cargo)}</td>
+        <td class="p-2 border-r border-slate-800 text-slate-300 text-center">${prodEsc(l.setor)}</td>
+        <td class="p-2 border-r border-slate-800 text-right font-black text-emerald-300">${prodNum(l.pontuacao, 2)}</td>
+        <td class="p-2 border-r border-slate-800 text-right text-slate-300">${prodNum(l.qtd_os)}</td>
+        <td class="p-2 border-r border-slate-800 text-right text-slate-300">${prodNum(l.qtd_apanhos)}</td>
+        <td class="p-2 border-r border-slate-800 text-right text-slate-300">${prodNum(l.kg_total)}</td>
+        <td class="p-2 border-r border-slate-800 text-right text-slate-300">${prodNum(l.kg_entrada)}</td>
+        <td class="p-2 border-r border-slate-800 text-center">${badge(l.sac.length, 'text-red-400')}</td>
+        <td class="p-2 border-r border-slate-800 text-center">${badge(l.colab.length, 'text-amber-400')}</td>
+        <td class="p-2 text-center">${badge(l.medidas.length, 'text-purple-400')}</td>
+      </tr>
+      ${aberta ? `<tr><td colspan="13" class="p-0 border-b border-slate-800">${prodDetalheHtml(l)}</td></tr>` : ''}`;
+  };
+
+  const semCorrHtml = semCorrespondencia.length === 0 ? '' : `
+    <div class="bg-slate-900 border border-amber-800/60 rounded-xl p-4 shadow-xl space-y-2">
+      <h3 class="text-xs font-extrabold text-amber-400 uppercase">⚠️ Ocorrências sem correspondência nos pontos — ${semCorrespondencia.length}</h3>
+      <p class="text-[10px] text-slate-400">Nomes apontados em ocorrências do período que não batem com nenhum colaborador da lista de pontos (nome escrito diferente, ou pessoa fora do cadastro do Power BI). Clique para ver.</p>
+      <div class="divide-y divide-slate-800">
+        ${semCorrespondencia.map((o, i) => {
+          const chave = 'x' + i;
+          const aberta = !!st.aberto[chave];
+          return `<div>
+            <div class="flex items-center justify-between py-1.5 cursor-pointer text-xs" onclick="prodAlternarLinha('${chave}')">
+              <span class="font-bold text-white uppercase">${aberta ? '▾' : '▸'} ${prodEsc(o.nome)}</span>
+              <span class="space-x-3"><span>SAC ${badge(o.sac.length, 'text-red-400')}</span><span>Colab. ${badge(o.colab.length, 'text-amber-400')}</span><span>Medidas ${badge(o.medidas.length, 'text-purple-400')}</span></span>
+            </div>
+            ${aberta ? prodDetalheHtml(o) : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  return `
+    <div class="space-y-5">
+      ${cabecalhoTela(botoes)}
+
+      <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl shadow-inner grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
+        <div>
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Mês de fechamento</label>
+          <select onchange="prodSelecionarMes(this.value)" class="w-full bg-slate-900 border border-slate-700 text-emerald-300 text-xs rounded-lg p-2 font-bold">
+            ${st.periodos.map(p => `<option value="${p.ano_mes}" ${p.ano_mes === st.mes ? 'selected' : ''}>${prodEsc(p.rotulo)}${p.status === 'aberto' ? ' — EM ANDAMENTO' : ''}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Setor</label>
+          <select onchange="window._prodCD.setor=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-amber-300 text-xs rounded-lg p-2 font-bold">
+            <option value="TODOS" ${st.setor === 'TODOS' ? 'selected' : ''}>TODOS</option>
+            ${setores.map(s => `<option value="${prodEsc(s)}" ${st.setor === s ? 'selected' : ''}>${prodEsc(s)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Função</label>
+          <select onchange="window._prodCD.funcao=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-amber-300 text-xs rounded-lg p-2 font-bold">
+            <option value="TODAS" ${st.funcao === 'TODAS' ? 'selected' : ''}>TODAS</option>
+            ${funcoes.map(f => `<option value="${prodEsc(f)}" ${st.funcao === f ? 'selected' : ''}>${prodEsc(f)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Ordenar por</label>
+          <select onchange="window._prodCD.ordem=this.value; renderApp()" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-bold">
+            <option value="pontuacao" ${st.ordem === 'pontuacao' ? 'selected' : ''}>Maior pontuação</option>
+            <option value="ocorrencias" ${st.ordem === 'ocorrencias' ? 'selected' : ''}>Mais ocorrências</option>
+            <option value="nome" ${st.ordem === 'nome' ? 'selected' : ''}>Nome</option>
+          </select>
+        </div>
+        <div class="sm:col-span-2">
+          <label class="block text-[9px] text-slate-400 font-bold uppercase mb-1">Pesquisar (nome, matrícula ou função)</label>
+          <input id="prod-busca" type="text" placeholder="🔎 Digite para pesquisar..." value="${prodEsc(st.busca)}" oninput="prodBuscar(this.value)" class="w-full bg-slate-900 border border-slate-700 text-white text-xs rounded-lg p-2 font-medium focus:border-emerald-500 focus:outline-none">
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 text-[11px]">
+        <span class="${aberto ? 'bg-amber-950 text-amber-300 border-amber-700/80' : 'bg-emerald-950 text-emerald-300 border-emerald-700/80'} border px-2 py-0.5 rounded font-extrabold uppercase">${aberto ? '⏳ Em andamento — prévia' : '🔒 Fechado'}</span>
+        <span class="text-slate-400">Período: <b class="text-white">${formatarData(periodo.inicio)} a ${formatarData(periodo.fim)}</b></span>
+        ${aberto ? `<span class="text-slate-500">· Pontos atualizados em ${ultima} (sincroniza às 06h e 13h)</span>` : ''}
+        ${st.erro ? `<span class="text-red-400 font-bold">⚠️ ${prodEsc(st.erro)}</span>` : ''}
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        ${card('Colaboradores', linhas.length, 'text-white')}
+        ${card('Pontuação média', prodNum(media, 2), 'text-emerald-300')}
+        ${card('Ocorrências SAC', soma('sac'), 'text-red-400')}
+        ${card('Ocorrência Colaborador', soma('colab'), 'text-amber-400')}
+        ${card('Medidas Disciplinares', soma('medidas'), 'text-purple-400')}
+      </div>
+
+      <div class="bg-slate-900 border border-emerald-800/60 rounded-xl p-4 shadow-xl">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-950 text-slate-300 text-[9px] uppercase border-b border-slate-800">
+              <tr>
+                <th class="p-2 border-r border-slate-800"></th>
+                <th class="p-2 border-r border-slate-800">Matrícula</th>
+                <th class="p-2 border-r border-slate-800 min-w-[180px]">Colaborador</th>
+                <th class="p-2 border-r border-slate-800 min-w-[140px]">Função</th>
+                <th class="p-2 border-r border-slate-800 text-center">Setor</th>
+                <th class="p-2 border-r border-slate-800 text-right text-emerald-400">Pontuação</th>
+                <th class="p-2 border-r border-slate-800 text-right">OS</th>
+                <th class="p-2 border-r border-slate-800 text-right">Apanhos</th>
+                <th class="p-2 border-r border-slate-800 text-right">Kg Expedição</th>
+                <th class="p-2 border-r border-slate-800 text-right">Kg Entrada</th>
+                <th class="p-2 border-r border-slate-800 text-center text-red-400">Oc. SAC</th>
+                <th class="p-2 border-r border-slate-800 text-center text-amber-400">Oc. Colab.</th>
+                <th class="p-2 text-center text-purple-400">Medidas</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+              ${!st.pontos[periodo.ano_mes]
+                ? '<tr><td colspan="13" class="p-6 text-center text-slate-500">⏳ Carregando pontos do mês...</td></tr>'
+                : linhas.length === 0
+                  ? '<tr><td colspan="13" class="p-6 text-center text-slate-500">Nenhum colaborador encontrado com esses filtros.</td></tr>'
+                  : linhas.map(linhaHtml).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-[10px] text-slate-500 mt-2">Clique numa linha para ver a produção e cada ocorrência do período. Ocorrências SAC: devoluções ERRO CARREGAMENTO em que a pessoa foi apontada como separador e/ou conferente.</p>
+      </div>
+
+      ${semCorrHtml}
+    </div>`;
+}
+
+// ===== TELA: VISAO OPERACAO (6.9.4) =====
+// Visao Geral > Visao Operacao: a mesma pagina do arquivo .html que o gerador
+// (tools/gerar_visao_operacao.bat) grava ao lado da apresentacao mensal. Quem
+// monta tudo (carga, analise e graficos) e js/visaoOperacao.js, comum aos dois.
+// - Le a nuvem so quando a tela abre: as tabelas vo_* (foto mensal tirada do
+//   Power BI pela Edge Function sync-visao-operacao) nao entram na sincronizacao.
+// - Abre no ultimo mes congelado; o mes em andamento aparece como previa.
+// - A pagina vai num iframe (srcdoc) para o CSS dela nao brigar com o Tailwind
+//   do app; a altura acompanha o conteudo e os atalhos do menu dela rolam a tela.
+// - Todos veem, inclusive a lista de hora extra (decisao de 28/10/2026).
+window._visaoOp = window._visaoOp || { periodos: null, mes: null, paginas: {}, altura: 900, carregando: false, erro: '' };
+
+const VO_LOGO = './public/logo_jr_branca.png';
+
+async function voRest(tabela, query) {
+  const cs = window.cloudStore;
+  const r = await fetch(`${cs.config.url}/rest/v1/${tabela}?${query}`, { headers: cs._headers() });
+  if (!r.ok) throw new Error(`Não foi possível ler ${tabela} (${r.status}).`);
+  return r.json();
+}
+
+async function carregarVisaoOperacao(forcar = false) {
+  const st = window._visaoOp;
+  if (st.carregando) return;
+  if (!window.cloudStore || !window.cloudStore.isConfigured()) {
+    st.erro = 'Sem conexão com a nuvem configurada neste aparelho.';
+    renderApp();
+    return;
+  }
+  if (!window.VisaoOperacao) {
+    st.erro = 'O arquivo js/visaoOperacao.js não carregou. Atualize a página.';
+    renderApp();
+    return;
+  }
+  st.carregando = true; st.erro = '';
+  try {
+    if (forcar || !st.periodos) {
+      st.periodos = await voRest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes.desc');
+      if (!st.mes || !st.periodos.some(p => p.ano_mes === st.mes)) {
+        const fechado = st.periodos.find(p => p.status === 'fechado');
+        st.mes = (fechado || st.periodos[0] || {}).ano_mes || null;
+      }
+    }
+    if (st.mes && (forcar || !st.paginas[st.mes])) {
+      const VO = window.VisaoOperacao;
+      const d = await VO.carregarDados(voRest, st.mes);
+      st.paginas[st.mes] = VO.gerarHtml(d, VO.analisar(d), { logo: VO_LOGO });
+    }
+  } catch (e) {
+    st.erro = e.message || String(e);
+  } finally {
+    st.carregando = false;
+    renderApp();
+  }
+}
+window.carregarVisaoOperacao = carregarVisaoOperacao;
+
+function voSelecionarMes(valor) {
+  window._visaoOp.mes = Number(valor);
+  carregarVisaoOperacao();
+  renderApp();
+}
+window.voSelecionarMes = voSelecionarMes;
+
+// Altura do iframe = altura da pagina; os links do menu da pagina rolam o app
+// (dentro de um srcdoc, "#secao" apontaria para o endereco do app).
+function voAoCarregar(frame) {
+  try {
+    const doc = frame.contentDocument;
+    const ajustar = () => {
+      const h = doc.documentElement.scrollHeight;
+      if (h > 200) { frame.style.height = `${h}px`; window._visaoOp.altura = h; }
+    };
+    ajustar();
+    setTimeout(ajustar, 300);
+    doc.querySelectorAll('nav a[href^="#"]').forEach(a => {
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        const alvo = doc.getElementById(a.getAttribute('href').slice(1));
+        if (alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  } catch (e) {
+    console.warn('[Visao Operacao] ajuste do quadro:', e.message);
+  }
+}
+window.voAoCarregar = voAoCarregar;
+
+function voImprimir() {
+  const frame = document.getElementById('vo-frame');
+  if (frame && frame.contentWindow) frame.contentWindow.print();
+}
+window.voImprimir = voImprimir;
+
+// Baixa a pagina como arquivo .html (o logo vai embutido, para abrir sem o app)
+async function voBaixarHtml() {
+  const st = window._visaoOp;
+  let html = st.paginas[st.mes];
+  if (!html) return;
+  try {
+    const blobLogo = await (await fetch(VO_LOGO)).blob();
+    const dataUrl = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(blobLogo); });
+    html = html.split(VO_LOGO).join(dataUrl);
+  } catch (_) { /* sem logo: o arquivo sai do mesmo jeito */ }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  a.download = `${Math.floor(st.mes / 100)}.${String(st.mes % 100).padStart(2, '0')} - Visão Operação.html`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+window.voBaixarHtml = voBaixarHtml;
+
+function renderVisaoOperacaoView() {
+  const st = window._visaoOp;
+  const VO = window.VisaoOperacao;
+  const nome = am => (VO ? VO.nomeMes(am) : String(am));
+  const cabecalho = (extra = '') => `
+    <div class="bg-gradient-to-r from-slate-900 via-blue-950/50 to-slate-900 p-4 rounded-xl shadow-xl border border-blue-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+      <div class="flex items-center gap-3">
+        <div class="bg-blue-600/30 p-2.5 rounded-xl border border-blue-500/40 text-2xl">📈</div>
+        <div>
+          <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+            VISÃO OPERAÇÃO
+            <span class="bg-blue-800 text-blue-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">GERÊNCIA E DIRETORIA</span>
+          </h2>
+          <p class="text-[11px] text-slate-300 font-medium">Fechamento mensal da logística: Power BI (foto do mês) + Jr-Oper. O mês congela no dia 3 do mês seguinte.</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">${extra}</div>
+    </div>`;
+  const aviso = (txt) => `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">
+      ${st.erro ? `<div class="text-red-400 font-bold mb-3">⚠️ ${prodEsc(st.erro)}</div><button onclick="carregarVisaoOperacao(true)" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">Tentar de novo</button>` : txt}
+    </div>`;
+
+  if (!st.periodos) {
+    if (!st.carregando && !st.erro) setTimeout(() => carregarVisaoOperacao(), 0);
+    return `<div class="space-y-5">${cabecalho()}${aviso('⏳ Carregando a Visão Operação da nuvem...')}</div>`;
+  }
+  if (!st.periodos.length) {
+    return `<div class="space-y-5">${cabecalho()}${aviso('Nenhum mês gravado ainda. A coleta roda todo dia às 06h20.')}</div>`;
+  }
+
+  const opcoes = st.periodos.map(p => `<option value="${p.ano_mes}" ${p.ano_mes === st.mes ? 'selected' : ''}>${prodEsc(nome(p.ano_mes))}${p.status === 'fechado' ? '' : ' · prévia'}</option>`).join('');
+  const html = st.paginas[st.mes];
+  const botoes = `
+    <select onchange="voSelecionarMes(this.value)" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2 py-1.5 font-bold">${opcoes}</select>
+    <button onclick="carregarVisaoOperacao(true)" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-500/40 shadow" ${st.carregando ? 'disabled' : ''}>${st.carregando ? '⏳ Atualizando...' : '🔄 Atualizar'}</button>
+    <button onclick="voImprimir()" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-500/40 shadow" ${html ? '' : 'disabled'}>🖨️ Imprimir / PDF</button>
+    <button onclick="voBaixarHtml()" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-500/40 shadow" ${html ? '' : 'disabled'}>⬇️ Baixar HTML</button>`;
+
+  if (!html) {
+    if (!st.carregando && !st.erro) setTimeout(() => carregarVisaoOperacao(), 0);
+    return `<div class="space-y-5">${cabecalho(botoes)}${aviso(`⏳ Montando ${prodEsc(nome(st.mes))}...`)}</div>`;
+  }
+
+  return `<div class="space-y-4">${cabecalho(botoes)}
+    ${st.erro ? `<div class="text-red-400 text-xs font-bold">⚠️ ${prodEsc(st.erro)}</div>` : ''}
+    <iframe id="vo-frame" title="Visão Operação ${prodEsc(nome(st.mes))}" onload="voAoCarregar(this)"
+      class="w-full rounded-xl border border-slate-700 bg-white block" style="height:${st.altura}px"
+      srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe>
+  </div>`;
+}
