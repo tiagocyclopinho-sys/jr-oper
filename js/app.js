@@ -3998,7 +3998,9 @@ const NAV_GRUPOS = [
   {
     id: 'visao_geral', icon: '📊', titulo: 'Visão Geral',
     itens: [
-      { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo', papeis: null }
+      { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo', papeis: null },
+      // 6.9.4: fechamento mensal (Power BI + Jr-Oper), a mesma pagina do .html do gerador.
+      { tab: 'visao_operacao', icon: '📈', label: 'Visão Operação', papeis: null }
     ]
   },
   {
@@ -4294,6 +4296,9 @@ function renderApp() {
         break;
       case 'dashboard':
         html = renderDashboardView();
+        break;
+      case 'visao_operacao':
+        html = renderVisaoOperacaoView();
         break;
       case 'sac_abertura':
         html = renderSacAberturaView();
@@ -30111,4 +30116,167 @@ function renderProdutividadeCDView() {
 
       ${semCorrHtml}
     </div>`;
+}
+
+// ===== TELA: VISAO OPERACAO (6.9.4) =====
+// Visao Geral > Visao Operacao: a mesma pagina do arquivo .html que o gerador
+// (tools/gerar_visao_operacao.bat) grava ao lado da apresentacao mensal. Quem
+// monta tudo (carga, analise e graficos) e js/visaoOperacao.js, comum aos dois.
+// - Le a nuvem so quando a tela abre: as tabelas vo_* (foto mensal tirada do
+//   Power BI pela Edge Function sync-visao-operacao) nao entram na sincronizacao.
+// - Abre no ultimo mes congelado; o mes em andamento aparece como previa.
+// - A pagina vai num iframe (srcdoc) para o CSS dela nao brigar com o Tailwind
+//   do app; a altura acompanha o conteudo e os atalhos do menu dela rolam a tela.
+// - Todos veem, inclusive a lista de hora extra (decisao de 28/10/2026).
+window._visaoOp = window._visaoOp || { periodos: null, mes: null, paginas: {}, altura: 900, carregando: false, erro: '' };
+
+const VO_LOGO = './public/logo_jr_branca.png';
+
+async function voRest(tabela, query) {
+  const cs = window.cloudStore;
+  const r = await fetch(`${cs.config.url}/rest/v1/${tabela}?${query}`, { headers: cs._headers() });
+  if (!r.ok) throw new Error(`Não foi possível ler ${tabela} (${r.status}).`);
+  return r.json();
+}
+
+async function carregarVisaoOperacao(forcar = false) {
+  const st = window._visaoOp;
+  if (st.carregando) return;
+  if (!window.cloudStore || !window.cloudStore.isConfigured()) {
+    st.erro = 'Sem conexão com a nuvem configurada neste aparelho.';
+    renderApp();
+    return;
+  }
+  if (!window.VisaoOperacao) {
+    st.erro = 'O arquivo js/visaoOperacao.js não carregou. Atualize a página.';
+    renderApp();
+    return;
+  }
+  st.carregando = true; st.erro = '';
+  try {
+    if (forcar || !st.periodos) {
+      st.periodos = await voRest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes.desc');
+      if (!st.mes || !st.periodos.some(p => p.ano_mes === st.mes)) {
+        const fechado = st.periodos.find(p => p.status === 'fechado');
+        st.mes = (fechado || st.periodos[0] || {}).ano_mes || null;
+      }
+    }
+    if (st.mes && (forcar || !st.paginas[st.mes])) {
+      const VO = window.VisaoOperacao;
+      const d = await VO.carregarDados(voRest, st.mes);
+      st.paginas[st.mes] = VO.gerarHtml(d, VO.analisar(d), { logo: VO_LOGO });
+    }
+  } catch (e) {
+    st.erro = e.message || String(e);
+  } finally {
+    st.carregando = false;
+    renderApp();
+  }
+}
+window.carregarVisaoOperacao = carregarVisaoOperacao;
+
+function voSelecionarMes(valor) {
+  window._visaoOp.mes = Number(valor);
+  carregarVisaoOperacao();
+  renderApp();
+}
+window.voSelecionarMes = voSelecionarMes;
+
+// Altura do iframe = altura da pagina; os links do menu da pagina rolam o app
+// (dentro de um srcdoc, "#secao" apontaria para o endereco do app).
+function voAoCarregar(frame) {
+  try {
+    const doc = frame.contentDocument;
+    const ajustar = () => {
+      const h = doc.documentElement.scrollHeight;
+      if (h > 200) { frame.style.height = `${h}px`; window._visaoOp.altura = h; }
+    };
+    ajustar();
+    setTimeout(ajustar, 300);
+    doc.querySelectorAll('nav a[href^="#"]').forEach(a => {
+      a.addEventListener('click', ev => {
+        ev.preventDefault();
+        const alvo = doc.getElementById(a.getAttribute('href').slice(1));
+        if (alvo) alvo.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  } catch (e) {
+    console.warn('[Visao Operacao] ajuste do quadro:', e.message);
+  }
+}
+window.voAoCarregar = voAoCarregar;
+
+function voImprimir() {
+  const frame = document.getElementById('vo-frame');
+  if (frame && frame.contentWindow) frame.contentWindow.print();
+}
+window.voImprimir = voImprimir;
+
+// Baixa a pagina como arquivo .html (o logo vai embutido, para abrir sem o app)
+async function voBaixarHtml() {
+  const st = window._visaoOp;
+  let html = st.paginas[st.mes];
+  if (!html) return;
+  try {
+    const blobLogo = await (await fetch(VO_LOGO)).blob();
+    const dataUrl = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(blobLogo); });
+    html = html.split(VO_LOGO).join(dataUrl);
+  } catch (_) { /* sem logo: o arquivo sai do mesmo jeito */ }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  a.download = `${Math.floor(st.mes / 100)}.${String(st.mes % 100).padStart(2, '0')} - Visão Operação.html`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+window.voBaixarHtml = voBaixarHtml;
+
+function renderVisaoOperacaoView() {
+  const st = window._visaoOp;
+  const VO = window.VisaoOperacao;
+  const nome = am => (VO ? VO.nomeMes(am) : String(am));
+  const cabecalho = (extra = '') => `
+    <div class="bg-gradient-to-r from-slate-900 via-blue-950/50 to-slate-900 p-4 rounded-xl shadow-xl border border-blue-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+      <div class="flex items-center gap-3">
+        <div class="bg-blue-600/30 p-2.5 rounded-xl border border-blue-500/40 text-2xl">📈</div>
+        <div>
+          <h2 class="text-lg font-black tracking-wider uppercase flex items-center gap-2">
+            VISÃO OPERAÇÃO
+            <span class="bg-blue-800 text-blue-200 text-[10px] px-2 py-0.5 rounded font-extrabold uppercase">GERÊNCIA E DIRETORIA</span>
+          </h2>
+          <p class="text-[11px] text-slate-300 font-medium">Fechamento mensal da logística: Power BI (foto do mês) + Jr-Oper. O mês congela no dia 3 do mês seguinte.</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">${extra}</div>
+    </div>`;
+  const aviso = (txt) => `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">
+      ${st.erro ? `<div class="text-red-400 font-bold mb-3">⚠️ ${prodEsc(st.erro)}</div><button onclick="carregarVisaoOperacao(true)" class="bg-blue-700 hover:bg-blue-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">Tentar de novo</button>` : txt}
+    </div>`;
+
+  if (!st.periodos) {
+    if (!st.carregando && !st.erro) setTimeout(() => carregarVisaoOperacao(), 0);
+    return `<div class="space-y-5">${cabecalho()}${aviso('⏳ Carregando a Visão Operação da nuvem...')}</div>`;
+  }
+  if (!st.periodos.length) {
+    return `<div class="space-y-5">${cabecalho()}${aviso('Nenhum mês gravado ainda. A coleta roda todo dia às 06h20.')}</div>`;
+  }
+
+  const opcoes = st.periodos.map(p => `<option value="${p.ano_mes}" ${p.ano_mes === st.mes ? 'selected' : ''}>${prodEsc(nome(p.ano_mes))}${p.status === 'fechado' ? '' : ' · prévia'}</option>`).join('');
+  const html = st.paginas[st.mes];
+  const botoes = `
+    <select onchange="voSelecionarMes(this.value)" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2 py-1.5 font-bold">${opcoes}</select>
+    <button onclick="carregarVisaoOperacao(true)" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-500/40 shadow" ${st.carregando ? 'disabled' : ''}>${st.carregando ? '⏳ Atualizando...' : '🔄 Atualizar'}</button>
+    <button onclick="voImprimir()" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-500/40 shadow" ${html ? '' : 'disabled'}>🖨️ Imprimir / PDF</button>
+    <button onclick="voBaixarHtml()" class="bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-blue-500/40 shadow" ${html ? '' : 'disabled'}>⬇️ Baixar HTML</button>`;
+
+  if (!html) {
+    if (!st.carregando && !st.erro) setTimeout(() => carregarVisaoOperacao(), 0);
+    return `<div class="space-y-5">${cabecalho(botoes)}${aviso(`⏳ Montando ${prodEsc(nome(st.mes))}...`)}</div>`;
+  }
+
+  return `<div class="space-y-4">${cabecalho(botoes)}
+    ${st.erro ? `<div class="text-red-400 text-xs font-bold">⚠️ ${prodEsc(st.erro)}</div>` : ''}
+    <iframe id="vo-frame" title="Visão Operação ${prodEsc(nome(st.mes))}" onload="voAoCarregar(this)"
+      class="w-full rounded-xl border border-slate-700 bg-white block" style="height:${st.altura}px"
+      srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe>
+  </div>`;
 }
