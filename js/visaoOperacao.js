@@ -68,16 +68,19 @@ async function carregarDados(rest, am) {
   // janeiro e dezembro do ano passado) e o mesmo mes do ano anterior. A nuvem
   // devolve no maximo 1.000 linhas por leitura: ler 2 anos inteiros cortava dados.
   const meses = [...new Set([...Array.from({ length: m }, (_, i) => a * 100 + i + 1), ant, am - 100])].join(',');
-  const [periodos, ind, quad, pontos, sac, trocas, analises] = await Promise.all([
+  const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo] = await Promise.all([
     rest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes'),
     rest('vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=in.(${meses})`),
     rest('vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
     rest('prod_pontuacao', `select=nome,cargo,setor,pontuacao,qtd_os,qtd_apanhos,kg_total,kg_entrada&ano_mes=eq.${am}`),
-    rest('ocorrencias_devolucao', `select=id,criado_em,data_acao_gestor,responsavel_analise,tipo_erro,status_gestao,valor_reclamado,forma_acerto,data_entrada_cd,sem_itens&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
+    rest('ocorrencias_devolucao', `select=id,carga_numero,criado_em,data_acao_gestor,responsavel_analise,tipo_erro,status_gestao,valor_reclamado,forma_acerto,data_entrada_cd,sem_itens&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
     rest('trocas_veiculos', `select=data,veiculo_escalado,veiculo_trocado,motivo_resumido,motivo_outro,detalhamento,autorizado_por&or=(is_deleted.is.null,is_deleted.is.false)&data=gte.${iso(a, m, 1)}&data=lte.${iso(a, m + 1, 0)}&order=data.desc`),
     // Quando o monitoramento concluiu a analise: o primeiro EDICAO_INVESTIGACAO
     // da trilha de auditoria (o registro da devolucao nao guarda essa hora).
     rest('audit_logs', `select=registro_id,data_hora&modulo=eq.ocorrencias_devolucao&acao=eq.EDICAO_INVESTIGACAO&data_hora=gte.${iso(a, m - 1, 26)}&data_hora=lt.${iso(a, m + 4, 1)}&order=data_hora.asc&limit=5000`),
+    // Cargas com devolucao no Oper de 10 dias antes a 20 depois do periodo: a mesma
+    // folga da lista do WinThor, para o cruzamento por carga nao errar na borda.
+    rest('ocorrencias_devolucao', `select=carga_numero&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 16)}&criado_em=lt.${iso(a, m + 1, 16)}&limit=5000`),
   ]);
   const primeiraAnalise = {};
   for (const r of analises || []) if (!primeiraAnalise[r.registro_id]) primeiraAnalise[r.registro_id] = r.data_hora;
@@ -99,7 +102,7 @@ async function carregarDados(rest, am) {
     serie: (sec, k) => Object.entries((I[sec] || {})[k] || {}).filter(([mes]) => Math.floor(mes / 100) === a && Number(mes) <= am)
       .sort(([x], [y]) => x - y).map(([mes, o]) => ({ mes: Number(mes), valor: o.valor })),
     q: (sec, quadro) => (Q[sec] || {})[quadro] || [],
-    pontos, sac, trocas,
+    pontos, sac, trocas, cargasOperAmplo: cargasOperAmplo || [],
   };
 }
 const num0 = (v) => (v === null || v === undefined ? null : Number(v));
@@ -208,6 +211,15 @@ function analisar(d) {
   const abaixo = motQ.filter((x) => x.valor3 !== null && x.valor3 < 0.7);
   if (abaixo.length) melhorias.push({ peso: abaixo.length / Math.max(motQ.length, 1), texto: `${abaixo.length} de ${motQ.length} motoristas ficaram abaixo de 70% do garantido de ${num(v('motoristas', 'garantido'))} kg.` });
 
+  // Comparativo Oper x WinThor
+  {
+    const c = comparativoDevolucao(d);
+    if (c.win.valor) {
+      const dv = c.oper.valor / c.win.valor - 1;
+      if (Math.abs(dv) >= 0.1 || c.winSoNoWin.length) melhorias.push({ peso: Math.min(Math.abs(dv), 1) * 0.6 + 0.1,
+        texto: `Devolução Oper × WinThor no período: ${reais(c.oper.valor)} × ${reais(c.win.valor)} (${dv >= 0 ? '+' : '−'}${pct(Math.abs(dv), 0)}); ${c.winSoNoWin.length} carga(s) devolvidas no WinThor sem ocorrência no Oper e ${c.operSoNoOper.length} ocorrência(s) do Oper sem a carga no WinThor.` });
+    }
+  }
   // S.A.C.: SLA de atendimento (a partir de set/2026)
   if (d.am >= SLA_INICIO && d.sac.length) {
     for (const o of d.sac) o._sla = o._sla || etapasSla(o);
@@ -355,6 +367,32 @@ function resumoSla(lista, etapa) {
 }
 // Horas uteis decimais -> "4h12" / "2d 3h" (dia util = 24 h uteis)
 const horasTxt = (h) => (h === null || h === undefined ? '—' : h < 24 ? `${Math.floor(h)}h${String(Math.round((h % 1) * 60)).padStart(2, '0')}` : `${num(Math.floor(h / 24))}d ${Math.round(h % 24)}h`);
+
+// Comparativo da devolucao lancada no Jr-Oper (S.A.C.) com a do WinThor (Power BI),
+// no mesmo periodo de 26 a 25. Cruzamento por numero de carga: o Oper as vezes
+// grava duas cargas juntas ("44079/44080"), entao separa os numeros.
+const cargasDe = (txt) => (String(txt || '').match(/\d{4,}/g) || []);
+// Tipo de erro do Oper -> "RESP DEV" do WinThor
+const RESP_DO_TIPO = { 'ERRO COMERCIAL': 'COMERCIAL', 'ERRO INDÚSTRIA': 'FORNECEDOR', 'ERRO MOTORISTA': 'MOTORISTA', 'ERRO CARREGAMENTO': 'CARREGAMENTO', 'ERRO CLIENTE': 'CLIENTE' };
+function comparativoDevolucao(d) {
+  const oper = d.sac;
+  const win = d.q('devolucao', 'carga_fech'), winAmplo = new Set(d.q('devolucao', 'carga_amplo').map((x) => x.rotulo));
+  const operAmplo = new Set(d.cargasOperAmplo.flatMap((o) => cargasDe(o.carga_numero)));
+  const achadaNoWin = (o) => cargasDe(o.carga_numero).some((c) => winAmplo.has(c));
+  const operSoNoOper = oper.filter((o) => !achadaNoWin(o));
+  const winSoNoWin = win.filter((x) => !operAmplo.has(x.rotulo));
+  const somaV = (l, k) => l.reduce((t, x) => t + Number(x[k] || 0), 0);
+  // por responsavel: Oper (tipo de erro convertido) x WinThor (RESP DEV)
+  const resp = {};
+  for (const o of oper) { const k = RESP_DO_TIPO[o.tipo_erro] || 'NÃO IDENTIFICADO'; (resp[k] ||= { oq: 0, ov: 0, wq: 0, wv: 0 }); resp[k].oq++; resp[k].ov += Number(o.valor_reclamado || 0); }
+  for (const x of d.q('devolucao', 'resp_fech')) { const k = x.rotulo === '(Em branco)' ? 'NÃO IDENTIFICADO' : x.rotulo; (resp[k] ||= { oq: 0, ov: 0, wq: 0, wv: 0 }); resp[k].wq += x.valor2 || 0; resp[k].wv += x.valor || 0; }
+  return {
+    oper: { qtd: oper.length, valor: somaV(oper, 'valor_reclamado'), cargas: new Set(oper.flatMap((o) => cargasDe(o.carga_numero))).size },
+    win: { qtd: d.v('devolucao', 'qtd_fech'), valor: d.v('devolucao', 'valor_fech'), cargas: d.v('devolucao', 'cargas_fech') },
+    operSoNoOper, winSoNoWin, cruzadas: oper.length - operSoNoOper.length,
+    resp: Object.entries(resp).sort((p, q) => (q[1].wv + q[1].ov) - (p[1].wv + p[1].ov)),
+  };
+}
 
 // ---------------------------------------------------------------- pagina HTML
 const CH = {
@@ -748,6 +786,30 @@ function gerarHtml(d, a, opcoes = {}) {
         ${card('Faixas de horário com mais ocorrências', barrasH(d.q('rastreamento', 'faixa_horaria').slice(0, 10).map((x) => ({ rotulo: x.rotulo, valor: x.valor, texto: `${num(x.valor)} · ${pct(oc ? x.valor / oc : null, 1)}` })), { fmt: N0, cor: CH.laranja, larguraRot: 60 }))}</div>`));
   }
 
+  // Motor ocioso: as mesmas visoes do geral, so com essa violacao
+  {
+    const oci = (d.q('rastreamento', 'motivo').find((x) => /OCIOSO/i.test(x.rotulo)) || {}).valor ?? null;
+    const vinc = d.q('rastreamento', 'ocioso_vinculo'), dia = d.q('rastreamento', 'ocioso_dia');
+    const semV = (vinc.find((x) => /SEM/i.test(x.rotulo)) || {}).valor || 0;
+    const tot = vinc.reduce((t, x) => t + (x.valor || 0), 0) || oci || 0;
+    const ident = tot ? 1 - semV / tot : null;
+    const mots = d.q('rastreamento', 'ocioso_motorista').filter((x) => x.rotulo !== '(Em branco)').slice(0, 15);
+    const veics = d.q('rastreamento', 'ocioso_veiculo');
+    const faixas = d.q('rastreamento', 'ocioso_faixa').slice().sort((p, q) => q.valor - p.valor).slice(0, 10);
+    const pctOf = (x) => pct(tot ? x / tot : null, 1);
+    partes.push(`<section class="secao sub" id="ocioso"><header><h2>MOOV — motor ocioso</h2><p>${esc(mesCheio)} · mesma visão do geral, só com a violação MOTOR OCIOSO</p></header>
+      ${vinc.length || oci !== null ? `<div class="kpis">${kpi(num(oci), 'Ocorrências de motor ocioso', oci === null ? null : metaTxt(oci <= 500, '≤ 500'), CH.laranja)}
+        ${kpi(pct(ident, 1), 'Vinculadas (em viagem ou pré/pós)', ident === null ? null : metaTxt(ident >= 0.8, `≥ 80% · ${num(semV)} sem vínculo`))}
+        ${kpi(veics[0] ? veics[0].rotulo : '—', 'Veículo com mais ocorrências', veics[0] ? { texto: `${num(veics[0].valor)} · ${pctOf(veics[0].valor)} do total`, bom: null } : null)}
+        ${kpi(mots[0] ? titulo(mots[0].rotulo) : '—', 'Motorista com mais ocorrências', mots[0] ? { texto: `${num(mots[0].valor)} · ${pctOf(mots[0].valor)} do total`, bom: null } : null)}</div>
+      <div class="grade g3">${card('Por vínculo', rosca(it(vinc), { fmt: N0 }))}
+        ${card('Top veículos', barrasH(veics.map((x) => ({ rotulo: x.rotulo, valor: x.valor, texto: `${num(x.valor)} · ${pctOf(x.valor)}` })), { fmt: N0, cor: CH.laranja, larguraRot: 80, W: 340 }))}
+        ${card('Faixas de horário', barrasH(faixas.map((x) => ({ rotulo: x.rotulo, valor: x.valor, texto: `${num(x.valor)} · ${pctOf(x.valor)}` })), { fmt: N0, cor: CH.laranja, larguraRot: 50, W: 340 }))}</div>
+      <div class="grade g1">${card('Motor ocioso por dia', linhas(dia.map((x) => diaMes(x.rotulo)), [{ nome: 'Motor ocioso', cor: CH.laranja, valores: dia.map((x) => x.valor) }], { fmt: N0, altura: 230, W: 1180 }))}</div>
+      <div class="grade g1">${card('Motorista responsável (top 15)', barrasH(mots.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${num(x.valor)} · ${pctOf(x.valor)}` })), { fmt: N0, cor: CH.laranja, larguraRot: 260, W: 1180 }))}</div>`
+      : '<p class="nota">Sem detalhamento de motor ocioso gravado para este mês.</p>'}</section>`);
+  }
+
   // S.A.C.
   {
     const oc = d.sac, concl = oc.filter((o) => o.status_gestao === 'CONCLUIDO').length;
@@ -786,6 +848,27 @@ function gerarHtml(d, a, opcoes = {}) {
       <div class="grade g2">${card('Monitoramento por analista · mediana até a análise', barrasH(Object.entries(porAnalista).map(([nm, hs]) => { const md = mediana(hs), no = hs.filter((h) => h <= SLA_PRAZO.monitoramento).length; return { rotulo: nm, valor: md, cor: no / hs.length >= 0.9 ? CH.bom : no / hs.length >= 0.7 ? CH.ambar : CH.ruim, texto: `${horasTxt(md)} · ${hs.length} análises · ${pct(no / hs.length, 0)} no prazo` }; }).sort((p, q) => q.valor - p.valor), { fmt: N0, larguraRot: 170 }))}
         ${card('Tratativa do gestor por tipo de erro · % no prazo', barrasH(porTipoSla.map((x) => ({ rotulo: rotT(x.t), valor: x.r.pctNoPrazo * 100, filtro: x.t, cor: x.r.pctNoPrazo >= 0.9 ? CH.bom : x.r.pctNoPrazo >= 0.7 ? CH.ambar : CH.ruim, texto: `${pct(x.r.pctNoPrazo, 0)} · mediana ${horasTxt(x.r.mediana)}` })), { fmt: N0, larguraRot: 170, grupo: 'sac' }))}</div>
       <p class="nota">No prazo = concluída dentro do prazo; fora = concluída depois ou ainda aberta com o prazo vencido; em andamento = aberta e ainda no prazo (fica fora do %). A hora da análise vem da trilha de auditoria (1ª análise da causa raiz). Verde ≥ 90% no prazo, amarelo ≥ 70%, vermelho abaixo.</p>`;
+    // Comparativo Oper x WinThor (mesmo periodo de 26 a 25)
+    const cmp = comparativoDevolucao(d);
+    const temWin = cmp.win.valor !== null && cmp.win.valor !== undefined;
+    const difTxt = (o, w, fmt) => (w ? `${o >= w ? '+' : '−'}${fmt(Math.abs(o - w))} (${pct(w ? o / w - 1 : null, 0)})` : '—');
+    const blocoComp = !temWin ? '<p class="nota">Comparativo com o WinThor: regrave este mês na coleta para trazer a devolução do Power BI no período de 26 a 25.</p>' : `
+      <h3 class="sub">Devolução no Jr-Oper × WinThor (Power BI) · mesmo período</h3>
+      <div class="kpis">${kpi(`${num(cmp.oper.qtd)} × ${num(cmp.win.qtd)}`, 'Ocorrências no Oper × notas no WinThor', { texto: `diferença ${difTxt(cmp.oper.qtd, cmp.win.qtd, num)}`, bom: null })}
+        ${kpi(`${reais(cmp.oper.valor)} × ${reais(cmp.win.valor)}`, 'Valor reclamado (Oper) × valor devolvido (WinThor)', { texto: `diferença ${difTxt(cmp.oper.valor, cmp.win.valor, reais)}`, bom: null })}
+        ${kpi(`${num(cmp.oper.cargas)} × ${num(cmp.win.cargas)}`, 'Cargas com devolução (Oper × WinThor)')}
+        ${kpi(`${num(cmp.operSoNoOper.length)} | ${num(cmp.winSoNoWin.length)}`, 'Sem par: só no Oper | só no WinThor', { texto: `${num(cmp.cruzadas)} de ${num(cmp.oper.qtd)} ocorrências do Oper acharam a carga no WinThor`, bom: cmp.operSoNoOper.length + cmp.winSoNoWin.length ? false : true })}</div>
+      <div class="grade g2">${card('Valor por responsável · Oper × WinThor', colunas(cmp.resp.map(([k]) => titulo(k).replace('Não Identificado', 'Não ident.')), [
+          { nome: 'Jr-Oper', cor: CH.azul, valores: cmp.resp.map(([, x]) => x.ov), textos: cmp.resp.map(([, x]) => `${num(x.ov / 1000, 1)} mil`) },
+          { nome: 'WinThor', cor: CH.ambar, valores: cmp.resp.map(([, x]) => x.wv), textos: cmp.resp.map(([, x]) => `${num(x.wv / 1000, 1)} mil`) }], { fmt: N0 }))}
+        ${card('Quantidade por responsável · ocorrências no Oper × notas no WinThor', colunas(cmp.resp.map(([k]) => titulo(k).replace('Não Identificado', 'Não ident.')), [
+          { nome: 'Jr-Oper', cor: CH.azul, valores: cmp.resp.map(([, x]) => x.oq) },
+          { nome: 'WinThor', cor: CH.ambar, valores: cmp.resp.map(([, x]) => x.wq) }], { fmt: N0 }))}</div>
+      <div class="grade g2">${card(`Lançadas no Oper sem a carga no WinThor (${cmp.operSoNoOper.length})`, cmp.operSoNoOper.length ? `<table class="tab"><thead><tr><th>Carga</th><th>Tipo de erro</th><th class="n">Valor reclamado</th><th>Aberta em</th></tr></thead><tbody>${
+          cmp.operSoNoOper.slice().sort((p, q) => (q.valor_reclamado || 0) - (p.valor_reclamado || 0)).slice(0, 20).map((o) => `<tr><td>${esc(o.carga_numero || '—')}</td><td>${esc(titulo(o.tipo_erro || ''))}</td><td class="n">${esc(reais(Number(o.valor_reclamado || 0), 2))}</td><td>${esc(dataBr(String(o.criado_em).slice(0, 10)))}</td></tr>`).join('')}</tbody></table>` : '<p class="vazio">Todas as ocorrências do Oper têm a carga no WinThor.</p>')}
+        ${card(`Devolvidas no WinThor sem ocorrência no Oper (${cmp.winSoNoWin.length})`, cmp.winSoNoWin.length ? `<table class="tab"><thead><tr><th>Carga</th><th class="n">Notas</th><th class="n">Valor devolvido</th></tr></thead><tbody>${
+          cmp.winSoNoWin.slice(0, 20).map((x) => `<tr><td>${esc(x.rotulo)}</td><td class="n">${num(x.valor2)}</td><td class="n">${esc(reais(x.valor, 2))}</td></tr>`).join('')}</tbody></table>` : '<p class="vazio">Todas as cargas devolvidas no WinThor têm ocorrência no Oper.</p>')}</div>
+      <p class="nota">Período de 26 a 25 nos dois lados. Oper conta ocorrências e o valor reclamado na abertura; WinThor conta notas de devolução e o valor devolvido. Cruzamento pelo número da carga, com folga de 10 dias antes e 20 depois (a nota entra no WinThor depois da ocorrência). Responsável: tipo de erro do Oper convertido (comercial, indústria = fornecedor, motorista, carregamento, cliente); "avaria" só existe no WinThor. Até 20 linhas por lista, as de maior valor.</p>`;
     const kpisSac = (tp) => {
       const l = tp ? oc.filter((o) => (o.tipo_erro || 'SEM TIPO') === tp) : oc;
       const c = l.filter((o) => o.status_gestao === 'CONCLUIDO').length, vl = l.reduce((t, o) => t + Number(o.valor_reclamado || 0), 0);
@@ -798,6 +881,7 @@ function gerarHtml(d, a, opcoes = {}) {
       <div class="grade g2">${card('Ocorrências por tipo de erro', barrasH(tipos.map(([t, o]) => ({ rotulo: rotT(t), valor: o.qtd, filtro: t, texto: `${o.qtd} · ${pct(oc.length ? o.qtd / oc.length : null, 0)}` })), { fmt: N0, cores: PALETA_H, larguraRot: 190, grupo: 'sac' }))}
         ${card('Valor reclamado por tipo de erro', barrasH(tipos.slice().sort((x, y) => y[1].valor - x[1].valor).map(([t, o]) => ({ rotulo: rotT(t), valor: o.valor, filtro: t, texto: `${reais(o.valor)} · ${pct(valor ? o.valor / valor : null, 0)}` })), { fmt: R0, cor: CH.marinho, larguraRot: 190, grupo: 'sac' }))}</div>
       <p class="nota">Valor reclamado é o informado na abertura. Erro industrial e comercial são tratados por outra gerência; desconto de produtividade só cabe a motorista e carregamento.</p>
+      ${blocoComp}
       ${blocoSla}`));
   }
 
@@ -814,7 +898,7 @@ function gerarHtml(d, a, opcoes = {}) {
 nav{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--borda);display:flex;gap:4px;overflow-x:auto;padding:0 24px}
 nav a{color:var(--suave);text-decoration:none;padding:12px 10px;font-weight:600;font-size:13px;white-space:nowrap;border-bottom:3px solid transparent}nav a:hover{color:var(--marinho);border-color:var(--azul)}
 main{max-width:1280px;margin:0 auto;padding:8px 24px 40px}
-.secao{margin-top:28px}.secao>header{border-left:5px solid var(--azul);padding-left:12px;margin-bottom:14px}
+.secao{margin-top:28px}.secao.sub{margin-top:18px}.secao>header{border-left:5px solid var(--azul);padding-left:12px;margin-bottom:14px}
 .secao h2{margin:0;font-size:21px;color:var(--marinho)}.secao header p{margin:3px 0 0;color:var(--suave)}
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.kpis.k5{grid-template-columns:repeat(5,1fr)}
 .kpi{background:var(--card);border:1px solid var(--borda);border-radius:10px;padding:14px 16px}
@@ -844,7 +928,7 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
 </style></head><body>
 <div class="topo">${logo ? `<img src="${logo}" alt="JR Distribuidora">` : ''}<div><h1>Visão Operação · ${esc(nomeMes(d.am))}</h1><p>Logística · gerado em ${hoje} a partir do Power BI e do Jr-Oper</p></div>
 <span class="selo">${d.previa ? 'PRÉVIA · números ainda abertos' : 'Mês fechado'}</span></div>
-<nav>${indice.map(([id, nome]) => `<a href="#${id}">${esc(nome)}</a>`).join('')}</nav>
+<nav>${indice.map(([id, nome]) => `<a href="#${id}">${esc(nome)}</a>`).join('').replace('>Rastreamento</a>', '>Rastreamento</a><a href="#ocioso">Motor ocioso</a>')}</nav>
 <main>${partes.join('\n')}</main>
 <script>
 // Filtro das secoes: clicar numa barra/fatia mostra o bloco daquele valor (cartoes e listas);
@@ -877,6 +961,6 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
 
 return {
   MESES, MES_ABREV, nf, num, reais, mil, pct, dataBr, diaMes, iso, mesAnterior, nomeMes, abrev, titulo, variacao,
-  comparar, media, mediana, hhmm, horasUteis, etapasSla, carregarDados, analisar, metasOficiais, gerarHtml,
+  comparar, media, mediana, hhmm, horasUteis, etapasSla, comparativoDevolucao, carregarDados, analisar, metasOficiais, gerarHtml,
 };
 });
