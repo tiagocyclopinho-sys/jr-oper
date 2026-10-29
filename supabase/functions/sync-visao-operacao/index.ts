@@ -159,6 +159,7 @@ function linhaIndicadores(r: any, j: Janela): Ind[] {
   return Object.entries(r ?? {}).map(([k, v]) => ({ indicador: k.replace(/^\[|\]$/g, ""), valor: num(v), de: j.de, ate: j.ate }));
 }
 
+// medidas aceitam expressao DAX solta (ex.: DISTINCTCOUNT); numeros de carga viram texto
 async function quadro(token: string, modelo: string, nome: string, coluna: string, filtro: string, medidas: string[], top = 0): Promise<Quad[]> {
   const cols = medidas.map((m, i) => `"v${i + 1}", ${m}`).join(", ");
   let q = `SUMMARIZECOLUMNS(${coluna}, ${filtro}, ${cols})`;
@@ -222,9 +223,13 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       faturamento: "[Vl Fat Bruto]", faturamento_kg: "[Peso Fat]", pct_dev_fat: "[% Dev/Fat]",
       valor_ly: "[LY Vl Dev]", kg_ly: "[LY Peso Dev]", qtd_ly: "[LY Qtd Dev]", ticket_ly: "[LY Tick Médio]",
     }, j);
-    // Faturamento de 26 a 25: base da meta de corte (corte R$ / faturado R$ <= 0,01%)
-    const jf = janelas(am).fech;
-    ind.push(...await soIndicadores(t, "devolucao", datas("dim_CALENDARIO[Data]", jf), { faturamento_fech: "[Vl Fat Bruto]" }, jf));
+    // Faturamento de 26 a 25: base da meta de corte (corte R$ / faturado R$ <= 0,1%)
+    const jf = janelas(am).fech, ff = datas("dim_CALENDARIO[Data]", jf);
+    // No periodo 26 -> 25 (o mesmo do S.A.C. no Jr-Oper): base do comparativo Oper x WinThor
+    ind.push(...await soIndicadores(t, "devolucao", ff, {
+      faturamento_fech: "[Vl Fat Bruto]", valor_fech: "[Vl Devolução]", qtd_fech: "[Qtd Devolução]",
+      cargas_fech: "DISTINCTCOUNT(f_DEVOLUCAO[NUMCAR])",
+    }, jf));
     if (soInd) return { ind, quad: [] };
     const quad = [
       ...await quadro(t, "devolucao", "dia", "dim_CALENDARIO[Data]", f, ["[Vl Devolução]"]),
@@ -233,6 +238,14 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       ...await quadro(t, "devolucao", "setor", "dim_PCSUPERV[SETOR I]", f, ["[Vl Devolução]"]),
       // devolucao e faturamento por setor do supervisor: meta de 0,20% por seco x frio
       ...await quadro(t, "devolucao", "setor_fat", "dim_PCSUPERV[SETOR I]", f, ["[Vl Fat Bruto]", "[Vl Devolução]"]),
+      // Comparativo com o Jr-Oper (26 -> 25): por responsavel e por carga. A lista de
+      // cargas vai de 10 dias antes a 20 depois, porque a nota de devolucao entra no
+      // WinThor alguns dias depois da ocorrencia aberta no SAC.
+      ...await quadro(t, "devolucao", "resp_fech", `f_DEVOLUCAO["RESP DEV"]`, ff, ["[Vl Devolução]", "[Qtd Devolução]"]),
+      ...await quadro(t, "devolucao", "carga_amplo", "f_DEVOLUCAO[NUMCAR]",
+        datas("dim_CALENDARIO[Data]", { de: iso(Math.floor(am / 100), am % 100 - 1, 16), ate: iso(Math.floor(am / 100), am % 100 + 1, 15) }),
+        ["[Vl Devolução]", "[Qtd Devolução]"]),
+      ...await quadro(t, "devolucao", "carga_fech", "f_DEVOLUCAO[NUMCAR]", ff, ["[Vl Devolução]", "[Qtd Devolução]"]),
     ];
     return { ind, quad };
   },
@@ -366,6 +379,15 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       ...await quadro(t, "cco", "faixa_horaria", "fMoov[Faixa Horária]", f, ["[Ocorrência Moov]"]),
       ...await quadro(t, "cco", "dia", "'dCalendário'[Data]", f, ["[Ocorrência Moov]"]),
     ];
+    // Motor ocioso: as mesmas visoes do geral, so com essa violacao
+    const fo = `${f}, TREATAS({"MOTOR OCIOSO"}, fMoov[Violação])`;
+    quad.push(
+      ...await quadro(t, "cco", "ocioso_vinculo", "fMoov[Status Vínculo]", fo, ["[Ocorrência Moov]"]),
+      ...await quadro(t, "cco", "ocioso_dia", "'dCalendário'[Data]", fo, ["[Ocorrência Moov]"]),
+      ...await quadro(t, "cco", "ocioso_motorista", "fMoov[Motorista Resp]", fo, ["[Ocorrência Moov]"], TOP + 1),
+      ...await quadro(t, "cco", "ocioso_veiculo", "fMoov[Veículo]", fo, ["[Ocorrência Moov]"], TOP),
+      ...await quadro(t, "cco", "ocioso_faixa", "fMoov[Faixa Horária]", fo, ["[Ocorrência Moov]"]),
+    );
     return { ind, quad };
   },
 };
