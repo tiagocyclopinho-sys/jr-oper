@@ -139,7 +139,7 @@ partir do branch `main` do GitHub.
   em vo_*; carregarDados lê só ano corrente + mês anterior + mesmo mês do ano
   anterior, porque o REST devolve no máx. 1.000 linhas). Metas OFICIAIS em
   `metasOficiais()` (decisão do Tiago em 29/10): HE carregamento 1º turno 40 h,
-  2º turno 200 h, demais setores 1 h; devolução ≤ 0,20% do faturamento geral e
+  2º turno 200 h, portaria 60 h, pátio e manutenção 6 h, demais setores 1 h; devolução ≤ 0,20% do faturamento geral e
   por seco/frio (SETOR I do supervisor no Power BI; frio = TO+PA+MA); corte ≤
   0,1% (valor cortado ÷ faturado no período 26→25, `faturamento_fech`) e corte
   ≤ R$ 30 mil; faturamento do mês ≥ R$ 30 mi;
