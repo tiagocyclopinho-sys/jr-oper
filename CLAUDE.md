@@ -155,6 +155,13 @@ partir do branch `main` do GitHub.
   1º EDICAO_INVESTIGACAO em audit_logs (24 h); gestor = análise →
   data_acao_gestor (48 h); ponta a ponta = abertura → CONCLUIDO (72 h). Aberta
   com prazo vencido conta como fora; aberta no prazo fica fora do %.
+- 6.9.6 (29/10): MOOV ganhou o bloco Motor ocioso (quadros ocioso_* em vo_quadros,
+  filtro TREATAS({"MOTOR OCIOSO"}, fMoov[Violação])). S.A.C. ganhou o comparativo
+  Oper × WinThor no período 26→25 (`comparativoDevolucao()`): indicadores
+  valor_fech/qtd_fech/cargas_fech e quadros resp_fech, carga_fech e carga_amplo
+  (−10/+20 dias). Cruzamento por número de carga (o Oper grava "44079/44080":
+  separar os números). Tipo de erro → RESP DEV: comercial, indústria =
+  fornecedor, motorista, carregamento, cliente; "avaria" só no WinThor.
 
 ## Pendências
 - Segurança: repositório público; todas as tabelas com política
