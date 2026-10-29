@@ -274,9 +274,11 @@ function analisar(d) {
 // { area, indicador, real, meta, ok } ja com texto formatado.
 // Corte: ate 0,1% do faturado e no maximo R$ 30 mil no periodo; faturamento: R$ 30 mi/mes (Tiago, 29/10/2026)
 const META_DEV = 0.002, META_CORTE = 0.001, META_CORTE_RS = 30000, META_FAT = 30000000;
+// HE: carregamento 1o turno 40 h, 2o turno 200 h; portaria 60 h; patio e manutencao 6 h; demais 1 h (Tiago, 29/10/2026)
 function metaHoraExtra(setor) {
-  const s = String(setor).toUpperCase(), carreg = /CARREG/.test(s);
-  return carreg && /1\s*TURNO/.test(s) ? 40 : carreg && /2\s*TURNO/.test(s) ? 200 : 1;
+  const s = String(setor).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, ''), carreg = /CARREG/.test(s);
+  if (carreg) return /1\s*TURNO/.test(s) ? 40 : /2\s*TURNO/.test(s) ? 200 : 1;
+  return /PORTARIA/.test(s) ? 60 : /PATIO|MANUTENC/.test(s) ? 6 : 1;
 }
 // Devolucao x faturamento por setor do supervisor (SETOR I do Power BI): seco e frio (TO + PA + MA)
 function devolucaoPorSetor(d) {
