@@ -76,8 +76,10 @@ async function carregarDados(rest, am) {
     rest('ocorrencias_devolucao', `select=id,carga_numero,criado_em,data_acao_gestor,responsavel_analise,tipo_erro,status_gestao,valor_reclamado,forma_acerto,data_entrada_cd,sem_itens&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
     rest('trocas_veiculos', `select=data,veiculo_escalado,veiculo_trocado,motivo_resumido,motivo_outro,detalhamento,autorizado_por&or=(is_deleted.is.null,is_deleted.is.false)&data=gte.${iso(a, m, 1)}&data=lte.${iso(a, m + 1, 0)}&order=data.desc`),
     // Quando o monitoramento concluiu a analise: o primeiro EDICAO_INVESTIGACAO
-    // da trilha de auditoria (o registro da devolucao nao guarda essa hora).
-    rest('audit_logs', `select=registro_id,data_hora&modulo=eq.ocorrencias_devolucao&acao=eq.EDICAO_INVESTIGACAO&data_hora=gte.${iso(a, m - 1, 26)}&data_hora=lt.${iso(a, m + 4, 1)}&order=data_hora.asc&limit=5000`),
+    // da trilha de auditoria (o registro da devolucao nao guarda essa hora). Comeca
+    // um mes antes do periodo para a "monitorada por dia" nao contar como 1a analise
+    // a reedicao de uma ocorrencia antiga.
+    rest('audit_logs', `select=registro_id,data_hora&modulo=eq.ocorrencias_devolucao&acao=eq.EDICAO_INVESTIGACAO&data_hora=gte.${iso(a, m - 2, 26)}&data_hora=lt.${iso(a, m + 4, 1)}&order=data_hora.asc&limit=5000`),
     // Cargas com devolucao no Oper de 10 dias antes a 20 depois do periodo: a mesma
     // folga da lista do WinThor, para o cruzamento por carga nao errar na borda.
     rest('ocorrencias_devolucao', `select=carga_numero&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 16)}&criado_em=lt.${iso(a, m + 1, 16)}&limit=5000`),
@@ -85,6 +87,9 @@ async function carregarDados(rest, am) {
   const primeiraAnalise = {};
   for (const r of analises || []) if (!primeiraAnalise[r.registro_id]) primeiraAnalise[r.registro_id] = r.data_hora;
   for (const o of sac) o.analise_em = primeiraAnalise[String(o.id)] || null;
+  // 1as analises feitas dentro do periodo (26 a 25), de qualquer ocorrencia
+  const ini = iso(a, m - 1, 26), fim = iso(a, m, 26);
+  const analisesPeriodo = Object.values(primeiraAnalise).map((t) => String(t).slice(0, 10)).filter((dt) => dt >= ini && dt < fim);
   const I = {}; // I[secao][indicador][ano_mes] = { valor, valor_atual }
   for (const r of ind) {
     ((I[r.secao] ||= {})[r.indicador] ||= {})[r.ano_mes] = { valor: num0(r.valor), valor_atual: num0(r.valor_atual) };
@@ -102,7 +107,7 @@ async function carregarDados(rest, am) {
     serie: (sec, k) => Object.entries((I[sec] || {})[k] || {}).filter(([mes]) => Math.floor(mes / 100) === a && Number(mes) <= am)
       .sort(([x], [y]) => x - y).map(([mes, o]) => ({ mes: Number(mes), valor: o.valor })),
     q: (sec, quadro) => (Q[sec] || {})[quadro] || [],
-    pontos, sac, trocas, cargasOperAmplo: cargasOperAmplo || [],
+    pontos, sac, trocas, analisesPeriodo, cargasOperAmplo: cargasOperAmplo || [],
   };
 }
 const num0 = (v) => (v === null || v === undefined ? null : Number(v));
@@ -869,6 +874,17 @@ function gerarHtml(d, a, opcoes = {}) {
         ${card(`Devolvidas no WinThor sem ocorrência no Oper (${cmp.winSoNoWin.length})`, cmp.winSoNoWin.length ? `<table class="tab"><thead><tr><th>Carga</th><th class="n">Notas</th><th class="n">Valor devolvido</th></tr></thead><tbody>${
           cmp.winSoNoWin.slice(0, 20).map((x) => `<tr><td>${esc(x.rotulo)}</td><td class="n">${num(x.valor2)}</td><td class="n">${esc(reais(x.valor, 2))}</td></tr>`).join('')}</tbody></table>` : '<p class="vazio">Todas as cargas devolvidas no WinThor têm ocorrência no Oper.</p>')}</div>
       <p class="nota">Período de 26 a 25 nos dois lados. Oper conta ocorrências e o valor reclamado na abertura; WinThor conta notas de devolução e o valor devolvido. Cruzamento pelo número da carga, com folga de 10 dias antes e 20 depois (a nota entra no WinThor depois da ocorrência). Responsável: tipo de erro do Oper convertido (comercial, indústria = fornecedor, motorista, carregamento, cliente); "avaria" só existe no WinThor. Até 20 linhas por lista, as de maior valor.</p>`;
+    // Abertura e monitoramento por dia, nos dias do periodo de 26 a 25
+    const dias = [];
+    for (let t = Date.UTC(ano, m - 2, 26); t < Date.UTC(ano, m - 1, 26); t += 864e5) dias.push(new Date(t).toISOString().slice(0, 10));
+    const contaDia = (datas) => { const n = {}; for (const dt of datas) n[dt] = (n[dt] || 0) + 1; return dias.map((dt) => n[dt] || 0); };
+    const abertasDia = contaDia(oc.map((o) => String(o.criado_em).slice(0, 10)));
+    const monitDia = contaDia(d.analisesPeriodo || []);
+    const nDias = (vs) => vs.filter((x) => x).length;
+    const blocoDia = `<div class="grade g1">${card(`Abertura de ocorrências por dia · ${num(oc.length)} no período, média ${num(oc.length / (nDias(abertasDia) || 1), 1)} por dia com abertura`,
+        colunas(dias.map(diaMes), [{ nome: 'Abertas', cor: CH.azul, valores: abertasDia }], { fmt: N0, altura: 230, W: 1180, girar: false }))}</div>
+      ${comSla ? `<div class="grade g1">${card(`Monitoradas por dia · 1ª análise da causa raiz · ${num(monitDia.reduce((t, x) => t + x, 0))} no período, média ${num(monitDia.reduce((t, x) => t + x, 0) / (nDias(monitDia) || 1), 1)} por dia com análise`,
+        colunas(dias.map(diaMes), [{ nome: 'Monitoradas', cor: CH.bom, valores: monitDia }], { fmt: N0, altura: 230, W: 1180, girar: false }))}</div>` : ''}`;
     const kpisSac = (tp) => {
       const l = tp ? oc.filter((o) => (o.tipo_erro || 'SEM TIPO') === tp) : oc;
       const c = l.filter((o) => o.status_gestao === 'CONCLUIDO').length, vl = l.reduce((t, o) => t + Number(o.valor_reclamado || 0), 0);
@@ -880,7 +896,8 @@ function gerarHtml(d, a, opcoes = {}) {
       ${variantes('sac', ['', ...tipos.map(([t]) => t)].map((tp) => ({ valor: tp, html: kpisSac(tp) })))}
       <div class="grade g2">${card('Ocorrências por tipo de erro', barrasH(tipos.map(([t, o]) => ({ rotulo: rotT(t), valor: o.qtd, filtro: t, texto: `${o.qtd} · ${pct(oc.length ? o.qtd / oc.length : null, 0)}` })), { fmt: N0, cores: PALETA_H, larguraRot: 190, grupo: 'sac' }))}
         ${card('Valor reclamado por tipo de erro', barrasH(tipos.slice().sort((x, y) => y[1].valor - x[1].valor).map(([t, o]) => ({ rotulo: rotT(t), valor: o.valor, filtro: t, texto: `${reais(o.valor)} · ${pct(valor ? o.valor / valor : null, 0)}` })), { fmt: R0, cor: CH.marinho, larguraRot: 190, grupo: 'sac' }))}</div>
-      <p class="nota">Valor reclamado é o informado na abertura. Erro industrial e comercial são tratados por outra gerência; desconto de produtividade só cabe a motorista e carregamento.</p>
+      ${blocoDia}
+      <p class="nota">Valor reclamado é o informado na abertura. Erro industrial e comercial são tratados por outra gerência; desconto de produtividade só cabe a motorista e carregamento. Monitorada = dia da 1ª análise da causa raiz registrada na trilha de auditoria, inclusive de ocorrências abertas antes do dia 26.</p>
       ${blocoComp}
       ${blocoSla}`));
   }

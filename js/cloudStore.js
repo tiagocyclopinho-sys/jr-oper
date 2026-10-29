@@ -3384,7 +3384,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "visao-operacao-ocioso-winthor-6.9.6";
+CloudStore.BUILD = "visao-operacao-sac-por-dia-6.9.7";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
