@@ -222,12 +222,17 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       faturamento: "[Vl Fat Bruto]", faturamento_kg: "[Peso Fat]", pct_dev_fat: "[% Dev/Fat]",
       valor_ly: "[LY Vl Dev]", kg_ly: "[LY Peso Dev]", qtd_ly: "[LY Qtd Dev]", ticket_ly: "[LY Tick Médio]",
     }, j);
+    // Faturamento de 26 a 25: base da meta de corte (corte R$ / faturado R$ <= 0,01%)
+    const jf = janelas(am).fech;
+    ind.push(...await soIndicadores(t, "devolucao", datas("dim_CALENDARIO[Data]", jf), { faturamento_fech: "[Vl Fat Bruto]" }, jf));
     if (soInd) return { ind, quad: [] };
     const quad = [
       ...await quadro(t, "devolucao", "dia", "dim_CALENDARIO[Data]", f, ["[Vl Devolução]"]),
       ...await quadro(t, "devolucao", "motivo", "f_DEVOLUCAO[MOTIVO]", f, ["[Vl Devolução]", "[Qtd Devolução]"]),
       ...await quadro(t, "devolucao", "responsavel", `f_DEVOLUCAO["RESP DEV"]`, f, ["[Vl Devolução]", "[Qtd Devolução]"]),
       ...await quadro(t, "devolucao", "setor", "dim_PCSUPERV[SETOR I]", f, ["[Vl Devolução]"]),
+      // devolucao e faturamento por setor do supervisor: meta de 0,20% por seco x frio
+      ...await quadro(t, "devolucao", "setor_fat", "dim_PCSUPERV[SETOR I]", f, ["[Vl Fat Bruto]", "[Vl Devolução]"]),
     ];
     return { ind, quad };
   },
@@ -272,13 +277,28 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
     const ind = await soIndicadores(t, "motoristas", f, {
       peso: "[Total Peso Mot]", viagens: "[Total Viagens Mot]", motoristas_ativos: "[Qtd Motoristas Ativos]",
       ajudantes_ativos: "[Qtd Ajudantes Ativos]", garantido: "[Garantido Mot]",
+      peso_palmas: "[Peso Tranb Palmas]", cargas_palmas: "[Qtd Tranb Palmas]", media_palmas: "[Media Transb Palmas]", pct_palmas: "[% Transb]",
+      peso_maraba: "[Peso Transb Marabá]", cargas_maraba: "[Qtd Tranb Marabá]", media_maraba: "[Media Transb Marabá]", pct_maraba: "[% Transb Marabá]",
+      peso_maraba_ly: "[Peso Marabá LY]", cargas_maraba_ly: "[Qtd Carga Marabá LY]",
     }, j);
     if (soInd) return { ind, quad: [] };
     const naoBranco = (q: Quad[]) => q.filter((l) => l.rotulo !== "(Em branco)");
     const quad = [
       ...naoBranco(await quadro(t, "motoristas", "motorista", "dim_PCEMPR[NOME]", f, ["[Total Peso Mot]", "[Total Viagens Mot]", "[% Garantido Mot]"])),
       ...naoBranco(await quadro(t, "motoristas", "ajudante", "dim_PCEMPR[NOME]", f, ["[Total Peso Ajud]", "[Total Viagens Ajud]", "[% Garantido Ajud]"])),
+      ...await quadro(t, "motoristas", "palmas_dia", "dim_CALENDARIO[Data]", f, ["[Peso Tranb Palmas]", "[Qtd Tranb Palmas]", "[Media Transb Palmas]"]),
     ];
+    // Maraba mes a mes no ano, com o mesmo mes do ano anterior (grafico comparativo)
+    const a = Math.floor(am / 100), m = am % 100;
+    const mar = await dax(t, "motoristas", `EVALUATE SUMMARIZECOLUMNS(dim_CALENDARIO[Ano], dim_CALENDARIO[Mês],
+      ${datas("dim_CALENDARIO[Data]", { de: iso(a, 1, 1), ate: iso(a, m + 1, 0) })},
+      "p", [Peso Transb Marabá], "q", [Qtd Tranb Marabá], "ly", [Peso Marabá LY])`);
+    for (const r of mar) {
+      const mes = Number(r["dim_CALENDARIO[Mês]"]);
+      if (mes > m) continue;
+      quad.push({ quadro: "maraba_mes", rotulo: `${a}-${String(mes).padStart(2, "0")}`, ordem: a * 100 + mes,
+        valor: num(r["[p]"]), valor2: num(r["[q]"]), valor3: num(r["[ly]"]) });
+    }
     return { ind, quad };
   },
 
