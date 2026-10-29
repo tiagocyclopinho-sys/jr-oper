@@ -513,7 +513,7 @@ function resumo(pres, d, a) {
   });
   if (!a.custos.length) semDados(s2, 4.0, 1.5, 8.7, 4.6, 'Nenhuma oportunidade calculada');
 
-  const s3 = slideConteudo(pres, 'Metas sugeridas', `Mediana dos meses de ${d.ano} com 5% de melhora, nunca além do melhor mês já feito`);
+  const s3 = slideConteudo(pres, 'Metas', `Oficiais (definidas pela gestão) e sugeridas (mediana de ${d.ano} com 5% de melhora)`);
   tabela(s3, 0.6, 1.5, [{ titulo: 'Indicador', w: 3.4 }, { titulo: abrev(d.am), w: 1.6, align: 'right' }, { titulo: `Mediana ${d.ano}`, w: 1.7, align: 'right' },
     { titulo: 'Melhor mês', w: 1.7, align: 'right' }, { titulo: 'Meta sugerida', w: 2.0, align: 'right' }, { titulo: 'Situação', w: 1.7, align: 'center' }],
   a.metas, { fonte: 11, alturaLinha: 0.45 });
@@ -526,7 +526,7 @@ function resumoTexto(d, a) {
   l.push('PONTOS POSITIVOS', ...a.positivos.map((t) => `- ${t}`), '');
   l.push('PONTOS DE MELHORIA', ...a.melhorias.map((t) => `- ${t}`), '');
   l.push(`OPORTUNIDADES DE REDUÇÃO DE CUSTO (estimativa ${reais(a.custos.reduce((t, c) => t + c.valor, 0))}/mês)`, ...a.custos.map((c) => `- ${c.titulo}: ${reais(c.valor)}. ${c.texto}`), '');
-  l.push('METAS SUGERIDAS', ...a.metas.map((m) => `- ${m[0]}: meta ${m[4].text} (mês: ${m[1].text}; ${m[5].text.toLowerCase()})`), '');
+  l.push('METAS (oficiais e sugeridas)', ...a.metas.map((m) => `- ${m[0]}: meta ${m[4].text} (mês: ${m[1].text}; ${m[5].text.toLowerCase()})`), '');
   return l.join('\r\n');
 }
 

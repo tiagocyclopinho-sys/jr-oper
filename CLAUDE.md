@@ -134,6 +134,28 @@ partir do branch `main` do GitHub.
 - Os modelos Corte e Devolução expõem colunas sensíveis do WinThor
   (dim_PCEMPR/dim_PCUSUARI: salário, CPF, hash de senha); nunca consultar.
 
+- 6.9.5 (29/10): menu de seções travado (no app o quadro rola por dentro);
+  Painel com 3º comparativo = mesmo mês do ano anterior (2025 inteiro carregado
+  em vo_*; carregarDados lê só ano corrente + mês anterior + mesmo mês do ano
+  anterior, porque o REST devolve no máx. 1.000 linhas). Metas OFICIAIS em
+  `metasOficiais()` (decisão do Tiago em 29/10): HE carregamento 1º turno 40 h,
+  2º turno 200 h, demais setores 1 h; devolução ≤ 0,20% do faturamento geral e
+  por seco/frio (SETOR I do supervisor no Power BI; frio = TO+PA+MA); corte ≤
+  0,1% (valor cortado ÷ faturado no período 26→25, `faturamento_fech`) e corte
+  ≤ R$ 30 mil; faturamento do mês ≥ R$ 30 mi;
+  despesa de cartão ≤ 75% do mesmo mês do ano anterior; MOOV motor ocioso ≤ 500
+  e ≥ 80% identificadas/em viagem; inventário saldo acumulado no ano ≥ 0. Seção
+  Transbordos (Palmas dia a dia, Marabá mês a mês × ano anterior). Filtro por
+  clique (variantes pré-montadas + script na página) só onde os dados já
+  permitem: HE por setor, movimentação frio/seco, motoristas por faixa, S.A.C.
+  por tipo de erro.
+- SLA de atendimento (6.9.5, decisão do Tiago em 29/10): a partir de set/2026,
+  em HORAS ÚTEIS (seg–sex, sem feriados nacionais; lista FERIADOS em
+  visaoOperacao.js até 2027, Palmas ainda não). Monitoramento = criado_em →
+  1º EDICAO_INVESTIGACAO em audit_logs (24 h); gestor = análise →
+  data_acao_gestor (48 h); ponta a ponta = abertura → CONCLUIDO (72 h). Aberta
+  com prazo vencido conta como fora; aberta no prazo fica fora do %.
+
 ## Pendências
 - Segurança: repositório público; todas as tabelas com política
   `acesso_total_anon`; login próprio (tabela `usuarios`, hash no navegador),
