@@ -162,6 +162,11 @@ partir do branch `main` do GitHub.
   (−10/+20 dias). Cruzamento por número de carga (o Oper grava "44079/44080":
   separar os números). Tipo de erro → RESP DEV: comercial, indústria =
   fornecedor, motorista, carregamento, cliente; "avaria" só no WinThor.
+- 6.9.7 (29/10): S.A.C. ganhou "Abertura por dia" (criado_em de d.sac) e
+  "Monitoradas por dia" (`d.analisesPeriodo`: 1º EDICAO_INVESTIGACAO de cada
+  ocorrência caindo em 26→25, de qualquer data de abertura). A leitura do
+  audit_logs começa um mês antes do período para a 1ª análise não ser
+  confundida com reedição.
 
 ## Pendências
 - Segurança: repositório público; todas as tabelas com política
