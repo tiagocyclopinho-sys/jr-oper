@@ -30126,9 +30126,10 @@ function renderProdutividadeCDView() {
 //   Power BI pela Edge Function sync-visao-operacao) nao entram na sincronizacao.
 // - Abre no ultimo mes congelado; o mes em andamento aparece como previa.
 // - A pagina vai num iframe (srcdoc) para o CSS dela nao brigar com o Tailwind
-//   do app; a altura acompanha o conteudo e os atalhos do menu dela rolam a tela.
+//   do app. O quadro tem a altura da tela e rola por dentro (6.9.5): assim o
+//   menu de secoes da pagina fica travado no topo enquanto se desce.
 // - Todos veem, inclusive a lista de hora extra (decisao de 28/10/2026).
-window._visaoOp = window._visaoOp || { periodos: null, mes: null, paginas: {}, altura: 900, carregando: false, erro: '' };
+window._visaoOp = window._visaoOp || { periodos: null, mes: null, paginas: {}, carregando: false, erro: '' };
 
 const VO_LOGO = './public/logo_jr_branca.png';
 
@@ -30182,17 +30183,11 @@ function voSelecionarMes(valor) {
 }
 window.voSelecionarMes = voSelecionarMes;
 
-// Altura do iframe = altura da pagina; os links do menu da pagina rolam o app
-// (dentro de um srcdoc, "#secao" apontaria para o endereco do app).
+// Os links do menu da pagina rolam dentro do quadro (num srcdoc, "#secao"
+// apontaria para o endereco do app e recarregaria a tela).
 function voAoCarregar(frame) {
   try {
     const doc = frame.contentDocument;
-    const ajustar = () => {
-      const h = doc.documentElement.scrollHeight;
-      if (h > 200) { frame.style.height = `${h}px`; window._visaoOp.altura = h; }
-    };
-    ajustar();
-    setTimeout(ajustar, 300);
     doc.querySelectorAll('nav a[href^="#"]').forEach(a => {
       a.addEventListener('click', ev => {
         ev.preventDefault();
@@ -30276,7 +30271,7 @@ function renderVisaoOperacaoView() {
   return `<div class="space-y-4">${cabecalho(botoes)}
     ${st.erro ? `<div class="text-red-400 text-xs font-bold">⚠️ ${prodEsc(st.erro)}</div>` : ''}
     <iframe id="vo-frame" title="Visão Operação ${prodEsc(nome(st.mes))}" onload="voAoCarregar(this)"
-      class="w-full rounded-xl border border-slate-700 bg-white block" style="height:${st.altura}px"
+      class="w-full rounded-xl border border-slate-700 bg-white block" style="height:calc(100vh - 190px);min-height:520px"
       srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe>
   </div>`;
 }

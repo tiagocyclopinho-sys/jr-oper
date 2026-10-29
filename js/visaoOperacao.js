@@ -64,15 +64,24 @@ const hhmm = (h) => {
 async function carregarDados(rest, am) {
   const a = Math.floor(am / 100), m = am % 100;
   const ant = mesAnterior(am);
-  const desde = (a - 1) * 100 + 1;
-  const [periodos, ind, quad, pontos, sac, trocas] = await Promise.all([
+  // So os meses usados: o ano corrente (medias e series), o mes anterior (que em
+  // janeiro e dezembro do ano passado) e o mesmo mes do ano anterior. A nuvem
+  // devolve no maximo 1.000 linhas por leitura: ler 2 anos inteiros cortava dados.
+  const meses = [...new Set([...Array.from({ length: m }, (_, i) => a * 100 + i + 1), ant, am - 100])].join(',');
+  const [periodos, ind, quad, pontos, sac, trocas, analises] = await Promise.all([
     rest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes'),
-    rest('vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=gte.${desde}&ano_mes=lte.${am}`),
+    rest('vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=in.(${meses})`),
     rest('vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
     rest('prod_pontuacao', `select=nome,cargo,setor,pontuacao,qtd_os,qtd_apanhos,kg_total,kg_entrada&ano_mes=eq.${am}`),
-    rest('ocorrencias_devolucao', `select=tipo_erro,status_gestao,valor_reclamado,forma_acerto,data_entrada_cd,sem_itens&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
+    rest('ocorrencias_devolucao', `select=id,criado_em,data_acao_gestor,responsavel_analise,tipo_erro,status_gestao,valor_reclamado,forma_acerto,data_entrada_cd,sem_itens&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
     rest('trocas_veiculos', `select=data,veiculo_escalado,veiculo_trocado,motivo_resumido,motivo_outro,detalhamento,autorizado_por&or=(is_deleted.is.null,is_deleted.is.false)&data=gte.${iso(a, m, 1)}&data=lte.${iso(a, m + 1, 0)}&order=data.desc`),
+    // Quando o monitoramento concluiu a analise: o primeiro EDICAO_INVESTIGACAO
+    // da trilha de auditoria (o registro da devolucao nao guarda essa hora).
+    rest('audit_logs', `select=registro_id,data_hora&modulo=eq.ocorrencias_devolucao&acao=eq.EDICAO_INVESTIGACAO&data_hora=gte.${iso(a, m - 1, 26)}&data_hora=lt.${iso(a, m + 4, 1)}&order=data_hora.asc&limit=5000`),
   ]);
+  const primeiraAnalise = {};
+  for (const r of analises || []) if (!primeiraAnalise[r.registro_id]) primeiraAnalise[r.registro_id] = r.data_hora;
+  for (const o of sac) o.analise_em = primeiraAnalise[String(o.id)] || null;
   const I = {}; // I[secao][indicador][ano_mes] = { valor, valor_atual }
   for (const r of ind) {
     ((I[r.secao] ||= {})[r.indicador] ||= {})[r.ano_mes] = { valor: num0(r.valor), valor_atual: num0(r.valor_atual) };
@@ -194,12 +203,22 @@ function analisar(d) {
 
   // MOOV e motoristas
   const oc = v('rastreamento', 'ocorrencias'), sv = v('rastreamento', 'sem_vinculo');
-  if (oc && sv / oc > 0.15) melhorias.push({ peso: sv / oc, texto: `MOOV: ${pct(sv / oc, 0)} das ocorrências estão sem vínculo com viagem (meta ≤ 15%). Sem o vínculo não dá para cobrar o motorista.` });
+  if (oc && 1 - sv / oc < 0.8) melhorias.push({ peso: sv / oc, texto: `MOOV: só ${pct(1 - sv / oc, 0)} das ocorrências estão identificadas ou em viagem (meta ≥ 80%); ${num(sv)} sem vínculo. Sem o vínculo não dá para cobrar o motorista.` });
   const motQ = d.q('motoristas', 'motorista');
   const abaixo = motQ.filter((x) => x.valor3 !== null && x.valor3 < 0.7);
   if (abaixo.length) melhorias.push({ peso: abaixo.length / Math.max(motQ.length, 1), texto: `${abaixo.length} de ${motQ.length} motoristas ficaram abaixo de 70% do garantido de ${num(v('motoristas', 'garantido'))} kg.` });
 
-  // S.A.C.
+  // S.A.C.: SLA de atendimento (a partir de set/2026)
+  if (d.am >= SLA_INICIO && d.sac.length) {
+    for (const o of d.sac) o._sla = o._sla || etapasSla(o);
+    const etapas = [['monitoramento', 'Monitoramento'], ['gestor', 'Tratativa do gestor'], ['ponta', 'Atendimento ponta a ponta']];
+    for (const [k, nome] of etapas) {
+      const r = resumoSla(d.sac, k);
+      if (r.pctNoPrazo === null) continue;
+      const txt = `SLA ${nome.toLowerCase()}: ${pct(r.pctNoPrazo, 0)} no prazo de ${SLA_PRAZO[k]} h úteis (${r.no} de ${r.no + r.fora}; mediana ${horasTxt(r.mediana)})${r.atrasadasAbertas ? `; ${r.atrasadasAbertas} ainda abertas com o prazo vencido` : ''}.`;
+      (r.pctNoPrazo >= 0.9 ? positivos : melhorias).push({ peso: r.pctNoPrazo >= 0.9 ? 0.45 : 1 - r.pctNoPrazo, texto: txt });
+    }
+  }
   const conclu = d.sac.filter((o) => o.status_gestao === 'CONCLUIDO').length;
   if (d.sac.length) {
     const tx = conclu / d.sac.length;
@@ -218,19 +237,124 @@ function analisar(d) {
     const ok = atual !== null && (menorMelhor ? atual <= alvo : atual >= alvo);
     metas.push([rot, { text: fmt(atual), bold: true }, fmt(med), fmt(melhor), { text: `${menorMelhor ? '≤' : '≥'} ${fmt(alvo)}`, bold: true }, ok ? { text: 'Atingida', cor: COR.bom } : { text: 'Não atingida', cor: COR.ruim }]);
   };
-  meta('Hora extra 55% (R$)', 'horas_extras', 'valor', (x) => reais(x));
-  meta('Valor de cortes (R$)', 'cortes', 'valor', (x) => reais(x));
+  // So entram como "sugeridas" os indicadores que ainda nao tem meta oficial
   meta('Pedidos cortados', 'cortes', 'pedidos', (x) => num(x));
-  meta('Devolução (R$)', 'devolucao', 'valor', (x) => reais(x));
-  meta('% devolução / faturamento', 'devolucao', 'pct_dev_fat', (x) => pct(x, 2));
-  meta('Despesas de cartão (R$)', 'despesa', 'valor', (x) => reais(x));
   meta('Preço médio combustível (R$/L)', 'abastecimento', 'preco_medio', (x) => reais(x, 2));
-  meta('Ocorrências MOOV', 'rastreamento', 'ocorrencias', (x) => num(x));
-  if (oc) metas.push(['MOOV sem vínculo', { text: pct(sv / oc, 0), bold: true }, '—', '—', { text: '≤ 15%', bold: true }, sv / oc <= 0.15 ? { text: 'Atingida', cor: COR.bom } : { text: 'Não atingida', cor: COR.ruim }]);
+  meta('Peso entregue (kg)', 'motoristas', 'peso', (x) => num(x), false);
+  // Metas oficiais (realizado x meta) vem antes, marcadas "(oficial)"
+  const oficiais = metasOficiais(d);
+  metas.unshift(...oficiais.map((o) => [`${o.area} · ${o.indicador} (oficial)`, { text: o.real, bold: true }, '—', '—', { text: o.meta, bold: true },
+    o.ok ? { text: 'Atingida', cor: COR.bom } : { text: 'Não atingida', cor: COR.ruim }]));
+  const foraMeta = oficiais.filter((o) => o.ok === false), naMeta = oficiais.filter((o) => o.ok);
+  if (oficiais.length) (foraMeta.length ? melhorias : positivos).push({ peso: 0.95,
+    texto: `Metas oficiais: ${naMeta.length} de ${oficiais.length} atingidas${foraMeta.length ? `. Fora da meta: ${foraMeta.slice(0, 4).map((o) => `${o.area} ${o.indicador.toLowerCase()} (${o.real}; meta ${o.meta})`).join('; ')}${foraMeta.length > 4 ? '…' : ''}` : ''}.` });
 
   const ordena = (l) => l.sort((a, b) => b.peso - a.peso).slice(0, 6).map((x) => x.texto);
   return { positivos: ordena(positivos), melhorias: ordena(melhorias), custos: custos.filter((c) => c.valor > 1).sort((a, b) => b.valor - a.valor), metas };
 }
+
+// Metas oficiais da operacao (passadas pelo Tiago em 29/10/2026). Cada item:
+// { area, indicador, real, meta, ok } ja com texto formatado.
+// Corte: ate 0,1% do faturado e no maximo R$ 30 mil no periodo; faturamento: R$ 30 mi/mes (Tiago, 29/10/2026)
+const META_DEV = 0.002, META_CORTE = 0.001, META_CORTE_RS = 30000, META_FAT = 30000000;
+function metaHoraExtra(setor) {
+  const s = String(setor).toUpperCase(), carreg = /CARREG/.test(s);
+  return carreg && /1\s*TURNO/.test(s) ? 40 : carreg && /2\s*TURNO/.test(s) ? 200 : 1;
+}
+// Devolucao x faturamento por setor do supervisor (SETOR I do Power BI): seco e frio (TO + PA + MA)
+function devolucaoPorSetor(d) {
+  const g = {};
+  for (const x of d.q('devolucao', 'setor_fat')) {
+    if (x.rotulo === '(Em branco)') continue;
+    const k = /SECO/i.test(x.rotulo) ? 'Seco' : 'Frio';
+    (g[k] ||= { fat: 0, dev: 0 }); g[k].fat += x.valor || 0; g[k].dev += x.valor2 || 0;
+  }
+  return ['Seco', 'Frio'].filter((k) => g[k] && g[k].fat).map((k) => ({ setor: k, ...g[k], pct: g[k].dev / g[k].fat }));
+}
+function metasOficiais(d) {
+  const v = (sec, k, mes) => d.v(sec, k, mes);
+  const out = [];
+  const add = (area, indicador, real, meta, ok) => out.push({ area, indicador, real, meta, ok });
+  for (const x of d.q('horas_extras', 'setor')) {
+    const lim = metaHoraExtra(x.rotulo);
+    add('Hora extra', titulo(x.rotulo), `${hhmm(x.valor2)} h`, `≤ ${lim} h`, (x.valor2 || 0) <= lim);
+  }
+  const pg = v('devolucao', 'pct_dev_fat');
+  if (pg !== null) add('Devolução', 'Geral, % do faturamento', pct(pg, 2), '≤ 0,20%', pg <= META_DEV);
+  for (const x of devolucaoPorSetor(d)) add('Devolução', `${x.setor}, % do faturamento`, pct(x.pct, 2), '≤ 0,20%', x.pct <= META_DEV);
+  const corte = v('cortes', 'valor'), fat = v('devolucao', 'faturamento_fech');
+  if (corte !== null && fat) add('Corte', 'Valor cortado ÷ faturado', pct(corte / fat, 3), '≤ 0,10%', corte / fat <= META_CORTE);
+  if (corte !== null) add('Corte', 'Valor cortado no período', reais(corte), `≤ ${reais(META_CORTE_RS)}`, corte <= META_CORTE_RS);
+  const fm = v('devolucao', 'faturamento');
+  if (fm !== null) add('Faturamento', 'Faturado no mês', reais(fm), `≥ ${reais(META_FAT)}`, fm >= META_FAT);
+  const dp = v('despesa', 'valor'), dly = v('despesa', 'valor_ly');
+  if (dp !== null && dly) add('Despesa de cartão', 'Gasto (25% abaixo do ano anterior)', reais(dp), `≤ ${reais(dly * 0.75)}`, dp <= dly * 0.75);
+  const ocioso = (d.q('rastreamento', 'motivo').find((x) => /OCIOSO/i.test(x.rotulo)) || {}).valor;
+  if (ocioso !== undefined && ocioso !== null) add('MOOV', 'Ocorrências de motor ocioso', num(ocioso), '≤ 500', ocioso <= 500);
+  const oc = v('rastreamento', 'ocorrencias'), sv = v('rastreamento', 'sem_vinculo');
+  if (oc) add('MOOV', 'Identificadas ou em viagem', pct(1 - sv / oc, 1), '≥ 80%', 1 - sv / oc >= 0.8);
+  const sd = v('inventario', 'saldo');
+  if (sd !== null) add('Inventário', 'Saldo acumulado no ano', reais(sd), '≥ R$ 0', sd >= 0);
+  return out;
+}
+
+// SLA de atendimento das devolucoes (pedido do Tiago, 29/10/2026), a partir de
+// setembro/2026 (antes nao ha trilha completa). Tres etapas, em HORAS UTEIS:
+// seg a sex, sem feriados nacionais (sabado e domingo nao contam). Feriados de
+// Palmas entram quando houver o cadastro.
+//   monitoramento: abertura no SAC -> 1a analise da causa raiz   (prazo 24 h)
+//   gestor:        analise -> acao do gestor (data_acao_gestor)  (prazo 48 h)
+//   ponta a ponta: abertura -> devolucao concluida               (prazo 72 h = 24 + 48)
+// Concluida dentro do prazo = no prazo; concluida depois, ou ainda aberta com o
+// prazo vencido = fora; ainda aberta dentro do prazo = em andamento (fora da conta).
+const SLA_INICIO = 202609;
+const SLA_PRAZO = { monitoramento: 24, gestor: 48, ponta: 72 };
+const FERIADOS = new Set([
+  '2025-01-01', '2025-04-18', '2025-04-21', '2025-05-01', '2025-09-07', '2025-10-12', '2025-11-02', '2025-11-15', '2025-11-20', '2025-12-25',
+  '2026-01-01', '2026-04-03', '2026-04-21', '2026-05-01', '2026-09-07', '2026-10-12', '2026-11-02', '2026-11-15', '2026-11-20', '2026-12-25',
+  '2027-01-01', '2027-03-26', '2027-04-21', '2027-05-01', '2027-09-07', '2027-10-12', '2027-11-02', '2027-11-15', '2027-11-20', '2027-12-25',
+]);
+// Os carimbos do banco ja estao no horario de Brasilia e sem fuso: le "como estao"
+const msLocal = (t) => {
+  const x = String(t || '').match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  return x ? Date.UTC(+x[1], +x[2] - 1, +x[3], +x[4], +x[5], +(x[6] || 0)) : null;
+};
+const agoraLocal = () => Date.now() - 3 * 36e5;
+function horasUteis(ini, fim) {
+  if (ini === null || fim === null || fim <= ini) return 0;
+  let h = 0;
+  for (let dia = Math.floor(ini / 864e5) * 864e5; dia < fim; dia += 864e5) {
+    const dt = new Date(dia), sem = dt.getUTCDay();
+    if (sem === 0 || sem === 6 || FERIADOS.has(dt.toISOString().slice(0, 10))) continue;
+    h += (Math.min(fim, dia + 864e5) - Math.max(ini, dia)) / 36e5;
+  }
+  return h;
+}
+// Uma devolucao -> horas de cada etapa (null = etapa ainda nao comecou)
+function etapasSla(o, agora = agoraLocal()) {
+  const ab = msLocal(o.criado_em), an = msLocal(o.analise_em), ge = o.status_gestao === 'CONCLUIDO' ? msLocal(o.data_acao_gestor) : null;
+  const etapa = (ini, fim, prazo) => {
+    if (ini === null) return null;
+    const h = horasUteis(ini, fim === null ? agora : fim);
+    return { h, feito: fim !== null, situacao: fim !== null ? (h <= prazo ? 'no_prazo' : 'fora') : (h > prazo ? 'fora' : 'andamento') };
+  };
+  return {
+    monitoramento: etapa(ab, an, SLA_PRAZO.monitoramento),
+    gestor: etapa(an, ge, SLA_PRAZO.gestor),
+    ponta: etapa(ab, ge, SLA_PRAZO.ponta),
+  };
+}
+function resumoSla(lista, etapa) {
+  const xs = lista.map((o) => o._sla && o._sla[etapa]).filter(Boolean);
+  const feitos = xs.filter((x) => x.feito).map((x) => x.h).sort((p, q) => p - q);
+  const no = xs.filter((x) => x.situacao === 'no_prazo').length, fora = xs.filter((x) => x.situacao === 'fora').length;
+  return {
+    total: xs.length, no, fora, andamento: xs.length - no - fora, atrasadasAbertas: xs.filter((x) => !x.feito && x.situacao === 'fora').length,
+    pctNoPrazo: no + fora ? no / (no + fora) : null, mediana: mediana(feitos), media: feitos.length ? feitos.reduce((t, h) => t + h, 0) / feitos.length : null,
+  };
+}
+// Horas uteis decimais -> "4h12" / "2d 3h" (dia util = 24 h uteis)
+const horasTxt = (h) => (h === null || h === undefined ? '—' : h < 24 ? `${Math.floor(h)}h${String(Math.round((h % 1) * 60)).padStart(2, '0')}` : `${num(Math.floor(h / 24))}d ${Math.round(h % 24)}h`);
 
 // ---------------------------------------------------------------- pagina HTML
 const CH = {
@@ -248,7 +372,8 @@ const corta = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…
 // Todos recebem itens { rotulo, valor, texto? } — "texto" e o rotulo de dados
 // (quando nao vem, usa fmt(valor)). Nenhum grafico sai sem rotulo.
 
-function barrasH(itens, { fmt, cor = CH.azul, cores = null, larguraRot = 190, vazio = 'Sem dados no período', W = 580 } = {}) {
+// grupo: torna as barras clicaveis (filtro da secao); item.filtro e o valor do filtro.
+function barrasH(itens, { fmt, cor = CH.azul, cores = null, larguraRot = 190, vazio = 'Sem dados no período', W = 580, grupo = '' } = {}) {
   if (!itens.length) return `<p class="vazio">${vazio}</p>`;
   const hb = 20, gap = 8, top = 6;
   const H = top + itens.length * (hb + gap);
@@ -257,8 +382,9 @@ function barrasH(itens, { fmt, cor = CH.azul, cores = null, larguraRot = 190, va
   const linhas = itens.map((i, k) => {
     const y = top + k * (hb + gap);
     const w = Math.max((Math.abs(i.valor || 0) / max) * util, 2);
-    const c = cores ? cores[k % cores.length] : cor;
-    return `<g><title>${esc(i.rotulo)}: ${esc(i.texto ?? fmt(i.valor))}</title>
+    const c = i.cor || (cores ? cores[k % cores.length] : cor);
+    const clic = grupo ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"` : '';
+    return `<g${clic}><title>${esc(i.rotulo)}: ${esc(i.texto ?? fmt(i.valor))}</title>
       <text x="${larguraRot - 8}" y="${y + hb / 2 + 4}" class="cat" text-anchor="end">${esc(corta(i.rotulo, 30))}</text>
       <rect x="${larguraRot}" y="${y}" width="${w}" height="${hb}" rx="3" fill="${c}"/>
       <text x="${larguraRot + w + 6}" y="${y + hb / 2 + 4}" class="val">${esc(i.texto ?? fmt(i.valor))}</text></g>`;
@@ -307,7 +433,7 @@ function colunas(cats, series, { fmt, altura = 280, girar = null, W = 580 } = {}
   return `${leg}<svg viewBox="0 ${rot ? -40 : 0} ${W} ${altura + (rot ? 40 : 0) + (larg < 34 ? 10 : 0)}" class="graf" role="img">${svg}</svg>`;
 }
 
-function rosca(itens, { fmt } = {}) {
+function rosca(itens, { fmt, grupo = '' } = {}) {
   const lista = itens.filter((i) => (i.valor || 0) > 0);
   if (!lista.length) return '<p class="vazio">Sem dados no período</p>';
   const tot = lista.reduce((t, i) => t + i.valor, 0);
@@ -317,16 +443,17 @@ function rosca(itens, { fmt } = {}) {
     const frac = i.valor / tot, a2 = ang + frac * 2 * Math.PI, grande = frac > 0.5 ? 1 : 0;
     const p = (rad, ra) => `${cx + ra * Math.cos(rad)},${cy + ra * Math.sin(rad)}`;
     const cor = PALETA_H[k % PALETA_H.length];
+    const clic = grupo ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"` : '';
     fatias += frac >= 0.999
       ? `<circle cx="${cx}" cy="${cy}" r="${(R + r) / 2}" fill="none" stroke="${cor}" stroke-width="${R - r}"/>`
-      : `<path d="M${p(ang, R)} A${R},${R} 0 ${grande} 1 ${p(a2, R)} L${p(a2, r)} A${r},${r} 0 ${grande} 0 ${p(ang, r)} Z" fill="${cor}"><title>${esc(i.rotulo)}: ${esc(fmt(i.valor))}</title></path>`;
+      : `<path${clic} d="M${p(ang, R)} A${R},${R} 0 ${grande} 1 ${p(a2, R)} L${p(a2, r)} A${r},${r} 0 ${grande} 0 ${p(ang, r)} Z" fill="${cor}"><title>${esc(i.rotulo)}: ${esc(fmt(i.valor))}</title></path>`;
     if (frac >= 0.04) {
       const meio = (ang + a2) / 2, rm = (R + r) / 2;
       rotulos += `<text x="${cx + rm * Math.cos(meio)}" y="${cy + rm * Math.sin(meio) + 4}" text-anchor="middle" class="fatia">${Math.round(frac * 100)}%</text>`;
     }
     ang = a2;
   });
-  const leg = lista.map((i, k) => `<li><i style="background:${PALETA_H[k % PALETA_H.length]}"></i><span class="n">${esc(i.rotulo)}</span><b>${esc(fmt(i.valor))}</b><em>${(i.valor / tot * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</em></li>`).join('');
+  const leg = lista.map((i, k) => `<li${grupo ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"` : ''}><i style="background:${PALETA_H[k % PALETA_H.length]}"></i><span class="n">${esc(i.rotulo)}</span><b>${esc(fmt(i.valor))}</b><em>${(i.valor / tot * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</em></li>`).join('');
   return `<div class="rosca"><svg viewBox="0 0 220 220" role="img">${fatias}${rotulos}</svg><ul>${leg}</ul></div>`;
 }
 
@@ -369,6 +496,13 @@ function kpi(valor, rotulo, comp, corValor) {
   return `<div class="kpi"><div class="v"${corValor ? ` style="color:${corValor}"` : ''}>${esc(valor)}</div><div class="r">${esc(rotulo)}</div>${comp && comp.texto ? `<div class="c ${cls}">${esc(comp.texto)}</div>` : ''}</div>`;
 }
 
+// Filtro da secao: blocos alternativos (um por valor; '' = todos) que o clique troca.
+function variantes(grupo, lista) {
+  return lista.map((x) => `<div class="variante" data-grupo="${grupo}" data-valor="${esc(x.valor)}"${x.valor ? ' hidden' : ''}>${x.html}</div>`).join('');
+}
+const chip = (grupo, dica) => `<p class="dica">${esc(dica)}</p><div class="chip" data-chip="${grupo}" hidden></div>`;
+const metaTxt = (ok, txt) => ({ texto: `${ok ? '✓' : '✗'} meta ${txt}`, bom: ok });
+
 function secao(id, titulo, sub, corpo) {
   return `<section class="secao" id="${id}"><header><h2>${esc(titulo)}</h2><p>${esc(sub)}</p></header>${corpo}</section>`;
 }
@@ -394,38 +528,59 @@ function gerarHtml(d, a, opcoes = {}) {
     ['Preço médio / L', 'abastecimento', 'preco_medio', (x) => reais(x, 2), true], ['Peso entregue (kg)', 'motoristas', 'peso', N0, false],
     ['Ocorrências MOOV', 'rastreamento', 'ocorrencias', N0, true],
   ];
+  // Mesmo mes do ano anterior: a foto de AAAA-1 quando existe; senao a medida LY do Power BI
+  const doAnoAnterior = (sec, k) => { const x = v(sec, k, d.am - 100); return x !== null && x !== undefined ? x : v(sec, `${k}_ly`); };
   const painel = painelItens.map(([rot, sec, k, fmt, menor]) => {
-    const at = v(sec, k), c1 = comparar(at, v(sec, k, d.ant), abrev(d.ant).toLowerCase(), menor), c2 = comparar(at, media(d.serie(sec, k)), `média ${ano}`, menor);
-    const cls = (c) => (c ? (c.bom === true ? 'bom' : c.bom === false ? 'ruim' : 'neutro') : '');
+    const at = v(sec, k);
+    const cs = [comparar(at, v(sec, k, d.ant), abrev(d.ant).toLowerCase(), menor), comparar(at, media(d.serie(sec, k)), `média ${ano}`, menor),
+      comparar(at, doAnoAnterior(sec, k), abrev(d.am - 100).toLowerCase(), menor)];
+    const cls = (c) => (c.bom === true ? 'bom' : c.bom === false ? 'ruim' : 'neutro');
     return `<div class="kpi"><div class="v">${esc(fmt(at))}</div><div class="r">${esc(rot)}</div>
-      ${c1 ? `<div class="c ${cls(c1)}">${esc(c1.texto)}</div>` : ''}${c2 ? `<div class="c ${cls(c2)}">${esc(c2.texto)}</div>` : ''}</div>`;
+      ${cs.filter(Boolean).map((c) => `<div class="c ${cls(c)}">${esc(c.texto)}</div>`).join('')}</div>`;
   }).join('');
-  add('painel', 'Painel', secao('painel', 'Painel do mês', `${nomeMes(d.am)} comparado ao mês anterior e à média de ${ano}`, `<div class="kpis k5">${painel}</div>`));
+  add('painel', 'Painel', secao('painel', 'Painel do mês', `${nomeMes(d.am)} comparado ao mês anterior, à média de ${ano} e ao mesmo mês de ${ano - 1}`, `<div class="kpis k5">${painel}</div>`));
 
   // Resumo
   const lista = (l) => (l.length ? `<ul class="lista">${l.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : '<p class="vazio">Nada a destacar no mês.</p>');
   const totCusto = a.custos.reduce((t, c) => t + c.valor, 0);
+  const oficiais = metasOficiais(d);
+  const tabOficiais = `<table class="tab"><thead><tr><th>Área</th><th>Indicador</th><th class="n">Realizado</th><th class="n">Meta</th><th>Situação</th></tr></thead><tbody>${
+    oficiais.map((o) => `<tr><td>${esc(o.area)}</td><td>${esc(o.indicador)}</td><td class="n"><b>${esc(o.real)}</b></td><td class="n">${esc(o.meta)}</td><td class="${o.ok ? 'bom' : 'ruim'}"><b>${o.ok ? '✓ Atingida' : '✗ Não atingida'}</b></td></tr>`).join('')}</tbody></table>`;
   const metas = `<table class="tab"><thead><tr><th>Indicador</th><th class="n">${abrev(d.am)}</th><th class="n">Mediana ${ano}</th><th class="n">Melhor mês</th><th class="n">Meta sugerida</th><th>Situação</th></tr></thead><tbody>${
-    a.metas.map((r) => `<tr><td>${esc(r[0])}</td><td class="n"><b>${esc(r[1].text ?? r[1])}</b></td><td class="n">${esc(r[2])}</td><td class="n">${esc(r[3])}</td><td class="n"><b>${esc(r[4].text ?? r[4])}</b></td><td class="${/Atingida/.test(r[5].text) ? 'bom' : 'ruim'}">${esc(r[5].text)}</td></tr>`).join('')}</tbody></table>`;
+    a.metas.filter((r) => !/\(oficial\)$/.test(r[0])).map((r) => `<tr><td>${esc(r[0])}</td><td class="n"><b>${esc(r[1].text ?? r[1])}</b></td><td class="n">${esc(r[2])}</td><td class="n">${esc(r[3])}</td><td class="n"><b>${esc(r[4].text ?? r[4])}</b></td><td class="${/Atingida/.test(r[5].text) ? 'bom' : 'ruim'}">${esc(r[5].text)}</td></tr>`).join('')}</tbody></table>`;
   add('resumo', 'Resumo', secao('resumo', 'Resumo executivo', 'Leitura automática dos números · regras fixas, cada frase cita a referência',
     `<div class="grade g2">${card('Pontos positivos', lista(a.positivos), 'pos')}${card('Pontos de melhoria', lista(a.melhorias), 'neg')}</div>
      <div class="grade g2">${card(`Oportunidades de redução de custo · ${reais(totCusto)}/mês`, barrasH(a.custos.map((c) => ({ rotulo: c.titulo, valor: c.valor })), { fmt: R0, cor: CH.verde, larguraRot: 210 })
-       + `<ul class="lista peq">${a.custos.map((c) => `<li><b>${esc(c.titulo)}:</b> ${esc(c.texto)}</li>`).join('')}</ul>`)}${card('Metas sugeridas', metas + '<p class="nota">Mediana do ano com 5% de melhora, nunca além do melhor mês já feito.</p>')}</div>`));
+       + `<ul class="lista peq">${a.custos.map((c) => `<li><b>${esc(c.titulo)}:</b> ${esc(c.texto)}</li>`).join('')}</ul>`)}${card('Metas sugeridas (indicadores sem meta oficial)', metas + '<p class="nota">Mediana do ano com 5% de melhora, nunca além do melhor mês já feito.</p>')}</div>
+     <div class="grade g1">${card(`Metas da operação · ${oficiais.filter((o) => o.ok).length} de ${oficiais.length} atingidas`, tabOficiais)}</div>`));
 
   // Hora extra
   {
     const setor = d.q('horas_extras', 'setor'), meses = d.q('horas_extras', 'mes').slice().sort((x, y) => x.ordem - y.ordem);
-    const pessoas = d.q('horas_extras', 'funcionario').slice(0, 15), tot = v('horas_extras', 'valor');
+    const todas = d.q('horas_extras', 'funcionario'), tot = v('horas_extras', 'valor');
     const v100 = v('horas_extras', 'valor_100');
+    const doSetor = (st) => todas.filter((x) => !st || x.rotulo.split(' | ')[0] === st);
+    const kpisHE = (st) => {
+      if (!st) {
+        return `<div class="kpis">${kpi(hhmm(v('horas_extras', 'horas')), 'Horas extras', comparar(v('horas_extras', 'horas'), v('horas_extras', 'horas', d.ant), 'mês anterior'))}
+          ${kpi(reais(tot, 2), 'Valor', comparar(tot, v('horas_extras', 'valor', d.ant), 'mês anterior'))}
+          ${kpi(reais(v('horas_extras', 'valor_ly'), 2), `Mesmo mês de ${ano - 1}`, comparar(tot, v('horas_extras', 'valor_ly'), String(ano - 1)))}
+          ${kpi(num(v('horas_extras', 'funcionarios')), 'Funcionários com HE', v100 ? { texto: `+ HE 100%: ${reais(v100, 2)}`, bom: false } : null)}</div>`;
+      }
+      const ps = doSetor(st), sx = setor.find((x) => x.rotulo === st) || {}, lim = metaHoraExtra(st);
+      return `<div class="kpis">${kpi(`${hhmm(sx.valor2)} h`, 'Horas extras do setor', metaTxt((sx.valor2 || 0) <= lim, `≤ ${lim} h`))}
+        ${kpi(reais(sx.valor, 2), 'Valor do setor', { texto: `${pct(tot ? sx.valor / tot : null, 1)} do total da empresa`, bom: null })}
+        ${kpi(num(ps.length), 'Funcionários com HE')}${kpi(ps[0] ? titulo(ps[0].rotulo.split(' | ')[1]) : '—', 'Maior hora extra', ps[0] ? { texto: `${hhmm(ps[0].valor2)} h · ${reais(ps[0].valor, 2)}`, bom: null } : null)}</div>`;
+    };
+    const topHE = (st) => card(`Funcionários com mais hora extra (top 15)${st ? ` · ${titulo(st)}` : ''}`, barrasH(doSetor(st).slice(0, 15).map((x) => { const [sto, nome] = x.rotulo.split(' | '); return { rotulo: `${titulo(nome || sto)}`, valor: x.valor, texto: `${reais(x.valor, 2)} · ${hhmm(x.valor2)} h · ${pct(tot ? x.valor / tot : null, 1)}` }; }), { fmt: R0, cor: CH.ambar, larguraRot: 260, W: 1180 }));
+    const valores = ['', ...setor.map((x) => x.rotulo)];
     add('he', 'Hora extra', secao('he', 'Gestão de hora extra', `Visão ${fech} · Hora Extra 55%`,
-      `<div class="kpis">${kpi(hhmm(v('horas_extras', 'horas')), 'Horas extras', comparar(v('horas_extras', 'horas'), v('horas_extras', 'horas', d.ant), 'mês anterior'))}
-        ${kpi(reais(tot, 2), 'Valor', comparar(tot, v('horas_extras', 'valor', d.ant), 'mês anterior'))}
-        ${kpi(reais(v('horas_extras', 'valor_ly'), 2), `Mesmo mês de ${ano - 1}`, comparar(tot, v('horas_extras', 'valor_ly'), String(ano - 1)))}
-        ${kpi(num(v('horas_extras', 'funcionarios')), 'Funcionários com HE', v100 ? { texto: `+ HE 100%: ${reais(v100, 2)}`, bom: false } : null)}</div>
-      <div class="grade g3">${card('Valor por setor', rosca(it(setor, 'valor', (x) => titulo(x.rotulo)), { fmt: (x) => reais(x) }))}
-        ${card('Horas por setor', barrasH(setor.map((x) => ({ rotulo: titulo(x.rotulo).replace('Carregamento ', 'Carreg. '), valor: x.valor2, texto: `${hhmm(x.valor2)} h` })), { fmt: N0, larguraRot: 130, W: 340 }))}
+      `${chip('he', 'Clique num setor (rosca ou barras) para filtrar os cartões e a lista de funcionários.')}
+      ${variantes('he', valores.map((st) => ({ valor: st, html: kpisHE(st) })))}
+      <div class="grade g3">${card('Valor por setor', rosca(setor.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, filtro: x.rotulo })), { fmt: (x) => reais(x), grupo: 'he' }))}
+        ${card('Horas por setor x meta', barrasH(setor.map((x) => { const lim = metaHoraExtra(x.rotulo), ok = (x.valor2 || 0) <= lim; return { rotulo: titulo(x.rotulo).replace('Carregamento ', 'Carreg. '), valor: x.valor2, filtro: x.rotulo, cor: ok ? CH.bom : CH.ruim, texto: `${hhmm(x.valor2)} h · meta ${lim} h` }; }), { fmt: N0, larguraRot: 120, W: 340, grupo: 'he' }))}
         ${card('Valor HE por mês (R$)', colunas(meses.map((x) => `${MES_ABREV[Number(x.rotulo.slice(5)) - 1]}/${x.rotulo.slice(2, 4)}`), [{ nome: 'Valor', cor: CH.ambar, valores: meses.map((x) => x.valor) }], { fmt: N0, W: 340 }))}</div>
-      <div class="grade g1">${card('Funcionários com mais hora extra (top 15)', barrasH(pessoas.map((x) => { const [st, nome] = x.rotulo.split(' | '); return { rotulo: `${titulo(nome || st)}`, valor: x.valor, texto: `${reais(x.valor, 2)} · ${hhmm(x.valor2)} h · ${pct(tot ? x.valor / tot : null, 1)}` }; }), { fmt: R0, cor: CH.ambar, larguraRot: 260, W: 1180 }))}</div>`));
+      ${variantes('he', valores.map((st) => ({ valor: st, html: `<div class="grade g1">${topHE(st)}</div>` })))}`));
   }
 
   // Movimentacao CD
@@ -436,13 +591,25 @@ function gerarHtml(d, a, opcoes = {}) {
     const porSetor = ['FRIO', 'SECO'].map((s) => ({ s, l: op.filter((p) => (p.setor || '').toUpperCase() === s) }));
     const topKg = op.filter((p) => p.kg_total).sort((x, y) => y.kg_total - x.kg_total).slice(0, 15);
     const topPt = op.filter((p) => p.pontuacao).sort((x, y) => y.pontuacao - x.pontuacao).slice(0, 15);
+    const doSetorM = (st) => (st ? op.filter((p) => (p.setor || '').toUpperCase() === st) : op);
+    const blocoMov = (st) => {
+      const l = doSetorM(st), kg = soma(l, 'kg_total');
+      const tk = l.filter((p) => p.kg_total).sort((x, y) => y.kg_total - x.kg_total).slice(0, 15);
+      const tp = l.filter((p) => p.pontuacao).sort((x, y) => y.pontuacao - x.pontuacao).slice(0, 15);
+      return {
+        kpis: `<div class="kpis">${kpi(num(l.length), st ? `Colaboradores · ${st}` : 'Colaboradores')}${kpi(`${num(kg)} kg`, 'Total movimentado', st ? { texto: `${pct(kgTot ? kg / kgTot : null, 1)} do total`, bom: null } : null)}${kpi(num(soma(l, 'qtd_os')), 'Ordens de serviço')}${kpi(num(soma(l, 'qtd_apanhos')), 'Apanhos')}</div>`,
+        listas: `<div class="grade g2">${card(`Quem mais movimentou (kg, top 15)${st ? ` · ${st}` : ''}`, barrasH(tk.map((p) => ({ rotulo: titulo(p.nome), valor: p.kg_total, texto: `${num(p.kg_total)} kg · ${pct(kg ? p.kg_total / kg : null, 1)}` })), { fmt: N0, larguraRot: 200 }))}
+          ${card(`Maiores pontuações (top 15)${st ? ` · ${st}` : ''}`, barrasH(tp.map((p) => ({ rotulo: titulo(p.nome), valor: p.pontuacao, texto: num(p.pontuacao, 1) })), { fmt: N0, cor: CH.roxo, larguraRot: 200 }))}</div>`,
+      };
+    };
+    const vals = ['', 'FRIO', 'SECO'];
     add('mov', 'Movimentação', secao('mov', 'Movimentação CD — produtividade', `${fech} · ${op.length} colaboradores operacionais`,
-      `<div class="kpis">${kpi(num(op.length), 'Colaboradores')}${kpi(`${num(kgTot)} kg`, 'Total movimentado')}${kpi(num(soma(op, 'qtd_os')), 'Ordens de serviço')}${kpi(num(soma(op, 'qtd_apanhos')), 'Apanhos')}</div>
-      <div class="grade g3">${card('Kg por setor', rosca(porSetor.map((x) => ({ rotulo: x.s, valor: soma(x.l, 'kg_total') })), { fmt: (x) => `${num(x)} kg` }))}
-        ${card('Ordens de serviço por setor', barrasH(porSetor.map((x) => ({ rotulo: x.s, valor: soma(x.l, 'qtd_os') })), { fmt: N0, larguraRot: 60, W: 340 }))}
-        ${card('Apanhos por setor', barrasH(porSetor.map((x) => ({ rotulo: x.s, valor: soma(x.l, 'qtd_apanhos') })), { fmt: N0, larguraRot: 60, cor: CH.verde, W: 340 }))}</div>
-      <div class="grade g2">${card('Quem mais movimentou (kg, top 15)', barrasH(topKg.map((p) => ({ rotulo: titulo(p.nome), valor: p.kg_total, texto: `${num(p.kg_total)} kg · ${pct(kgTot ? p.kg_total / kgTot : null, 1)}` })), { fmt: N0, larguraRot: 200 }))}
-        ${card('Maiores pontuações (top 15)', barrasH(topPt.map((p) => ({ rotulo: titulo(p.nome), valor: p.pontuacao, texto: num(p.pontuacao, 1) })), { fmt: N0, cor: CH.roxo, larguraRot: 200 }))}</div>`));
+      `${chip('mov', 'Clique em FRIO ou SECO para filtrar os cartões e as listas.')}
+      ${variantes('mov', vals.map((st) => ({ valor: st, html: blocoMov(st).kpis })))}
+      <div class="grade g3">${card('Kg por setor', rosca(porSetor.map((x) => ({ rotulo: x.s, valor: soma(x.l, 'kg_total') })), { fmt: (x) => `${num(x)} kg`, grupo: 'mov' }))}
+        ${card('Ordens de serviço por setor', barrasH(porSetor.map((x) => ({ rotulo: x.s, valor: soma(x.l, 'qtd_os') })), { fmt: N0, larguraRot: 60, W: 340, grupo: 'mov' }))}
+        ${card('Apanhos por setor', barrasH(porSetor.map((x) => ({ rotulo: x.s, valor: soma(x.l, 'qtd_apanhos') })), { fmt: N0, larguraRot: 60, cor: CH.verde, W: 340, grupo: 'mov' }))}</div>
+      ${variantes('mov', vals.map((st) => ({ valor: st, html: blocoMov(st).listas })))}`));
   }
 
   // Cortes
@@ -450,8 +617,9 @@ function gerarHtml(d, a, opcoes = {}) {
     const prod = d.q('cortes', 'produto'), dia = d.q('cortes', 'dia'), tot = v('cortes', 'valor');
     const serie = d.serie('cortes', 'valor');
     add('cortes', 'Cortes', secao('cortes', 'Gestão de cortes', fech,
-      `<div class="kpis">${kpi(reais(tot), 'Corte (R$)', comparar(tot, v('cortes', 'valor', d.ant), 'mês anterior'))}${kpi(`${num(v('cortes', 'kg'))} kg`, 'Corte (kg)', comparar(v('cortes', 'kg'), v('cortes', 'kg', d.ant), 'mês anterior'))}
-        ${kpi(num(v('cortes', 'pedidos')), 'Pedidos cortados', comparar(v('cortes', 'pedidos'), v('cortes', 'pedidos', d.ant), 'mês anterior'))}${kpi(reais(media(serie)), `Média mensal ${ano}`)}</div>
+      `<div class="kpis k5">${kpi(reais(tot), 'Corte (R$)', comparar(tot, v('cortes', 'valor', d.ant), 'mês anterior'))}${kpi(`${num(v('cortes', 'kg'))} kg`, 'Corte (kg)', comparar(v('cortes', 'kg'), v('cortes', 'kg', d.ant), 'mês anterior'))}
+        ${kpi(num(v('cortes', 'pedidos')), 'Pedidos cortados', comparar(v('cortes', 'pedidos'), v('cortes', 'pedidos', d.ant), 'mês anterior'))}${kpi(reais(media(serie)), `Média mensal ${ano}`)}
+        ${(() => { const fat = v('devolucao', 'faturamento_fech'), p = fat && tot !== null ? tot / fat : null; return kpi(pct(p, 3), '% do faturado no período', p === null ? null : metaTxt(p <= META_CORTE, '≤ 0,10%')); })()}</div>
       <div class="grade g2">${card('Cortes por produto (R$, top 15)', barrasH(prod.map((x) => ({ rotulo: x.rotulo, valor: x.valor, texto: `${reais(x.valor)} · ${pct(tot ? x.valor / tot : null, 1)}` })), { fmt: R0, larguraRot: 230 }))}
         ${card('Valor de corte por dia (R$)', colunas(dia.map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.laranja, valores: dia.map((x) => x.valor) }], { fmt: N0 }))}</div>
       <div class="grade g1">${card(`Valor de corte por mês em ${ano} (R$)`, colunas(serie.map((x) => MES_ABREV[(x.mes % 100) - 1]), [{ nome: 'Valor', cor: CH.laranja, valores: serie.map((x) => x.valor) }], { fmt: N0, altura: 230, W: 1180 }))}</div>`));
@@ -464,7 +632,7 @@ function gerarHtml(d, a, opcoes = {}) {
     const sd = v('inventario', 'saldo'), ly = v('inventario', 'saldo_ly');
     const corS = (x) => (x === null ? null : x >= 0 ? CH.bom : CH.ruim);
     add('inv', 'Inventário', secao('inv', 'Gestão de inventários', `Acumulado de 01/01/${ano} a ${dataBr(iso(ano, m + 1, 0))}`,
-      `<div class="kpis k5">${kpi(reais(sd), 'Saldo no ano', null, corS(sd))}${kpi(reais(ly), `Saldo ${ano - 1}`, null, corS(ly))}${kpi(reais(sd !== null && ly !== null ? sd - ly : null), 'Diferença para o ano anterior', null, corS(sd !== null && ly !== null ? sd - ly : null))}
+      `<div class="kpis k5">${kpi(reais(sd), 'Saldo no ano', sd === null ? null : metaTxt(sd >= 0, '≥ R$ 0'), corS(sd))}${kpi(reais(ly), `Saldo ${ano - 1}`, null, corS(ly))}${kpi(reais(sd !== null && ly !== null ? sd - ly : null), 'Diferença para o ano anterior', null, corS(sd !== null && ly !== null ? sd - ly : null))}
         ${kpi(reais(v('inventario', 'perda')), 'Perda', null, CH.ruim)}${kpi(reais(v('inventario', 'rendimento')), 'Rendimento', null, CH.bom)}</div>
       <div class="grade g2">${card('Perda e rendimento por mês (R$)', colunas(rot, [{ nome: 'Perda', cor: CH.laranja, valores: atual.map((x) => x.valor2 || 0) }, { nome: 'Rendimento', cor: CH.azul, valores: atual.map((x) => x.valor3 || 0) }], { fmt: N0 }))}
         ${card('Saldo comparativo por mês (R$)', colunas(rot, [{ nome: String(ano - 1), cor: CH.marinho, valores: atual.map((x) => (ant.find((y) => y.rotulo.slice(5) === x.rotulo.slice(5)) || {}).valor || 0) }, { nome: String(ano), cor: CH.ambar, valores: atual.map((x) => x.valor || 0) }], { fmt: N0 }))}</div>`));
@@ -477,17 +645,21 @@ function gerarHtml(d, a, opcoes = {}) {
     add('dev', 'Devolução', secao('dev', 'Acompanhamento de devolução', `${mesCheio} · Power BI (WinThor)`,
       `<div class="kpis k5">${kpi(reais(s('valor')), 'Devolução (R$)', comparar(s('valor'), s('valor_ly'), ly))}${kpi(`${num(s('kg'))} kg`, 'Devolução (kg)', comparar(s('kg'), s('kg_ly'), ly))}
         ${kpi(num(s('qtd')), 'Qtd devoluções', comparar(s('qtd'), s('qtd_ly'), ly))}${kpi(reais(s('ticket'), 2), 'Ticket médio', comparar(s('ticket'), s('ticket_ly'), ly))}
-        ${kpi(pct(s('pct_dev_fat'), 2), '% dev / faturamento', { texto: `Faturamento ${reais(s('faturamento'))}`, bom: null })}</div>
-      <div class="grade g2">${card('Por setor', rosca(it(d.q('devolucao', 'setor')), { fmt: R0 }))}${card('Responsável (R$)', barrasH(resp.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${pct(totR ? x.valor / totR : null, 0)}` })), { fmt: R0, larguraRot: 150 }))}</div>
-      <div class="grade g2">${card('Pareto por motivo (R$, top 12)', barrasH(d.q('devolucao', 'motivo').slice(0, 12).map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${pct(totR ? x.valor / totR : null, 0)}` })), { fmt: R0, cor: CH.ambar, larguraRot: 240 }))}
-        ${card('Devolução por dia (R$)', colunas(d.q('devolucao', 'dia').map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: d.q('devolucao', 'dia').map((x) => x.valor) }], { fmt: N0 }))}</div>`));
+        ${kpi(pct(s('pct_dev_fat'), 2), '% dev / faturamento', s('pct_dev_fat') === null ? null : metaTxt(s('pct_dev_fat') <= META_DEV, `≤ 0,20% · faturado ${reais(s('faturamento'))}`))}</div>
+      <div class="grade g2">${card('Por setor', rosca(it(d.q('devolucao', 'setor')), { fmt: R0 }))}
+        ${card('Devolução ÷ faturamento x meta de 0,20%', barrasH([{ setor: 'Geral', pct: s('pct_dev_fat'), dev: s('valor'), fat: s('faturamento') }, ...devolucaoPorSetor(d)].filter((x) => x.pct !== null).map((x) => ({ rotulo: x.setor, valor: x.pct * 100, cor: x.pct <= META_DEV ? CH.bom : CH.ruim, texto: `${pct(x.pct, 2)} · ${reais(x.dev)} de ${reais(x.fat)}` })), { fmt: N0, larguraRot: 70 }) + '<p class="nota">Seco e frio pelo setor do supervisor no Power BI (frio = TO + PA + MA). Verde dentro da meta; vermelho fora.</p>')}</div>
+      <div class="grade g2">${card('Responsável (R$)', barrasH(resp.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${pct(totR ? x.valor / totR : null, 0)}` })), { fmt: R0, larguraRot: 150 }))}
+        ${card('Pareto por motivo (R$, top 12)', barrasH(d.q('devolucao', 'motivo').slice(0, 12).map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${pct(totR ? x.valor / totR : null, 0)}` })), { fmt: R0, cor: CH.ambar, larguraRot: 240 }))}
+        </div>
+      <div class="grade g1">${card('Devolução por dia (R$)', colunas(d.q('devolucao', 'dia').map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: d.q('devolucao', 'dia').map((x) => x.valor) }], { fmt: N0, W: 1180, altura: 240 }))}</div>`));
   }
 
   // Despesa
   {
     const s = (k) => v('despesa', k), us = d.q('despesa', 'usuario'), tot = s('valor');
     add('desp', 'Despesas', secao('desp', 'Acompanhamento de despesas', `${mesCheio} · cartões Vólus e ValeCard`,
-      `<div class="kpis">${kpi(reais(tot, 2), 'Valor total', comparar(tot, s('valor_ly'), 'ano anterior'))}${kpi(num(s('qtd')), 'Transações', comparar(s('qtd'), s('qtd_ly'), 'ano anterior'))}
+      `<div class="kpis k5">${kpi(reais(tot, 2), 'Valor total', comparar(tot, s('valor_ly'), 'ano anterior'))}
+        ${s('valor_ly') ? kpi(reais(s('valor_ly') * 0.75, 2), 'Meta: 25% abaixo do ano anterior', metaTxt(tot <= s('valor_ly') * 0.75, tot <= s('valor_ly') * 0.75 ? 'atingida' : `faltam ${reais(tot - s('valor_ly') * 0.75)}`)) : ''}${kpi(num(s('qtd')), 'Transações', comparar(s('qtd'), s('qtd_ly'), 'ano anterior'))}
         ${kpi(reais(s('ticket'), 2), 'Média por transação', comparar(s('ticket'), s('ticket_ly'), 'ano anterior'))}${kpi(reais(s('por_dia'), 2), 'Gasto por dia', comparar(s('por_dia'), s('por_dia_ly'), 'ano anterior'))}</div>
       <div class="grade g2">${card('Por departamento', rosca(it(d.q('despesa', 'departamento'), 'valor', (x) => titulo(x.rotulo)), { fmt: R0 }))}
         ${card('Usuários (top 15)', barrasH(us.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${pct(tot ? x.valor / tot : null, 1)}` })), { fmt: R0, cor: CH.ambar, larguraRot: 210 }))}</div>
@@ -517,21 +689,45 @@ function gerarHtml(d, a, opcoes = {}) {
   // Motoristas
   {
     const mot = d.q('motoristas', 'motorista'), aj = d.q('motoristas', 'ajudante');
-    const faixa = (l) => [
-      { rotulo: '≥ 100% do garantido', valor: l.filter((x) => x.valor3 >= 1).length },
-      { rotulo: '70% a 99%', valor: l.filter((x) => x.valor3 >= 0.7 && x.valor3 < 1).length },
-      { rotulo: 'Abaixo de 70%', valor: l.filter((x) => x.valor3 !== null && x.valor3 < 0.7).length },
-    ].map((f) => ({ ...f, texto: `${f.valor} · ${pct(l.length ? f.valor / l.length : null, 0)}` }));
+    const FAIXAS = [['≥ 100% do garantido', (p) => p >= 1], ['70% a 99%', (p) => p >= 0.7 && p < 1], ['Abaixo de 70%', (p) => p !== null && p < 0.7]];
+    const faixa = (l) => FAIXAS.map(([rotulo, ok]) => ({ rotulo, valor: l.filter((x) => ok(x.valor3)).length }))
+      .map((f) => ({ ...f, texto: `${f.valor} · ${pct(l.length ? f.valor / l.length : null, 0)}` }));
+    const naFaixa = (l, fx) => (fx ? l.filter((x) => FAIXAS.find((f) => f[0] === fx)[1](x.valor3)) : l);
     const top = (l) => l.slice(0, 15).map((x) => ({ rotulo: titulo(x.rotulo.replace(/^AJD\.?\s*MOT\.?\s*/i, '')), valor: x.valor, texto: `${num(x.valor)} kg · ${pct(x.valor3, 0)}` }));
     const serie = d.serie('motoristas', 'peso');
     add('mot', 'Motoristas', secao('mot', 'Gestão de motoristas & ajudantes', `${mesCheio} · garantido ${num(v('motoristas', 'garantido'))} kg`,
       `<div class="kpis">${kpi(`${num(v('motoristas', 'peso'))} kg`, 'Peso entregue', comparar(v('motoristas', 'peso'), v('motoristas', 'peso', d.ant), 'mês anterior', false))}
         ${kpi(num(v('motoristas', 'viagens')), 'Viagens', comparar(v('motoristas', 'viagens'), v('motoristas', 'viagens', d.ant), 'mês anterior', false))}
         ${kpi(num(v('motoristas', 'motoristas_ativos')), 'Motoristas ativos')}${kpi(num(v('motoristas', 'ajudantes_ativos')), 'Ajudantes ativos')}</div>
-      <div class="grade g2">${card('Motoristas por faixa do garantido', barrasH(faixa(mot), { fmt: N0, cores: [CH.bom, CH.ambar, CH.ruim], larguraRot: 170 }))}
-        ${card('Ajudantes por faixa do garantido', barrasH(faixa(aj), { fmt: N0, cores: [CH.bom, CH.ambar, CH.ruim], larguraRot: 170 }))}</div>
-      <div class="grade g2">${card('Motoristas com mais peso (top 15)', barrasH(top(mot), { fmt: N0, larguraRot: 210 }))}${card('Ajudantes com mais peso (top 15)', barrasH(top(aj), { fmt: N0, cor: CH.laranja, larguraRot: 210 }))}</div>
+      ${chip('motfx', 'Clique numa faixa para ver só os motoristas dela.')}${chip('ajfx', 'Clique numa faixa para ver só os ajudantes dela.')}
+      <div class="grade g2">${card('Motoristas por faixa do garantido', barrasH(faixa(mot), { fmt: N0, cores: [CH.bom, CH.ambar, CH.ruim], larguraRot: 170, grupo: 'motfx' }))}
+        ${card('Ajudantes por faixa do garantido', barrasH(faixa(aj), { fmt: N0, cores: [CH.bom, CH.ambar, CH.ruim], larguraRot: 170, grupo: 'ajfx' }))}</div>
+      <div class="grade g2"><div>${variantes('motfx', ['', ...FAIXAS.map((f) => f[0])].map((fx) => ({ valor: fx, html: card(`Motoristas com mais peso (top 15)${fx ? ` · ${fx}` : ''}`, barrasH(top(naFaixa(mot, fx)), { fmt: N0, larguraRot: 210 })) })))}</div>
+        <div>${variantes('ajfx', ['', ...FAIXAS.map((f) => f[0])].map((fx) => ({ valor: fx, html: card(`Ajudantes com mais peso (top 15)${fx ? ` · ${fx}` : ''}`, barrasH(top(naFaixa(aj, fx)), { fmt: N0, cor: CH.laranja, larguraRot: 210 })) })))}</div></div>
       <div class="grade g1">${card(`Peso entregue por mês em ${ano} (kg)`, colunas(serie.map((x) => MES_ABREV[(x.mes % 100) - 1]), [{ nome: 'Peso', cor: CH.azul, valores: serie.map((x) => x.valor) }], { fmt: N0, altura: 230, W: 1180 }))}</div>`));
+
+    // Transbordos de Palmas (dia a dia) e Maraba (mes a mes x ano anterior)
+    const mv = (k, mes) => v('motoristas', k, mes);
+    const pal = d.q('motoristas', 'palmas_dia'), mar = d.q('motoristas', 'maraba_mes').slice().sort((x, y) => x.ordem - y.ordem);
+    const kgMil = (x) => `${num((x || 0) / 1000, 1)} mil`;
+    add('transb', 'Transbordos', secao('transb', 'Gestão de transbordo — Palmas e Marabá', `${mesCheio} · Power BI (Motorista e Ajudantes)`,
+      `<h3 class="sub">Palmas</h3>
+      <div class="kpis k5">${kpi(`${num(mv('peso_palmas'))} kg`, 'Peso transbordado', comparar(mv('peso_palmas'), mv('peso_palmas', d.ant), 'mês anterior', null))}
+        ${kpi(num(mv('cargas_palmas')), 'Cargas', comparar(mv('cargas_palmas'), mv('cargas_palmas', d.ant), 'mês anterior', null))}
+        ${kpi(`${num(mv('media_palmas'))} kg`, 'Média por carga', comparar(mv('media_palmas'), mv('media_palmas', d.ant), 'mês anterior', false))}
+        ${kpi(pct(mv('pct_palmas'), 1), '% do peso entregue', { texto: 'sobre o total entregue pelos motoristas', bom: null })}
+        ${kpi(`${num(mv('peso_palmas', d.am - 100))} kg`, `Mesmo mês de ${ano - 1}`, comparar(mv('peso_palmas'), mv('peso_palmas', d.am - 100), String(ano - 1), null))}</div>
+      <div class="grade g2">${card('Peso transbordado por dia (kg)', colunas(pal.map((x) => diaMes(x.rotulo)), [{ nome: 'Peso', cor: CH.laranja, valores: pal.map((x) => x.valor), textos: pal.map((x) => kgMil(x.valor)) }], { fmt: N0 }))}
+        ${card('Cargas transbordadas por dia', colunas(pal.map((x) => diaMes(x.rotulo)), [{ nome: 'Cargas', cor: CH.marinho, valores: pal.map((x) => x.valor2) }], { fmt: N0 }))}</div>
+      <h3 class="sub">Marabá</h3>
+      <div class="kpis k5">${kpi(`${num(mv('peso_maraba'))} kg`, 'Peso transbordado', comparar(mv('peso_maraba'), mv('peso_maraba_ly'), `${abrev(d.am - 100).toLowerCase()}`, null))}
+        ${kpi(`${num(mv('peso_maraba_ly'))} kg`, `Mesmo mês de ${ano - 1}`)}
+        ${kpi(num(mv('cargas_maraba')), 'Cargas', comparar(mv('cargas_maraba'), mv('cargas_maraba_ly'), `${abrev(d.am - 100).toLowerCase()}`, null))}
+        ${kpi(`${num(mv('media_maraba'))} kg`, 'Média por carga', comparar(mv('media_maraba'), mv('media_maraba', d.ant), 'mês anterior', false))}
+        ${kpi(pct(mv('pct_maraba'), 1), '% do peso entregue', { texto: 'sobre o total entregue pelos motoristas', bom: null })}</div>
+      <div class="grade g2">${card(`Peso Marabá por mês (kg) · ${ano} x ${ano - 1}`, colunas(mar.map((x) => MES_ABREV[Number(x.rotulo.slice(5)) - 1]), [{ nome: String(ano - 1), cor: CH.marinho, valores: mar.map((x) => x.valor3), textos: mar.map((x) => kgMil(x.valor3)) }, { nome: String(ano), cor: CH.laranja, valores: mar.map((x) => x.valor), textos: mar.map((x) => kgMil(x.valor)) }], { fmt: N0 }))}
+        ${card(`Cargas Marabá por mês em ${ano}`, colunas(mar.map((x) => MES_ABREV[Number(x.rotulo.slice(5)) - 1]), [{ nome: 'Cargas', cor: CH.laranja, valores: mar.map((x) => x.valor2) }], { fmt: N0 }))}</div>
+      <p class="nota">O "% Transbordo" do painel do Power BI usa outra base de peso; aqui o % é sobre o peso total entregue pelos motoristas no mês.</p>`));
   }
 
   // Rastreamento
@@ -542,7 +738,8 @@ function gerarHtml(d, a, opcoes = {}) {
     for (const t of tr) { const k = titulo(((t.motivo_resumido === 'OUTRO' ? t.motivo_outro : t.motivo_resumido) || 'Sem motivo').replace(/_/g, ' ')); motivoTroca[k] = (motivoTroca[k] || 0) + 1; }
     add('moov', 'Rastreamento', secao('moov', 'Gestão MOOV — rastreamento', `${mesCheio} · parâmetros da plataforma mudaram recentemente: comparar meses com cuidado`,
       `<div class="kpis">${kpi(num(oc), 'Ocorrências', comparar(oc, v('rastreamento', 'ocorrencias', d.ant), 'mês anterior'), CH.laranja)}
-        ${kpi(pct(oc ? sv / oc : null, 1), 'Sem vínculo com viagem', { texto: `${num(sv)} sem motorista · meta ≤ 15%`, bom: oc ? sv / oc <= 0.15 : null })}
+        ${(() => { const oci = (d.q('rastreamento', 'motivo').find((x) => /OCIOSO/i.test(x.rotulo)) || {}).valor; return kpi(num(oci), 'Motor ocioso', oci === undefined || oci === null ? null : metaTxt(oci <= 500, '≤ 500')); })()}
+        ${kpi(pct(oc ? 1 - sv / oc : null, 1), 'Identificadas ou em viagem', oc ? metaTxt(1 - sv / oc >= 0.8, `≥ 80% · ${num(sv)} sem vínculo`) : null)}
         ${kpi(num(tr.length), 'Trocas de veículo', null)}</div>
       <div class="grade g3">${card('Por motivo', rosca(it(d.q('rastreamento', 'motivo'), 'valor', (x) => titulo(x.rotulo)), { fmt: N0 }))}${card('Por vínculo', rosca(it(d.q('rastreamento', 'vinculo')), { fmt: N0 }))}
         ${card('Trocas de veículo por motivo', barrasH(Object.entries(motivoTroca).sort((x, y) => y[1] - x[1]).map(([k, n]) => ({ rotulo: k, valor: n })), { fmt: N0, cor: CH.roxo, larguraRot: 130, vazio: 'Nenhuma troca no mês', W: 340 }))}</div>
@@ -559,12 +756,49 @@ function gerarHtml(d, a, opcoes = {}) {
     for (const o of oc) { const t = o.tipo_erro || 'SEM TIPO'; (porTipo[t] ||= { qtd: 0, valor: 0 }); porTipo[t].qtd++; porTipo[t].valor += Number(o.valor_reclamado || 0); }
     const tipos = Object.entries(porTipo).sort((x, y) => y[1].qtd - x[1].qtd);
     const rotT = (t) => t.charAt(0) + t.slice(1).toLowerCase();
+    // SLA de atendimento (horas uteis), so a partir de set/2026
+    const comSla = d.am >= SLA_INICIO;
+    if (comSla) for (const o of oc) o._sla = o._sla || etapasSla(o);
+    const ETAPAS = [['monitoramento', 'Monitoramento', 'abertura → análise da causa raiz'], ['gestor', 'Tratativa do gestor', 'análise → ação do gestor'], ['ponta', 'Ponta a ponta', 'abertura → concluída']];
+    const kpisSla = (tp) => {
+      const l = tp ? oc.filter((o) => (o.tipo_erro || 'SEM TIPO') === tp) : oc;
+      return `<div class="kpis">${ETAPAS.map(([k, nome, dsc]) => {
+        const r = resumoSla(l, k);
+        return kpi(pct(r.pctNoPrazo, 0), `SLA ${nome} (≤ ${SLA_PRAZO[k]} h úteis)`, r.pctNoPrazo === null ? { texto: dsc, bom: null }
+          : { texto: `${r.no} de ${r.no + r.fora} no prazo · mediana ${horasTxt(r.mediana)}${r.andamento ? ` · ${r.andamento} em andamento` : ''}`, bom: r.pctNoPrazo >= 0.9 ? true : r.pctNoPrazo >= 0.7 ? null : false });
+      }).join('')}${(() => { const at = new Set(); for (const k of ['monitoramento', 'gestor']) l.forEach((o) => { const x = o._sla && o._sla[k]; if (x && !x.feito && x.situacao === 'fora') at.add(o.id); }); return kpi(num(at.size), 'Abertas com prazo vencido', { texto: 'monitoramento ou gestor', bom: at.size ? false : true }, at.size ? CH.ruim : CH.bom); })()}</div>`;
+    };
+    const faixasSla = (k) => {
+      const lim = SLA_PRAZO[k];
+      const xs = oc.map((o) => o._sla && o._sla[k]).filter((x) => x && x.feito);
+      const cortes = [[`até ${lim / 4} h`, 0, lim / 4], [`${lim / 4} a ${lim} h`, lim / 4, lim], [`${lim} a ${lim * 2} h`, lim, lim * 2], [`mais de ${lim * 2} h`, lim * 2, Infinity]];
+      return cortes.map(([rotulo, a1, a2], i) => { const n = xs.filter((x) => x.h > a1 - (i ? 0 : 1) && x.h <= a2).length; return { rotulo, valor: n, cor: i < 2 ? CH.bom : i === 2 ? CH.ambar : CH.ruim, texto: `${n} · ${pct(xs.length ? n / xs.length : null, 0)}` }; });
+    };
+    const porAnalista = {};
+    if (comSla) for (const o of oc) { const x = o._sla.monitoramento; if (!x || !x.feito) continue; const nm = titulo(o.responsavel_analise || 'Sem nome'); (porAnalista[nm] ||= []).push(x.h); }
+    const porTipoSla = tipos.map(([t]) => ({ t, r: resumoSla(oc.filter((o) => (o.tipo_erro || 'SEM TIPO') === t), 'gestor') })).filter((x) => x.r.pctNoPrazo !== null);
+    const blocoSla = !comSla ? '<p class="nota">O SLA de atendimento aparece a partir de setembro/2026.</p>' : `
+      <h3 class="sub">SLA de atendimento · horas úteis (seg a sex, sem feriados)</h3>
+      ${variantes('sac', ['', ...tipos.map(([t]) => t)].map((tp) => ({ valor: tp, html: kpisSla(tp) })))}
+      <div class="grade g3">${card(`Monitoramento: tempo até a análise (prazo ${SLA_PRAZO.monitoramento} h)`, barrasH(faixasSla('monitoramento'), { fmt: N0, larguraRot: 100, W: 430 }), 'largo')}
+        ${card(`Gestor: tempo até a ação (prazo ${SLA_PRAZO.gestor} h)`, barrasH(faixasSla('gestor'), { fmt: N0, larguraRot: 100, W: 340 }))}
+        ${card(`Ponta a ponta (prazo ${SLA_PRAZO.ponta} h)`, barrasH(faixasSla('ponta'), { fmt: N0, larguraRot: 100, W: 340 }))}</div>
+      <div class="grade g2">${card('Monitoramento por analista · mediana até a análise', barrasH(Object.entries(porAnalista).map(([nm, hs]) => { const md = mediana(hs), no = hs.filter((h) => h <= SLA_PRAZO.monitoramento).length; return { rotulo: nm, valor: md, cor: no / hs.length >= 0.9 ? CH.bom : no / hs.length >= 0.7 ? CH.ambar : CH.ruim, texto: `${horasTxt(md)} · ${hs.length} análises · ${pct(no / hs.length, 0)} no prazo` }; }).sort((p, q) => q.valor - p.valor), { fmt: N0, larguraRot: 170 }))}
+        ${card('Tratativa do gestor por tipo de erro · % no prazo', barrasH(porTipoSla.map((x) => ({ rotulo: rotT(x.t), valor: x.r.pctNoPrazo * 100, filtro: x.t, cor: x.r.pctNoPrazo >= 0.9 ? CH.bom : x.r.pctNoPrazo >= 0.7 ? CH.ambar : CH.ruim, texto: `${pct(x.r.pctNoPrazo, 0)} · mediana ${horasTxt(x.r.mediana)}` })), { fmt: N0, larguraRot: 170, grupo: 'sac' }))}</div>
+      <p class="nota">No prazo = concluída dentro do prazo; fora = concluída depois ou ainda aberta com o prazo vencido; em andamento = aberta e ainda no prazo (fica fora do %). A hora da análise vem da trilha de auditoria (1ª análise da causa raiz). Verde ≥ 90% no prazo, amarelo ≥ 70%, vermelho abaixo.</p>`;
+    const kpisSac = (tp) => {
+      const l = tp ? oc.filter((o) => (o.tipo_erro || 'SEM TIPO') === tp) : oc;
+      const c = l.filter((o) => o.status_gestao === 'CONCLUIDO').length, vl = l.reduce((t, o) => t + Number(o.valor_reclamado || 0), 0);
+      return `<div class="kpis k5">${kpi(num(l.length), tp ? `Ocorrências · ${rotT(tp)}` : 'Ocorrências', tp ? { texto: `${pct(oc.length ? l.length / oc.length : null, 0)} do total`, bom: null } : null)}${kpi(num(c), 'Concluídas', { texto: `${pct(l.length ? c / l.length : null, 0)} do total`, bom: null }, CH.bom)}
+        ${kpi(num(l.length - c), 'Aguardando gestor', null, CH.neutro)}${kpi(num(l.filter((o) => !o.data_entrada_cd && !o.sem_itens).length), 'Físico pendente', null, CH.neutro)}${kpi(reais(vl), 'Valor reclamado', tp ? { texto: `${pct(valor ? vl / valor : null, 0)} do total`, bom: null } : null)}</div>`;
+    };
     add('sac', 'S.A.C.', secao('sac', 'S.A.C. & monitoramento', `${fech} · ocorrências lançadas no Jr-Oper`,
-      `<div class="kpis k5">${kpi(num(oc.length), 'Ocorrências')}${kpi(num(concl), 'Concluídas', { texto: `${pct(oc.length ? concl / oc.length : null, 0)} do total`, bom: null }, CH.bom)}
-        ${kpi(num(oc.length - concl), 'Aguardando gestor', null, CH.neutro)}${kpi(num(oc.filter((o) => !o.data_entrada_cd && !o.sem_itens).length), 'Físico pendente', null, CH.neutro)}${kpi(reais(valor), 'Valor reclamado')}</div>
-      <div class="grade g2">${card('Ocorrências por tipo de erro', barrasH(tipos.map(([t, o]) => ({ rotulo: rotT(t), valor: o.qtd, texto: `${o.qtd} · ${pct(oc.length ? o.qtd / oc.length : null, 0)}` })), { fmt: N0, cores: PALETA_H, larguraRot: 190 }))}
-        ${card('Valor reclamado por tipo de erro', barrasH(tipos.slice().sort((x, y) => y[1].valor - x[1].valor).map(([t, o]) => ({ rotulo: rotT(t), valor: o.valor, texto: `${reais(o.valor)} · ${pct(valor ? o.valor / valor : null, 0)}` })), { fmt: R0, cor: CH.marinho, larguraRot: 190 }))}</div>
-      <p class="nota">Valor reclamado é o informado na abertura. Erro industrial e comercial são tratados por outra gerência; desconto de produtividade só cabe a motorista e carregamento.</p>`));
+      `${chip('sac', 'Clique num tipo de erro para filtrar os cartões, inclusive os de SLA.')}
+      ${variantes('sac', ['', ...tipos.map(([t]) => t)].map((tp) => ({ valor: tp, html: kpisSac(tp) })))}
+      <div class="grade g2">${card('Ocorrências por tipo de erro', barrasH(tipos.map(([t, o]) => ({ rotulo: rotT(t), valor: o.qtd, filtro: t, texto: `${o.qtd} · ${pct(oc.length ? o.qtd / oc.length : null, 0)}` })), { fmt: N0, cores: PALETA_H, larguraRot: 190, grupo: 'sac' }))}
+        ${card('Valor reclamado por tipo de erro', barrasH(tipos.slice().sort((x, y) => y[1].valor - x[1].valor).map(([t, o]) => ({ rotulo: rotT(t), valor: o.valor, filtro: t, texto: `${reais(o.valor)} · ${pct(valor ? o.valor / valor : null, 0)}` })), { fmt: R0, cor: CH.marinho, larguraRot: 190, grupo: 'sac' }))}</div>
+      <p class="nota">Valor reclamado é o informado na abertura. Erro industrial e comercial são tratados por outra gerência; desconto de produtividade só cabe a motorista e carregamento.</p>
+      ${blocoSla}`));
   }
 
   const hoje = new Date().toLocaleDateString('pt-BR');
@@ -598,6 +832,12 @@ main{max-width:1280px;margin:0 auto;padding:8px 24px 40px}
 .tab{width:100%;border-collapse:collapse;font-size:12.5px}.tab th{background:var(--marinho);color:#fff;text-align:left;padding:7px 8px;font-weight:600}
 .tab td{padding:6px 8px;border-bottom:1px solid #EEF2F6}.tab .n{text-align:right}.nota{color:var(--suave);font-size:12px;font-style:italic;margin:6px 0 0}
 .vazio{color:var(--suave);text-align:center;padding:30px 0}
+[hidden]{display:none!important}
+.clic{cursor:pointer}.clic:hover{opacity:.82}.apagado{opacity:.25}
+.dica{color:var(--suave);font-size:12px;margin:-4px 0 8px}
+.chip{display:inline-flex;gap:8px;align-items:center;background:#E8F0FB;color:var(--marinho);border:1px solid #BCD0EA;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;margin:0 8px 10px 0}
+.chip button{border:0;background:#fff;color:var(--azul);cursor:pointer;font-weight:600;border-radius:12px;padding:2px 8px}
+h3.sub{margin:18px 0 10px;font-size:16px;color:var(--marinho)}
 footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);font-size:12px}
 @media (max-width:900px){.kpis,.kpis.k5{grid-template-columns:repeat(2,1fr)}.g2,.g3{grid-template-columns:1fr}.topo{flex-wrap:wrap;padding:18px 16px}main{padding:8px 16px 30px}nav{padding:0 8px}.selo{margin-left:0}}
 @media print{nav{display:none}body{background:#fff}.secao{break-before:page}.secao:first-of-type{break-before:auto}.card,.kpi{break-inside:avoid}.topo{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
@@ -606,13 +846,37 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
 <span class="selo">${d.previa ? 'PRÉVIA · números ainda abertos' : 'Mês fechado'}</span></div>
 <nav>${indice.map(([id, nome]) => `<a href="#${id}">${esc(nome)}</a>`).join('')}</nav>
 <main>${partes.join('\n')}</main>
-<footer>JR Distribuidora · Visão Operação ${esc(nomeMes(d.am))}. Cortes, hora extra e S.A.C.: 26 do mês anterior a 25; devolução, despesa, abastecimento, motoristas e MOOV: mês cheio; inventário: acumulado do ano.</footer>
+<script>
+// Filtro das secoes: clicar numa barra/fatia mostra o bloco daquele valor (cartoes e listas);
+// clicar de novo, ou no "limpar", volta para todos.
+(function () {
+  function aplicar(g, val) {
+    document.querySelectorAll('.variante[data-grupo="' + g + '"]').forEach(function (v) { v.hidden = v.getAttribute('data-valor') !== val; });
+    document.querySelectorAll('.clic[data-grupo="' + g + '"]').forEach(function (c) { c.classList.toggle('apagado', !!val && c.getAttribute('data-valor') !== val); });
+    document.querySelectorAll('.chip[data-chip="' + g + '"]').forEach(function (c) {
+      c.hidden = !val;
+      c.innerHTML = val ? 'Filtro: <b></b> <button type="button">✕ limpar</button>' : '';
+      if (val) c.querySelector('b').textContent = val;
+    });
+    document.body.setAttribute('data-f-' + g, val);
+  }
+  document.addEventListener('click', function (e) {
+    var limpar = e.target.closest('.chip button');
+    if (limpar) { aplicar(limpar.parentNode.getAttribute('data-chip'), ''); return; }
+    var el = e.target.closest('.clic');
+    if (!el) return;
+    var g = el.getAttribute('data-grupo'), val = el.getAttribute('data-valor');
+    aplicar(g, document.body.getAttribute('data-f-' + g) === val ? '' : val);
+  });
+})();
+</script>
+<footer>JR Distribuidora · Visão Operação ${esc(nomeMes(d.am))}. Cortes, hora extra e S.A.C.: 26 do mês anterior a 25; devolução, despesa, abastecimento, motoristas, transbordos e MOOV: mês cheio; inventário: acumulado do ano. Metas oficiais definidas pela gestão em 29/10/2026.</footer>
 </body></html>`;
 }
 
 
 return {
   MESES, MES_ABREV, nf, num, reais, mil, pct, dataBr, diaMes, iso, mesAnterior, nomeMes, abrev, titulo, variacao,
-  comparar, media, mediana, hhmm, carregarDados, analisar, gerarHtml,
+  comparar, media, mediana, hhmm, horasUteis, etapasSla, carregarDados, analisar, metasOficiais, gerarHtml,
 };
 });
