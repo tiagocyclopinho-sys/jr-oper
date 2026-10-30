@@ -204,7 +204,14 @@ partir do branch `main` do GitHub.
   e linhas. "A / B" vindo das planilhas é separado ao carregar
   (`escSepararAjudantes`) e gravado separado na próxima edição. Fusion:
   AJUDANTE 1 -> ajudante, AJUDANTE 2+ -> ajudante_2. Imagens juntam "A / B".
-- Migration 59 (APLICADA 30/10): nomes das matrizes = Cadastros Mestres.
+- Migrations 59, 60 e 61 (APLICADAS 30/10): nomes das matrizes e da escala de
+  02/11 = Cadastros Mestres; ARMANO -> ARMANDO LIMA DA CUNHA e tabulação do
+  GLEDSON (cadastro, viagens, infrações). EDSON ARRUDA é RCA (veio do
+  WinThor): não considerar.
+- Cadastros Mestres ganhou busca e edição em Motoristas, Ajudantes e Veículos
+  (6.11.2). Renomear pessoa ou trocar placa pode corrigir o histórico direto
+  na nuvem por valor exato (`cadCorrigirHistorico` / `CAD_HISTORICO` em
+  app.js; escala "A / B" trocada por pedaço).
 - SQL que mexe em escala_* (ou qualquer tabela com a guarda de carimbo):
   `atualizado_em = (now() AT TIME ZONE 'America/Sao_Paulo')`, NUNCA `now()`
   puro. O app grava hora de Brasília; um carimbo em UTC fica 3 h no futuro e
