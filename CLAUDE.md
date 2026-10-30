@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 57).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 61).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -190,6 +190,25 @@ partir do branch `main` do GitHub.
   a carga ("45025 / 45026" fica junto; separar só ao cruzar com o WinThor).
   Retornos semeados de "Horário Fechamento Rotas (2025.11)", desatualizado:
   ajustar na tela.
+- Importar Fusion: `roteirizacoes (N).xlsx` (CARGA ERP, ENTREGAS, PESO, VALOR,
+  DESTINO, MOTORISTA, VEICULO, AJUDANTE 1-4, FILIAL EXPEDICAO). Rota sem carga
+  no dia (COLINAS 02, ARAGUAINA III) fica na convocação e sai do fechamento.
+- Transbordo (6.11.0, migration 57 APLICADA em 30/10): setor `TRANSBORDO` +
+  `transbordo_id` nas rotas (matriz e escala). Só veículo PRÓPRIO; terceiro
+  fica na observação. Imagem: rota com transbordo mostra "NOME - PLACA" dele.
+  Vira viagem quando uma rota que leva ganha carga, com carga
+  `TRANSB dd.mm.aaaa PLACA` (setor TRANSBORDO). Fusion "CROSS DOCKING PALMAS"
+  liga ao transbordo de Palmas se houver um só no dia. Peso do transbordo =
+  soma das rotas, fora do total da montagem.
+- 2º ajudante (6.11.0, migration 58 APLICADA): coluna `ajudante_2` em matrizes
+  e linhas. "A / B" vindo das planilhas é separado ao carregar
+  (`escSepararAjudantes`) e gravado separado na próxima edição. Fusion:
+  AJUDANTE 1 -> ajudante, AJUDANTE 2+ -> ajudante_2. Imagens juntam "A / B".
+- Migration 59 (APLICADA 30/10): nomes das matrizes = Cadastros Mestres.
+- SQL que mexe em escala_* (ou qualquer tabela com a guarda de carimbo):
+  `atualizado_em = (now() AT TIME ZONE 'America/Sao_Paulo')`, NUNCA `now()`
+  puro. O app grava hora de Brasília; um carimbo em UTC fica 3 h no futuro e
+  a guarda passa a ignorar as edições do app nessa linha.
 
 ## Pendências
 - Segurança: repositório público; todas as tabelas com política
