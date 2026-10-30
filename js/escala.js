@@ -243,7 +243,7 @@ function escCabecalho(icone, titulo, subtitulo, direita = '') {
       <div class="flex flex-wrap items-center gap-2">
         ${st.salvando ? '<span class="text-[11px] text-amber-300">Gravando…</span>' : ''}
         ${direita}
-        <button onclick="escCarregar(true)" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold px-3 py-2 rounded-xl text-xs">🔄 Atualizar</button>
+        <button onclick="escCarregar(true)" title="Lê de novo da nuvem o que já está gravado (o que outra pessoa mudou em outro aparelho). Não refaz nem apaga nada." class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold px-3 py-2 rounded-xl text-xs">🔄 Recarregar</button>
       </div>
     </div>
     ${st.erro ? `<div class="bg-red-950 border border-red-800 text-red-200 rounded-xl p-3 text-xs">⚠️ ${escEsc(st.erro)}</div>` : ''}`;
@@ -330,7 +330,7 @@ function escTelaMatrizes() {
             <tbody>
               ${ls.length ? ls.map((m, i) => `
                 <tr class="border-t border-slate-800">
-                  <td class="p-1.5 text-center text-slate-500">${i + 1}</td>
+                  <td class="p-1.5 text-center text-slate-500">${tr ? "T" : ""}${i + 1}</td>
                   <td class="p-1"><input id="escm-${m.id}-rota" class="${ESC_INPUT}" list="esc-dl-rotas" value="${escEsc(m.rota)}" onchange="escMatrizCampo('${m.id}','rota',this.value)"></td>
                   <td class="p-1"><input id="escm-${m.id}-placa" class="${ESC_INPUT}" list="esc-dl-placas" value="${escEsc(m.placa)}" onchange="escMatrizCampo('${m.id}','placa',this.value)"></td>
                   <td class="p-1"><input id="escm-${m.id}-motorista" class="${ESC_INPUT}" list="esc-dl-pessoas" value="${escEsc(m.motorista)}" onchange="escMatrizCampo('${m.id}','motorista',this.value)"></td>
@@ -381,26 +381,42 @@ function escTransbordoDe(item, lista) {
 }
 
 // O texto que ia à mão na observação: "ARMANDO - RSC7E69".
+// Vazio enquanto o transbordo não tem motorista nem placa.
 function escRotuloTransbordo(t) {
   if (!t) return '';
-  const nome = String(t.motorista || '').trim().split(/\s+/)[0] || 'TRANSBORDO';
-  return `${nome.toUpperCase()} - ${String(t.placa || '').toUpperCase()}`.replace(/ - $/, '');
+  const nome = String(t.motorista || '').trim().split(/\s+/)[0];
+  const placa = String(t.placa || '').trim();
+  return [nome, placa].filter(Boolean).join(' - ').toUpperCase();
+}
+
+// Os transbordos do dia (ou da matriz) em ordem: T1, T2… — o mesmo número
+// que aparece na coluna # do bloco Transbordo.
+function escTransbordosOrdenados(lista) {
+  return (lista || []).filter(x => x.setor === 'TRANSBORDO').sort((a, b) => (a.ordem - b.ordem) || (a.id - b.id));
+}
+
+// Texto da opção: "T1 · ARMANDO - RSC7E69 · PALMAS". Dois transbordos sem
+// motorista/placa ainda se distinguem pelo número.
+function escRotuloOpcaoTransbordo(t, lista) {
+  const n = escTransbordosOrdenados(lista).indexOf(t) + 1;
+  const destino = escNorm(t.rota).replace(/^TRANSBORDO\s*/, '') || 'SEM DESTINO';
+  return `T${n} · ${escRotuloTransbordo(t) || 'sem motorista/placa'} · ${destino}`;
 }
 
 // Observação que sai na imagem: rota com transbordo próprio mostra o
-// transbordo ("NOME - PLACA"); sem transbordo, a observação digitada (é onde
-// fica o terceiro e qualquer outro recado).
+// transbordo ("NOME - PLACA"); sem transbordo (ou com ele ainda sem motorista
+// e placa), a observação digitada — é onde fica o terceiro e qualquer recado.
 function escObsImagem(l, lista) {
-  const t = escTransbordoDe(l, lista);
-  return t ? escRotuloTransbordo(t) : String(l.observacao || '').trim();
+  const rotulo = escRotuloTransbordo(escTransbordoDe(l, lista));
+  return rotulo || String(l.observacao || '').trim();
 }
 
 function escSelectTransbordo(item, lista, onchange, id) {
-  const ts = (lista || []).filter(x => x.setor === 'TRANSBORDO');
+  const ts = escTransbordosOrdenados(lista);
   if (!ts.length) return '<span class="text-[10px] text-slate-600">—</span>';
   return `<select id="${id}" class="${ESC_INPUT}" onchange="${onchange}">
     <option value="">—</option>
-    ${ts.map(t => `<option value="${t.id}" ${String(item.transbordo_id || '') === String(t.id) ? 'selected' : ''}>${escEsc(escRotuloTransbordo(t))}</option>`).join('')}
+    ${ts.map(t => `<option value="${t.id}" ${String(item.transbordo_id || '') === String(t.id) ? 'selected' : ''}>${escEsc(escRotuloOpcaoTransbordo(t, lista))}</option>`).join('')}
   </select>`;
 }
 
@@ -494,12 +510,26 @@ function escDataViagemIso(v) {
 
 function escStatusViagem(v) { return String(v.status_viagem || '').toUpperCase().trim(); }
 
+// EM ANDAMENTO, EM ANDAMENTO (PALMAS), EM RETORNO: o caminhão está na rua.
+function escViagemEmAndamento(v) { return /ANDAMENTO|RETORNO/.test(escStatusViagem(v)); }
+
+// Previsão de chegada de uma viagem pela matriz: a mesma rota no dia da
+// semana da saída (ou em qualquer dia); sem rota na matriz, o dia às 23:59.
+function escPrevisaoPelaMatriz(rota, saidaIso) {
+  const ms = (window._escala.matrizes || []).filter(m => m.setor !== 'TRANSBORDO');
+  const dia = escDiaSemana(saidaIso);
+  const mesmaRota = m => escNorm(m.rota) === escNorm(rota);
+  const parecida = m => escChaveRota(m.rota) === escChaveRota(rota) && escEhSeco(m.rota) === escEhSeco(rota);
+  const m = ms.find(x => x.dia_semana === dia && mesmaRota(x)) || ms.find(mesmaRota)
+    || ms.find(x => x.dia_semana === dia && parecida(x)) || ms.find(parecida);
+  return m ? escPrevisao(saidaIso, m.retorno_dias, m.retorno_hora) : escPrevisao(saidaIso, 0, '23:59');
+}
+
 function escAvisos(linhas, dataIso, vizinhas) {
   const avisos = {};   // id da linha -> [texto]
   const add = (id, t) => { (avisos[id] = avisos[id] || []).push(t); };
   const data = (typeof db !== 'undefined' && db.data) ? db.data : {};
   const viagens = (typeof db !== 'undefined' && db.getControleViagens) ? db.getControleViagens() : [];
-  const viagemPorId = new Map(viagens.map(v => [String(v.id), v]));
   const idsDestaEscala = new Set(linhas.map(l => String(l.viagem_id || '')).filter(Boolean));
 
   // 1) repetidos na própria escala — pessoa cruzando motorista e ajudante.
@@ -532,35 +562,31 @@ function escAvisos(linhas, dataIso, vizinhas) {
     if (placasInativas.has(escNorm(l.placa))) add(l.id, `⛔ Placa ${escNorm(l.placa)} está inativa no cadastro`);
   });
 
-  // 3) ainda em viagem: escalas anteriores com previsão depois das 06:00 do
-  //    dia, e viagens não finalizadas do Controle de Viagens.
+  // 3) ainda em viagem (6.11.1, decisão do Tiago): só viagem EM ANDAMENTO
+  //    (ou em retorno) do Controle de Viagens, e só se a previsão de chegada
+  //    passa das 06:00 do dia da escala. A previsão é calculada: a da escala
+  //    que gerou a viagem; sem ela, a saída + retorno da matriz da mesma rota
+  //    (dia da semana da saída); sem matriz, o próprio dia às 23:59.
   const corte = `${dataIso}T06:00`;
   const ocupados = [];   // { pessoas[], placa, texto }
-  const viagensVistas = new Set();
-  (vizinhas || []).forEach(o => {
-    const v = o.viagem_id ? viagemPorId.get(String(o.viagem_id)) : null;
-    if (v && escStatusViagem(v) === 'FINALIZADO') return;
-    const prev = String(o.previsao_retorno || '').replace(' ', 'T').slice(0, 16);
-    if (!prev || prev <= corte) return;
-    if (v) viagensVistas.add(String(v.id));
-    ocupados.push({
-      pessoas: escPessoas(o.motorista).concat(escPessoasAjudantes(o)), placa: escNorm(o.placa),
-      texto: `escala de ${escDataBr(o.data_escala)} — ${o.rota}${o.carga ? ' (carga ' + o.carga + ')' : ''}, previsão de chegada ${escPrevisaoBr(o.previsao_retorno)}`
-    });
-  });
   const ini = somaDiasIso(dataIso, -ESC_JANELA_VIAGEM_DIAS);
-  const prevPorViagem = new Map();
-  (vizinhas || []).forEach(o => { if (o.viagem_id && o.previsao_retorno) prevPorViagem.set(String(o.viagem_id), o.previsao_retorno); });
+  const prevPorViagem = new Map(), prevPorCarga = new Map();
+  (vizinhas || []).forEach(o => {
+    if (!o.previsao_retorno) return;
+    if (o.viagem_id) prevPorViagem.set(String(o.viagem_id), o.previsao_retorno);
+    if (o.carga) prevPorCarga.set(escNorm(o.carga), o.previsao_retorno);
+  });
   viagens.forEach(v => {
-    if (viagensVistas.has(String(v.id)) || idsDestaEscala.has(String(v.id))) return;
-    const st = escStatusViagem(v);
-    if (st === 'FINALIZADO') return;
+    if (idsDestaEscala.has(String(v.id))) return;
+    if (!escViagemEmAndamento(v)) return;
     const ds = escDataViagemIso(v);
     if (!ds || ds < ini || ds > dataIso) return;
-    const prev = prevPorViagem.get(String(v.id));
+    const prev = String(prevPorViagem.get(String(v.id)) || prevPorCarga.get(escNorm(v.carga)) || escPrevisaoPelaMatriz(v.rota, ds))
+      .replace(' ', 'T').slice(0, 16);
+    if (prev < corte) return;   // volta antes da saída: não é conflito
     ocupados.push({
       pessoas: escPessoas(v.motorista).concat(escPessoas(v.ajudante)).concat(escPessoas(v.ajudante_2)), placa: escNorm(v.placa),
-      texto: `viagem ${st ? st.toLowerCase() : 'sem status'} — carga ${v.carga || '—'}, ${v.rota || ''}, saída ${escDataBr(ds)}${prev ? ', previsão de chegada ' + escPrevisaoBr(prev) : ', sem previsão de chegada'}`
+      texto: `em viagem: ${v.rota || 'sem rota'}${v.carga ? ' (carga ' + v.carga + ')' : ''} · previsão de chegada ${escPrevisaoBr(prev)}`
     });
   });
   linhas.forEach(l => {
@@ -591,7 +617,9 @@ function escTelaConvocacao() {
   const temMatriz = (st.matrizes || []).some(m => m.dia_semana === dia);
   const cab = escCabecalho('📣', 'Convocação Escala', 'A escala do dia, montada pela matriz. Ajuste, confira os avisos e gere a imagem para o grupo dos motoristas e ajudantes.',
     (linhas.length ? `<button onclick="escImportarFusion()" class="bg-sky-700 hover:bg-sky-600 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">📥 Importar Fusion</button>` : '')
-    + (linhas.length ? `<button onclick="escGerarImagem('convocacao')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">🖼️ Imagem da convocação</button>` : ''));
+    + (linhas.length ? `<button onclick="escGerarImagem('convocacao')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">🖼️ Imagem da convocação</button>` : '')
+    + (linhas.length && temMatriz ? `<button onclick="escDescartarEscala(true)" title="Apaga a escala desta data e monta de novo pela matriz do dia" class="bg-slate-800 hover:bg-slate-700 text-amber-200 border border-amber-800 font-bold px-3 py-2 rounded-xl text-xs">↺ Refazer pela matriz</button>` : '')
+    + (linhas.length ? `<button onclick="escDescartarEscala(false)" title="Apaga a escala desta data: a tela volta a oferecer Montar pela matriz" class="bg-slate-800 hover:bg-slate-700 text-red-300 border border-red-900 font-bold px-3 py-2 rounded-xl text-xs">✕ Apagar escala do dia</button>` : ''));
   if (!st.matrizes || !st.linhas[st.data]) return cab + escSeletorData() + escCarregandoHtml();
 
   if (!linhas.length) {
@@ -624,13 +652,13 @@ function escTelaConvocacao() {
         </div>
         ${tr ? `<p class="px-3 pt-2 text-[11px] text-slate-400">Só veículo NOSSO. Terceiro: deixe a observação na rota, como antes. A observação da imagem ("NOME - PLACA") sai sozinha nas rotas que escolherem este transbordo.</p>` : ''}
         <div class="overflow-x-auto">
-          <table class="w-full text-xs min-w-[1350px]">
+          <table class="w-full text-xs min-w-[940px]">
             <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase">
               <tr>
                 <th class="p-1.5 w-8">#</th><th class="p-1.5 text-left">${tr ? 'Destino (cross-docking)' : 'Rota - Destino'}</th><th class="p-1.5 text-left w-28">Placa</th>
                 <th class="p-1.5 text-left">Motorista</th><th class="p-1.5 text-left">Ajudante</th><th class="p-1.5 text-left">2º Ajudante</th><th class="p-1.5 text-left">${tr ? 'Leva as rotas' : 'Observação'}</th>
-                ${tr ? '' : '<th class="p-1.5 text-left w-36">Transbordo</th>'}
-                <th class="p-1.5 text-left w-40">Previsão de chegada</th><th class="p-1.5 w-16"></th>
+                ${tr ? '' : '<th class="p-1.5 text-left w-28">Transbordo</th>'}
+                <th class="p-1.5 w-16"></th>
               </tr>
             </thead>
             <tbody>
@@ -639,7 +667,7 @@ function escTelaConvocacao() {
                 const av = avisos[l.id] || [];
                 return `
                 <tr class="border-t border-slate-800 ${av.length ? 'bg-amber-950/20' : ''}">
-                  <td class="p-1.5 text-center text-slate-500">${i + 1}</td>
+                  <td class="p-1.5 text-center text-slate-500">${tr ? "T" : ""}${i + 1}</td>
                   <td class="p-1"><input id="escl-${l.id}-rota" class="${ESC_INPUT}" list="esc-dl-rotas" value="${escEsc(l.rota)}" onchange="escLinhaCampo('${l.id}','rota',this.value)"></td>
                   <td class="p-1">
                     <input id="escl-${l.id}-placa" class="${ESC_INPUT} ${trocou ? '!border-amber-500' : ''}" list="esc-dl-placas" value="${escEsc(l.placa)}" onchange="escLinhaCampo('${l.id}','placa',this.value)">
@@ -650,17 +678,16 @@ function escTelaConvocacao() {
                   <td class="p-1"><input id="escl-${l.id}-ajudante_2" class="${ESC_INPUT}" list="esc-dl-pessoas" value="${escEsc(l.ajudante_2)}" onchange="escLinhaCampo('${l.id}','ajudante_2',this.value)"></td>
                   ${tr ? `<td class="p-1.5">${escChipsRotas(l, linhas)}</td>` : `
                   <td class="p-1"><input id="escl-${l.id}-observacao" class="${ESC_INPUT}" value="${escEsc(l.observacao)}" placeholder="${escEsc(escRotuloTransbordo(escTransbordoDe(l, linhas)))}" onchange="escLinhaCampo('${l.id}','observacao',this.value)">
-                    ${escTransbordoDe(l, linhas) && String(l.observacao || '').trim() ? `<div class="text-[10px] text-sky-300 mt-0.5">na imagem: ${escEsc(escRotuloTransbordo(escTransbordoDe(l, linhas)))}</div>` : ''}</td>
+                    ${escRotuloTransbordo(escTransbordoDe(l, linhas)) && String(l.observacao || '').trim() ? `<div class="text-[10px] text-sky-300 mt-0.5">na imagem: ${escEsc(escRotuloTransbordo(escTransbordoDe(l, linhas)))}</div>` : ''}</td>
                   <td class="p-1">${escSelectTransbordo(l, linhas, `escLinhaCampo('${l.id}','transbordo_id',this.value)`, `escl-${l.id}-transbordo_id`)}</td>`}
-                  <td class="p-1"><input id="escl-${l.id}-previsao_retorno" type="datetime-local" class="${ESC_INPUT}" value="${escEsc(String(l.previsao_retorno || '').replace(' ', 'T').slice(0, 16))}" onchange="escLinhaCampo('${l.id}','previsao_retorno',this.value)"></td>
                   <td class="p-1 whitespace-nowrap text-center">
                     <button onclick="escLinhaMover('${l.id}',-1)" class="text-slate-400 hover:text-white px-0.5" title="Subir">▲</button>
                     <button onclick="escLinhaMover('${l.id}',1)" class="text-slate-400 hover:text-white px-0.5" title="Descer">▼</button>
                     <button onclick="escLinhaExcluir('${l.id}')" class="text-red-400 hover:text-red-300 px-0.5" title="Retirar viagem">🗑</button>
                   </td>
                 </tr>
-                ${av.length ? `<tr class="bg-amber-950/20"><td></td><td colspan="9" class="px-2 pb-2 text-[11px] text-amber-200 space-y-0.5">${av.map(t => `<div>${escEsc(t)}</div>`).join('')}</td></tr>` : ''}`;
-              }).join('') : `<tr><td colspan="10" class="p-4 text-center text-slate-500">${tr ? 'Nenhum transbordo com veículo próprio nesta data.' : `Nenhuma viagem ${setor === 'FRIO' ? 'no frio' : 'no seco'}.`}</td></tr>`}
+                ${av.length ? `<tr class="bg-amber-950/20"><td></td><td colspan="8" class="px-2 pb-2 text-[11px] text-amber-200 space-y-0.5">${av.map(t => `<div>${escEsc(t)}</div>`).join('')}</td></tr>` : ''}`;
+              }).join('') : `<tr><td colspan="9" class="p-4 text-center text-slate-500">${tr ? 'Nenhum transbordo com veículo próprio nesta data.' : `Nenhuma viagem ${setor === 'FRIO' ? 'no frio' : 'no seco'}.`}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -675,7 +702,7 @@ function escTelaConvocacao() {
         ${trocasPendentes.length ? `<span class="px-2 py-1 rounded-lg border border-amber-700 text-amber-300 bg-amber-950/40">🔄 ${trocasPendentes.length} troca(s) de veículo sem registro</span>` : ''}
       </div>
     </div>
-    <p class="text-[11px] text-slate-500">Avisos não travam nada: a pessoa é procurada como motorista e como ajudante, nesta escala, nas escalas dos ${ESC_JANELA_VIAGEM_DIAS} dias anteriores (pela previsão de chegada) e nas viagens não finalizadas do Controle de Viagens.</p>
+    <p class="text-[11px] text-slate-500">Avisos não travam nada: a pessoa é procurada como motorista e como ajudante nesta escala e nas viagens EM ANDAMENTO do Controle de Viagens que só chegam depois das 06:00 deste dia (previsão calculada pela escala ou pela matriz da rota).</p>
     ${bloco('FRIO')}
     ${bloco('SECO')}
     ${bloco('TRANSBORDO')}`;
@@ -690,6 +717,30 @@ function escLinhaDaMatriz(m, data) {
     matriz_id: m.id, transbordo_id: null, is_deleted: false
   }, true);
 }
+
+// Desfaz a escala da data aberta (6.11.1, pedido do Tiago: depois de montada
+// não havia como "fechar" a convocação). Exclusão lógica de todas as linhas;
+// com `refazer`, monta de novo pela matriz do dia. Viagens já criadas no
+// Controle de Viagens e trocas registradas ficam onde estão.
+async function escDescartarEscala(refazer) {
+  const st = window._escala;
+  const ls = (st.linhas[st.data] || []).slice();
+  if (!ls.length) return;
+  const comViagem = ls.filter(l => l.viagem_id);
+  const msg = (refazer
+      ? `Refazer a escala de ${escDataBr(st.data)} pela matriz de ${ESC_DIAS[escDiaSemana(st.data)]}?\n\nTudo o que foi ajustado nesta data (placas, nomes, viagens incluídas, transbordos) volta a ser o da matriz.`
+      : `Apagar a escala de ${escDataBr(st.data)}?\n\nA tela volta a mostrar "Montar pela matriz".`)
+    + (comViagem.length ? `\n\n⚠️ ${comViagem.length} linha(s) já têm carga e viraram viagem no Controle de Viagens. As viagens NÃO são apagadas: se for o caso, exclua lá.` : '');
+  if (!confirm(msg)) return;
+  const agora = agoraIsoBrasilia();
+  ls.forEach(l => { l.is_deleted = true; l.deleted_at = agora; l.deleted_by_nome = escUsuario(); escCarimbar(l, false); });
+  st.linhas[st.data] = [];
+  renderApp();
+  try { await escGravar('escala_linhas', ls); } catch (e) { escFalha(e); return; }
+  if (refazer) await escMontar();
+  else renderApp();
+}
+window.escDescartarEscala = escDescartarEscala;
 
 async function escMontar() {
   const st = window._escala;
@@ -1255,7 +1306,7 @@ function escTelaFechamento() {
               ${ts.map((t, i) => {
                 const s = escTotais(escRotasDoTransbordo(t).filter(r => r.carga));
                 return `<tr class="border-t border-slate-800 text-slate-300">
-                  <td class="p-1.5 text-center text-slate-500">${i + 1}</td>
+                  <td class="p-1.5 text-center text-slate-500">T${i + 1}</td>
                   <td class="p-1.5 font-bold text-sky-200">${escEsc(t.carga || '—')}</td>
                   <td class="p-1.5 text-slate-200">${escEsc(t.rota)}</td>
                   <td class="p-1.5">${escEsc(t.placa)}</td>
