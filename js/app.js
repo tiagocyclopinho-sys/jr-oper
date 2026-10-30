@@ -15105,6 +15105,7 @@ function editarViagemModal(id) {
               <option value="FRIO" ${v.setor==='FRIO'?'selected':''}>FRIO</option>
               <option value="SECO" ${v.setor==='SECO'?'selected':''}>SECO</option>
               <option value="HORTI" ${v.setor==='HORTI'?'selected':''}>HORTI</option>
+              <option value="TRANSBORDO" ${v.setor==='TRANSBORDO'?'selected':''}>TRANSBORDO</option>
             </select>
           </div>
         </div>
