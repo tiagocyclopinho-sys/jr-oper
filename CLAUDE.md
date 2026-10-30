@@ -167,6 +167,15 @@ partir do branch `main` do GitHub.
   ocorrência caindo em 26→25, de qualquer data de abertura). A leitura do
   audit_logs começa um mês antes do período para a 1ª análise não ser
   confundida com reedição.
+- 6.9.9 (30/10): tabelas de prazo vencido (monitoramento e gestor) após os
+  gráficos do SLA. Comparativo Oper × WinThor: causa raiz
+  (motivo_real_causa_raiz) no lugar do tipo de erro; sobra ("SOBRA" na causa
+  raiz) sai da contagem e da lista "só no Oper", mas conta na busca reversa
+  (sobra às vezes tem nota no WinThor, ex.: DEV-074). A nota do WinThor entra
+  depois da tratativa, às vezes meses depois, então o cruzamento não prende ao
+  26→25: carga_amplo vai de 16/(M-1) até hoje (máx. M+4) e a rodada diária
+  regrava esse quadro dos 4 últimos meses, mesmo fechados
+  (`atualizarCargaWin`); o lado Oper procura ocorrência até 5 meses antes.
 
 ## Pendências
 - Segurança: repositório público; todas as tabelas com política
