@@ -4037,6 +4037,16 @@ const NAV_GRUPOS = [
     ]
   },
   {
+    // 6.10.0 (migration 56): a escala de embarques saiu das planilhas.
+    // Telas em js/escala.js.
+    id: 'escala', icon: '📋', titulo: 'Escala',
+    itens: [
+      { tab: 'escala_matrizes', icon: '🗂️', label: 'Matrizes', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'escala_convocacao', icon: '📣', label: 'Convocação Escala', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'escala_fechamento', icon: '✅', label: 'Fechamento', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] }
+    ]
+  },
+  {
     // 6.7.0 (decisão 4): "Largada" deixou de existir como subaba — é a
     // própria tela de Controle de Viagens. As outras quatro subiram para
     // irmãs dela.
@@ -4336,6 +4346,12 @@ function renderApp() {
         break;
       case 'disponibilidade_frota':
         html = renderDisponibilidadeFrotaView();
+        break;
+      // 6.10.0: Escala (js/escala.js).
+      case 'escala_matrizes':
+      case 'escala_convocacao':
+      case 'escala_fechamento':
+        html = renderEscalaView(activeTab);
         break;
       case 'cadastros_dados':
         html = renderCadastrosDadosView();
