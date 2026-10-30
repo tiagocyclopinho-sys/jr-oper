@@ -20978,11 +20978,12 @@ function renderCadSubTabContent() {
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
-        <div class="overflow-x-auto max-h-80 overflow-y-auto">
+        ${cadBarraBusca('motoristas', 'Buscar por nome, código ERP ou CNH...')}
+        <div class="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table class="w-full text-left text-xs">
-            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 hidden sm:table-cell">CNH</th><th class="p-2 text-right">Ação</th></tr></thead>
+            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 hidden sm:table-cell">CNH</th><th class="p-2 hidden sm:table-cell">Telefone</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${(db.data.motoristas||[]).filter(m=>!m.is_deleted).map(m=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${m.id}</td><td class="p-2 font-semibold text-white">${m.nome}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.cnh||'—'}</td><td class="p-2 text-right"><button onclick="deleteCad('motoristas','${m.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${cadFiltrar('motoristas', m => [m.id, m.nome, m.cnh, m.telefone]).map(m=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${m.id}</td><td class="p-2 font-semibold text-white">${escEsc(m.nome)}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.cnh||'—'}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.telefone||'—'}</td><td class="p-2">${cadSituacaoPessoa(m)}</td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('motoristas','${m.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('motoristas','${m.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -20999,11 +21000,12 @@ function renderCadSubTabContent() {
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
-        <div class="overflow-x-auto max-h-80 overflow-y-auto">
+        ${cadBarraBusca('ajudantes', 'Buscar por nome ou código ERP...')}
+        <div class="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table class="w-full text-left text-xs">
-            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 text-right">Ação</th></tr></thead>
+            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${(db.data.ajudantes||[]).filter(a=>!a.is_deleted).map(a=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${a.id}</td><td class="p-2 font-semibold text-white">${a.nome}</td><td class="p-2 text-right"><button onclick="deleteCad('ajudantes','${a.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${cadFiltrar('ajudantes', a => [a.id, a.nome]).map(a=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${a.id}</td><td class="p-2 font-semibold text-white">${escEsc(a.nome)}</td><td class="p-2">${cadSituacaoPessoa(a)}</td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('ajudantes','${a.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('ajudantes','${a.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -21051,11 +21053,12 @@ function renderCadSubTabContent() {
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
-        <div class="overflow-x-auto max-h-80 overflow-y-auto">
+        ${cadBarraBusca('veiculos', 'Buscar por placa ou grupo...')}
+        <div class="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table class="w-full text-left text-xs">
             <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Placa</th><th class="p-2">Grupo</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${(db.data.veiculos||[]).filter(v=>!v.is_deleted).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo}</td><td class="p-2"><span class="${v.situacao==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right"><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${cadFiltrar('veiculos', v => [v.placa, v.tipo, v.modelo, v.situacao]).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo||'—'}</td><td class="p-2"><span class="${(v.situacao||'Ativo')==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('veiculos','${v.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -21148,6 +21151,229 @@ function deleteCad(col, id) {
   }
 }
 function deleteRota(nome) { if(confirm(`Excluir rota "${nome}"?`)){ db.deleteRota(nome); renderApp(); } }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BUSCA E EDIÇÃO EM MOTORISTAS, AJUDANTES E VEÍCULOS (6.11.2)
+// ─────────────────────────────────────────────────────────────────────────────
+// Antes só havia "Excluir": nome errado no cadastro (ARMANO em vez de
+// ARMANDO, 30/10/2026) só se corrigia por SQL. A edição grava pelo caminho
+// normal (db.data + save + envio à nuvem). Renomear pessoa ou trocar placa
+// pode levar junto o histórico: a correção vai DIRETO na nuvem (PATCH por
+// valor exato), porque o aparelho só guarda os últimos 90 dias de viagem; os
+// aparelhos recebem a versão nova no próximo pull (atualizado_em = agora).
+window._cadBusca = window._cadBusca || {};
+
+function cadBarraBusca(colecao, placeholder) {
+  const total = (db.data[colecao] || []).filter(x => !x.is_deleted).length;
+  const busca = window._cadBusca[colecao] || '';
+  const achados = busca ? cadFiltrar(colecao, cadCamposBusca(colecao)).length : total;
+  return `
+        <div class="flex gap-2 items-center">
+          <input type="text" id="cad-busca-${colecao}" value="${vgEscAttr(busca)}" placeholder="${placeholder}"
+            oninput="forcarMaiuscula(this); window._cadBusca['${colecao}']=this.value; renderApp()"
+            class="flex-1 bg-slate-800 border border-slate-700 text-white rounded-lg p-2 text-xs">
+          <span class="text-[10px] text-slate-400 whitespace-nowrap">${achados} de ${total}</span>
+          ${busca ? `<button onclick="window._cadBusca['${colecao}']=''; renderApp()" class="text-[10px] text-red-400 hover:text-red-300 font-bold px-2 py-1 bg-slate-800 rounded">Limpar</button>` : ''}
+        </div>`;
+}
+
+function cadCamposBusca(colecao) {
+  if (colecao === 'veiculos') return v => [v.placa, v.tipo, v.modelo, v.situacao];
+  if (colecao === 'motoristas') return m => [m.id, m.nome, m.cnh, m.telefone];
+  return a => [a.id, a.nome];
+}
+
+// Busca sem acento e sem diferença de espaço; ordem alfabética.
+function cadFiltrar(colecao, campos) {
+  const termo = normalizeStr(window._cadBusca[colecao] || '');
+  const chave = colecao === 'veiculos' ? 'placa' : 'nome';
+  return (db.data[colecao] || [])
+    .filter(x => !x.is_deleted)
+    .filter(x => !termo || campos(x).some(c => normalizeStr(c).includes(termo)))
+    .sort((a, b) => String(a[chave] || '').localeCompare(String(b[chave] || ''), 'pt-BR'));
+}
+
+function cadSituacaoPessoa(p) {
+  if (p.data_desligamento) return `<span class="text-red-400 text-[10px] font-bold">Desligado ${formatarData(p.data_desligamento)}</span>`;
+  if (p.ativo === false) return '<span class="text-slate-500 text-[10px] font-bold">Inativo</span>';
+  return '<span class="text-emerald-400 text-[10px] font-bold">Ativo</span>';
+}
+
+function abrirEdicaoCadastro(colecao, id) {
+  const item = (db.data[colecao] || []).find(x => String(x.id) === String(id));
+  const modal = document.getElementById('modal-container');
+  if (!item || !modal) return;
+  const cls = 'w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5 text-xs';
+  const v = s => vgEscAttr(s == null ? '' : s);
+  let campos = '';
+  if (colecao === 'motoristas') {
+    campos = `
+      <div class="col-span-2"><label class="block text-[10px] text-slate-400 mb-1">Nome completo *</label><input id="ed-cad-nome" required class="${cls}" value="${v(item.nome)}" oninput="forcarMaiuscula(this)"></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">CNH</label><input id="ed-cad-cnh" class="${cls}" value="${v(item.cnh)}"></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Telefone</label><input id="ed-cad-telefone" class="${cls}" value="${v(item.telefone)}"></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Admissão</label><input type="date" id="ed-cad-admissao" class="${cls}" value="${v(String(item.data_admissao || '').slice(0, 10))}"></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Desligamento</label><input type="date" id="ed-cad-desligamento" class="${cls}" value="${v(String(item.data_desligamento || '').slice(0, 10))}"></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Ativo</label><select id="ed-cad-ativo" class="${cls}"><option value="sim" ${item.ativo !== false ? 'selected' : ''}>Sim</option><option value="nao" ${item.ativo === false ? 'selected' : ''}>Não</option></select></div>`;
+  } else if (colecao === 'ajudantes') {
+    campos = `
+      <div class="col-span-2"><label class="block text-[10px] text-slate-400 mb-1">Nome completo *</label><input id="ed-cad-nome" required class="${cls}" value="${v(item.nome)}" oninput="forcarMaiuscula(this)"></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Ativo</label><select id="ed-cad-ativo" class="${cls}"><option value="sim" ${item.ativo !== false ? 'selected' : ''}>Sim</option><option value="nao" ${item.ativo === false ? 'selected' : ''}>Não</option></select></div>`;
+  } else {
+    const grupos = ['TOCO', 'TRUCK', 'CARRETA', '3/4', 'VUC', 'CAVALO', 'UTILITARIO', 'PASSEIO'];
+    const atual = String(item.tipo || item.modelo || '').toUpperCase();
+    campos = `
+      <div><label class="block text-[10px] text-slate-400 mb-1">Placa *</label><input id="ed-cad-placa" required class="${cls}" value="${v(item.placa)}" oninput="forcarMaiuscula(this)"></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Grupo</label><select id="ed-cad-tipo" class="${cls}">${(grupos.includes(atual) || !atual ? grupos : [atual].concat(grupos)).map(g => `<option value="${g}" ${g === atual ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Situação</label><select id="ed-cad-situacao" class="${cls}"><option value="Ativo" ${(item.situacao || 'Ativo') === 'Ativo' ? 'selected' : ''}>Ativo</option><option value="Inativo" ${item.situacao === 'Inativo' ? 'selected' : ''}>Inativo</option></select></div>`;
+  }
+  const titulo = { motoristas: 'Motorista', ajudantes: 'Ajudante', veiculos: 'Veículo' }[colecao];
+  modal.innerHTML = `
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl space-y-4">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-2">
+        <h3 class="font-bold text-white text-sm">✏️ Editar ${titulo}${colecao !== 'veiculos' ? ` — ERP ${escEsc(item.id)}` : ''}</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white text-sm">✕</button>
+      </div>
+      <form onsubmit="salvarEdicaoCadastro(event, '${colecao}', '${vgEscAttr(item.id)}')" class="space-y-3 text-xs">
+        <div class="grid grid-cols-2 gap-2">${campos}</div>
+        <p class="text-[10px] text-slate-500">${colecao === 'veiculos' ? 'Trocando a placa' : 'Trocando o nome'}, o app pergunta se corrige também o histórico (viagens, escala, infrações, reentregas, ocorrências), para o Dossiê não separar ${colecao === 'veiculos' ? 'o mesmo veículo' : 'a mesma pessoa'} em dois.</p>
+        <div class="flex justify-end gap-2">
+          <button type="button" onclick="closeModal()" class="bg-slate-800 border border-slate-700 text-slate-200 px-3 py-1.5 rounded">Cancelar</button>
+          <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded">Salvar</button>
+        </div>
+      </form>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+window.abrirEdicaoCadastro = abrirEdicaoCadastro;
+
+async function salvarEdicaoCadastro(e, colecao, id) {
+  e.preventDefault();
+  const item = (db.data[colecao] || []).find(x => String(x.id) === String(id));
+  if (!item) return;
+  const val = elId => { const el = document.getElementById(elId); return el ? String(el.value || '').trim() : ''; };
+  const antes = JSON.parse(JSON.stringify(item));
+  const ehVeiculo = colecao === 'veiculos';
+  const chave = ehVeiculo ? 'placa' : 'nome';
+  const novo = (ehVeiculo ? val('ed-cad-placa').replace(/[^A-Za-z0-9]/g, '') : val('ed-cad-nome').replace(/\s+/g, ' ')).toUpperCase();
+  if (!novo) { alert('Preencha o ' + (ehVeiculo ? 'campo placa.' : 'nome.')); return; }
+  const antigo = String(item[chave] || '').trim();
+
+  // Nome/placa repetido com outro cadastro vivo da mesma lista.
+  const repetido = (db.data[colecao] || []).find(x => !x.is_deleted && String(x.id) !== String(id) && normalizeStr(x[chave]) === normalizeStr(novo));
+  if (repetido && !confirm(`Já existe outro cadastro com "${novo}" (ERP/ID ${repetido.id}). Salvar mesmo assim?`)) return;
+
+  item[chave] = novo;
+  if (colecao === 'motoristas') {
+    item.cnh = val('ed-cad-cnh');
+    item.telefone = val('ed-cad-telefone');
+    item.data_admissao = val('ed-cad-admissao') || null;
+    item.data_desligamento = val('ed-cad-desligamento') || null;
+    item.ativo = val('ed-cad-ativo') !== 'nao';
+  } else if (colecao === 'ajudantes') {
+    item.ativo = val('ed-cad-ativo') !== 'nao';
+  } else {
+    item.tipo = val('ed-cad-tipo');
+    item.situacao = val('ed-cad-situacao') || 'Ativo';
+  }
+  db.carimbarEdicao(colecao, item);
+  db.logAudit({ acao: 'EDICAO', modulo: colecao, registro_id: item.id, diff: { antes, depois: JSON.parse(JSON.stringify(item)) } });
+  db.save();
+  if (window.cloudStore && window.cloudStore.isConfigured()) window.cloudStore.syncLocalToCloud().catch(() => {});
+  closeModal();
+  renderApp();
+
+  if (antigo && normalizeStr(antigo) !== normalizeStr(novo)
+      && confirm(`${ehVeiculo ? 'Placa' : 'Nome'} alterado de "${antigo}" para "${novo}".\n\nCorrigir também no histórico (viagens, escala, infrações, reentregas, ocorrências, sinistros)?\n\nPrecisa de internet.`)) {
+    try {
+      const n = await cadCorrigirHistorico(ehVeiculo ? 'placa' : 'pessoa', antigo, novo);
+      alert(`✅ Histórico corrigido: ${n} registro(s). Os outros aparelhos recebem na próxima sincronização.`);
+    } catch (err) {
+      alert('❌ O cadastro foi salvo, mas o histórico não foi corrigido: ' + (err.message || err));
+    }
+    renderApp();
+  } else {
+    showToast('✅ Cadastro atualizado!');
+  }
+}
+window.salvarEdicaoCadastro = salvarEdicaoCadastro;
+
+// Onde cada tipo de valor aparece no histórico. relatorios_divergencia não
+// tem atualizado_em. A escala guarda "A / B" num campo: é tratada à parte.
+const CAD_HISTORICO = {
+  pessoa: [
+    ['controle_viagens', ['motorista', 'ajudante', 'ajudante_2'], true],
+    ['infracoes', ['prestador_nome'], true],
+    ['ocorrencias_rota', ['motorista_nome'], true],
+    ['reentregas_rota', ['motorista_nome', 'novo_motorista', 'ajudante', 'ajudante_2'], true],
+    ['sinistros', ['motorista_nome'], true],
+    ['relatorios_divergencia', ['motorista', 'motorista_nome', 'ajudante'], false]
+  ],
+  placa: [
+    ['controle_viagens', ['placa'], true],
+    ['infracoes', ['veiculo_placa'], true],
+    ['ocorrencias_devolucao', ['veiculo_placa'], true],
+    ['ocorrencias_rota', ['veiculo_placa'], true],
+    ['ocorrencias_viagens', ['placa'], true],
+    ['reentregas_rota', ['placa', 'despacho_placa'], true],
+    ['retencoes_frota', ['placa'], true],
+    ['sinistros', ['placa'], true],
+    ['trocas_veiculos', ['veiculo_escalado', 'veiculo_trocado'], true],
+    ['relatorios_divergencia', ['veiculo_placa'], false]
+  ]
+};
+
+async function cadCorrigirHistorico(tipo, antigo, novo) {
+  const cs = window.cloudStore;
+  if (!cs || !cs.isConfigured()) throw new Error('sem conexão com a nuvem configurada neste aparelho');
+  let total = 0;
+  for (const [tabela, colunas, temCarimbo] of CAD_HISTORICO[tipo]) {
+    for (const col of colunas) {
+      const corpo = { [col]: novo };
+      if (temCarimbo) corpo.atualizado_em = agoraIsoBrasilia();
+      const resp = await fetch(`${cs.config.url}/rest/v1/${tabela}?${col}=eq.${encodeURIComponent(antigo)}`, {
+        method: 'PATCH',
+        headers: cs._headers({ 'Prefer': 'return=minimal,count=exact' }),
+        body: JSON.stringify(corpo)
+      });
+      if (!resp.ok) throw new Error(`${tabela}.${col}: ${resp.status} ${(await resp.text()).slice(0, 150)}`);
+      const faixa = resp.headers.get('content-range') || '';
+      total += Number(faixa.split('/')[1]) || 0;
+    }
+  }
+  // Escala: o campo pode ter dois nomes ("A / B"); troca só o pedaço igual.
+  const escCols = tipo === 'placa' ? { escala_matrizes: ['placa'], escala_linhas: ['placa', 'placa_matriz'] }
+                                   : { escala_matrizes: ['motorista', 'ajudante', 'ajudante_2'], escala_linhas: ['motorista', 'ajudante', 'ajudante_2'] };
+  const alvo = normalizeStr(antigo);
+  for (const [tabela, colunas] of Object.entries(escCols)) {
+    const filtro = colunas.map(c => `${c}.ilike.*${encodeURIComponent(antigo)}*`).join(',');
+    const linhas = await cs._getPagina(tabela, `is_deleted=is.false&or=(${filtro})`);
+    if (!linhas) throw new Error(`não foi possível ler ${tabela}`);
+    const mudadas = [];
+    linhas.forEach(r => {
+      let mudou = false;
+      colunas.forEach(c => {
+        if (!r[c]) return;
+        const partes = String(r[c]).split('/').map(x => x.trim());
+        const novas = partes.map(p => normalizeStr(p) === alvo ? novo : p);
+        if (novas.join(' / ') !== partes.join(' / ')) { r[c] = novas.join(' / '); mudou = true; }
+      });
+      if (mudou) {
+        r.atualizado_por = db.currentUser ? db.currentUser.nome : 'SISTEMA';
+        r.atualizado_em = agoraIsoBrasilia();
+        mudadas.push(r);
+      }
+    });
+    if (mudadas.length) {
+      await escGravar(tabela, mudadas);
+      total += mudadas.length;
+    }
+  }
+  // A escala aberta na tela recarrega da nuvem na próxima vez.
+  if (window._escala) { window._escala.matrizes = null; window._escala.linhas = {}; }
+  // Puxa já as viagens etc. corrigidas para este aparelho.
+  try { await cs.syncCloudToLocal(); } catch (e) {}
+  return total;
+}
 
 // ===== MÓDULO: CONECTOR DE DADOS (ANALISTA & POWER BI) =====
 function renderConectorDadosView() {
