@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 55).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 57).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -176,6 +176,20 @@ partir do branch `main` do GitHub.
   26→25: carga_amplo vai de 16/(M-1) até hoje (máx. M+4) e a rodada diária
   regrava esse quadro dos 4 últimos meses, mesmo fechados
   (`atualizarCargaWin`); o lado Oper procura ocorrência até 5 meses antes.
+
+## Escala de embarques (6.10.0, 30/10/2026)
+- Menu Escala (Matrizes, Convocação Escala, Fechamento) em `js/escala.js`;
+  substitui as planilhas `S:\Logistica\01 - LOGISTICA INFORMATIVO\11 - CARGAS E
+  ROTAS\Escalas e Gestão de Embarque\` (matriz por dia + FECHAMENTO DIA).
+- Migration 56 (APLICADA em 30/10): `escala_matrizes` (dia_semana 1–6, retorno
+  = saída + N dias na hora indicada) e `escala_linhas` (uma por viagem do dia).
+  Fora da sincronização automática (egress): lidas ao abrir e gravadas direto.
+- Decisões do Tiago: avisos não travam e cruzam motorista × ajudante; placa
+  diferente da matriz abre Troca de Veículos; peso/valor/entregas manuais (quem
+  fecha a carga digita); a linha vira viagem no Controle de Viagens quando ganha
+  a carga ("45025 / 45026" fica junto; separar só ao cruzar com o WinThor).
+  Retornos semeados de "Horário Fechamento Rotas (2025.11)", desatualizado:
+  ajustar na tela.
 
 ## Pendências
 - Segurança: repositório público; todas as tabelas com política

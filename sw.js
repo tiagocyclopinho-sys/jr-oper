@@ -8,7 +8,7 @@
 // APAGAR o cache da versao anterior, entao nenhum aparelho fica servindo um
 // js/app.js velho quando abrir sem sinal. Trocar o byte do sw.js e tambem o
 // que faz o navegador reinstalar o service worker.
-const CACHE_NAME = 'jr-oper-v6.9.9';
+const CACHE_NAME = 'jr-oper-v6.10.0';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
@@ -26,13 +26,15 @@ const FILES_TO_CACHE = [
   // de arquivos e localStorage são baldes diferentes.
   './js/mockData.js',
   './js/visaoOperacao.js',
+  './js/escala.js',
   './js/app.js',
   './js/tailwind.cdn.js',
   './js/xlsx.full.min.js',
   './js/html2pdf.bundle.min.js',
   './public/icon-512.png',
   './public/logo.png',
-  './public/logo_jr_branca.png'
+  './public/logo_jr_branca.png',
+  './public/logo_jr_verde.png'   // 6.10.0: imagem da convocação/fechamento da Escala
 ];
 
 // INSTALAÇÃO: salva os arquivos no cache do aparelho
