@@ -1124,6 +1124,9 @@ ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS fotos_investigacao JS
 ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS itens              JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS atualizado_por     VARCHAR(120);
 ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS data_entrada_cd    TIMESTAMPTZ;
+-- 6.11.5 (migration 62): quem mudou o status_fechamento e com qual perfil.
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS status_alterado_por    VARCHAR(255);
+ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS status_alterado_perfil VARCHAR(50);
 ALTER TABLE ocorrencias_devolucao ADD COLUMN IF NOT EXISTS requisito          VARCHAR(120);
 
 -- resumo_diario_cd guarda os blocos do formulario como objeto aninhado
