@@ -556,7 +556,10 @@ function escAvisos(linhas, dataIso, vizinhas) {
   const inativos = new Set();
   (data.motoristas || []).forEach(m => { if (m && (m.ativo === false || m.data_desligamento)) inativos.add(escNorm(m.nome)); });
   (data.ajudantes || []).forEach(a => { if (a && a.ativo === false) inativos.add(escNorm(a.nome)); });
-  const placasInativas = new Set((data.veiculos || []).filter(v => v && (v.ativo === false || String(v.situacao || '').toUpperCase() === 'INATIVO')).map(v => escNorm(v.placa)));
+  // Veículo: só a Situação vale (é o que Cadastros Mestres mostra e edita). A
+  // coluna `ativo` é da carga inicial e ninguém mexe nela pela tela (TVD1E68
+  // ficou com ativo=false e Situação Ativo, 03/11).
+  const placasInativas = new Set((data.veiculos || []).filter(v => v && String(v.situacao || '').toUpperCase() === 'INATIVO').map(v => escNorm(v.placa)));
   linhas.forEach(l => {
     escPessoas(l.motorista).concat(escPessoasAjudantes(l)).forEach(p => { if (inativos.has(p)) add(l.id, `⛔ ${p} está inativo/desligado no cadastro`); });
     if (placasInativas.has(escNorm(l.placa))) add(l.id, `⛔ Placa ${escNorm(l.placa)} está inativa no cadastro`);
@@ -1528,6 +1531,7 @@ async function escGerarImagem(tipo) {
         <button onclick="escImagemCopiar()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-lg">📋 Copiar imagem</button>
         ${podeCompartilhar ? `<button onclick="escImagemCompartilhar()" class="bg-sky-700 hover:bg-sky-600 text-white font-bold px-3 py-2 rounded-lg">📤 Compartilhar</button>` : ''}
         <button onclick="escImagemBaixar()" class="bg-slate-800 border border-slate-700 text-white font-bold px-3 py-2 rounded-lg">⬇️ Baixar PNG</button>
+        <button onclick="escImagemImprimir()" class="bg-slate-800 border border-slate-700 text-white font-bold px-3 py-2 rounded-lg">🖨️ Imprimir</button>
       </div>
     </div>`;
   modal.classList.remove('hidden');
@@ -1567,3 +1571,32 @@ function escImagemBaixar() {
   document.body.appendChild(a); a.click(); a.remove();
 }
 window.escImagemBaixar = escImagemBaixar;
+
+// Imprime a mesma imagem da prévia numa folha A4 (deitada quando a imagem é
+// mais larga que alta). Vai por um iframe escondido para não esbarrar no
+// bloqueio de pop-up e não levar o resto da tela do app para a impressão.
+function escImagemImprimir() {
+  const { canvas, nome } = window._escImagem;
+  const deitada = canvas.width >= canvas.height;
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  document.body.appendChild(iframe);
+  const janela = iframe.contentWindow;
+  const doc = janela.document;
+  doc.open();
+  doc.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escEsc(nome.replace(/\.png$/i, ''))}</title>
+    <style>@page{size:A4 ${deitada ? 'landscape' : 'portrait'};margin:8mm}html,body{margin:0}
+    img{display:block;margin:0 auto;max-width:100%;max-height:100vh;object-fit:contain}</style></head><body><img alt=""></body></html>`);
+  doc.close();
+  let removido = false;
+  const remover = () => { if (!removido) { removido = true; iframe.remove(); } };
+  const img = doc.querySelector('img');
+  img.onload = () => {
+    janela.onafterprint = () => setTimeout(remover, 500);
+    janela.focus();
+    janela.print();
+    setTimeout(remover, 60000);
+  };
+  img.src = canvas.toDataURL('image/png');
+}
+window.escImagemImprimir = escImagemImprimir;
