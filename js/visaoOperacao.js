@@ -61,6 +61,18 @@ const hhmm = (h) => {
 // ---------------------------------------------------------------- dados
 // rest(tabela, query) -> linhas: no gerador e fetch com a chave publica; no app,
 // o mesmo fetch com a config do cloudStore.
+// A nuvem devolve no maximo 1.000 linhas por leitura: le em paginas (os quadros de
+// um mes ja passam disso). A consulta precisa ter order para a paginacao ser estavel.
+async function lerTudo(rest, tabela, query) {
+  const todas = [];
+  for (let pag = 0; pag < 20; pag++) {
+    const l = await rest(tabela, `${query}&limit=1000&offset=${pag * 1000}`);
+    todas.push(...l);
+    if (l.length < 1000) break;
+  }
+  return todas;
+}
+
 async function carregarDados(rest, am) {
   const a = Math.floor(am / 100), m = am % 100;
   const ant = mesAnterior(am);
@@ -71,7 +83,7 @@ async function carregarDados(rest, am) {
   const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo] = await Promise.all([
     rest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes'),
     rest('vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=in.(${meses})`),
-    rest('vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
+    lerTudo(rest, 'vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
     rest('prod_pontuacao', `select=nome,cargo,setor,pontuacao,qtd_os,qtd_apanhos,kg_total,kg_entrada&ano_mes=eq.${am}`),
     rest('ocorrencias_devolucao', `select=id,numero_devolucao,motivo_real_causa_raiz,carga_numero,criado_em,data_acao_gestor,responsavel_analise,tipo_erro,status_gestao,valor_reclamado,forma_acerto,data_entrada_cd,sem_itens&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
     rest('trocas_veiculos', `select=data,veiculo_escalado,veiculo_trocado,motivo_resumido,motivo_outro,detalhamento,autorizado_por&or=(is_deleted.is.null,is_deleted.is.false)&data=gte.${iso(a, m, 1)}&data=lte.${iso(a, m + 1, 0)}&order=data.desc`),
@@ -441,7 +453,7 @@ function barrasH(itens, { fmt, cor = CH.azul, cores = null, larguraRot = 190, va
     const y = top + k * (hb + gap);
     const w = Math.max((Math.abs(i.valor || 0) / max) * util, 2);
     const c = i.cor || (cores ? cores[k % cores.length] : cor);
-    const clic = grupo ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"` : '';
+    const clic = grupo && i.filtro !== false ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"${i.pai ? ` data-pai="${esc(i.pai)}"` : ''}` : '';
     return `<g${clic}><title>${esc(i.rotulo)}: ${esc(i.texto ?? fmt(i.valor))}</title>
       <text x="${larguraRot - 8}" y="${y + hb / 2 + 4}" class="cat" text-anchor="end">${esc(corta(i.rotulo, 30))}</text>
       <rect x="${larguraRot}" y="${y}" width="${w}" height="${hb}" rx="3" fill="${c}"/>
@@ -500,8 +512,8 @@ function rosca(itens, { fmt, grupo = '' } = {}) {
   lista.forEach((i, k) => {
     const frac = i.valor / tot, a2 = ang + frac * 2 * Math.PI, grande = frac > 0.5 ? 1 : 0;
     const p = (rad, ra) => `${cx + ra * Math.cos(rad)},${cy + ra * Math.sin(rad)}`;
-    const cor = PALETA_H[k % PALETA_H.length];
-    const clic = grupo ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"` : '';
+    const cor = i.cor || PALETA_H[k % PALETA_H.length];
+    const clic = grupo ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"${i.pai ? ` data-pai="${esc(i.pai)}"` : ''}` : '';
     fatias += frac >= 0.999
       ? `<circle cx="${cx}" cy="${cy}" r="${(R + r) / 2}" fill="none" stroke="${cor}" stroke-width="${R - r}"/>`
       : `<path${clic} d="M${p(ang, R)} A${R},${R} 0 ${grande} 1 ${p(a2, R)} L${p(a2, r)} A${r},${r} 0 ${grande} 0 ${p(ang, r)} Z" fill="${cor}"><title>${esc(i.rotulo)}: ${esc(fmt(i.valor))}</title></path>`;
@@ -511,7 +523,7 @@ function rosca(itens, { fmt, grupo = '' } = {}) {
     }
     ang = a2;
   });
-  const leg = lista.map((i, k) => `<li${grupo ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"` : ''}><i style="background:${PALETA_H[k % PALETA_H.length]}"></i><span class="n">${esc(i.rotulo)}</span><b>${esc(fmt(i.valor))}</b><em>${(i.valor / tot * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</em></li>`).join('');
+  const leg = lista.map((i, k) => `<li${grupo ? ` class="clic" data-grupo="${grupo}" data-valor="${esc(i.filtro ?? i.rotulo)}"${i.pai ? ` data-pai="${esc(i.pai)}"` : ''}` : ''}><i style="background:${i.cor || PALETA_H[k % PALETA_H.length]}"></i><span class="n">${esc(i.rotulo)}</span><b>${esc(fmt(i.valor))}</b><em>${(i.valor / tot * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</em></li>`).join('');
   return `<div class="rosca"><svg viewBox="0 0 220 220" role="img">${fatias}${rotulos}</svg><ul>${leg}</ul></div>`;
 }
 
@@ -715,13 +727,53 @@ function gerarHtml(d, a, opcoes = {}) {
   // Despesa
   {
     const s = (k) => v('despesa', k), us = d.q('despesa', 'usuario'), tot = s('valor');
-    add('desp', 'Despesas', secao('desp', 'Acompanhamento de despesas', `${mesCheio} · cartões Vólus e ValeCard`,
-      `<div class="kpis k5">${kpi(reais(tot, 2), 'Valor total', comparar(tot, s('valor_ly'), 'ano anterior'))}
+    const deps = d.q('despesa', 'departamento'), diasMes = d.q('despesa', 'dia');
+    // Filtro por clique: departamento <-> usuario (quadros "DEP | NOME", "DEP | dia", "NOME | dia")
+    const par = (q) => d.q('despesa', q).map((x) => { const [a1, a2] = x.rotulo.split(' | '); return { a: a1, b: a2, valor: x.valor, qtd: x.valor2 }; });
+    const ud = par('usuario_dep'), depDia = par('dep_dia'), usuDia = par('usuario_dia');
+    const interativo = ud.length > 0;
+    const depDe = {}; for (const x of ud) depDe[x.b] = x.a;
+    const doDep = (dp) => ud.filter((x) => x.a === dp);
+    const totDep = (dp) => doDep(dp).reduce((t, x) => t + (x.valor || 0), 0);
+    const barraU = (x, base) => ({ rotulo: titulo(x.nome), valor: x.valor, filtro: x.nome, pai: depDe[x.nome], texto: `${reais(x.valor)} · ${pct(base ? x.valor / base : null, 1)}` });
+    const grp = interativo ? 'desp' : '';
+    const listaU = (dp) => (dp
+      ? card(`Usuários (top 15) · ${titulo(dp)}`, barrasH(doDep(dp).slice(0, 15).map((x) => barraU({ nome: x.b, valor: x.valor }, totDep(dp))), { fmt: R0, cor: CH.ambar, larguraRot: 210, grupo: grp }))
+      : card('Usuários (top 15)', barrasH(us.map((x) => barraU({ nome: x.rotulo, valor: x.valor }, tot)), { fmt: R0, cor: CH.ambar, larguraRot: 210, grupo: grp })));
+    const porDia = (lista, chave, titulo2) => { const m = {}; for (const x of lista) if (x.a === chave) m[x.b] = x.valor; return card(`Gasto por dia (R$)${titulo2 ? ` · ${titulo2}` : ''}`, colunas(diasMes.map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: diasMes.map((x) => m[x.rotulo] || 0) }], { fmt: N0, altura: 240, W: 1180 })); };
+    const kpisGeral = `<div class="kpis k5">${kpi(reais(tot, 2), 'Valor total', comparar(tot, s('valor_ly'), 'ano anterior'))}
         ${s('valor_ly') ? kpi(reais(s('valor_ly') * 0.75, 2), 'Meta: 25% abaixo do ano anterior', metaTxt(tot <= s('valor_ly') * 0.75, tot <= s('valor_ly') * 0.75 ? 'atingida' : `faltam ${reais(tot - s('valor_ly') * 0.75)}`)) : ''}${kpi(num(s('qtd')), 'Transações', comparar(s('qtd'), s('qtd_ly'), 'ano anterior'))}
-        ${kpi(reais(s('ticket'), 2), 'Média por transação', comparar(s('ticket'), s('ticket_ly'), 'ano anterior'))}${kpi(reais(s('por_dia'), 2), 'Gasto por dia', comparar(s('por_dia'), s('por_dia_ly'), 'ano anterior'))}</div>
-      <div class="grade g2">${card('Por departamento', rosca(it(d.q('despesa', 'departamento'), 'valor', (x) => titulo(x.rotulo)), { fmt: R0 }))}
-        ${card('Usuários (top 15)', barrasH(us.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${pct(tot ? x.valor / tot : null, 1)}` })), { fmt: R0, cor: CH.ambar, larguraRot: 210 }))}</div>
-      <div class="grade g1">${card('Gasto por dia (R$)', colunas(d.q('despesa', 'dia').map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: d.q('despesa', 'dia').map((x) => x.valor) }], { fmt: N0, altura: 240, W: 1180 }))}</div>`));
+        ${kpi(reais(s('ticket'), 2), 'Média por transação', comparar(s('ticket'), s('ticket_ly'), 'ano anterior'))}${kpi(reais(s('por_dia'), 2), 'Gasto por dia', comparar(s('por_dia'), s('por_dia_ly'), 'ano anterior'))}</div>`;
+    const kpisDep = (dp) => {
+      const l = doDep(dp), vl = totDep(dp), q = l.reduce((t, x) => t + (x.qtd || 0), 0);
+      return `<div class="kpis k5">${kpi(reais(vl, 2), `Valor · ${titulo(dp)}`, { texto: `${pct(tot ? vl / tot : null, 1)} do total`, bom: null })}${kpi(num(q), 'Transações')}
+        ${kpi(reais(q ? vl / q : null, 2), 'Média por transação', { texto: `geral ${reais(s('ticket'), 2)}`, bom: null })}${kpi(num(l.length), 'Usuários com gasto')}
+        ${kpi(l[0] ? titulo(l[0].b) : '—', 'Maior gasto', l[0] ? { texto: `${reais(l[0].valor, 2)} · ${pct(vl ? l[0].valor / vl : null, 1)} do departamento`, bom: null } : null)}</div>`;
+    };
+    const kpisUsu = (nome) => {
+      const x = ud.find((y) => y.b === nome) || {}, dp = depDe[nome], vl = x.valor || 0, q = x.qtd || 0;
+      return `<div class="kpis k5">${kpi(reais(vl, 2), `Valor · ${titulo(nome)}`, { texto: `${pct(tot ? vl / tot : null, 1)} do total · ${pct(totDep(dp) ? vl / totDep(dp) : null, 1)} do departamento`, bom: null })}
+        ${kpi(num(q), 'Transações')}${kpi(reais(q ? vl / q : null, 2), 'Média por transação', { texto: `geral ${reais(s('ticket'), 2)}`, bom: null })}
+        ${kpi(titulo(dp || '—'), 'Departamento')}${kpi(num(usuDia.filter((y) => y.a === nome).length), 'Dias com gasto')}</div>`;
+    };
+    const diaGeral = card('Gasto por dia (R$)', colunas(diasMes.map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: diasMes.map((x) => x.valor) }], { fmt: N0, altura: 240, W: 1180 }));
+    // usuarios clicaveis: os que aparecem em alguma lista (geral ou de um departamento)
+    const usuarios = [...new Set([...us.map((x) => x.rotulo), ...deps.flatMap((dp) => doDep(dp.rotulo).slice(0, 15).map((x) => x.b))])].filter((nm) => depDe[nm]);
+    const vals = interativo ? [
+      { valor: '', kpis: kpisGeral, lista: listaU(''), dia: diaGeral },
+      ...deps.map((dp) => ({ valor: dp.rotulo, kpis: kpisDep(dp.rotulo), lista: listaU(dp.rotulo), dia: porDia(depDia, dp.rotulo, titulo(dp.rotulo)) })),
+      ...usuarios.map((nm) => ({ valor: nm, kpis: kpisUsu(nm), lista: listaU(depDe[nm]), dia: porDia(usuDia, nm, titulo(nm)) })),
+    ] : [];
+    const rosDep = card('Por departamento', rosca(deps.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, filtro: x.rotulo })), { fmt: R0, grupo: grp }));
+    add('desp', 'Despesas', secao('desp', 'Acompanhamento de despesas', `${mesCheio} · cartões Vólus e ValeCard`, interativo
+      ? `${chip('desp', 'Clique num departamento ou num usuário para filtrar os cartões, a lista e o gasto por dia.')}
+      ${variantes('desp', vals.map((x) => ({ valor: x.valor, html: x.kpis })))}
+      <div class="grade g2">${rosDep}
+        ${variantes('desp', vals.map((x) => ({ valor: x.valor, html: x.lista })))}</div>
+      ${variantes('desp', vals.map((x) => ({ valor: x.valor, html: `<div class="grade g1">${x.dia}</div>` })))}`
+      : `${kpisGeral}
+      <div class="grade g2">${rosDep}${listaU('')}</div>
+      <div class="grade g1">${diaGeral}</div>`));
   }
 
   // Abastecimento
@@ -732,16 +784,60 @@ function gerarHtml(d, a, opcoes = {}) {
     const ajuste = d.statusAnt === 'fechado' && fechAnt !== null && atualAnt !== null && Math.abs(atualAnt - fechAnt) >= 1
       ? `<p class="nota">Lançado após o fechamento de ${esc(nomeMes(d.ant).toLowerCase())}: ${atualAnt > fechAnt ? '+' : '−'}${esc(reais(Math.abs(atualAnt - fechAnt)))} (notas quinzenais).</p>` : '';
     const minimo = s('preco_min');
-    add('abast', 'Abastecimento', secao('abast', 'Gestão de abastecimento', mesCheio,
-      `<div class="kpis k5">${kpi(reais(tot), 'Valor total', comparar(tot, s('valor_lm'), 'mês anterior'))}${kpi(`${num(s('litros'))} L`, 'Litros', comparar(s('litros'), s('litros_lm'), 'mês anterior', null))}
+    const kpisGeral = `<div class="kpis k5">${kpi(reais(tot), 'Valor total', comparar(tot, s('valor_lm'), 'mês anterior'))}${kpi(`${num(s('litros'))} L`, 'Litros', comparar(s('litros'), s('litros_lm'), 'mês anterior', null))}
         ${kpi(reais(s('preco_medio'), 2), 'Preço médio / L', comparar(s('preco_medio'), s('preco_medio_lm'), 'mês anterior'))}
         ${kpi(reais(minimo, 2), 'Preço mínimo / L', minimo !== null && minimo < 3 ? { texto: '⚠ abaixo de R$ 3: conferir lançamento', bom: false } : comparar(minimo, s('preco_min_lm'), 'mês anterior'))}
-        ${kpi(reais(s('preco_max'), 2), 'Preço máximo / L', comparar(s('preco_max'), s('preco_max_lm'), 'mês anterior'))}</div>${ajuste}
-      <div class="grade g1">${card('Abastecimento por dia (R$)', colunas(dia.map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: dia.map((x) => x.valor) }], { fmt: N0, W: 1180, altura: 260 }))}</div>
-      <div class="grade g1">${card('Preço por litro por dia (R$)', linhas(pr.map((x) => diaMes(x.rotulo)), [{ nome: 'Médio', cor: CH.azul, valores: pr.map((x) => x.valor) }, { nome: 'Mínimo', cor: CH.verde, valores: pr.map((x) => x.valor2) }, { nome: 'Máximo', cor: CH.laranja, valores: pr.map((x) => x.valor3) }], { fmt: (x) => num(x, 2), W: 1180, altura: 300 }))}</div>
-      <div class="grade g3">${card('Postos (R$, top 15)', barrasH(forn.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${num(x.valor3, 2)}/L` })), { fmt: R0, cor: CH.ambar, larguraRot: 150, W: 430 }), 'largo')}
-        ${card('Por combustível', rosca(it(d.q('abastecimento', 'combustivel')), { fmt: R0 }))}
-        ${card('Posto interno x externo', rosca(it(d.q('abastecimento', 'interno_externo'), 'valor', (x) => titulo(x.rotulo)), { fmt: R0 }))}</div>`));
+        ${kpi(reais(s('preco_max'), 2), 'Preço máximo / L', comparar(s('preco_max'), s('preco_max_lm'), 'mês anterior'))}</div>`;
+    const diaGeral = card('Abastecimento por dia (R$)', colunas(dia.map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: dia.map((x) => x.valor) }], { fmt: N0, W: 1180, altura: 260 }));
+    const precoGeral = card('Preço por litro por dia (R$)', linhas(pr.map((x) => diaMes(x.rotulo)), [{ nome: 'Médio', cor: CH.azul, valores: pr.map((x) => x.valor) }, { nome: 'Mínimo', cor: CH.verde, valores: pr.map((x) => x.valor2) }, { nome: 'Máximo', cor: CH.laranja, valores: pr.map((x) => x.valor3) }], { fmt: (x) => num(x, 2), W: 1180, altura: 300 }));
+    // Filtro por clique: posto x combustivel x interno/externo (quadro "POSTO | COMB | INT/EXT | dia")
+    const cz = d.q('abastecimento', 'cruzado_dia').map((x) => { const [p, c, t, dt] = x.rotulo.split(' | '); return { p, c, t, dt, valor: x.valor || 0, l: x.valor2 || 0 }; });
+    const interativo = cz.length > 0;
+    const combs = d.q('abastecimento', 'combustivel'), ies = d.q('abastecimento', 'interno_externo');
+    const corC = {}; combs.forEach((x, k) => { corC[x.rotulo] = PALETA_H[k % PALETA_H.length]; });
+    const corT = {}; ies.forEach((x, k) => { corT[x.rotulo] = PALETA_H[k % PALETA_H.length]; });
+    const dimDe = (val) => (combs.some((x) => x.rotulo === val) ? 'c' : ies.some((x) => x.rotulo === val) ? 't' : 'p');
+    const somar = (l, k) => { const m = {}; for (const x of l) { (m[x[k]] ||= { valor: 0, l: 0 }); m[x[k]].valor += x.valor; m[x[k]].l += x.l; } return Object.entries(m).map(([rotulo, o]) => ({ rotulo, ...o })).sort((a2, b2) => b2.valor - a2.valor); };
+    const doFiltro = (val) => (val ? cz.filter((x) => x[dimDe(val)] === val) : cz);
+    // postos clicaveis: os que aparecem em alguma lista top 15 (geral ou filtrada por combustivel / tipo)
+    const postosClic = new Set(interativo ? [...forn.map((x) => x.rotulo), ...[...combs, ...ies].flatMap((x) => somar(doFiltro(x.rotulo), 'p').slice(0, 15).map((y) => y.rotulo))] : []);
+    const grp = interativo ? 'abast' : '';
+    const graficos = (val) => {
+      const dm = val ? dimDe(val) : '', l = doFiltro(val), pai = val || null;
+      // o grafico da dimensao clicada fica inteiro (com o item aceso); os outros mostram so o filtrado
+      const postos = dm === 'p' || !val ? forn.map((x) => ({ rotulo: x.rotulo, valor: x.valor, l: x.valor2 })) : somar(l, 'p').slice(0, 15);
+      const cs = dm === 'c' || !val ? combs.map((x) => ({ rotulo: x.rotulo, valor: x.valor })) : somar(l, 'c');
+      const ts = dm === 't' || !val ? ies.map((x) => ({ rotulo: x.rotulo, valor: x.valor })) : somar(l, 't');
+      const suf = val ? ` · ${titulo(val)}` : '';
+      return `<div class="grade g3">${card(`Postos (R$, top 15)${dm && dm !== 'p' ? suf : ''}`, barrasH(postos.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, filtro: postosClic.has(x.rotulo) ? x.rotulo : false, pai: dm !== 'p' ? pai : null, texto: `${reais(x.valor)} · ${num(x.l ? x.valor / x.l : null, 2)}/L` })), { fmt: R0, cor: CH.ambar, larguraRot: 150, W: 430, grupo: grp }), 'largo')}
+        ${card(`Por combustível${dm && dm !== 'c' ? suf : ''}`, rosca(cs.map((x) => ({ rotulo: x.rotulo, valor: x.valor, filtro: x.rotulo, cor: corC[x.rotulo], pai: dm !== 'c' ? pai : null })), { fmt: R0, grupo: grp }))}
+        ${card(`Posto interno x externo${dm && dm !== 't' ? suf : ''}`, rosca(ts.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, filtro: x.rotulo, cor: corT[x.rotulo], pai: dm !== 't' ? pai : null })), { fmt: R0, grupo: grp }))}</div>`;
+    };
+    const kpisFiltro = (val) => {
+      const l = doFiltro(val), vl = l.reduce((t2, x) => t2 + x.valor, 0), lt = l.reduce((t2, x) => t2 + x.l, 0);
+      const dias = new Set(l.map((x) => x.dt)).size, postos = new Set(l.map((x) => x.p)).size, ehPosto = dimDe(val) === 'p';
+      const principal = somar(l, 'c')[0];
+      return `<div class="kpis k5">${kpi(reais(vl), `Valor · ${titulo(val)}`, { texto: `${pct(tot ? vl / tot : null, 1)} do total`, bom: null })}${kpi(`${num(lt)} L`, 'Litros', { texto: `${pct(s('litros') ? lt / s('litros') : null, 1)} do total`, bom: null })}
+        ${kpi(reais(lt ? vl / lt : null, 2), 'Preço médio / L', { texto: `geral ${reais(s('preco_medio'), 2)}/L`, bom: null })}
+        ${kpi(num(dias), 'Dias com abastecimento')}${ehPosto ? kpi(principal ? principal.rotulo : '—', 'Combustível principal', principal ? { texto: `${pct(vl ? principal.valor / vl : null, 0)} do valor do posto`, bom: null } : null) : kpi(num(postos), 'Postos usados')}</div>`;
+    };
+    const porDiaFiltro = (val) => {
+      const m = {}; for (const x of doFiltro(val)) { (m[x.dt] ||= { valor: 0, l: 0 }); m[x.dt].valor += x.valor; m[x.dt].l += x.l; }
+      const ds = dia.map((x) => x.rotulo);
+      return `<div class="grade g1">${card(`Abastecimento por dia (R$) · ${titulo(val)}`, colunas(ds.map(diaMes), [{ nome: 'Valor', cor: CH.ambar, valores: ds.map((dt) => (m[dt] ? m[dt].valor : 0)) }], { fmt: N0, W: 1180, altura: 260 }))}</div>
+      <div class="grade g1">${card(`Preço médio por litro por dia (R$) · ${titulo(val)}`, linhas(ds.map(diaMes), [{ nome: 'Médio', cor: CH.azul, valores: ds.map((dt) => (m[dt] && m[dt].l ? m[dt].valor / m[dt].l : null)) }], { fmt: (x) => num(x, 2), W: 1180, altura: 260 }))}</div>`;
+    };
+    const vals = ['', ...postosClic, ...combs.map((x) => x.rotulo), ...ies.map((x) => x.rotulo)];
+    add('abast', 'Abastecimento', secao('abast', 'Gestão de abastecimento', mesCheio, interativo
+      ? `${chip('abast', 'Clique num posto, num combustível ou em interno/externo para filtrar os cartões, os gráficos por dia e os outros dois gráficos.')}
+      ${variantes('abast', vals.map((val) => ({ valor: val, html: val ? kpisFiltro(val) : kpisGeral })))}${ajuste}
+      ${variantes('abast', vals.map((val) => ({ valor: val, html: val ? porDiaFiltro(val) : `<div class="grade g1">${diaGeral}</div><div class="grade g1">${precoGeral}</div>` })))}
+      ${variantes('abast', vals.map((val) => ({ valor: val, html: graficos(val) })))}
+      <p class="nota">Com filtro, o preço por dia mostra só o médio (valor ÷ litros do dia); mínimo e máximo ficam na visão sem filtro.</p>`
+      : `${kpisGeral}${ajuste}
+      <div class="grade g1">${diaGeral}</div>
+      <div class="grade g1">${precoGeral}</div>
+      ${graficos('')}`));
   }
 
   // Motoristas
@@ -976,9 +1072,11 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
 // Filtro das secoes: clicar numa barra/fatia mostra o bloco daquele valor (cartoes e listas);
 // clicar de novo, ou no "limpar", volta para todos.
 (function () {
-  function aplicar(g, val) {
+  // pai: o valor "de cima" do item clicado (ex.: departamento do usuario), que fica aceso junto;
+  // os itens cujo data-pai e o valor filtrado (usuarios do departamento) tambem ficam acesos
+  function aplicar(g, val, pai) {
     document.querySelectorAll('.variante[data-grupo="' + g + '"]').forEach(function (v) { v.hidden = v.getAttribute('data-valor') !== val; });
-    document.querySelectorAll('.clic[data-grupo="' + g + '"]').forEach(function (c) { c.classList.toggle('apagado', !!val && c.getAttribute('data-valor') !== val); });
+    document.querySelectorAll('.clic[data-grupo="' + g + '"]').forEach(function (c) { var x = c.getAttribute('data-valor'); c.classList.toggle('apagado', !!val && x !== val && !(pai && x === pai) && c.getAttribute('data-pai') !== val); });
     document.querySelectorAll('.chip[data-chip="' + g + '"]').forEach(function (c) {
       c.hidden = !val;
       c.innerHTML = val ? 'Filtro: <b></b> <button type="button">✕ limpar</button>' : '';
@@ -992,7 +1090,7 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
     var el = e.target.closest('.clic');
     if (!el) return;
     var g = el.getAttribute('data-grupo'), val = el.getAttribute('data-valor');
-    aplicar(g, document.body.getAttribute('data-f-' + g) === val ? '' : val);
+    aplicar(g, document.body.getAttribute('data-f-' + g) === val ? '' : val, el.getAttribute('data-pai'));
   });
 })();
 </script>
