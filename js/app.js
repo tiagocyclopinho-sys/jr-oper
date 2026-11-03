@@ -11563,6 +11563,12 @@ function renderCdRecepcaoView() {
         ${d.status_fechamento === 'PENDENTE_FISICO'
           ? `<span class="bg-amber-500/20 text-amber-300 border border-amber-500/50 px-2 py-1 rounded text-[10px] font-black animate-pulse block">⚠️ PENDENTE</span>${seloIdade}`
           : `<span class="bg-emerald-900/50 text-emerald-300 border border-emerald-700/50 px-2 py-1 rounded text-[10px] font-bold block">✔ ${d.status_fechamento}</span>`}
+        ${d.status_alterado_por ? (() => {
+          // Quem mudou o status e o perfil dele (6.11.5, migration 62).
+          // Entradas antigas sem o rastro ficam sem a linha, em vez de chutar.
+          const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+          return `<div class="text-[9px] text-slate-400 mt-1 leading-tight" title="Quem alterou o status">👤 ${esc(d.status_alterado_por)}${d.status_alterado_perfil ? ` <span class="bg-slate-800 border border-slate-600 text-amber-300 px-1 rounded font-bold">${esc(d.status_alterado_perfil)}</span>` : ''}</div>`;
+        })() : ''}
       </td>
       <td class="p-3 hidden sm:table-cell font-semibold text-emerald-400 text-[11px]">${formatarDestinoLabel(d.destino_cd)}</td>
       <td class="p-3 text-right">

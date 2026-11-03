@@ -2257,6 +2257,13 @@ class Store {
     const dev = this.data.ocorrencias_devolucao.find(d => d.id == id);
     if (dev) {
       dev.destino_cd = destino_cd;
+      // Quem mudou o status e com qual perfil (6.11.5, migration 62). Só na
+      // MUDANÇA: corrigir a conferência mantém o status e não troca o autor.
+      // atualizado_por não serve para isso — qualquer edição posterior o troca.
+      if (dev.status_fechamento !== status_fechamento) {
+        dev.status_alterado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
+        dev.status_alterado_perfil = this.currentUser ? (this.currentUser.role || null) : null;
+      }
       dev.status_fechamento = status_fechamento;
       // Na correção de uma conferência já feita, a data de entrada é a da
       // entrada de verdade — mexer nela jogaria a devolução em outro período.
