@@ -222,6 +222,9 @@ partir do branch `main` do GitHub.
   (6.11.2). Renomear pessoa ou trocar placa pode corrigir o histórico direto
   na nuvem por valor exato (`cadCorrigirHistorico` / `CAD_HISTORICO` em
   app.js; escala "A / B" trocada por pedaço).
+- Prévia das imagens (convocação e fechamento): Copiar, Compartilhar, Baixar PNG
+  e Imprimir (6.11.4, `escImagemImprimir`: iframe escondido, A4 deitada ou em
+  pé conforme a proporção da imagem).
 - SQL que mexe em escala_* (ou qualquer tabela com a guarda de carimbo):
   `atualizado_em = (now() AT TIME ZONE 'America/Sao_Paulo')`, NUNCA `now()`
   puro. O app grava hora de Brasília; um carimbo em UTC fica 3 h no futuro e
