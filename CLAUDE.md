@@ -176,6 +176,16 @@ partir do branch `main` do GitHub.
   26→25: carga_amplo vai de 16/(M-1) até hoje (máx. M+4) e a rodada diária
   regrava esse quadro dos 4 últimos meses, mesmo fechados
   (`atualizarCargaWin`); o lado Oper procura ocorrência até 5 meses antes.
+- 6.11.3 (03/11): Despesas interativas. Quadros novos usuario_dep ("DEP | NOME"),
+  dep_dia ("DEP | data") e usuario_dia ("NOME | data") na seção despesa; sem eles
+  (meses antes de out/26) a seção sai sem filtro. Clique usa o grupo 'desp' e o
+  atributo data-pai (o usuário acende o departamento; o departamento acende os
+  usuários dele). vo_quadros de um mês passa de 1.000 linhas: `lerTudo()`
+  pagina a leitura (limit/offset, precisa de order). Abastecimento interativo
+  no mesmo padrão: quadro cruzado_dia ("POSTO | COMB | INT/EXT | data", valor
+  R$, valor2 litros) e tudo é somado na página; o gráfico da dimensão clicada
+  fica inteiro e os outros dois mostram o filtrado (itens com data-pai = filtro).
+  Barra com filtro: false não é clicável (posto sem variante).
 
 ## Escala de embarques (6.10.0, 30/10/2026)
 - Menu Escala (Matrizes, Convocação Escala, Fechamento) em `js/escala.js`;
