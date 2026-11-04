@@ -253,6 +253,38 @@ function horasExtras(pres, d) {
   });
 }
 
+// HE 100%: mesmo formato da 55%, sem meta por setor (secao he_tipos)
+function horasExtras100(pres, d) {
+  if (!d.q('he_tipos', 'setor_dsr').length) return;
+  const a = d.ano, m = d.am % 100;
+  const sub = `Visão ${dataBr(iso(a, m - 1, 26))} a ${dataBr(iso(a, m, 25))} · Hora Extra 100% (Power BI GERÊNCIA)`;
+  const t = (k) => d.v('he_tipos', k), h = (k, am) => d.v('horas_extras', k, am);
+  const valor = t('valor_100'), horas = t('horas_100');
+  const s = slideConteudo(pres, 'Gestão de hora extra 100%', sub);
+  cartao(s, 0.6, 1.5, 2.95, 1.3, hhmm(horas), 'Horas HE 100%', comparar(horas, h('horas_100', d.ant), 'mês anterior'));
+  cartao(s, 3.7, 1.5, 2.95, 1.3, reais(valor, 2), 'Valor (R$)', comparar(valor, h('valor_100', d.ant), 'mês anterior'));
+  cartao(s, 6.8, 1.5, 2.95, 1.3, reais(t('valor_100_ly'), 2), `Mesmo mês de ${a - 1}`, (t('valor_100_ly') || 0) >= 100 ? comparar(valor, t('valor_100_ly'), `${a - 1}`) : { texto: 'base muito pequena para comparar', bom: null });
+  const junto = (h('valor') || 0) + (valor || 0);
+  cartao(s, 9.9, 1.5, 2.8, 1.3, num(t('funcionarios_100')), 'Funcionários com HE 100%', { texto: `55% + 100%: ${reais(junto)} · DSR: ${reais(t('valor_dsr'))}`, bom: null });
+  const setor = d.q('he_tipos', 'setor_100');
+  grafRosca(s, 0.6, 3.0, 4.3, 3.3, 'Valor por setor', setor.map((x) => titulo(x.rotulo)), setor.map((x) => x.valor));
+  grafBarras(s, 5.05, 3.0, 3.6, 3.3, 'Horas por setor', setor.map((x) => titulo(x.rotulo).replace('Carregamento ', 'Carreg. ')), setor.map((x) => x.valor2), { cor: COR.azul, formato: '#,##0', rotuloSize: 8 });
+  // mesmo eixo da 55%: mes sem HE 100% aparece com zero
+  const eixo = d.q('horas_extras', 'mes').slice().sort((x, y) => x.ordem - y.ordem).map((x) => x.rotulo);
+  const m100 = d.q('he_tipos', 'mes_100');
+  grafBarras(s, 8.8, 3.0, 3.9, 3.3, 'Valor HE 100% por mês (R$)', eixo.map((r) => `${MES_ABREV[Number(r.slice(5)) - 1]}/${r.slice(2, 4)}`), eixo.map((r) => (m100.find((x) => x.rotulo === r) || {}).valor || 0), { horizontal: false, cor: COR.laranja, rotuloSize: 7 });
+
+  const pessoas = d.q('he_tipos', 'funcionario_100');
+  const paginas = pessoas.length ? fatias(pessoas, 18) : [];
+  paginas.forEach((pag, i) => {
+    const s2 = slideConteudo(pres, 'Hora extra 100% por funcionário', `${sub}${paginas.length > 1 ? ` · parte ${i + 1}/${paginas.length}` : ''}`);
+    tabela(s2, 0.6, 1.5, [{ titulo: 'Funcionário', w: 4.6 }, { titulo: 'Setor', w: 3.4 }, { titulo: 'Horas', w: 1.3, align: 'right' },
+      { titulo: 'Valor (R$)', w: 1.5, align: 'right' }, { titulo: '% do total', w: 1.3, align: 'right' }],
+    pag.map((x) => { const [st, nome] = x.rotulo.split(' | '); return [titulo(nome || st), titulo(nome ? st : ''), hhmm(x.valor2), num(x.valor, 2), pct(valor ? x.valor / valor : null, 1)]; }),
+    { fonte: 9, alturaLinha: 0.27 });
+  });
+}
+
 function movimentacao(pres, d) {
   slideImagem(pres, 'divisor_movimentacao.jpg');
   const operacional = d.pontos.filter((p) => !/SUPERVISOR|ASSISTENTE/i.test(p.cargo || ''));
@@ -557,6 +589,7 @@ async function main() {
   painel(pres, d);
   resumo(pres, d, analise);
   horasExtras(pres, d);
+  horasExtras100(pres, d);
   movimentacao(pres, d);
   cortes(pres, d);
   inventario(pres, d);
