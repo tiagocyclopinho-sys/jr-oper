@@ -4073,7 +4073,10 @@ const NAV_GRUPOS = [
       { tab: 'escala_convocacao', icon: '📣', label: 'Convocação Escala', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'escala_fechamento', icon: '✅', label: 'Fechamento', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'escala_disponibilidade', icon: '👥', label: 'Disponibilidade', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
-      { tab: 'escala_folgas', icon: '🌴', label: 'Folgas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] }
+      { tab: 'escala_folgas', icon: '🌴', label: 'Folgas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      // 7.1.1: as mesmas telas de Operação & Frota, que continuam lá.
+      { tab: 'reentregas', icon: '🔁', label: 'Reentregas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'troca_veiculos', icon: '🔄', label: 'Troca de Veículos', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] }
     ]
   },
   {
@@ -21132,15 +21135,20 @@ function renderCadSubTabContent() {
                 <option value="">Sem setor</option><option value="FRIO">Frio</option><option value="SECO">Seco</option>
               </select>
             </div>
+            <div><label class="block text-[10px] text-slate-400">Uso na escala</label>
+              <select id="cad-veic-uso" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">
+                ${Object.entries(ESC_USO_VEICULO).map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}
+              </select>
+            </div>
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
         ${cadBarraBusca('veiculos', 'Buscar por placa ou grupo...')}
         <div class="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table class="w-full text-left text-xs">
-            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Placa</th><th class="p-2">Grupo</th><th class="p-2">Setor</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
+            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Placa</th><th class="p-2">Grupo</th><th class="p-2">Setor</th><th class="p-2">Uso na escala</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${cadFiltrar('veiculos', v => [v.placa, v.tipo, v.modelo, v.situacao, v.setor]).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo||'—'}</td><td class="p-2 text-slate-300">${v.setor||'—'}</td><td class="p-2"><span class="${(v.situacao||'Ativo')==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('veiculos','${v.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${cadFiltrar('veiculos', v => [v.placa, v.tipo, v.modelo, v.situacao, v.setor, ESC_USO_VEICULO[v.uso_escala || 'ROTA']]).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo||'—'}</td><td class="p-2 text-slate-300">${v.setor||'—'}</td><td class="p-2 text-slate-300 whitespace-nowrap">${ESC_USO_VEICULO[v.uso_escala || 'ROTA'] || '—'}</td><td class="p-2"><span class="${(v.situacao||'Ativo')==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('veiculos','${v.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -21217,7 +21225,7 @@ function deleteMotivoDevolucaoCad(nome) {
 function handleCadMotoristaSubmit(e) { e.preventDefault(); const r=db.addMotorista(document.getElementById('cad-mot-erp').value,document.getElementById('cad-mot-nome').value,document.getElementById('cad-mot-cnh').value,'',document.getElementById('cad-mot-admissao')?.value||'',document.getElementById('cad-mot-desligamento')?.value||'',document.getElementById('cad-mot-uso')?.value||'ROTA'); if(r) alert('✅ Motorista cadastrado!'); renderApp(); }
 function handleCadAjudanteSubmit(e) { e.preventDefault(); db.addAjudante(document.getElementById('cad-aju-erp').value,document.getElementById('cad-aju-nome').value); alert('✅ Ajudante cadastrado!'); renderApp(); }
 function handleCadProdutoSubmit(e) { e.preventDefault(); db.addProduto(document.getElementById('cad-prod-cod').value,document.getElementById('cad-prod-desc').value,document.getElementById('cad-prod-cat').value,0); alert('✅ Produto cadastrado!'); renderApp(); }
-function handleCadVeiculoSubmit(e) { e.preventDefault(); db.addVeiculo(document.getElementById('cad-veic-placa').value,document.getElementById('cad-veic-tipo').value,document.getElementById('cad-veic-situacao').value,document.getElementById('cad-veic-setor').value); alert('✅ Veículo cadastrado!'); renderApp(); }
+function handleCadVeiculoSubmit(e) { e.preventDefault(); db.addVeiculo(document.getElementById('cad-veic-placa').value,document.getElementById('cad-veic-tipo').value,document.getElementById('cad-veic-situacao').value,document.getElementById('cad-veic-setor').value,document.getElementById('cad-veic-uso').value); alert('✅ Veículo cadastrado!'); renderApp(); }
 function handleCadClienteSubmit(e) { e.preventDefault(); const res = db.addCliente({ codigo: document.getElementById('cad-cli-cod')?.value, nome: document.getElementById('cad-cli-nome')?.value, cidade: document.getElementById('cad-cli-cidade')?.value, cnpj_cpf: document.getElementById('cad-cli-cnpj')?.value }); if (res) { showToast('Cliente cadastrado com sucesso!'); renderApp(); } }
 function handleCadRotaSubmit(e) { e.preventDefault(); const r=db.addRota(document.getElementById('cad-rota-nome').value); if(r) alert('✅ Rota cadastrada!'); renderApp(); }
 function handleCadCargaSubmit(e) { e.preventDefault(); db.addCargaRota(document.getElementById('cad-car-num').value,document.getElementById('cad-car-rota').value,document.getElementById('cad-car-mot').value,document.getElementById('cad-car-aju').value,document.getElementById('cad-car-veic').value); alert('✅ Carga cadastrada!'); renderApp(); }
@@ -21260,7 +21268,7 @@ function cadBarraBusca(colecao, placeholder) {
 }
 
 function cadCamposBusca(colecao) {
-  if (colecao === 'veiculos') return v => [v.placa, v.tipo, v.modelo, v.situacao, v.setor];
+  if (colecao === 'veiculos') return v => [v.placa, v.tipo, v.modelo, v.situacao, v.setor, ESC_USO_VEICULO[v.uso_escala || 'ROTA']];
   if (colecao === 'motoristas') return m => [m.id, m.nome, m.cnh, m.telefone, ESC_USO_ESCALA[m.uso_escala || 'ROTA']];
   return a => [a.id, a.nome];
 }
@@ -21308,6 +21316,7 @@ function abrirEdicaoCadastro(colecao, id) {
       <div><label class="block text-[10px] text-slate-400 mb-1">Placa *</label><input id="ed-cad-placa" required class="${cls}" value="${v(item.placa)}" oninput="forcarMaiuscula(this)"></div>
       <div><label class="block text-[10px] text-slate-400 mb-1">Grupo</label><select id="ed-cad-tipo" class="${cls}">${(grupos.includes(atual) || !atual ? grupos : [atual].concat(grupos)).map(g => `<option value="${g}" ${g === atual ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
       <div><label class="block text-[10px] text-slate-400 mb-1">Setor</label><select id="ed-cad-setor" class="${cls}"><option value="">Sem setor</option><option value="FRIO" ${item.setor === 'FRIO' ? 'selected' : ''}>Frio</option><option value="SECO" ${item.setor === 'SECO' ? 'selected' : ''}>Seco</option></select></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Uso na escala</label><select id="ed-cad-uso-veic" class="${cls}">${Object.entries(ESC_USO_VEICULO).map(([k, t]) => `<option value="${k}" ${(item.uso_escala || 'ROTA') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       <div><label class="block text-[10px] text-slate-400 mb-1">Situação</label><select id="ed-cad-situacao" class="${cls}"><option value="Ativo" ${(item.situacao || 'Ativo') === 'Ativo' ? 'selected' : ''}>Ativo</option><option value="Inativo" ${item.situacao === 'Inativo' ? 'selected' : ''}>Inativo</option></select></div>`;
   }
   const titulo = { motoristas: 'Motorista', ajudantes: 'Ajudante', veiculos: 'Veículo' }[colecao];
@@ -21360,6 +21369,7 @@ async function salvarEdicaoCadastro(e, colecao, id) {
     item.tipo = val('ed-cad-tipo');
     item.situacao = val('ed-cad-situacao') || 'Ativo';
     item.setor = val('ed-cad-setor') || null;
+    item.uso_escala = val('ed-cad-uso-veic') || 'ROTA';
   }
   db.carimbarEdicao(colecao, item);
   db.logAudit({ acao: 'EDICAO', modulo: colecao, registro_id: item.id, diff: { antes, depois: JSON.parse(JSON.stringify(item)) } });

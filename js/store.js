@@ -2560,8 +2560,8 @@ class Store {
     return item;
   }
 
-  addVeiculo(placa, tipo, situacao, setor) {
-    const item = { id: this.gerarIdUnico(), placa: placa.toUpperCase(), modelo: tipo, tipo: tipo.toUpperCase(), situacao: situacao || 'Ativo', setor: setor || null };
+  addVeiculo(placa, tipo, situacao, setor, uso_escala) {
+    const item = { id: this.gerarIdUnico(), placa: placa.toUpperCase(), modelo: tipo, tipo: tipo.toUpperCase(), situacao: situacao || 'Ativo', setor: setor || null, uso_escala: uso_escala || 'ROTA' };
     this.data.veiculos.push(item);
     this.save();
     return item;

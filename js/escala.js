@@ -55,6 +55,8 @@ const ESC_JANELA_VIAGEM_DIAS = 20;
 // Uso do motorista na escala (migration 69). Nem todo motorista cadastrado faz
 // rota, mas quem tem infração não pode sair do cadastro: as outras abas não mudam.
 const ESC_USO_ESCALA = { ROTA: 'Rota', TRANSBORDO: 'Só transbordo', FIXA: 'Rota fixa', NAO: 'Não faz viagem' };
+// Veículo de serviço fixo (migration 70) não entra nos disponíveis, mas segue nas sugestões.
+const ESC_USO_VEICULO = { ROTA: 'Rota', FIXA: 'Rota fixa' };
 
 function escEsc(v) {
   return String(v === null || v === undefined ? '' : v)
@@ -2099,7 +2101,7 @@ function escDisponibilidade(dataIso) {
   const veiculo = placa => {
     const k = escNorm(placa);
     const cad = ((typeof db !== 'undefined' && db.data.veiculos) || []).find(v => escNorm(v.placa) === k) || {};
-    const base = { nome: placa, tipo: cad.tipo || cad.modelo || '', setor: cad.setor || '' };
+    const base = { nome: placa, tipo: cad.tipo || cad.modelo || '', setor: cad.setor || '', uso: cad.uso_escala || 'ROTA' };
     if (parados.has(k)) return Object.assign(base, { sit: parados.get(k).sit, detalhe: parados.get(k).texto, volta: '' });
     if (placasEscaladas.has(k)) return Object.assign(base, { sit: 'ESCALADO', detalhe: placasEscaladas.get(k), volta: '' });
     const itens = ocupacao.filter(o => o.placa === k);
@@ -2117,7 +2119,7 @@ function escDisponibilidade(dataIso) {
   const ordenar = arr => arr.sort((a, b) => (ESC_DISP[a.sit].ordem - ESC_DISP[b.sit].ordem) || a.nome.localeCompare(b.nome, 'pt-BR'));
   // Passeio, utilitário, carreta e cavalo não servem de substituto na largada.
   // Carreta e cavalo, com os motoristas de carreta, ficam na aba Transbordo.
-  const veiculos = listas.placas.map(veiculo);
+  const veiculos = listas.placas.map(veiculo).filter(v => v.uso !== 'FIXA');
   const fazRota = v => !['PASSEIO', 'UTILITARIO', 'CARRETA', 'CAVALO'].includes(escNorm(v.tipo));
   const fazTransbordo = v => ['CARRETA', 'CAVALO'].includes(escNorm(v.tipo));
   return {

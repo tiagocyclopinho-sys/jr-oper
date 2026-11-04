@@ -7,7 +7,7 @@
 window.JR_CONFIG = {
   // Nome da Aplicação e Versão
   appName: "JR Oper - Gestão Logística Integrada",
-  appVersion: "7.1.0",
+  appVersion: "7.1.1",
   
   // Modo de Operação: 'local' (LocalStorage no navegador) ou 'cloud' (Supabase/Postgres)
   mode: "cloud",
