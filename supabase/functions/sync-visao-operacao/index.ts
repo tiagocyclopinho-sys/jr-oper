@@ -181,6 +181,39 @@ async function soIndicadores(token: string, modelo: string, filtro: string, medi
   return linhaIndicadores(rows[0], j);
 }
 
+// Cargas com nota de devolucao no WinThor, de 10 dias antes do periodo ate hoje (no
+// maximo 4 meses depois): a nota so entra depois da tratativa, as vezes no mes
+// seguinte ou alem. Fica fora do congelamento: a rodada diaria regrava este quadro
+// dos ultimos meses (atualizarCargaWin).
+const MESES_CARGA_WIN = 4;
+function quadroCargaWin(t: string, am: number) {
+  const a = Math.floor(am / 100), m = am % 100;
+  const h = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+  const limite = iso(a, m + MESES_CARGA_WIN + 1, 0);
+  return quadro(t, "devolucao", "carga_amplo", "f_DEVOLUCAO[NUMCAR]",
+    datas("dim_CALENDARIO[Data]", { de: iso(a, m - 1, 16), ate: h < limite ? h : limite }),
+    ["[Vl Devolução]", "[Qtd Devolução]"]);
+}
+async function atualizarCargaWin(t: string, am: number) {
+  try {
+    const agora = new Date().toISOString();
+    const quad = (await quadroCargaWin(t, am)).map((q) => ({ ano_mes: am, secao: "devolucao", ...q, atualizado_em: agora }));
+    const { error: e1 } = await db.from("vo_quadros").delete().eq("ano_mes", am).eq("secao", "devolucao").eq("quadro", "carga_amplo");
+    if (e1) throw e1;
+    if (quad.length) { const { error } = await db.from("vo_quadros").insert(quad); if (error) throw error; }
+    return "ok";
+  } catch (e: any) {
+    return `erro: ${e?.message ?? e}`;
+  }
+}
+
+// [Qtd HE] e HHHMMSS; passa para horas decimais
+const horas = (v: any) => {
+  const n = num(v);
+  if (n === null) return null;
+  return Math.floor(n / 10000) + Math.floor((n % 10000) / 100) / 60 + (n % 100) / 3600;
+};
+
 const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<Resultado>> = {
   async cortes(t, am, soInd) {
     const j = janelas(am).fech, f = datas("dim_Calendario[DATA]", j);
@@ -238,13 +271,9 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       ...await quadro(t, "devolucao", "setor", "dim_PCSUPERV[SETOR I]", f, ["[Vl Devolução]"]),
       // devolucao e faturamento por setor do supervisor: meta de 0,20% por seco x frio
       ...await quadro(t, "devolucao", "setor_fat", "dim_PCSUPERV[SETOR I]", f, ["[Vl Fat Bruto]", "[Vl Devolução]"]),
-      // Comparativo com o Jr-Oper (26 -> 25): por responsavel e por carga. A lista de
-      // cargas vai de 10 dias antes a 20 depois, porque a nota de devolucao entra no
-      // WinThor alguns dias depois da ocorrencia aberta no SAC.
+      // Comparativo com o Jr-Oper (26 -> 25): por responsavel e por carga.
       ...await quadro(t, "devolucao", "resp_fech", `f_DEVOLUCAO["RESP DEV"]`, ff, ["[Vl Devolução]", "[Qtd Devolução]"]),
-      ...await quadro(t, "devolucao", "carga_amplo", "f_DEVOLUCAO[NUMCAR]",
-        datas("dim_CALENDARIO[Data]", { de: iso(Math.floor(am / 100), am % 100 - 1, 16), ate: iso(Math.floor(am / 100), am % 100 + 1, 15) }),
-        ["[Vl Devolução]", "[Qtd Devolução]"]),
+      ...await quadroCargaWin(t, am),
       ...await quadro(t, "devolucao", "carga_fech", "f_DEVOLUCAO[NUMCAR]", ff, ["[Vl Devolução]", "[Qtd Devolução]"]),
     ];
     return { ind, quad };
@@ -262,6 +291,17 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       ...await quadro(t, "despesa", "usuario", "dNome[Nome]", f, ["[Valor Total]", "[Qtd Total]"], TOP),
       ...await quadro(t, "despesa", "dia", "'dCalendário'[Data]", f, ["[Valor Total]"]),
     ];
+    // Para o filtro por clique (departamento <-> usuario): rotulo "CHAVE | DETALHE"
+    const pares = async (nome: string, c1: string, c2: string) => {
+      const rows = await dax(t, "despesa", `EVALUATE SUMMARIZECOLUMNS(${c1}, ${c2}, ${f}, "v", [Valor Total], "q", [Qtd Total])`);
+      const k1 = c1.replace(/'/g, ""), k2 = c2.replace(/'/g, "");
+      rows.filter((r) => r["[v]"] !== null)
+        .sort((x, y) => (y["[v]"] ?? 0) - (x["[v]"] ?? 0))
+        .forEach((r, i) => quad.push({ quadro: nome, rotulo: `${rot(r[k1])} | ${rot(r[k2])}`, ordem: i + 1, valor: num(r["[v]"]), valor2: num(r["[q]"]) }));
+    };
+    await pares("usuario_dep", "dNome[Dep]", "dNome[Nome]");
+    await pares("dep_dia", "dNome[Dep]", "'dCalendário'[Data]");
+    await pares("usuario_dia", "dNome[Nome]", "'dCalendário'[Data]");
     return { ind, quad };
   },
 
@@ -282,6 +322,16 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       ...await quadro(t, "abastecimento", "combustivel", "f_Abastecimento[Item]", f, ["[Valor Total]", "[Qtd Total]"]),
       ...await quadro(t, "abastecimento", "interno_externo", "f_Abastecimento[Int/Ext]", f, ["[Valor Total]", "[Qtd Total]"]),
     ];
+    // Para o filtro por clique (posto x combustivel x interno/externo, com o dia):
+    // rotulo "POSTO | COMBUSTIVEL | INT/EXT | data", valor = R$, valor2 = litros
+    const cruz = await dax(t, "abastecimento", `EVALUATE SUMMARIZECOLUMNS(f_Abastecimento[Fornecedor], f_Abastecimento[Item],
+      f_Abastecimento[Int/Ext], d_Calendario[Data], ${f}, "v", [Valor Total], "l", [Qtd Total])`);
+    cruz.filter((r) => r["[v]"] !== null)
+      .sort((x, y) => (y["[v]"] ?? 0) - (x["[v]"] ?? 0))
+      .forEach((r, i) => quad.push({
+        quadro: "cruzado_dia", ordem: i + 1, valor: num(r["[v]"]), valor2: num(r["[l]"]),
+        rotulo: [r["f_Abastecimento[Fornecedor]"], r["f_Abastecimento[Item]"], r["f_Abastecimento[Int/Ext]"], r["d_Calendario[Data]"]].map(rot).join(" | "),
+      }));
     return { ind, quad };
   },
 
@@ -318,12 +368,6 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
   async horas_extras(t, am, soInd) {
     const a = Math.floor(am / 100), m = am % 100;
     const j = janelas(am).fech;
-    // [Qtd HE] e HHHMMSS; passa para horas decimais
-    const horas = (v: any) => {
-      const n = num(v);
-      if (n === null) return null;
-      return Math.floor(n / 10000) + Math.floor((n % 10000) / 100) / 60 + (n % 100) / 3600;
-    };
     const tipo = (t55: boolean) => `'fHora Extra'[HORA EXTRA] = "HORA EXTRA ${t55 ? "55" : "100"}%"`;
     const mes = (aa: number, mm: number) => `'fHora Extra'[MÊS] = DATE(${aa},${mm},1)`;
     const linha = async (filtros: string) => {
@@ -365,6 +409,58 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       const d = String(r["fHora Extra[MÊS]"]).slice(0, 7);
       quad.push({ quadro: "mes", rotulo: d, ordem: Number(d.replace("-", "")), valor: num(r["[vl]"]), valor2: horas(r["[qtd]"]) });
     });
+    return { ind, quad };
+  },
+
+  // HE 100% e DSR para a visao por tipo. Secao separada de horas_extras: regravar
+  // estes numeros nao mexe nos totais congelados da HE 55%.
+  async he_tipos(t, am, soInd) {
+    const a = Math.floor(am / 100), m = am % 100;
+    const j = janelas(am).fech;
+    const mes = (aa: number, mm: number) => `'fHora Extra'[MÊS] = DATE(${aa},${mm},1)`;
+    const TIPO = "'fHora Extra'[HORA EXTRA]", SETOR = "'fHora Extra'[SETOR]", PESSOA = "'fHora Extra'[FUNCIONÁRIO]";
+    const SUF: Record<string, string> = { "HORA EXTRA 100%": "100", "DSR": "dsr" };
+    const porTipo = async (aa: number, mm: number) => {
+      const rows = await dax(t, "hora_extra", `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(${TIPO}, "qtd", [Qtd HE], "vl", [Valor HE],
+        "pessoas", DISTINCTCOUNT(${PESSOA})), ${mes(aa, mm)})`);
+      const o: Record<string, any> = {};
+      for (const r of rows) o[SUF[r["fHora Extra[HORA EXTRA]"]] ?? "55"] = r;
+      return o;
+    };
+    const atual = await porTipo(a, m), ly = await porTipo(a - 1, m);
+    const junto = (await dax(t, "hora_extra", `EVALUATE CALCULATETABLE(ROW("p", DISTINCTCOUNT(${PESSOA})), ${mes(a, m)},
+      ${TIPO} IN {"HORA EXTRA 55%", "HORA EXTRA 100%"})`))[0] ?? {};
+    const ind: Ind[] = [
+      { indicador: "valor_100", valor: num(atual["100"]?.["[vl]"]) ?? 0 }, { indicador: "horas_100", valor: horas(atual["100"]?.["[qtd]"]) ?? 0 },
+      { indicador: "funcionarios_100", valor: num(atual["100"]?.["[pessoas]"]) ?? 0 }, { indicador: "valor_dsr", valor: num(atual["dsr"]?.["[vl]"]) ?? 0 },
+      { indicador: "valor_100_ly", valor: num(ly["100"]?.["[vl]"]) }, { indicador: "horas_100_ly", valor: horas(ly["100"]?.["[qtd]"]) },
+      { indicador: "valor_dsr_ly", valor: num(ly["dsr"]?.["[vl]"]) }, { indicador: "funcionarios_junto", valor: num(junto["[p]"]) },
+    ].map((i) => ({ ...i, de: j.de, ate: j.ate }));
+    if (soInd) return { ind, quad: [] };
+
+    const naoE55 = `${TIPO} <> "HORA EXTRA 55%"`;
+    const grupo = async (colunas: string, filtros: string) => {
+      const rows = await dax(t, "hora_extra", `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(${colunas}, "qtd", [Qtd HE], "vl", [Valor HE]), ${filtros})`);
+      return rows.filter((r) => r["[vl]"] !== null && SUF[r["fHora Extra[HORA EXTRA]"]]).sort((x, y) => y["[vl]"] - x["[vl]"]);
+    };
+    const quad: Quad[] = [];
+    const ordem: Record<string, number> = {};
+    const prox = (q: string) => (ordem[q] = (ordem[q] ?? 0) + 1);
+    for (const r of await grupo(`${SETOR}, ${TIPO}`, `${mes(a, m)}, ${naoE55}`)) {
+      const q = `setor_${SUF[r["fHora Extra[HORA EXTRA]"]]}`;
+      quad.push({ quadro: q, rotulo: rot(r["fHora Extra[SETOR]"]), ordem: prox(q), valor: num(r["[vl]"]), valor2: horas(r["[qtd]"]) });
+    }
+    for (const r of await grupo(`${SETOR}, ${PESSOA}, ${TIPO}`, `${mes(a, m)}, ${naoE55}`)) {
+      const q = `funcionario_${SUF[r["fHora Extra[HORA EXTRA]"]]}`;
+      quad.push({ quadro: q, rotulo: `${rot(r["fHora Extra[SETOR]"])} | ${rot(r["fHora Extra[FUNCIONÁRIO]"])}`, ordem: prox(q), valor: num(r["[vl]"]), valor2: horas(r["[qtd]"]) });
+    }
+    // Ultimos 12 meses
+    const ini = new Date(Date.UTC(a, m - 12, 1));
+    for (const r of await grupo(`'fHora Extra'[MÊS], ${TIPO}`,
+      `${naoE55}, 'fHora Extra'[MÊS] >= DATE(${ini.getUTCFullYear()},${ini.getUTCMonth() + 1},1), 'fHora Extra'[MÊS] <= DATE(${a},${m},1)`)) {
+      const d = String(r["fHora Extra[MÊS]"]).slice(0, 7);
+      quad.push({ quadro: `mes_${SUF[r["fHora Extra[HORA EXTRA]"]]}`, rotulo: d, ordem: Number(d.replace("-", "")), valor: num(r["[vl]"]), valor2: horas(r["[qtd]"]) });
+    }
     return { ind, quad };
   },
 
@@ -482,6 +578,11 @@ Deno.serve(async (req: Request) => {
       }
       detalhe[am] = await capturar(token, am, "completo");
       await marcar(am, false);
+      // Meses ja fechados: so a lista de cargas do WinThor (notas que entraram depois)
+      for (let k = 0, mm = mesAnterior(ant); k < MESES_CARGA_WIN - 1; k++, mm = mesAnterior(mm)) {
+        detalhe[mm] = { carga_win: await atualizarCargaWin(token, mm) };
+      }
+      if ((await statusDe(ant)) === "fechado") detalhe[ant].carga_win = await atualizarCargaWin(token, ant);
     }
     const falhas = Object.values(detalhe).some((d) => typeof d === "object" && Object.values(d).some((s: any) => String(s).startsWith("erro")));
     await db.from("vo_sync_log").update({
