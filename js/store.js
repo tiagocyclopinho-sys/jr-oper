@@ -1332,7 +1332,7 @@ class Store {
       this.data.ocorrencias_rota.sort((a, b) => new Date(b.data_chamado || b.criado_em || b.data || 0) - new Date(a.data_chamado || a.criado_em || a.data || 0));
     }
     if (Array.isArray(this.data.controle_viagens)) {
-      this.data.controle_viagens.sort((a, b) => new Date(b.data_saida || b.data_viagem || b.data || b.criado_em || 0) - new Date(a.data_saida || a.data_viagem || a.data || a.criado_em || 0));
+      this.data.controle_viagens.sort((a, b) => this._msDaViagem(b) - this._msDaViagem(a));
     }
     if (Array.isArray(this.data.ocorrencias_viagens)) {
       this.data.ocorrencias_viagens.sort((a, b) => new Date(b.data || b.criado_em || 0) - new Date(a.data || a.criado_em || 0));
@@ -2627,7 +2627,21 @@ class Store {
   getControleViagens() {
     return (this.data.controle_viagens || [])
       .filter(x => !x.is_deleted)
-      .sort((a, b) => new Date(b.data_saida || b.data_viagem || b.data || b.criado_em || 0) - new Date(a.data_saida || a.data_viagem || a.data || a.criado_em || 0));
+      .sort((a, b) => this._msDaViagem(b) - this._msDaViagem(a));
+  }
+
+  // new Date('19/08/2026') é inválido e devolve NaN, que bagunça a ordenação:
+  // viagem antiga caía no meio das recentes (04/11/2026).
+  _msDaViagem(v) {
+    const bruto = String(v.data_saida || v.data_viagem || v.data || v.criado_em || '').trim();
+    const ms = new Date(this._dataViagemIso(bruto)).getTime();
+    return isNaN(ms) ? 0 : ms;
+  }
+
+  // A importação da escala entrega dd/mm/aaaa; o banco guarda aaaa-mm-dd.
+  _dataViagemIso(valor) {
+    const m = String(valor || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    return m ? `${m[3]}-${m[2]}-${m[1]}` : (valor || '');
   }
 
   // Uma carga -> a viagem dela. Montado UMA vez por chamada de getDevolucoes():
@@ -2667,11 +2681,11 @@ class Store {
       // editar a viagem, junto com o resto do preenchimento.
       ajudante_2: String(viagemData.ajudante_2 || '').toUpperCase().trim(),
       setor: String(viagemData.setor || 'FRIO').toUpperCase().trim(),
-      data_saida: viagemData.data_saida || '',
+      data_saida: this._dataViagemIso(viagemData.data_saida),
       hora_saida: viagemData.hora_saida || '',
-      data_entrega: viagemData.data_entrega || '',
+      data_entrega: this._dataViagemIso(viagemData.data_entrega),
       hora_entrega: viagemData.hora_entrega || '',
-      data_retorno: viagemData.data_retorno || '',
+      data_retorno: this._dataViagemIso(viagemData.data_retorno),
       hora_retorno: viagemData.hora_retorno || '',
       status_viagem: (viagemData.status_viagem !== undefined && viagemData.status_viagem !== null ? String(viagemData.status_viagem) : '').toUpperCase().trim(),
       fusion: (viagemData.fusion !== undefined && viagemData.fusion !== null ? String(viagemData.fusion) : '').toUpperCase().trim(),

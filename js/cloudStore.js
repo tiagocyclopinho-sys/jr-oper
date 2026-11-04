@@ -758,7 +758,15 @@ class CloudStore {
   // A repetida vai para a aba "⚠️ Conflitos" até alguém resolver.
   async _enviarViagensUmaAUma(data) {
     let tudoOk = true;
+    // Viagem que colidiu fica 30 minutos sem reenviar. Sem isso, cada ciclo
+    // repetia a recusa de todas: ~370 por minuto em 04/11/2026.
+    if (!this._viagensColididas) this._viagensColididas = new Map();
+    const agora = Date.now();
     for (const registro of data) {
+      if (agora - (this._viagensColididas.get(String(registro.id)) || 0) < 30 * 60 * 1000) {
+        tudoOk = false;
+        continue;
+      }
       try {
         const response = await fetch(`${this.config.url}/rest/v1/controle_viagens`, {
           method: 'POST',
@@ -768,6 +776,7 @@ class CloudStore {
         if (response.ok) continue;
         tudoOk = false;
         const errBody = await response.text();
+        if (this._ehColisaoUnica(errBody)) this._viagensColididas.set(String(registro.id), agora);
         this._registrarFalhaSync('controle_viagens', response.status, errBody);
         this._checkConflitoUnicidade('controle_viagens', errBody, [registro]).catch(() => {});
       } catch(err) {
@@ -3429,7 +3438,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "veiculos-uso-escala-7.1.1";
+CloudStore.BUILD = "guarda-viagens-cache-7.1.2";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
