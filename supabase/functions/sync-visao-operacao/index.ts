@@ -464,6 +464,50 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
     return { ind, quad };
   },
 
+  // Metas por setor do CD (frio x seco), de 26 a 25: devolucao de carregamento e corte
+  // da mesa sobre o faturamento do setor. Secao propria: regravar nao mexe em horas,
+  // cortes nem devolucao ja congelados. O modelo Corte nao tem setor: o corte herda o
+  // setor do RCA pelo supervisor do faturamento (mesmo criterio do denominador).
+  async metas_setor(t, am, soInd) {
+    const a = Math.floor(am / 100), m = am % 100;
+    const j = janelas(am).fech, ff = datas("dim_CALENDARIO[Data]", j), fc = datas("dim_Calendario[DATA]", j);
+    const SETOR = "dim_PCSUPERV[SETOR I]";
+    const setorDe = (s: any) => (/SECO/i.test(String(s)) ? "seco" : /FRIO/i.test(String(s)) ? "frio" : null);
+    const MOTIVOS = ["MERCADORIA NAO CARREGADA", "DATA PROXIMA DA VALIDADE", "PESO ERRADO", "INVERSAO MERCADORIA EXPEDICAO"];
+    const soma: Record<string, number> = { fat_frio: 0, fat_seco: 0, dev_frio: 0, dev_seco: 0, corte_frio: 0, corte_seco: 0, corte_sem_setor: 0 };
+    for (const r of await dax(t, "devolucao", `EVALUATE SUMMARIZECOLUMNS(${SETOR}, ${ff}, "f", [Vl Fat Bruto])`)) {
+      const s = setorDe(r[SETOR]);
+      if (s) soma[`fat_${s}`] += num(r["[f]"]) ?? 0;
+    }
+    const motivos: Record<string, number> = {};
+    const dev = await dax(t, "devolucao", `EVALUATE CALCULATETABLE(SUMMARIZECOLUMNS(${SETOR}, f_DEVOLUCAO[MOTIVO], ${ff}, "v", [Vl Devolução]),
+      f_DEVOLUCAO[MOTIVO] IN {${MOTIVOS.map((x) => `"${x}"`).join(", ")}})`);
+    for (const r of dev) {
+      const s = setorDe(r[SETOR]), v = num(r["[v]"]) ?? 0;
+      if (!s) continue;
+      soma[`dev_${s}`] += v;
+      const k = `${s.toUpperCase()} | ${rot(r["f_DEVOLUCAO[MOTIVO]"])}`;
+      motivos[k] = (motivos[k] ?? 0) + v;
+    }
+    // RCA -> setor: o de maior faturamento nos ultimos meses (cobre RCA sem venda no periodo)
+    const mapa = await dax(t, "devolucao", `EVALUATE SUMMARIZECOLUMNS(f_FATURAMENTO[CODUSUR], ${SETOR},
+      ${datas("dim_CALENDARIO[Data]", { de: iso(a, m - 4, 26), ate: j.ate })}, "f", [Vl Fat Bruto])`);
+    const doRca: Record<string, { s: string; f: number }> = {};
+    for (const r of mapa) {
+      const rca = String(r["f_FATURAMENTO[CODUSUR]"]), s = setorDe(r[SETOR]), f = num(r["[f]"]) ?? 0;
+      if (s && (!doRca[rca] || f > doRca[rca].f)) doRca[rca] = { s, f };
+    }
+    for (const r of await dax(t, "corte", `EVALUATE SUMMARIZECOLUMNS(f_PCCORTEI[CODUSUR], ${fc}, "v", [Valor Corte])`)) {
+      const s = doRca[String(r["f_PCCORTEI[CODUSUR]"])]?.s;
+      soma[s ? `corte_${s}` : "corte_sem_setor"] += num(r["[v]"]) ?? 0;
+    }
+    const ind: Ind[] = Object.entries(soma).map(([indicador, valor]) => ({ indicador, valor, de: j.de, ate: j.ate }));
+    if (soInd) return { ind, quad: [] };
+    const quad: Quad[] = Object.entries(motivos).sort((x, y) => y[1] - x[1])
+      .map(([rotulo, valor], i) => ({ quadro: "dev_motivo", rotulo, ordem: i + 1, valor }));
+    return { ind, quad };
+  },
+
   async rastreamento(t, am, soInd) {
     const j = janelas(am).mes, f = datas("'dCalendário'[Data]", j);
     const ind = await soIndicadores(t, "cco", f, { ocorrencias: "[Ocorrência Moov]", sem_vinculo: "[Ocorrências Sem Vínculo]" }, j);
