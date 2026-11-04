@@ -201,6 +201,9 @@ partir do branch `main` do GitHub.
 - 7.1.7 (04/11): he_inventario em vo_quadros, gravado à mão só para 202610 (valor = HE 100%,
   valor2 = horas, valor3 = DSR). Fica fora de SECOES: a coleta não apaga. Já está dentro da
   HE 100% do Power BI; a aba "sem inventário" subtrai por funcionário e setor.
+- 7.1.9 (04/11): Taxa de Completude e % Responsabilidade no S.A.C. A completude mede só a abertura (campos + foto, vídeo ou anexo de NF). A regra fica
+  na view vo_sac_indicadores (migration 72), com a lista do que falta; mudou a regra no
+  Dashboard (js/app.js), mude a view junto. % Responsabilidade: `temResponsavel()`. Metas: completude ≥ 90%, responsabilidade ≥ 95%.
 
 ## Escala de embarques (6.10.0, 30/10/2026)
 - Menu Escala (Matrizes, Convocação Escala, Fechamento) em `js/escala.js`;
