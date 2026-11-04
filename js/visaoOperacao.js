@@ -323,15 +323,14 @@ function metasOficiais(d) {
     add('Hora extra', titulo(x.rotulo), `${hhmm(x.valor2)} h`, `≤ ${lim} h`, (x.valor2 || 0) <= lim);
   }
   const pg = v('devolucao', 'pct_dev_fat');
-  if (pg !== null) add('Devolução', 'Geral, % do faturamento', pct(pg, 2), '≤ 0,20%', pg <= META_DEV);
-  for (const x of devolucaoPorSetor(d)) add('Devolução', `${x.setor}, % do faturamento`, pct(x.pct, 2), '≤ 0,20%', x.pct <= META_DEV);
+  if (pg !== null) add('Devolução Geral', '% do faturamento', pct(pg, 2), '≤ 0,20%', pg <= META_DEV);
+  const cd = metasSetorCD(d);
+  for (const x of devolucaoPorSetor(d)) add('Devolução por Setor', `${x.setor}, % do faturamento`, pct(x.pct, 2), '≤ 0,20%', x.pct <= META_DEV);
+  for (const x of cd) if (x.pDev !== null) add('Devolução por Setor', `Carregamento ${x.setor}, % do faturamento do setor`, `${pct(x.pDev, 3)} · ${faixaMeta(x.pDev, META_DEV_CARREG).nome}`, '≤ 0,050%', x.pDev <= META_DEV_CARREG.limite);
   const corte = v('cortes', 'valor'), fat = v('devolucao', 'faturamento_fech');
-  if (corte !== null && fat) add('Corte', 'Valor cortado ÷ faturado', pct(corte / fat, 3), '≤ 0,10%', corte / fat <= META_CORTE);
-  if (corte !== null) add('Corte', 'Valor cortado no período', reais(corte), `≤ ${reais(META_CORTE_RS)}`, corte <= META_CORTE_RS);
-  for (const x of metasSetorCD(d)) {
-    if (x.pDev !== null) add('Devolução', `Carregamento ${x.setor}, % do faturamento do setor`, `${pct(x.pDev, 3)} · ${faixaMeta(x.pDev, META_DEV_CARREG).nome}`, '≤ 0,050%', x.pDev <= META_DEV_CARREG.limite);
-    if (x.pCorte !== null) add('Corte', `Mesa ${x.setor}, % do faturamento do setor`, `${pct(x.pCorte, 3)} · ${faixaMeta(x.pCorte, META_CORTE_MESA).nome}`, '≤ 0,100%', x.pCorte <= META_CORTE_MESA.limite);
-  }
+  if (corte !== null && fat) add('Corte Geral', 'Valor cortado ÷ faturado', pct(corte / fat, 3), '≤ 0,10%', corte / fat <= META_CORTE);
+  if (corte !== null) add('Corte Geral', 'Valor cortado no período', reais(corte), `≤ ${reais(META_CORTE_RS)}`, corte <= META_CORTE_RS);
+  for (const x of cd) if (x.pCorte !== null) add('Corte por Setor', `Mesa ${x.setor}, % do faturamento do setor`, `${pct(x.pCorte, 3)} · ${faixaMeta(x.pCorte, META_CORTE_MESA).nome}`, '≤ 0,100%', x.pCorte <= META_CORTE_MESA.limite);
   const fm = v('devolucao', 'faturamento');
   if (fm !== null) add('Faturamento', 'Faturado no mês', reais(fm), `≥ ${reais(META_FAT)}`, fm >= META_FAT);
   const dp = v('despesa', 'valor'), dly = v('despesa', 'valor_ly');
