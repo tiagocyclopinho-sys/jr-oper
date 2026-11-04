@@ -459,12 +459,12 @@ const corta = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…
 // (quando nao vem, usa fmt(valor)). Nenhum grafico sai sem rotulo.
 
 // grupo: torna as barras clicaveis (filtro da secao); item.filtro e o valor do filtro.
-function barrasH(itens, { fmt, cor = CH.azul, cores = null, larguraRot = 190, vazio = 'Sem dados no período', W = 580, grupo = '' } = {}) {
+function barrasH(itens, { fmt, cor = CH.azul, cores = null, larguraRot = 190, vazio = 'Sem dados no período', W = 580, grupo = '', folga = 150 } = {}) {
   if (!itens.length) return `<p class="vazio">${vazio}</p>`;
   const hb = 20, gap = 8, top = 6;
   const H = top + itens.length * (hb + gap);
   const max = Math.max(...itens.map((i) => Math.abs(i.valor || 0)), 1);
-  const util = Math.max(W - larguraRot - 150, 40);
+  const util = Math.max(W - larguraRot - folga, 40);
   const linhas = itens.map((i, k) => {
     const y = top + k * (hb + gap);
     const w = Math.max((Math.abs(i.valor || 0) / max) * util, 2);
@@ -738,14 +738,29 @@ function gerarHtml(d, a, opcoes = {}) {
     const topKg = op.filter((p) => p.kg_total).sort((x, y) => y.kg_total - x.kg_total).slice(0, 15);
     const topPt = op.filter((p) => p.pontuacao).sort((x, y) => y.pontuacao - x.pontuacao).slice(0, 15);
     const doSetorM = (st) => (st ? op.filter((p) => (p.setor || '').toUpperCase() === st) : op);
+    // Quem menos: kg nao se compara entre cargos (empilhadeira move 10x o movimentador), entao
+    // cada um e medido contra a mediana do proprio cargo e setor. Quem nao tem kg vem primeiro.
+    const cargoTxt = (p) => titulo(p.cargo || 'Sem cargo').replace(/ De Mercadoria| de Mercadoria/, '');
+    const grupoKg = (p) => `${(p.setor || '').toUpperCase()}|${p.cargo}`;
+    const medKg = {};
+    for (const p of op) if (p.kg_total) (medKg[grupoKg(p)] ||= []).push(Number(p.kg_total));
+    const relKg = (p) => { const m = mediana(medKg[grupoKg(p)] || []); return p.kg_total && m ? p.kg_total / m : 0; };
+    const corRel = (r) => (r < 0.5 ? CH.ruim : r < 0.8 ? CH.ambar : CH.azul);
     const blocoMov = (st) => {
       const l = doSetorM(st), kg = soma(l, 'kg_total');
       const tk = l.filter((p) => p.kg_total).sort((x, y) => y.kg_total - x.kg_total).slice(0, 15);
       const tp = l.filter((p) => p.pontuacao).sort((x, y) => y.pontuacao - x.pontuacao).slice(0, 15);
+      const bk = l.slice().sort((x, y) => relKg(x) - relKg(y)).slice(0, 15);
+      const bp = l.filter((p) => p.pontuacao).sort((x, y) => x.pontuacao - y.pontuacao).slice(0, 15);
+      const medP = mediana(l.filter((p) => p.pontuacao).map((p) => Number(p.pontuacao)));
       return {
         kpis: `<div class="kpis">${kpi(num(l.length), st ? `Colaboradores · ${st}` : 'Colaboradores')}${kpi(`${num(kg)} kg`, 'Total movimentado', st ? { texto: `${pct(kgTot ? kg / kgTot : null, 1)} do total`, bom: null } : null)}${kpi(num(soma(l, 'qtd_os')), 'Ordens de serviço')}${kpi(num(soma(l, 'qtd_apanhos')), 'Apanhos')}</div>`,
         listas: `<div class="grade g2">${card(`Quem mais movimentou (kg, top 15)${st ? ` · ${st}` : ''}`, barrasH(tk.map((p) => ({ rotulo: titulo(p.nome), valor: p.kg_total, texto: `${num(p.kg_total)} kg · ${pct(kg ? p.kg_total / kg : null, 1)}` })), { fmt: N0, larguraRot: 200 }))}
-          ${card(`Maiores pontuações (top 15)${st ? ` · ${st}` : ''}`, barrasH(tp.map((p) => ({ rotulo: titulo(p.nome), valor: p.pontuacao, texto: num(p.pontuacao, 1) })), { fmt: N0, cor: CH.roxo, larguraRot: 200 }))}</div>`,
+          ${card(`Maiores pontuações (top 15)${st ? ` · ${st}` : ''}`, barrasH(tp.map((p) => ({ rotulo: titulo(p.nome), valor: p.pontuacao, texto: num(p.pontuacao, 1) })), { fmt: N0, cor: CH.roxo, larguraRot: 200 }))}</div>
+        <h3 class="sub">Onde atuar</h3>
+        <div class="grade g1">${card(`Quem menos movimentou (15 menores)${st ? ` · ${st}` : ''}`, barrasH(bk.map((p) => { const r = relKg(p); return { rotulo: titulo(p.nome), valor: r * 100, cor: corRel(r), texto: `${p.kg_total ? `${num(p.kg_total)} kg · ${pct(r, 0)} da mediana do cargo` : 'sem kg no período'} · ${cargoTxt(p)} ${titulo(p.setor || '')}` }; }), { fmt: N0, larguraRot: 260, W: 1180, folga: 420 }))}</div>
+        <div class="grade g1">${card(`Quem menos pontuou (15 menores)${st ? ` · ${st}` : ''}`, barrasH(bp.map((p) => { const r = medP ? p.pontuacao / medP : 1; return { rotulo: titulo(p.nome), valor: p.pontuacao, cor: corRel(r), texto: `${num(p.pontuacao, 1)} · ${pct(r, 0)} da mediana · ${cargoTxt(p)} ${titulo(p.setor || '')}` }; }), { fmt: N0, larguraRot: 260, W: 1180, folga: 420 }))}</div>
+        <p class="nota">O kg é comparado com a mediana do mesmo cargo e setor, porque empilhadeira, conferente e movimentador movem volumes muito diferentes; a pontuação é comparada com a mediana geral. Vermelho abaixo de 50% da mediana, amarelo abaixo de 80%. Antes de agir, confira férias, atestado, afastamento e admissão no mês: esta lista não enxerga isso.</p>`,
       };
     };
     const vals = ['', 'FRIO', 'SECO'];
