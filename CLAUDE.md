@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 62).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 63).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -225,6 +225,11 @@ partir do branch `main` do GitHub.
 - Prévia das imagens (convocação e fechamento): Copiar, Compartilhar, Baixar PNG
   e Imprimir (6.11.4, `escImagemImprimir`: iframe escondido, A4 deitada ou em
   pé conforme a proporção da imagem).
+- 6.11.6 (04/11): `viagem_id` na linha não prova que a viagem subiu. addViagem
+  não gravava `criado_em` (NOT NULL); no lote com viagem editada o igualador de
+  chaves do upsert mandava null e tudo voltava 400 em silêncio. Hoje a viagem
+  nasce com o campo, o upsert completa as presas, 23505 sobe uma a uma
+  (`_enviarViagensUmaAUma`) e o Fechamento mostra "⚠️ não chegou" (`escSeloViagem`).
 - SQL que mexe em escala_* (ou qualquer tabela com a guarda de carimbo):
   `atualizado_em = (now() AT TIME ZONE 'America/Sao_Paulo')`, NUNCA `now()`
   puro. O app grava hora de Brasília; um carimbo em UTC fica 3 h no futuro e
