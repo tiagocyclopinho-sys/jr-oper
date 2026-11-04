@@ -1327,6 +1327,28 @@ function statusViagemLabel(v) {
   return `<span class="${cor} font-bold">${txt}</span>`;
 }
 
+// Folgas (7.0.0): histórico e registro, lançadas em Escala → Folgas. Ficam fora
+// da sincronização automática: escFolgasDoPrestador() lê da nuvem na 1ª vez.
+function renderBlocoFolgasPrestador(nome, varDe, varAte) {
+  const folgas = ordenarPorDataDesc(filtrarPorData(escFolgasDoPrestador(nome), varDe, varAte));
+  return `
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <h3 class="text-xs font-black text-violet-400 uppercase flex items-center gap-2"><span>🌴</span> Folgas e Justificativas — ${folgas.length}</h3>
+        <span class="text-[9px] text-slate-500">Lançado em Escala → Folgas</span>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-800">
+        <table class="w-full text-left text-[11px] text-slate-300 border-collapse">
+          <thead class="bg-slate-950 text-slate-500 uppercase text-[9px]"><tr><th class="p-2">Início</th><th class="p-2">Fim</th><th class="p-2 text-center">Dias</th><th class="p-2">Período</th><th class="p-2">Categoria</th><th class="p-2">Motivo</th><th class="p-2">Parecer</th><th class="p-2">Tratamento</th></tr></thead>
+          <tbody class="divide-y divide-slate-800">
+            ${folgas.length === 0 ? '<tr><td colspan="8" class="p-3 text-center text-slate-500">Nenhum registro.</td></tr>' :
+              folgas.map(f => `<tr><td class="p-2 whitespace-nowrap">${formatarData(f.data_inicio)}</td><td class="p-2 whitespace-nowrap">${formatarData(f.data_fim)}</td><td class="p-2 text-center">${f.dias}</td><td class="p-2">${vgEscTxt(f.periodo)}</td><td class="p-2">${vgEscTxt(f.categoria)}</td><td class="p-2">${vgEscTxt(f.motivo || '—')}</td><td class="p-2">${vgEscTxt(f.parecer)}</td><td class="p-2">${vgEscTxt(f.tratamento)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 function renderBlocoViagensPrestador(nome, varDe, varAte) {
   const viagens = ordenarPorDataDesc(filtrarPorData(viagensDoPrestador(nome), varDe, varAte));
   return `
@@ -1536,6 +1558,7 @@ function renderDossieMotoristaView() {
       ${renderBlocoOrientacaoFeedback(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieOfFormAberto')}
       ${renderBlocoAtestadosMedicos(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieAmFormAberto')}
       ${renderBlocoAusencias(nomeSelecionado, 'MOTORISTA', '_dossieFiltroDataDe', '_dossieFiltroDataAte', '_dossieArFormAberto')}
+      ${renderBlocoFolgasPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoDevolucoesErroMotorista(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoDeducoesPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
       ${renderBlocoInfracoesPrestador(nomeSelecionado, '_dossieFiltroDataDe', '_dossieFiltroDataAte')}
@@ -1575,6 +1598,7 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   // funções de dados da tela, mesmo filtro de período.
   const ehMotorista = tipo === 'MOTORISTA' && dadosMestre.tipo !== 'AJUDANTE';
   const viagens = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(viagensDoPrestador(nome), varDe, varAte)) : [];
+  const folgas = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(escFolgasDoPrestador(nome), varDe, varAte)) : [];
   const ocOper = tipo === 'MOTORISTA' ? ordenarPorDataDesc(filtrarPorData(ocOperacionaisDoPrestador(nome), varDe, varAte)) : [];
   const ocRota = ehMotorista ? ordenarPorDataDesc(filtrarPorData(ocRotaDoPrestador(nome), varDe, varAte)) : [];
   const sinistros = ehMotorista ? ordenarPorDataDesc(filtrarPorData(sinistrosDoPrestador(nome), varDe, varAte)) : [];
@@ -1599,6 +1623,7 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
     ['Orientações', orientacoes.length],
     ['Atestados', atestados.length],
     ['Faltas / Condutas', ausencias.length],
+    ['Folgas', folgas.length],
     ['Devoluções (erro motorista)', devsErro.length],
     ['Deduções', brl(totalDeducoes)],
     ['Infrações de trânsito', `${infracoesP.length} · ${brl(totalInfracoes)}`],
@@ -1669,6 +1694,7 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   ${secaoTabela('Orientação e Feedback', ['Data','Ocorrência','Ação'], orientacoes.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.ocorrencia}</td><td>${r.acao}</td></tr>`))}
   ${secaoTabela('Atestados Médicos', ['Data','Parcial/Integral','Motivo','CID','Médico','CRM/CRO'], atestados.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.tipo_afastamento==='INTEGRAL'?'Integral':'Parcial'}</td><td>${r.motivo||'—'}</td><td>${r.cid||'—'}</td><td>${r.medico||'—'}</td><td>${r.crm_cro||'—'}</td></tr>`))}
   ${secaoTabela('Faltas, Condutas & Ausências', ['Data','Turno','Conduta / Ausência','Avisado?','Período','Compensar?'], ausencias.map(r => `<tr><td class="nowrap">${formatarData(r.data)}</td><td>${r.turno||'—'}</td><td>${r.conduta||'—'}</td><td>${r.avisado||'—'}</td><td>${r.periodo||'Integral'}</td><td>${r.compensar||'NÃO'}</td></tr>`))}
+  ${tipo === 'MOTORISTA' ? secaoTabela('Folgas e Justificativas', ['Início','Fim','Dias','Período','Categoria','Motivo','Parecer','Tratamento'], folgas.map(f => `<tr><td class="nowrap">${formatarData(f.data_inicio)}</td><td class="nowrap">${formatarData(f.data_fim)}</td><td style="text-align:center;">${f.dias}</td><td>${vgEscTxt(f.periodo)}</td><td>${vgEscTxt(f.categoria)}</td><td>${vgEscTxt(f.motivo || '—')}</td><td>${vgEscTxt(f.parecer)}</td><td>${vgEscTxt(f.tratamento)}</td></tr>`)) : ''}
   ${tipo === 'MOTORISTA' ? '' : secaoTabela('Medidas Administrativas Aplicadas', ['Data','Tipo','Alíneas CLT','Motivo','Gestor'], medidas.map(m => `<tr><td class="nowrap">${formatarData(m.data_ocorrencia)}</td><td>${formatarTipoMedidaLabel(m.tipo)}</td><td>${m.alineas_clt||'—'}</td><td>${m.motivo||'—'}</td><td>${m.gestor||'—'}</td></tr>`))}
   ${tipo === 'MOTORISTA' ? '' : secaoTabela('Devoluções por Erro Carregamento', ['Data','Protocolo','Papel','Cliente','Motivo','Valor','Tratativa'], devsCarreg.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.papel}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`))}
   ${tipo === 'MOTORISTA' ? secaoTabela('Devoluções por Erro Motorista', ['Data','Protocolo','Cliente','Motivo','Valor','Tratativa'], devsErro.map(d => `<tr><td class="nowrap">${formatarData(d.data)}</td><td>${d.numero_devolucao || d.numero_protocolo || '—'}</td><td>${d.cliente_nome || '—'}</td><td>${d.motivo_real_causa_raiz || d.motivo_reclamado || '—'}</td><td class="num">${brl(d.valor_reclamado)}</td><td>${d.status_gestao === 'CONCLUIDO' ? 'Concluída' : 'Pendente'}</td></tr>`)) : ''}
@@ -1713,6 +1739,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   const devsErro = tipo === 'MOTORISTA' ? filtrarPorData(devolucoesErroMotoristaDoPrestador(nome), varDe, varAte) : [];
   const devsCarreg = tipo === 'MOTORISTA' ? [] : filtrarPorData(devolucoesErroCarregamentoDoColaborador(nome), varDe, varAte);
   const viagens = tipo === 'MOTORISTA' ? filtrarPorData(viagensDoPrestador(nome), varDe, varAte) : [];
+  const folgas = tipo === 'MOTORISTA' ? filtrarPorData(escFolgasDoPrestador(nome), varDe, varAte) : [];
   const ocOper = tipo === 'MOTORISTA' ? filtrarPorData(ocOperacionaisDoPrestador(nome), varDe, varAte) : [];
   const ocRota = ehMotorista ? filtrarPorData(ocRotaDoPrestador(nome), varDe, varAte) : [];
   const sinistros = ehMotorista ? filtrarPorData(sinistrosDoPrestador(nome), varDe, varAte) : [];
@@ -1726,6 +1753,7 @@ function exportarAcompanhamentoCsv(nome, tipo) {
   devsCarreg.forEach(d => csvLinha(['DEVOLUCAO_ERRO_CARREGAMENTO', formatarData(d.data), d.numero_devolucao || d.numero_protocolo, d.papel, d.cliente_nome, d.motivo_real_causa_raiz || d.motivo_reclamado, (parseFloat(d.valor_reclamado)||0).toFixed(2), d.status_gestao === 'CONCLUIDO' ? 'CONCLUIDA' : 'PENDENTE']));
   orientacoes.forEach(r => csvLinha(['ORIENTACAO_FEEDBACK', formatarData(r.data), r.ocorrencia, r.acao]));
   atestados.forEach(r => csvLinha(['ATESTADO_MEDICO', formatarData(r.data), r.tipo_afastamento, r.motivo, r.cid, r.medico, r.crm_cro]));
+  folgas.forEach(f => csvLinha(['FOLGA', formatarData(f.data_inicio), formatarData(f.data_fim), f.dias, f.periodo, f.categoria, f.motivo, f.parecer, f.tratamento]));
   ausencias.forEach(r => csvLinha(['FALTA_CONDUTA', formatarData(r.data), r.turno, r.conduta, r.avisado, r.periodo || 'Integral', r.compensar || 'NÃO']));
   medidas.forEach(m => csvLinha(['MEDIDA_DISCIPLINAR', formatarData(m.data_ocorrencia), m.tipo, m.alineas_clt, m.motivo, m.gestor]));
   ocOper.forEach(o => csvLinha(['OC_OPERACIONAL', formatarData(o.data), o.carga, o.rota, o.funcao, o.motivo, o.causa, o.ocorrencia, o.acao, o.status]));
@@ -4043,7 +4071,9 @@ const NAV_GRUPOS = [
     itens: [
       { tab: 'escala_matrizes', icon: '🗂️', label: 'Matrizes', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'escala_convocacao', icon: '📣', label: 'Convocação Escala', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
-      { tab: 'escala_fechamento', icon: '✅', label: 'Fechamento', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] }
+      { tab: 'escala_fechamento', icon: '✅', label: 'Fechamento', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'escala_disponibilidade', icon: '👥', label: 'Disponibilidade', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
+      { tab: 'escala_folgas', icon: '🌴', label: 'Folgas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] }
     ]
   },
   {
@@ -4351,6 +4381,8 @@ function renderApp() {
       case 'escala_matrizes':
       case 'escala_convocacao':
       case 'escala_fechamento':
+      case 'escala_disponibilidade':
+      case 'escala_folgas':
         html = renderEscalaView(activeTab);
         break;
       case 'cadastros_dados':
@@ -13962,6 +13994,15 @@ function handleImportEscalaFile(event) {
         return;
       }
 
+      // Mesma trava da edição. A planilha não para por uma linha: entra sem o
+      // retorno, e o aviso abaixo diz quantas.
+      let retornosInvalidos = 0;
+      viagensFormatadas.forEach(v => {
+        if (viagemRetornoAntesDaSaida(v.data_saida, v.hora_saida, v.data_retorno, v.hora_retorno)) {
+          v.data_retorno = ''; v.hora_retorno = ''; retornosInvalidos++;
+        }
+      });
+
       const res = db.importViagens(viagensFormatadas);
       const qtd = typeof res === 'object' ? res.importados : res;
       const dup = typeof res === 'object' ? res.duplicados : 0;
@@ -13981,6 +14022,9 @@ function handleImportEscalaFile(event) {
       let msg = `✅ Sucesso! ${qtd} viagem(ns) importada(s) da escala (${fileName})!`;
       if (dup > 0) {
         msg += `\nℹ️ ${dup} registro(s) repetido(s) com todos os 6 campos idênticos (Carga, Rota, Placa, Motorista, Ajudante e Setor) foram ignorados para evitar duplicidade.`;
+      }
+      if (retornosInvalidos > 0) {
+        msg += `\n⚠️ ${retornosInvalidos} viagem(ns) com retorno antes da saída entraram sem data de retorno.`;
       }
       alert(msg);
       renderApp();
@@ -15185,6 +15229,15 @@ function editarViagemModal(id) {
   modalContainer.classList.remove('hidden');
 }
 
+// Retorno antes da saída era erro de digitação que passava calado: as cargas
+// 45000 e 44967 ficaram com retorno um mês antes da saída e distorciam a média
+// das rotas (04/11/2026). Datas 'AAAA-MM-DD' e horas 'HH:MM' comparam como texto.
+function viagemRetornoAntesDaSaida(dataSaida, horaSaida, dataRetorno, horaRetorno) {
+  if (!dataSaida || !dataRetorno) return false;
+  if (dataRetorno !== dataSaida) return dataRetorno < dataSaida;
+  return !!(horaSaida && horaRetorno) && horaRetorno < horaSaida;
+}
+
 function handleSalvarEdicaoViagem(e, id) {
   e.preventDefault();
   const v = db.getControleViagens().find(x => x.id == id);
@@ -15218,12 +15271,20 @@ function handleSalvarEdicaoViagem(e, id) {
       });
     }
   }
+  if (viagemRetornoAntesDaSaida(data_saida, hora_saida, data_retorno, hora_retorno)) {
+    alert(`⚠️ O retorno (${formatarData(data_retorno)}${hora_retorno ? ' ' + hora_retorno : ''}) está antes da saída (${formatarData(data_saida)}${hora_saida ? ' ' + hora_saida : ''}). Corrija as datas para salvar.`);
+    return;
+  }
   const fusion = document.getElementById('ed-vg-fusion').value;
   const checklist_saida = document.getElementById('ed-vg-chk-saida').value;
   const checklist_chegada = document.getElementById('ed-vg-chk-chegada').value;
   const observacao = document.getElementById('ed-vg-obs').value;
   const carga = v ? v.carga : '';
   const rota = v ? v.rota : '';
+  // Troca de veículo ou de pessoa vai para a linha da escala (7.0.0): o Fechamento
+  // precisa mostrar quem fez a viagem. Comparado antes de updateViagem mudar `v`.
+  const trocouEquipe = !!v && [[v.placa, placa], [v.motorista, motorista], [v.ajudante, ajudante], [v.ajudante_2, ajudante_2]]
+    .some(([antes, depois]) => normalizeStr(antes || '') !== normalizeStr(depois || ''));
 
   db.updateViagem(id, {
     data_saida,
@@ -15244,6 +15305,9 @@ function handleSalvarEdicaoViagem(e, id) {
     observacao
   });
   closeModal();
+  if (trocouEquipe) {
+    escAtualizarLinhaDaViagem(db.getControleViagens().find(x => x.id == id)).then(erro => { if (erro) alert('⚠️ ' + erro); });
+  }
   alert('✅ Viagem atualizada!');
   renderApp();
 
@@ -21062,15 +21126,20 @@ function renderCadSubTabContent() {
                 <option value="Ativo">Ativo</option><option value="Inativo">Inativo</option>
               </select>
             </div>
+            <div><label class="block text-[10px] text-slate-400">Setor</label>
+              <select id="cad-veic-setor" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">
+                <option value="">Sem setor</option><option value="FRIO">Frio</option><option value="SECO">Seco</option>
+              </select>
+            </div>
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
         ${cadBarraBusca('veiculos', 'Buscar por placa ou grupo...')}
         <div class="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table class="w-full text-left text-xs">
-            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Placa</th><th class="p-2">Grupo</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
+            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">Placa</th><th class="p-2">Grupo</th><th class="p-2">Setor</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${cadFiltrar('veiculos', v => [v.placa, v.tipo, v.modelo, v.situacao]).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo||'—'}</td><td class="p-2"><span class="${(v.situacao||'Ativo')==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('veiculos','${v.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${cadFiltrar('veiculos', v => [v.placa, v.tipo, v.modelo, v.situacao, v.setor]).map(v=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${v.placa}</td><td class="p-2 text-white">${v.tipo||v.modelo||'—'}</td><td class="p-2 text-slate-300">${v.setor||'—'}</td><td class="p-2"><span class="${(v.situacao||'Ativo')==='Ativo'?'text-emerald-400':'text-slate-500'}">${v.situacao||'Ativo'}</span></td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('veiculos','${v.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('veiculos','${v.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -21147,7 +21216,7 @@ function deleteMotivoDevolucaoCad(nome) {
 function handleCadMotoristaSubmit(e) { e.preventDefault(); const r=db.addMotorista(document.getElementById('cad-mot-erp').value,document.getElementById('cad-mot-nome').value,document.getElementById('cad-mot-cnh').value,'',document.getElementById('cad-mot-admissao')?.value||'',document.getElementById('cad-mot-desligamento')?.value||''); if(r) alert('✅ Motorista cadastrado!'); renderApp(); }
 function handleCadAjudanteSubmit(e) { e.preventDefault(); db.addAjudante(document.getElementById('cad-aju-erp').value,document.getElementById('cad-aju-nome').value); alert('✅ Ajudante cadastrado!'); renderApp(); }
 function handleCadProdutoSubmit(e) { e.preventDefault(); db.addProduto(document.getElementById('cad-prod-cod').value,document.getElementById('cad-prod-desc').value,document.getElementById('cad-prod-cat').value,0); alert('✅ Produto cadastrado!'); renderApp(); }
-function handleCadVeiculoSubmit(e) { e.preventDefault(); db.addVeiculo(document.getElementById('cad-veic-placa').value,document.getElementById('cad-veic-tipo').value,document.getElementById('cad-veic-situacao').value); alert('✅ Veículo cadastrado!'); renderApp(); }
+function handleCadVeiculoSubmit(e) { e.preventDefault(); db.addVeiculo(document.getElementById('cad-veic-placa').value,document.getElementById('cad-veic-tipo').value,document.getElementById('cad-veic-situacao').value,document.getElementById('cad-veic-setor').value); alert('✅ Veículo cadastrado!'); renderApp(); }
 function handleCadClienteSubmit(e) { e.preventDefault(); const res = db.addCliente({ codigo: document.getElementById('cad-cli-cod')?.value, nome: document.getElementById('cad-cli-nome')?.value, cidade: document.getElementById('cad-cli-cidade')?.value, cnpj_cpf: document.getElementById('cad-cli-cnpj')?.value }); if (res) { showToast('Cliente cadastrado com sucesso!'); renderApp(); } }
 function handleCadRotaSubmit(e) { e.preventDefault(); const r=db.addRota(document.getElementById('cad-rota-nome').value); if(r) alert('✅ Rota cadastrada!'); renderApp(); }
 function handleCadCargaSubmit(e) { e.preventDefault(); db.addCargaRota(document.getElementById('cad-car-num').value,document.getElementById('cad-car-rota').value,document.getElementById('cad-car-mot').value,document.getElementById('cad-car-aju').value,document.getElementById('cad-car-veic').value); alert('✅ Carga cadastrada!'); renderApp(); }
@@ -21190,7 +21259,7 @@ function cadBarraBusca(colecao, placeholder) {
 }
 
 function cadCamposBusca(colecao) {
-  if (colecao === 'veiculos') return v => [v.placa, v.tipo, v.modelo, v.situacao];
+  if (colecao === 'veiculos') return v => [v.placa, v.tipo, v.modelo, v.situacao, v.setor];
   if (colecao === 'motoristas') return m => [m.id, m.nome, m.cnh, m.telefone];
   return a => [a.id, a.nome];
 }
@@ -21236,6 +21305,7 @@ function abrirEdicaoCadastro(colecao, id) {
     campos = `
       <div><label class="block text-[10px] text-slate-400 mb-1">Placa *</label><input id="ed-cad-placa" required class="${cls}" value="${v(item.placa)}" oninput="forcarMaiuscula(this)"></div>
       <div><label class="block text-[10px] text-slate-400 mb-1">Grupo</label><select id="ed-cad-tipo" class="${cls}">${(grupos.includes(atual) || !atual ? grupos : [atual].concat(grupos)).map(g => `<option value="${g}" ${g === atual ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Setor</label><select id="ed-cad-setor" class="${cls}"><option value="">Sem setor</option><option value="FRIO" ${item.setor === 'FRIO' ? 'selected' : ''}>Frio</option><option value="SECO" ${item.setor === 'SECO' ? 'selected' : ''}>Seco</option></select></div>
       <div><label class="block text-[10px] text-slate-400 mb-1">Situação</label><select id="ed-cad-situacao" class="${cls}"><option value="Ativo" ${(item.situacao || 'Ativo') === 'Ativo' ? 'selected' : ''}>Ativo</option><option value="Inativo" ${item.situacao === 'Inativo' ? 'selected' : ''}>Inativo</option></select></div>`;
   }
   const titulo = { motoristas: 'Motorista', ajudantes: 'Ajudante', veiculos: 'Veículo' }[colecao];
@@ -21286,6 +21356,7 @@ async function salvarEdicaoCadastro(e, colecao, id) {
   } else {
     item.tipo = val('ed-cad-tipo');
     item.situacao = val('ed-cad-situacao') || 'Ativo';
+    item.setor = val('ed-cad-setor') || null;
   }
   db.carimbarEdicao(colecao, item);
   db.logAudit({ acao: 'EDICAO', modulo: colecao, registro_id: item.id, diff: { antes, depois: JSON.parse(JSON.stringify(item)) } });
@@ -21354,7 +21425,7 @@ async function cadCorrigirHistorico(tipo, antigo, novo) {
   }
   // Escala: o campo pode ter dois nomes ("A / B"); troca só o pedaço igual.
   const escCols = tipo === 'placa' ? { escala_matrizes: ['placa'], escala_linhas: ['placa', 'placa_matriz'] }
-                                   : { escala_matrizes: ['motorista', 'ajudante', 'ajudante_2'], escala_linhas: ['motorista', 'ajudante', 'ajudante_2'] };
+                                   : { escala_matrizes: ['motorista', 'ajudante', 'ajudante_2'], escala_linhas: ['motorista', 'ajudante', 'ajudante_2'], escala_folgas: ['colaborador_nome', 'substituto'] };
   const alvo = normalizeStr(antigo);
   for (const [tabela, colunas] of Object.entries(escCols)) {
     const filtro = colunas.map(c => `${c}.ilike.*${encodeURIComponent(antigo)}*`).join(',');
@@ -21381,7 +21452,7 @@ async function cadCorrigirHistorico(tipo, antigo, novo) {
     }
   }
   // A escala aberta na tela recarrega da nuvem na próxima vez.
-  if (window._escala) { window._escala.matrizes = null; window._escala.linhas = {}; }
+  if (window._escala) { window._escala.matrizes = null; window._escala.linhas = {}; window._escala.folgas = null; }
   // Puxa já as viagens etc. corrigidas para este aparelho.
   try { await cs.syncCloudToLocal(); } catch (e) {}
   return total;

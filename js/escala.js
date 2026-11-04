@@ -2,7 +2,7 @@
 // ESCALA DE EMBARQUES (6.10.0, migration 56)
 // =============================================================================
 // Substitui as planilhas "Gestão de embarques - Matriz" (uma por dia da semana)
-// e os "FECHAMENTO DIA dd.mm.aaaa.xlsx". Três telas no menu Escala:
+// e os "FECHAMENTO DIA dd.mm.aaaa.xlsx". Telas do menu Escala:
 //
 //   Matrizes          — o modelo de cada dia (segunda a sábado): rota, placa,
 //                       motorista, ajudante, observação e o retorno (saída +
@@ -18,9 +18,14 @@
 //                       Controle de Viagens (uma por linha; "45025 / 45026"
 //                       fica junto, como sempre foi). Gera a imagem do
 //                       fechamento para o grupo da gestão.
+//   Disponibilidade   — (7.0.0) quem está livre na data, cruzando escala,
+//                       Controle de Viagens, folgas, retenções e veículos
+//                       parados em rota. Gera o arquivo para a largada.
+//   Folgas            — (7.0.0, migration 64) substitui a planilha Gestão de
+//                       Folga. Vai para o Dossiê do prestador.
 //
 // FORA DA SINCRONIZAÇÃO AUTOMÁTICA, de propósito (egress, ver 6.8.1): as
-// tabelas escala_matrizes e escala_linhas são lidas da nuvem quando a tela
+// tabelas escala_matrizes, escala_linhas e escala_folgas são lidas da nuvem quando a tela
 // abre e gravadas direto a cada alteração, como a Produtividade. Nada vai
 // para o localStorage. A viagem e a troca de veículo, essas sim, vão pelo
 // caminho normal (db.addViagem / db.addTrocaVeiculo).
@@ -32,6 +37,13 @@ window._escala = window._escala || {
   data: null,              // 'AAAA-MM-DD' da escala aberta
   linhas: {},              // data -> linhas de escala_linhas daquela data
   vizinhas: {},            // data -> linhas dos 20 dias anteriores (avisos)
+  folgas: null,            // linhas de escala_folgas (todas as vivas)
+  folgaVisao: 'ABERTAS',   // ABERTAS | TODAS
+  folgaBusca: '',
+  dispAba: 'MOTORISTA',    // MOTORISTA | AJUDANTE | VEICULO
+  dispSituacao: 'TODAS',
+  dispSetor: 'TODOS',      // TODOS | FRIO | SECO (só na aba Veículos)
+  dispBusca: '',
   carregando: false,
   erro: '',
   salvando: 0
@@ -180,6 +192,11 @@ async function escCarregar(forcar = false) {
       if (!m) throw new Error('Não foi possível ler as matrizes da escala.');
       st.matrizes = m.map(escSepararAjudantes);
     }
+    if (forcar || !st.folgas) {
+      const f = await cs.getAll('escala_folgas', 'is_deleted=is.false');
+      if (!f) throw new Error('Não foi possível ler as folgas.');
+      st.folgas = f;
+    }
     const d = st.data;
     if (forcar || !st.linhas[d]) {
       const ini = somaDiasIso(d, -ESC_JANELA_VIAGEM_DIAS);
@@ -213,7 +230,7 @@ function escListas() {
   const vivo = x => x && !x.is_deleted;
   const motoristas = (data.motoristas || []).filter(m => vivo(m) && m.ativo !== false && !m.data_desligamento).map(m => String(m.nome || '').toUpperCase());
   const ajudantes = (data.ajudantes || []).filter(a => vivo(a) && a.ativo !== false).map(a => String(a.nome || '').toUpperCase());
-  const placas = (data.veiculos || []).filter(v => vivo(v) && v.ativo !== false && String(v.situacao || '').toUpperCase() !== 'INATIVO').map(v => String(v.placa || '').toUpperCase());
+  const placas = (data.veiculos || []).filter(v => vivo(v) && String(v.situacao || '').toUpperCase() !== 'INATIVO').map(v => String(v.placa || '').toUpperCase());
   const rotas = new Set((data.rotas || []).map(r => String(r || '').toUpperCase()));
   (window._escala.matrizes || []).forEach(m => m.rota && rotas.add(m.rota));
   const uniq = arr => Array.from(new Set(arr.filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
@@ -276,11 +293,13 @@ window.escMudarData = escMudarData;
 function renderEscalaView(tab) {
   const st = window._escala;
   if (!st.data) st.data = escDataPadrao();
-  const precisa = !st.matrizes || (tab !== 'escala_matrizes' && !st.linhas[st.data]);
+  const precisa = !st.matrizes || !st.folgas || (!['escala_matrizes', 'escala_folgas'].includes(tab) && !st.linhas[st.data]);
   if (precisa && !st.carregando && !st.erro) setTimeout(() => escCarregar(), 0);
   let corpo;
   if (tab === 'escala_matrizes') corpo = escTelaMatrizes();
   else if (tab === 'escala_fechamento') corpo = escTelaFechamento();
+  else if (tab === 'escala_disponibilidade') corpo = escTelaDisponibilidade();
+  else if (tab === 'escala_folgas') corpo = escTelaFolgas();
   else corpo = escTelaConvocacao();
   return `<div class="space-y-4">${corpo}</div>${escDatalists()}`;
 }
@@ -513,16 +532,96 @@ function escStatusViagem(v) { return String(v.status_viagem || '').toUpperCase()
 // EM ANDAMENTO, EM ANDAMENTO (PALMAS), EM RETORNO: o caminhão está na rua.
 function escViagemEmAndamento(v) { return /ANDAMENTO|RETORNO/.test(escStatusViagem(v)); }
 
-// Previsão de chegada de uma viagem pela matriz: a mesma rota no dia da
-// semana da saída (ou em qualquer dia); sem rota na matriz, o dia às 23:59.
+// Viagem que ainda prende pessoa e veículo. A que nasce da escala vem sem status
+// até alguém registrar a saída (15 das 16 de 04/11): sem isto ela não contava.
+function escViagemAberta(v) {
+  return escViagemEmAndamento(v) || (!escStatusViagem(v) && !v.data_retorno);
+}
+
+// Previsão de chegada de uma viagem pela matriz: a mesma rota no dia da semana
+// da saída; depois a do dia seguinte, contada a partir dele (rota longa sai na
+// véspera, em geral domingo e quarta); depois qualquer dia; sem rota na matriz,
+// o dia às 23:59.
 function escPrevisaoPelaMatriz(rota, saidaIso) {
   const ms = (window._escala.matrizes || []).filter(m => m.setor !== 'TRANSBORDO');
   const dia = escDiaSemana(saidaIso);
   const mesmaRota = m => escNorm(m.rota) === escNorm(rota);
   const parecida = m => escChaveRota(m.rota) === escChaveRota(rota) && escEhSeco(m.rota) === escEhSeco(rota);
+  const seguinte = dia === 7 ? 1 : dia + 1;
+  const vespera = ms.find(mesmaRota) && !ms.find(x => x.dia_semana === dia && mesmaRota(x)) && ms.find(x => x.dia_semana === seguinte && mesmaRota(x));
+  if (vespera) return escPrevisao(somaDiasIso(saidaIso, 1), vespera.retorno_dias, vespera.retorno_hora);
   const m = ms.find(x => x.dia_semana === dia && mesmaRota(x)) || ms.find(mesmaRota)
     || ms.find(x => x.dia_semana === dia && parecida(x)) || ms.find(parecida);
   return m ? escPrevisao(saidaIso, m.retorno_dias, m.retorno_hora) : escPrevisao(saidaIso, 0, '23:59');
+}
+
+// Cadastro de pessoas: nome normalizado -> nome como está no cadastro.
+function escPessoasCadastro() {
+  const mapa = new Map();
+  escListas().pessoas.forEach(n => mapa.set(escNorm(n), n));
+  return mapa;
+}
+
+// Nome curto em viagem ("EDSON VELOSO / ALESSANCO") vale pelo nome completo do
+// cadastro quando só um começa assim. Sem isso a pessoa pareceria livre.
+function escResolverPessoa(p, cadastro) {
+  if (cadastro.has(p)) return p;
+  const achados = Array.from(cadastro.keys()).filter(n => n.startsWith(p + ' '));
+  return achados.length === 1 ? achados[0] : p;
+}
+
+// Quem está fora por viagem, numa regra só para os avisos e a Disponibilidade.
+// A referência é a de sempre: 06:00 do dia. Não é corte por rota: prestador não
+// tem horário a cumprir, a saída é só o máximo aceitável para não atrasar entrega.
+//   VIAGEM    previsão de chegada depois da referência;
+//   RETORNA   chega antes da referência e a previsão ainda não passou;
+//   VERIFICAR previsão vencida com a viagem aberta (atrasou ou faltou finalizar),
+//             ou escalado na véspera em rota longa sem carga até agora.
+// A previsão é a da escala que gerou a viagem; sem ela, a da matriz.
+function escOcupacao(linhas, dataIso, vizinhas) {
+  const viagens = (typeof db !== 'undefined' && db.getControleViagens) ? db.getControleViagens() : [];
+  const cadastro = escPessoasCadastro();
+  const resolver = arr => arr.map(p => escResolverPessoa(p, cadastro));
+  const idsDestaEscala = new Set(linhas.map(l => String(l.viagem_id || '')).filter(Boolean));
+  const corte = `${dataIso}T06:00`;
+  const agora = String(agoraIsoBrasilia()).slice(0, 16);
+  const ini = somaDiasIso(dataIso, -ESC_JANELA_VIAGEM_DIAS);
+  const prevPorViagem = new Map(), prevPorCarga = new Map();
+  (vizinhas || []).forEach(o => {
+    if (!o.previsao_retorno) return;
+    if (o.viagem_id) prevPorViagem.set(String(o.viagem_id), o.previsao_retorno);
+    if (o.carga) prevPorCarga.set(escNorm(o.carga), o.previsao_retorno);
+  });
+  const itens = [];
+  viagens.forEach(v => {
+    if (idsDestaEscala.has(String(v.id))) return;
+    if (!escViagemAberta(v)) return;
+    const ds = escDataViagemIso(v);
+    if (!ds || ds < ini || ds > dataIso) return;
+    const prev = String(prevPorViagem.get(String(v.id)) || prevPorCarga.get(escNorm(v.carga)) || escPrevisaoPelaMatriz(v.rota, ds))
+      .replace(' ', 'T').slice(0, 16);
+    const rotulo = `${v.rota || 'sem rota'}${v.carga ? ' (carga ' + v.carga + ')' : ''}`;
+    const item = {
+      motoristas: resolver(escPessoas(v.motorista)),
+      ajudantes: resolver(escPessoas(v.ajudante).concat(escPessoas(v.ajudante_2))),
+      placa: escNorm(v.placa), rota: v.rota || '', prev
+    };
+    if (prev >= corte) itens.push(Object.assign(item, { tipo: 'VIAGEM', texto: `em viagem: ${rotulo} · previsão de chegada ${escPrevisaoBr(prev)}` }));
+    else if (prev < agora) itens.push(Object.assign(item, { tipo: 'VERIFICAR', texto: `viagem aberta: ${rotulo} · previsão venceu em ${escPrevisaoBr(prev)}` }));
+    else itens.push(Object.assign(item, { tipo: 'RETORNA', texto: `volta de ${rotulo} · previsão ${escPrevisaoBr(prev)}` }));
+  });
+  const ontem = somaDiasIso(dataIso, -1);
+  (vizinhas || []).forEach(o => {
+    if (o.data_escala !== ontem || o.setor === 'TRANSBORDO' || o.viagem_id || String(o.carga || '').trim() || !o.previsao_retorno) return;
+    const prev = String(o.previsao_retorno).replace(' ', 'T').slice(0, 16);
+    if (prev < corte) return;
+    itens.push({
+      motoristas: resolver(escPessoas(o.motorista)), ajudantes: resolver(escPessoasAjudantes(o)),
+      placa: escNorm(o.placa), rota: o.rota || '', prev, tipo: 'VERIFICAR',
+      texto: `escalado em ${escDataBr(ontem)}: ${o.rota || 'sem rota'}, ainda sem carga`
+    });
+  });
+  return itens;
 }
 
 function escAvisos(linhas, dataIso, vizinhas) {
@@ -565,40 +664,29 @@ function escAvisos(linhas, dataIso, vizinhas) {
     if (placasInativas.has(escNorm(l.placa))) add(l.id, `⛔ Placa ${escNorm(l.placa)} está inativa no cadastro`);
   });
 
-  // 3) ainda em viagem (6.11.1, decisão do Tiago): só viagem EM ANDAMENTO
-  //    (ou em retorno) do Controle de Viagens, e só se a previsão de chegada
-  //    passa das 06:00 do dia da escala. A previsão é calculada: a da escala
-  //    que gerou a viagem; sem ela, a saída + retorno da matriz da mesma rota
-  //    (dia da semana da saída); sem matriz, o próprio dia às 23:59.
-  const corte = `${dataIso}T06:00`;
-  const ocupados = [];   // { pessoas[], placa, texto }
-  const ini = somaDiasIso(dataIso, -ESC_JANELA_VIAGEM_DIAS);
-  const prevPorViagem = new Map(), prevPorCarga = new Map();
-  (vizinhas || []).forEach(o => {
-    if (!o.previsao_retorno) return;
-    if (o.viagem_id) prevPorViagem.set(String(o.viagem_id), o.previsao_retorno);
-    if (o.carga) prevPorCarga.set(escNorm(o.carga), o.previsao_retorno);
-  });
-  viagens.forEach(v => {
-    if (idsDestaEscala.has(String(v.id))) return;
-    if (!escViagemEmAndamento(v)) return;
-    const ds = escDataViagemIso(v);
-    if (!ds || ds < ini || ds > dataIso) return;
-    const prev = String(prevPorViagem.get(String(v.id)) || prevPorCarga.get(escNorm(v.carga)) || escPrevisaoPelaMatriz(v.rota, ds))
-      .replace(' ', 'T').slice(0, 16);
-    if (prev < corte) return;   // volta antes da saída: não é conflito
-    ocupados.push({
-      pessoas: escPessoas(v.motorista).concat(escPessoas(v.ajudante)).concat(escPessoas(v.ajudante_2)), placa: escNorm(v.placa),
-      texto: `em viagem: ${v.rota || 'sem rota'}${v.carga ? ' (carga ' + v.carga + ')' : ''} · previsão de chegada ${escPrevisaoBr(prev)}`
-    });
-  });
+  // 3) ainda em viagem ou com viagem a conferir: a mesma regra da Disponibilidade.
+  const cadastro = escPessoasCadastro();
+  const pessoasDa = l => escPessoas(l.motorista).concat(escPessoasAjudantes(l)).map(p => escResolverPessoa(p, cadastro));
+  const ocupados = escOcupacao(linhas, dataIso, vizinhas).filter(o => o.tipo !== 'RETORNA');
   linhas.forEach(l => {
-    const ps = escPessoas(l.motorista).concat(escPessoasAjudantes(l));
+    const ps = pessoasDa(l);
     const pl = escNorm(l.placa);
     ocupados.forEach(o => {
-      ps.filter(p => o.pessoas.includes(p)).forEach(p => add(l.id, `🕒 ${p} — ${o.texto}`));
-      if (pl && o.placa === pl) add(l.id, `🕒 Placa ${pl} — ${o.texto}`);
+      const icone = o.tipo === 'VIAGEM' ? '🕒' : '🟡';
+      const pessoas = o.motoristas.concat(o.ajudantes);
+      ps.filter(p => pessoas.includes(p)).forEach(p => add(l.id, `${icone} ${p} — ${o.texto}`));
+      if (pl && o.placa === pl) add(l.id, `${icone} Placa ${pl} — ${o.texto}`);
     });
+  });
+
+  // 4) folga na data e veículo retido ou parado em rota.
+  const folgas = escFolgasNaData(dataIso);
+  const parados = escVeiculosParados();
+  linhas.forEach(l => {
+    pessoasDa(l).forEach(p => folgas.filter(f => escNorm(f.colaborador_nome) === p)
+      .forEach(f => add(l.id, `${f.parecer === 'ACEITO' ? '🟣' : '🟡'} ${p} — ${escTextoFolga(f)}`)));
+    const parado = parados.get(escNorm(l.placa));
+    if (parado) add(l.id, `🔴 Placa ${escNorm(l.placa)} — ${parado.texto}`);
   });
   return avisos;
 }
@@ -621,6 +709,7 @@ function escTelaConvocacao() {
   const cab = escCabecalho('📣', 'Convocação Escala', 'A escala do dia, montada pela matriz. Ajuste, confira os avisos e gere a imagem para o grupo dos motoristas e ajudantes.',
     (linhas.length ? `<button onclick="escImportarFusion()" class="bg-sky-700 hover:bg-sky-600 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">📥 Importar Fusion</button>` : '')
     + (linhas.length ? `<button onclick="escGerarImagem('convocacao')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">🖼️ Imagem da convocação</button>` : '')
+    + `<button onclick="switchTab('escala_disponibilidade')" class="bg-violet-700 hover:bg-violet-600 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">👥 Disponibilidade</button>`
     + (linhas.length && temMatriz ? `<button onclick="escDescartarEscala(true)" title="Apaga a escala desta data e monta de novo pela matriz do dia" class="bg-slate-800 hover:bg-slate-700 text-amber-200 border border-amber-800 font-bold px-3 py-2 rounded-xl text-xs">↺ Refazer pela matriz</button>` : '')
     + (linhas.length ? `<button onclick="escDescartarEscala(false)" title="Apaga a escala desta data: a tela volta a oferecer Montar pela matriz" class="bg-slate-800 hover:bg-slate-700 text-red-300 border border-red-900 font-bold px-3 py-2 rounded-xl text-xs">✕ Apagar escala do dia</button>` : ''));
   if (!st.matrizes || !st.linhas[st.data]) return cab + escSeletorData() + escCarregandoHtml();
@@ -705,7 +794,7 @@ function escTelaConvocacao() {
         ${trocasPendentes.length ? `<span class="px-2 py-1 rounded-lg border border-amber-700 text-amber-300 bg-amber-950/40">🔄 ${trocasPendentes.length} troca(s) de veículo sem registro</span>` : ''}
       </div>
     </div>
-    <p class="text-[11px] text-slate-500">Avisos não travam nada: a pessoa é procurada como motorista e como ajudante nesta escala e nas viagens EM ANDAMENTO do Controle de Viagens que só chegam depois das 06:00 deste dia (previsão calculada pela escala ou pela matriz da rota).</p>
+    <p class="text-[11px] text-slate-500">Avisos não travam nada: a pessoa é procurada como motorista e como ajudante nesta escala, nas viagens abertas do Controle de Viagens (previsão calculada pela escala ou pela matriz da rota) e nas folgas. A placa é procurada também nas retenções e nos veículos parados em rota.</p>
     ${bloco('FRIO')}
     ${bloco('SECO')}
     ${bloco('TRANSBORDO')}`;
@@ -886,16 +975,95 @@ async function escLinhaCampo(id, campo, valor) {
 }
 window.escLinhaCampo = escLinhaCampo;
 
+// EQUIPE DA VIAGEM (7.0.0). Antes da viagem manda a escala; depois de trocar no
+// Controle de Viagens, manda quem fez a viagem. A troca sobe para a linha e o
+// Fechamento, que é conferido com o WinThor, mostra quem viajou. Coluna ao lado:
+// guarda quem estava escalado antes da primeira troca (migration 67).
+const ESC_EQUIPE = [
+  ['motorista', 'motorista_escalado', 'Motorista'],
+  ['ajudante', 'ajudante_escalado', 'Ajudante'],
+  ['ajudante_2', 'ajudante_2_escalado', '2º ajudante'],
+  ['placa', 'placa_escalada', 'Placa']
+];
+
+function escViagemDaLinha(l) {
+  if (!l.viagem_id || typeof db === 'undefined') return null;
+  return db.getControleViagens().find(v => String(v.id) === String(l.viagem_id)) || null;
+}
+
+// Viagem sem o nome não apaga o da linha: só o 2º ajudante pode ter saído.
+function escDiferencasDaViagem(l, v) {
+  return ESC_EQUIPE.filter(([c]) => escNorm(l[c]) !== escNorm(v[c]) && (c === 'ajudante_2' || String(v[c] || '').trim()));
+}
+
+function escAplicarEquipeDaViagem(l, v) {
+  escDiferencasDaViagem(l, v).forEach(([c, orig]) => {
+    if (!l[orig] && String(l[c] || '').trim()) l[orig] = l[c];
+    l[c] = v[c] || '';
+  });
+  return escCarimbar(l, false);
+}
+
+// Chamada ao salvar a viagem no Controle de Viagens. Lê a linha da nuvem, e não
+// do que está aberto na tela, para não pisar no que outro aparelho gravou.
+// Devolve um texto só quando não conseguiu.
+async function escAtualizarLinhaDaViagem(v) {
+  const cs = window.cloudStore;
+  const falha = 'A viagem foi salva, mas o Fechamento não foi atualizado. Ele vai mostrar "diferente do Controle"; use o botão ali para trazer a troca.';
+  if (!cs || !cs.isConfigured()) return falha;
+  try {
+    const achadas = await cs._getPagina('escala_linhas', `is_deleted=is.false&viagem_id=eq.${v.id}`);
+    if (!achadas) return falha;
+    const mudadas = achadas.map(escSepararAjudantes).filter(l => escDiferencasDaViagem(l, v).length).map(l => escAplicarEquipeDaViagem(l, v));
+    if (!mudadas.length) return '';
+    await escGravar('escala_linhas', mudadas);
+    const st = window._escala;
+    mudadas.forEach(l => {
+      const abertas = (st.linhas[l.data_escala] || []).concat(...Object.values(st.vizinhas));
+      abertas.filter(x => String(x.id) === String(l.id)).forEach(x => Object.assign(x, l));
+    });
+    return '';
+  } catch (e) {
+    console.error('[Escala]', e);
+    return falha;
+  }
+}
+window.escAtualizarLinhaDaViagem = escAtualizarLinhaDaViagem;
+
+async function escTrazerDoControle(id) {
+  const l = escLinha(id);
+  const v = l && escViagemDaLinha(l);
+  if (!v) return;
+  const dif = escDiferencasDaViagem(l, v);
+  if (!dif.length) return;
+  const texto = dif.map(([c, , rotulo]) => `${rotulo}: ${l[c] || '—'} → ${v[c] || '—'}`).join('\n');
+  if (!confirm(`Trazer do Controle de Viagens para esta linha?\n\n${texto}`)) return;
+  escAplicarEquipeDaViagem(l, v);
+  renderApp();
+  try { await escGravar('escala_linhas', l); } catch (e) { escFalha(e); return; }
+  renderApp();
+}
+window.escTrazerDoControle = escTrazerDoControle;
+
+// Quem estava escalado, debaixo do nome de quem viajou.
+function escEscaladoHtml(l, orig) {
+  return l[orig] ? `<div class="text-[10px] text-amber-300 font-normal">escalado: ${escEsc(l[orig])}</div>` : '';
+}
+
 // Selo da coluna Viagem do Fechamento. Ter viagem_id na linha não prova que a
 // viagem existe: em 04/11 a linha dizia "criada" e a viagem estava presa no
 // aparelho de quem importou. Aqui confere se ela está no Controle de Viagens
-// deste aparelho.
+// deste aparelho, e se a equipe bate. Não copia sozinho: aparelho atrasado
+// desfaria a troca feita em outro.
 function escSeloViagem(l, dicaSemCarga) {
   if (!l.viagem_id) return `<span class="text-slate-500" title="${escEsc(dicaSemCarga)}">sem carga</span>`;
-  const existe = typeof db !== 'undefined' && db.getControleViagens().some(v => String(v.id) === String(l.viagem_id));
-  return existe
-    ? '<span class="text-emerald-400 font-bold">✔ criada</span>'
-    : '<span class="text-amber-400 font-bold" title="A linha aponta para uma viagem que não está no Controle de Viagens deste aparelho. Pode estar presa no aparelho de quem criou.">⚠️ não chegou</span>';
+  const v = escViagemDaLinha(l);
+  if (!v) return '<span class="text-amber-400 font-bold" title="A linha aponta para uma viagem que não está no Controle de Viagens deste aparelho. Pode estar presa no aparelho de quem criou.">⚠️ não chegou</span>';
+  const dif = escDiferencasDaViagem(l, v);
+  if (!dif.length) return '<span class="text-emerald-400 font-bold">✔ criada</span>';
+  const titulo = dif.map(([c, , rotulo]) => `${rotulo} no Controle: ${v[c] || '—'}`).join(' · ');
+  return `<div class="text-amber-400 font-bold" title="${escEsc(titulo)}">⚠️ diferente do Controle</div>
+    <button onclick="escTrazerDoControle('${l.id}')" class="underline text-sky-300 font-bold">Trazer do Controle</button>`;
 }
 
 // Cria ou atualiza a viagem do Controle de Viagens desta linha. Devolve um
@@ -916,6 +1084,15 @@ function escSincronizarViagem(l) {
   const mesmaCarga = viagens.find(x => escNorm(x.carga) === escNorm(carga) && (!v || x.id !== v.id));
   if (v) {
     if (mesmaCarga) return `⚠️ A carga ${carga} já está em outra viagem do Controle de Viagens (${mesmaCarga.rota || 'sem rota'}). A viagem desta linha não foi alterada.`;
+    // Saída já registrada vale: rota longa sai na véspera da data da escala, e
+    // quem registra acerta o dia real. Depois de sair, a equipe também é a da
+    // viagem: mexer na linha ou reimportar não pode desfazer uma troca.
+    if (v.hora_saida) {
+      ['data_saida', 'placa', 'motorista', 'ajudante', 'ajudante_2'].forEach(c => delete dados[c]);
+      db.updateViagem(v.id, dados);
+      return escDiferencasDaViagem(l, v).length
+        ? '⚠️ Esta viagem já saiu: a troca de veículo ou de pessoa é feita no Controle de Viagens. A viagem não foi alterada.' : '';
+    }
     db.updateViagem(v.id, dados);
     return '';
   }
@@ -1240,7 +1417,8 @@ async function escAplicarFusion() {
     } else {
       l = ls.find(x => String(x.id) === alvo);
       if (!l) return;
-      if (fz.atualizarPessoas) {
+      const jaSaiu = (escViagemDaLinha(l) || {}).hora_saida;
+      if (fz.atualizarPessoas && !jaSaiu) {
         if (f.placa) l.placa = f.placa;
         if (f.motorista) l.motorista = f.motorista;
         // O Fusion manda os ajudantes do dia: o 2º vem junto (ou sai, se não veio).
@@ -1357,9 +1535,9 @@ function escTelaFechamento() {
                   <td class="p-1.5 text-center text-slate-500">${i + 1}</td>
                   <td class="p-1"><input id="escf-${l.id}-carga" class="${ESC_INPUT} font-bold" placeholder="45025 / 45026" value="${escEsc(l.carga)}" onchange="escLinhaCampo('${l.id}','carga',this.value)"></td>
                   <td class="p-1.5 text-slate-200">${escEsc(l.rota)}</td>
-                  <td class="p-1.5 text-slate-300">${escEsc(l.placa)}</td>
-                  <td class="p-1.5 text-slate-300">${escEsc(l.motorista)}</td>
-                  <td class="p-1.5 text-slate-300">${escEsc(escAjudantesTexto(l))}</td>
+                  <td class="p-1.5 text-slate-300">${escEsc(l.placa)}${escEscaladoHtml(l, 'placa_escalada')}</td>
+                  <td class="p-1.5 text-slate-300">${escEsc(l.motorista)}${escEscaladoHtml(l, 'motorista_escalado')}</td>
+                  <td class="p-1.5 text-slate-300">${escEsc(escAjudantesTexto(l))}${escEscaladoHtml(l, 'ajudante_escalado')}${escEscaladoHtml(l, 'ajudante_2_escalado')}</td>
                   <td class="p-1"><input id="escf-${l.id}-peso" inputmode="decimal" class="${ESC_INPUT} text-right" value="${escEsc(escFmt(l.peso))}" onchange="escLinhaCampo('${l.id}','peso',this.value)"></td>
                   <td class="p-1"><input id="escf-${l.id}-valor" inputmode="decimal" class="${ESC_INPUT} text-right" value="${escEsc(escFmt(l.valor))}" onchange="escLinhaCampo('${l.id}','valor',this.value)"></td>
                   <td class="p-1"><input id="escf-${l.id}-qt_entregas" inputmode="numeric" class="${ESC_INPUT} text-right" value="${escEsc(l.qt_entregas === null || l.qt_entregas === undefined ? '' : l.qt_entregas)}" onchange="escLinhaCampo('${l.id}','qt_entregas',this.value)"></td>
@@ -1526,16 +1704,21 @@ async function escDesenhar(tipo) {
 
 async function escGerarImagem(tipo) {
   const st = window._escala;
-  const modal = document.getElementById('modal-container');
-  if (!modal) return;
   const canvas = await escDesenhar(tipo);
   const nome = `${tipo === 'fechamento' ? 'FECHAMENTO' : 'CONVOCACAO'} ${escDataBr(st.data).replace(/\//g, '.')}.png`;
+  escMostrarImagem(canvas, nome, `${tipo === 'fechamento' ? 'Relatório de fechamento' : 'Convocação'} — ${escDataBr(st.data)}`);
+}
+window.escGerarImagem = escGerarImagem;
+
+function escMostrarImagem(canvas, nome, titulo) {
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
   window._escImagem = { canvas, nome };
   const podeCompartilhar = !!(navigator.canShare && window.File);
   modal.innerHTML = `
     <div class="bg-slate-900 border border-slate-700 rounded-xl p-4 max-w-5xl w-full shadow-2xl space-y-3 max-h-[92vh] flex flex-col">
       <div class="flex justify-between items-center border-b border-slate-800 pb-2">
-        <h3 class="font-bold text-white text-sm">🖼️ ${tipo === 'fechamento' ? 'Relatório de fechamento' : 'Convocação'} — ${escDataBr(st.data)}</h3>
+        <h3 class="font-bold text-white text-sm">🖼️ ${escEsc(titulo)}</h3>
         <button onclick="closeModal()" class="text-slate-400 hover:text-white text-sm">✕</button>
       </div>
       <div class="overflow-auto bg-white rounded flex-1"><img src="${canvas.toDataURL('image/png')}" class="w-full h-auto" alt="Prévia"></div>
@@ -1548,7 +1731,6 @@ async function escGerarImagem(tipo) {
     </div>`;
   modal.classList.remove('hidden');
 }
-window.escGerarImagem = escGerarImagem;
 
 function escImagemBlob() {
   return new Promise(res => window._escImagem.canvas.toBlob(res, 'image/png'));
@@ -1612,3 +1794,498 @@ function escImagemImprimir() {
   img.src = canvas.toDataURL('image/png');
 }
 window.escImagemImprimir = escImagemImprimir;
+
+// =============================================================================
+// FOLGAS (7.0.0, migration 64)
+// =============================================================================
+// Atestado de prestador entra aqui como folga com justificativa: o tratamento
+// Abonado é o que diz que não gera desconto. O app só registra; não calcula valor.
+const ESC_FOLGA_CATEGORIAS = ['FOLGA PESSOAL', 'CONSULTA/EXAME', 'ATESTADO', 'AUDIÊNCIA/ÓRGÃO PÚBLICO', 'FALTA', 'FÉRIAS', 'OUTROS'];
+const ESC_FOLGA_APROVADORES = ['LUIZINHO', 'VICTOR HUGO', 'PAULO'];
+
+function escFolgaDias(f) {
+  return Math.round((new Date(`${f.data_fim}T12:00:00`) - new Date(`${f.data_inicio}T12:00:00`)) / 86400000) + 1;
+}
+
+// Negada ou cancelada não tira ninguém da escala.
+function escFolgaValida(f) { return f.parecer !== 'NEGADO' && f.parecer !== 'CANCELADO'; }
+
+function escFolgasNaData(dataIso) {
+  return (window._escala.folgas || []).filter(f => escFolgaValida(f) && f.data_inicio <= dataIso && f.data_fim >= dataIso);
+}
+
+function escTextoFolga(f) {
+  const periodo = f.data_inicio === f.data_fim ? escDataBr(f.data_inicio) : `${escDataBr(f.data_inicio)} a ${escDataBr(f.data_fim)}`;
+  return `${f.parecer === 'ACEITO' ? 'de folga' : 'folga sem parecer'}: ${f.categoria}${f.periodo !== 'INTEGRAL' ? ' · ' + f.periodo : ''} · ${periodo}`;
+}
+
+// Para o Dossiê, que pode abrir antes de a Escala ter sido aberta.
+async function escCarregarFolgas() {
+  const st = window._escala;
+  const cs = window.cloudStore;
+  if (st.folgas || st.lendoFolgas || !cs || !cs.isConfigured()) return;
+  st.lendoFolgas = true;
+  try {
+    const f = await cs.getAll('escala_folgas', 'is_deleted=is.false');
+    if (f) { st.folgas = f; renderApp(); }
+  } finally {
+    st.lendoFolgas = false;
+  }
+}
+
+function escFolgasDoPrestador(nome) {
+  const st = window._escala;
+  if (!st.folgas) { escCarregarFolgas(); return []; }
+  const alvo = escNorm(nome);
+  return st.folgas.filter(f => escNorm(f.colaborador_nome) === alvo)
+    .map(f => Object.assign({}, f, { data: f.data_inicio, dias: escFolgaDias(f) }));
+}
+window.escFolgasDoPrestador = escFolgasDoPrestador;
+
+function escFuncaoPrestador(nome) {
+  const l = escListas();
+  const n = escNorm(nome);
+  if (l.motoristas.some(x => escNorm(x) === n)) return 'MOTORISTA';
+  if (l.ajudantes.some(x => escNorm(x) === n)) return 'AJUDANTE';
+  return '';
+}
+
+function escFiltrarLinhas(idTabela, termo) {
+  const alvo = escNorm(termo);
+  document.querySelectorAll(`#${idTabela} tbody tr[data-busca]`).forEach(tr => {
+    tr.style.display = !alvo || tr.getAttribute('data-busca').includes(alvo) ? '' : 'none';
+  });
+}
+
+function escCorParecer(p) {
+  return p === 'ACEITO' ? 'text-emerald-300' : (p === 'PENDENTE' ? 'text-amber-300' : 'text-red-300');
+}
+
+function escTelaFolgas() {
+  const st = window._escala;
+  const cab = escCabecalho('🌴', 'Folgas', 'Folgas, ausências e justificativas dos prestadores. Entram na Disponibilidade, nos avisos da Convocação e no Dossiê.',
+    `<button onclick="escFolgaAbrir('')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">＋ Nova folga</button>`);
+  if (!st.folgas) return cab + escCarregandoHtml();
+  const hoje = hojeIsoBrasilia();
+  const abertas = f => f.data_fim >= hoje || f.parecer === 'PENDENTE' || f.tratamento === 'PENDENTE';
+  const lista = st.folgas.filter(f => st.folgaVisao === 'TODAS' || abertas(f))
+    .slice().sort((a, b) => String(b.data_inicio).localeCompare(String(a.data_inicio)));
+  const aba = (k, t) => `<button onclick="escFolgaVisao('${k}')" class="px-3 py-1.5 rounded-lg text-xs font-bold ${st.folgaVisao === k ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-700'}">${t}</button>`;
+  const alvo = escNorm(st.folgaBusca);
+  return `${cab}
+    <div class="flex flex-wrap items-center gap-2">
+      ${aba('ABERTAS', 'Em aberto e futuras')}${aba('TODAS', 'Todas')}
+      <input type="search" value="${escEsc(st.folgaBusca)}" placeholder="Buscar prestador ou motivo" oninput="window._escala.folgaBusca=this.value; escFiltrarLinhas('esc-tab-folgas', this.value)"
+        class="bg-slate-800 border border-slate-700 text-white rounded-lg px-2 py-1.5 text-xs w-60 max-w-full">
+    </div>
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
+      <table id="esc-tab-folgas" class="w-full text-xs min-w-[1000px]">
+        <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase">
+          <tr><th class="p-2 text-left">Prestador</th><th class="p-2 text-left">Função</th><th class="p-2 text-left">Categoria / Motivo</th><th class="p-2">Início</th><th class="p-2">Fim</th><th class="p-2">Dias</th>
+          <th class="p-2">Período</th><th class="p-2">Parecer</th><th class="p-2 text-left">Aprovado por</th><th class="p-2 text-left">Substituto</th><th class="p-2">Tratamento</th><th class="p-2 w-16"></th></tr>
+        </thead>
+        <tbody>
+          ${lista.length ? lista.map(f => {
+            const busca = escNorm(`${f.colaborador_nome} ${f.categoria} ${f.motivo || ''} ${f.substituto || ''}`);
+            return `<tr data-busca="${escEsc(busca)}" class="border-t border-slate-800 text-slate-300" ${alvo && !busca.includes(alvo) ? 'style="display:none"' : ''}>
+              <td class="p-2 font-bold text-white">${escEsc(f.colaborador_nome)}</td>
+              <td class="p-2">${escEsc(f.colaborador_tipo || '—')}</td>
+              <td class="p-2"><div class="font-bold">${escEsc(f.categoria)}</div>${f.motivo && f.motivo !== f.categoria ? `<div class="text-[10px] text-slate-400">${escEsc(f.motivo)}</div>` : ''}</td>
+              <td class="p-2 text-center whitespace-nowrap">${escDataBr(f.data_inicio)}</td>
+              <td class="p-2 text-center whitespace-nowrap">${escDataBr(f.data_fim)}</td>
+              <td class="p-2 text-center">${escFolgaDias(f)}</td>
+              <td class="p-2 text-center">${escEsc(f.periodo)}</td>
+              <td class="p-2 text-center font-bold ${escCorParecer(f.parecer)}">${escEsc(f.parecer)}</td>
+              <td class="p-2">${escEsc(f.aprovado_por || '—')}</td>
+              <td class="p-2">${escEsc(f.substituto || '—')}</td>
+              <td class="p-2 text-center">${escEsc(f.tratamento)}</td>
+              <td class="p-2 whitespace-nowrap text-center">
+                <button onclick="escFolgaAbrir('${f.id}')" class="text-blue-400 hover:text-blue-300 px-0.5" title="Editar">✏️</button>
+                <button onclick="escFolgaExcluir('${f.id}')" class="text-red-400 hover:text-red-300 px-0.5" title="Excluir">🗑</button>
+              </td>
+            </tr>`;
+          }).join('') : `<tr><td colspan="12" class="p-4 text-center text-slate-500">Nenhuma folga ${st.folgaVisao === 'TODAS' ? 'lançada' : 'em aberto'}.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function escFolgaVisao(v) { window._escala.folgaVisao = v; renderApp(); }
+window.escFolgaVisao = escFolgaVisao;
+
+function escFolgaAbrir(id) {
+  const st = window._escala;
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+  const f = (st.folgas || []).find(x => String(x.id) === String(id)) || {};
+  const cls = 'w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5';
+  const opcoes = (lista, atual) => lista.map(o => `<option value="${escEsc(o)}" ${o === atual ? 'selected' : ''}>${escEsc(o)}</option>`).join('');
+  const hoje = hojeIsoBrasilia();
+  modal.innerHTML = `
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-xl w-full shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-2">
+        <h3 class="font-bold text-white text-sm">🌴 ${f.id ? 'Editar folga' : 'Nova folga'}</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white text-sm">✕</button>
+      </div>
+      <form onsubmit="escFolgaSalvar(event, '${f.id || ''}')" class="space-y-3 text-xs">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <div class="sm:col-span-2"><label class="block text-[10px] text-slate-400 mb-1">Prestador *</label><input id="esc-fg-nome" required list="esc-dl-pessoas" value="${escEsc(f.colaborador_nome || '')}" class="${cls} uppercase"></div>
+          <div><label class="block text-[10px] text-slate-400 mb-1">Solicitada em</label><input id="esc-fg-sol" type="date" value="${escEsc(f.data_solicitacao || hoje)}" class="${cls}"></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div><label class="block text-[10px] text-slate-400 mb-1">Categoria *</label><select id="esc-fg-cat" onchange="escFolgaCategoria(this.value)" class="${cls}">${opcoes(ESC_FOLGA_CATEGORIAS, f.categoria || 'FOLGA PESSOAL')}</select></div>
+          <div><label class="block text-[10px] text-slate-400 mb-1">Período</label><select id="esc-fg-per" class="${cls}">${opcoes(['INTEGRAL', 'MATUTINO', 'VESPERTINO'], f.periodo || 'INTEGRAL')}</select></div>
+        </div>
+        <div><label class="block text-[10px] text-slate-400 mb-1">Motivo</label><input id="esc-fg-mot" value="${escEsc(f.motivo || '')}" class="${cls} uppercase"></div>
+        <div class="grid grid-cols-2 gap-2">
+          <div><label class="block text-[10px] text-slate-400 mb-1">Início *</label><input id="esc-fg-ini" type="date" required value="${escEsc(f.data_inicio || '')}" class="${cls}"></div>
+          <div><label class="block text-[10px] text-slate-400 mb-1">Fim (vazio = 1 dia)</label><input id="esc-fg-fim" type="date" value="${escEsc(f.data_fim || '')}" class="${cls}"></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div><label class="block text-[10px] text-slate-400 mb-1">Parecer</label><select id="esc-fg-par" class="${cls}">${opcoes(['PENDENTE', 'ACEITO', 'NEGADO', 'CANCELADO'], f.parecer || 'PENDENTE')}</select></div>
+          <div><label class="block text-[10px] text-slate-400 mb-1">Aprovado por</label><input id="esc-fg-apr" list="esc-dl-aprovadores" value="${escEsc(f.aprovado_por || '')}" class="${cls} uppercase"><datalist id="esc-dl-aprovadores">${ESC_FOLGA_APROVADORES.map(a => `<option value="${a}"></option>`).join('')}</datalist></div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div><label class="block text-[10px] text-slate-400 mb-1">Substituto</label><input id="esc-fg-sub" list="esc-dl-pessoas" value="${escEsc(f.substituto || '')}" class="${cls} uppercase"></div>
+          <div><label class="block text-[10px] text-slate-400 mb-1">Tratamento</label><select id="esc-fg-tra" class="${cls}">${opcoes(['PENDENTE', 'ABONADO', 'DESCONTADO'], f.tratamento || 'PENDENTE')}</select>
+            <p class="text-[9px] text-slate-500 mt-1">Abonado: com justificativa, não gera desconto.</p></div>
+        </div>
+        <div class="flex justify-end gap-2 pt-1">
+          <button type="button" onclick="closeModal()" class="bg-slate-800 text-slate-300 font-bold px-3 py-1.5 rounded">Cancelar</button>
+          <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-1.5 rounded shadow">Salvar</button>
+        </div>
+      </form>
+    </div>`;
+  modal.classList.remove('hidden');
+}
+window.escFolgaAbrir = escFolgaAbrir;
+
+function escFolgaCategoria(c) {
+  const t = document.getElementById('esc-fg-tra');
+  if (c === 'ATESTADO' && t && t.value === 'PENDENTE') t.value = 'ABONADO';
+}
+window.escFolgaCategoria = escFolgaCategoria;
+
+async function escFolgaSalvar(e, id) {
+  e.preventDefault();
+  const st = window._escala;
+  const val = k => document.getElementById(`esc-fg-${k}`).value;
+  const nome = String(val('nome')).toUpperCase().trim();
+  const inicio = val('ini');
+  const fim = val('fim') || inicio;
+  if (!nome || !inicio) { alert('⚠️ Informe o prestador e o início.'); return; }
+  if (fim < inicio) { alert('⚠️ O fim da folga está antes do início.'); return; }
+  const funcao = escFuncaoPrestador(nome);
+  if (!funcao && !confirm(`${nome} não está em Cadastros Mestres. Salvar assim mesmo?`)) return;
+  const parecer = val('par');
+  const sobre = st.folgas.filter(f => String(f.id) !== String(id) && escNorm(f.colaborador_nome) === escNorm(nome)
+    && escFolgaValida(f) && f.data_inicio <= fim && f.data_fim >= inicio);
+  if (sobre.length && parecer !== 'NEGADO' && parecer !== 'CANCELADO'
+    && !confirm(`⚠️ ${nome} já tem folga de ${escDataBr(sobre[0].data_inicio)} a ${escDataBr(sobre[0].data_fim)}. Salvar assim mesmo?`)) return;
+
+  const atual = st.folgas.find(f => String(f.id) === String(id));
+  const reg = escCarimbar(Object.assign({}, atual || { id: db.gerarIdUnico(), is_deleted: false }, {
+    colaborador_tipo: funcao || (atual && atual.colaborador_tipo) || '',
+    colaborador_nome: nome, data_solicitacao: val('sol') || null, categoria: val('cat'),
+    motivo: String(val('mot')).toUpperCase().trim(), data_inicio: inicio, data_fim: fim, periodo: val('per'), parecer,
+    aprovado_por: String(val('apr')).toUpperCase().trim(), substituto: String(val('sub')).toUpperCase().trim(), tratamento: val('tra')
+  }), !atual);
+  try {
+    await escGravar('escala_folgas', reg);
+  } catch (err) { closeModal(); escFalha(err); return; }
+  if (atual) Object.assign(atual, reg); else st.folgas.push(reg);
+  closeModal();
+  renderApp();
+}
+window.escFolgaSalvar = escFolgaSalvar;
+
+async function escFolgaExcluir(id) {
+  const st = window._escala;
+  const f = st.folgas.find(x => String(x.id) === String(id));
+  if (!f || !confirm(`Excluir a folga de ${f.colaborador_nome} (${escDataBr(f.data_inicio)})?`)) return;
+  const reg = escCarimbar(Object.assign({}, f, { is_deleted: true, deleted_at: agoraIsoBrasilia(), deleted_by_nome: escUsuario() }), false);
+  try {
+    await escGravar('escala_folgas', reg);
+  } catch (err) { escFalha(err); return; }
+  st.folgas = st.folgas.filter(x => x !== f);
+  renderApp();
+}
+window.escFolgaExcluir = escFolgaExcluir;
+
+// =============================================================================
+// DISPONIBILIDADE (7.0.0)
+// =============================================================================
+const ESC_DISP = {
+  DISPONIVEL: { ordem: 1, rotulo: 'Disponível', icone: '🟢', cor: 'text-emerald-300' },
+  VERIFICAR: { ordem: 2, rotulo: 'Verificar', icone: '🟡', cor: 'text-amber-300' },
+  VIAGEM: { ordem: 3, rotulo: 'Em viagem', icone: '🟠', cor: 'text-orange-300' },
+  ESCALADO: { ordem: 4, rotulo: 'Escalado', icone: '🔵', cor: 'text-sky-300' },
+  FOLGA: { ordem: 5, rotulo: 'De folga', icone: '🟣', cor: 'text-violet-300' },
+  PARADO: { ordem: 6, rotulo: 'Parado em rota', icone: '🔴', cor: 'text-red-300' },
+  RETIDO: { ordem: 7, rotulo: 'Retido', icone: '🔴', cor: 'text-red-300' }
+};
+
+// Retido e parado em rota são coisas diferentes: retenção é o veículo preso na
+// manutenção; parado é a ocorrência em rota ainda aberta.
+function escVeiculosParados() {
+  const mapa = new Map();
+  if (typeof db === 'undefined') return mapa;
+  (db.getRetencoesFrota ? db.getRetencoesFrota() : []).filter(r => r.status === 'RETIDO').forEach(r => {
+    const prev = String(r.data_previsao || '').slice(0, 10);
+    mapa.set(escNorm(r.placa), { sit: 'RETIDO', texto: `retido${r.motivo ? ': ' + r.motivo : ''}${prev ? ' · previsão ' + escDataBr(prev) : ''}` });
+  });
+  (db.getOcorrenciasRota ? db.getOcorrenciasRota() : []).filter(r => r.veiculo_parado && r.status_chamado !== 'finalizado').forEach(r => {
+    const placa = escNorm(r.veiculo_placa);
+    if (placa && !mapa.has(placa)) mapa.set(placa, { sit: 'PARADO', texto: `parado em rota: ${r.numero_protocolo || 'chamado aberto'}${r.localizacao ? ' · ' + r.localizacao : ''}` });
+  });
+  return mapa;
+}
+
+// Situação de cada pessoa e veículo na data; vale a primeira que se aplicar.
+// Inativo não entra: a lista parte dos cadastros ativos.
+function escDisponibilidade(dataIso) {
+  const st = window._escala;
+  const linhas = st.linhas[dataIso] || [];
+  const ocupacao = escOcupacao(linhas, dataIso, st.vizinhas[dataIso]);
+  const folgas = escFolgasNaData(dataIso);
+  const parados = escVeiculosParados();
+  const cadastro = escPessoasCadastro();
+  const listas = escListas();
+
+  const escalados = new Map(), placasEscaladas = new Map();
+  linhas.forEach(l => {
+    escPessoas(l.motorista).forEach(p => escalados.set(escResolverPessoa(p, cadastro), `${l.rota} (motorista)`));
+    escPessoasAjudantes(l).forEach(p => escalados.set(escResolverPessoa(p, cadastro), `${l.rota} (ajudante)`));
+    if (l.placa) placasEscaladas.set(escNorm(l.placa), l.rota);
+  });
+
+  const pelaOcupacao = itens => {
+    const viagem = itens.filter(o => o.tipo === 'VIAGEM').sort((a, b) => b.prev.localeCompare(a.prev))[0];
+    if (viagem) return { sit: 'VIAGEM', detalhe: viagem.texto, volta: viagem.prev };
+    const verificar = itens.find(o => o.tipo === 'VERIFICAR');
+    if (verificar) return { sit: 'VERIFICAR', detalhe: verificar.texto, volta: verificar.prev };
+    return null;
+  };
+  const voltaAntes = itens => {
+    const r = itens.find(o => o.tipo === 'RETORNA');
+    return r ? { sit: 'DISPONIVEL', detalhe: r.texto, volta: r.prev } : { sit: 'DISPONIVEL', detalhe: '', volta: '' };
+  };
+
+  const pessoa = nome => {
+    const p = escNorm(nome);
+    const minhas = folgas.filter(f => escNorm(f.colaborador_nome) === p);
+    const aceita = minhas.find(f => f.parecer === 'ACEITO');
+    const base = { nome };
+    if (aceita) return Object.assign(base, { sit: 'FOLGA', detalhe: escTextoFolga(aceita), volta: '' });
+    if (escalados.has(p)) return Object.assign(base, { sit: 'ESCALADO', detalhe: escalados.get(p), volta: '' });
+    const itens = ocupacao.filter(o => o.motoristas.includes(p) || o.ajudantes.includes(p));
+    const fora = pelaOcupacao(itens);
+    if (fora) return Object.assign(base, fora);
+    if (minhas.length) return Object.assign(base, { sit: 'VERIFICAR', detalhe: escTextoFolga(minhas[0]), volta: '' });
+    return Object.assign(base, voltaAntes(itens));
+  };
+
+  const veiculo = placa => {
+    const k = escNorm(placa);
+    const cad = ((typeof db !== 'undefined' && db.data.veiculos) || []).find(v => escNorm(v.placa) === k) || {};
+    const base = { nome: placa, tipo: cad.tipo || cad.modelo || '', setor: cad.setor || '' };
+    if (parados.has(k)) return Object.assign(base, { sit: parados.get(k).sit, detalhe: parados.get(k).texto, volta: '' });
+    if (placasEscaladas.has(k)) return Object.assign(base, { sit: 'ESCALADO', detalhe: placasEscaladas.get(k), volta: '' });
+    const itens = ocupacao.filter(o => o.placa === k);
+    return Object.assign(base, pelaOcupacao(itens) || voltaAntes(itens));
+  };
+
+  // Nome em viagem que não bate com o cadastro: sem isto, quem está na rua
+  // sumiria da lista e o nome certo apareceria como disponível.
+  const foraDoCadastro = campo => {
+    const nomes = new Map();
+    ocupacao.filter(o => o.tipo !== 'RETORNA').forEach(o => o[campo].forEach(p => { if (!cadastro.has(p) && !nomes.has(p)) nomes.set(p, o); }));
+    return Array.from(nomes, ([nome, o]) => ({ nome, sit: 'VERIFICAR', detalhe: `nome fora do cadastro · ${o.texto}`, volta: o.prev }));
+  };
+
+  const ordenar = arr => arr.sort((a, b) => (ESC_DISP[a.sit].ordem - ESC_DISP[b.sit].ordem) || a.nome.localeCompare(b.nome, 'pt-BR'));
+  // Passeio, utilitário, carreta e cavalo não servem de substituto na largada.
+  const fazRota = v => !['PASSEIO', 'UTILITARIO', 'CARRETA', 'CAVALO'].includes(escNorm(v.tipo));
+  return {
+    MOTORISTA: ordenar(listas.motoristas.map(pessoa).concat(foraDoCadastro('motoristas'))),
+    AJUDANTE: ordenar(listas.ajudantes.map(pessoa).concat(foraDoCadastro('ajudantes'))),
+    VEICULO: ordenar(listas.placas.map(veiculo).filter(fazRota))
+  };
+}
+
+function escDispAba(a) { const st = window._escala; st.dispAba = a; st.dispSituacao = 'TODAS'; renderApp(); }
+function escDispSituacao(s) { window._escala.dispSituacao = s; renderApp(); }
+function escDispSetor(s) { const st = window._escala; st.dispSetor = s; st.dispSituacao = 'TODAS'; renderApp(); }
+window.escDispSetor = escDispSetor;
+window.escDispAba = escDispAba;
+window.escDispSituacao = escDispSituacao;
+
+function escTelaDisponibilidade() {
+  const st = window._escala;
+  const cab = escCabecalho('👥', 'Disponibilidade', 'Quem está livre na data, cruzando escala, viagens abertas, folgas e veículos parados. Inativos não aparecem.',
+    `<button onclick="escGerarArquivoDisponiveis()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">📄 Arquivo dos disponíveis</button>
+     <button onclick="escExcelDisponiveis()" class="bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 font-bold px-3 py-2 rounded-xl text-xs">⬇️ Excel</button>`);
+  if (!st.matrizes || !st.folgas || !st.linhas[st.data]) return cab + escSeletorData() + escCarregandoHtml();
+
+  const d = escDisponibilidade(st.data);
+  const abas = { MOTORISTA: 'Motoristas', AJUDANTE: 'Ajudantes', VEICULO: 'Veículos' };
+  const veiculos = st.dispAba === 'VEICULO';
+  const lista = veiculos && st.dispSetor !== 'TODOS' ? d.VEICULO.filter(x => x.setor === st.dispSetor) : d[st.dispAba];
+  const qtd = sit => lista.filter(x => x.sit === sit).length;
+  const presentes = Object.keys(ESC_DISP).filter(sit => qtd(sit));
+  const chip = (k, texto) => `<button onclick="escDispSituacao('${k}')" class="px-2 py-1 rounded-lg border text-[11px] font-bold ${st.dispSituacao === k ? 'border-emerald-500 bg-emerald-950/60 text-white' : 'border-slate-700 bg-slate-900 text-slate-300'}">${texto}</button>`;
+  const visiveis = st.dispSituacao === 'TODAS' ? lista : lista.filter(x => x.sit === st.dispSituacao);
+  const alvo = escNorm(st.dispBusca);
+  const setorBtn = (k, t) => `<button onclick="escDispSetor('${k}')" class="px-3 py-1 rounded-lg text-[11px] font-bold ${st.dispSetor === k ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-300 border border-slate-700'}">${t}</button>`;
+  return `${cab}
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      ${escSeletorData()}
+      <div class="flex gap-1">
+        ${Object.keys(abas).map(k => `<button onclick="escDispAba('${k}')" class="px-3 py-1.5 rounded-lg text-xs font-bold ${st.dispAba === k ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-700'}">${abas[k]} (${d[k].filter(x => x.sit === 'DISPONIVEL').length})</button>`).join('')}
+      </div>
+    </div>
+    ${veiculos ? `<div class="flex flex-wrap gap-1">${setorBtn('TODOS', 'Frio e seco')}${setorBtn('FRIO', '❄️ Frio')}${setorBtn('SECO', '📦 Seco')}</div>` : ''}
+    <div class="flex flex-wrap items-center gap-1.5">
+      ${chip('TODAS', `Todos (${lista.length})`)}
+      ${presentes.map(sit => chip(sit, `${ESC_DISP[sit].icone} ${ESC_DISP[sit].rotulo} (${qtd(sit)})`)).join('')}
+      <input type="search" value="${escEsc(st.dispBusca)}" placeholder="Buscar" oninput="window._escala.dispBusca=this.value; escFiltrarLinhas('esc-tab-disp', this.value)"
+        class="bg-slate-800 border border-slate-700 text-white rounded-lg px-2 py-1 text-xs w-48 max-w-full">
+    </div>
+    <p class="text-[11px] text-slate-500">Em viagem: previsão de chegada depois das 06:00 de ${escDataBr(st.data)}, pela escala ou pela matriz da rota. Quem chega antes aparece como disponível, com a previsão ao lado.</p>
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
+      <table id="esc-tab-disp" class="w-full text-xs min-w-[640px]">
+        <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase">
+          <tr><th class="p-2 text-left">${veiculos ? 'Placa' : 'Nome'}</th>${veiculos ? '<th class="p-2 text-left">Tipo</th><th class="p-2 text-left">Setor</th>' : ''}<th class="p-2 text-left">Situação</th><th class="p-2 text-left">Detalhe</th></tr>
+        </thead>
+        <tbody>
+          ${visiveis.length ? visiveis.map(x => {
+            const info = ESC_DISP[x.sit];
+            const busca = escNorm(`${x.nome} ${x.tipo || ''} ${x.setor || ''} ${x.detalhe}`);
+            return `<tr data-busca="${escEsc(busca)}" class="border-t border-slate-800 text-slate-300" ${alvo && !busca.includes(alvo) ? 'style="display:none"' : ''}>
+              <td class="p-2 font-bold text-white">${escEsc(x.nome)}</td>
+              ${veiculos ? `<td class="p-2">${escEsc(x.tipo || '—')}</td><td class="p-2">${escEsc(x.setor || '—')}</td>` : ''}
+              <td class="p-2 whitespace-nowrap font-bold ${info.cor}">${info.icone} ${info.rotulo}</td>
+              <td class="p-2">${escEsc(x.detalhe || '—')}</td>
+            </tr>`;
+          }).join('') : `<tr><td colspan="${veiculos ? 5 : 3}" class="p-4 text-center text-slate-500">Ninguém nesta situação.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// O que vai para o arquivo da largada: quem pode cobrir uma falta agora.
+function escBlocosDisponiveis(dataIso) {
+  const d = escDisponibilidade(dataIso);
+  const funcoes = [['MOTORISTA', 'Motorista'], ['AJUDANTE', 'Ajudante'], ['VEICULO', 'Veículo']];
+  const juntar = filtro => funcoes.flatMap(([k, rotulo]) => d[k].filter(filtro).map(x => Object.assign({ funcao: x.setor ? `${rotulo} ${x.setor}` : rotulo }, x)));
+  const livres = k => d[k].filter(x => x.sit === 'DISPONIVEL');
+  return {
+    motoristas: livres('MOTORISTA'), ajudantes: livres('AJUDANTE'), veiculos: livres('VEICULO'),
+    retornam: juntar(x => x.sit === 'VIAGEM' && String(x.volta).slice(0, 10) === dataIso)
+      .sort((a, b) => a.volta.localeCompare(b.volta)),
+    confirmar: juntar(x => x.sit === 'VERIFICAR')
+  };
+}
+
+function escEmissaoBr() {
+  const agora = String(agoraIsoBrasilia());
+  return `${escDataBr(agora.slice(0, 10))} ${agora.slice(11, 16)}`;
+}
+
+async function escDesenharDisponiveis(dataIso) {
+  const b = escBlocosDisponiveis(dataIso);
+  const W = 1500, H_TIT = 84, H_CAB = 38, H_LIN = 30, GAP = 24;
+  // Veículo do frio é refrigerado e não vira seco: cada setor em coluna própria.
+  const placas = setor => b.veiculos.filter(x => x.setor === setor).map(x => x.tipo ? `${x.nome} · ${x.tipo}` : x.nome);
+  const colunasVeiculos = [['VEÍCULOS FRIO', 'FRIO'], ['VEÍCULOS SECO', 'SECO'], ['VEÍCULOS SEM SETOR', '']]
+    .map(([titulo, setor]) => [titulo, placas(setor)]).filter(([titulo, itens]) => itens.length || titulo !== 'VEÍCULOS SEM SETOR');
+  const colunas = [['MOTORISTAS', b.motoristas.map(x => x.nome), 500], ['AJUDANTES', b.ajudantes.map(x => x.nome), 500]]
+    .concat(colunasVeiculos.map(c => c.concat(500 / colunasVeiculos.length)));
+  const tabelas = [
+    ['RETORNAM HOJE', [['Nome', 560], ['Função', 170], ['Viagem', 770]],
+      b.retornam.map(x => [x.nome, x.funcao, x.detalhe.replace(/^em viagem: /, '')])],
+    ['A CONFIRMAR', [['Nome', 560], ['Função', 170], ['Por quê', 770]], b.confirmar.map(x => [x.nome, x.funcao, x.detalhe])]
+  ].filter(t => t[2].length);
+  const maxLinhas = Math.max(1, ...colunas.map(c => c[1].length));
+  let H = H_TIT + H_CAB + maxLinhas * H_LIN + GAP;
+  tabelas.forEach(t => { H += H_CAB * 2 + t[2].length * H_LIN + GAP; });
+
+  const canvas = document.createElement('canvas');
+  const esc = 1.5;
+  canvas.width = Math.ceil(W * esc); canvas.height = Math.ceil(H * esc);
+  const ctx = canvas.getContext('2d');
+  ctx.scale(esc, esc);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+  const VERDE_CLARO = '#b6e3a6', VERDE_ESCURO = '#25541c', LINHA_A = '#f2f2f2', AMARELO = '#ffff00', AZUL = '#1f5fa8';
+  const caixa = (x, y, w, h, fundo) => {
+    if (fundo) { ctx.fillStyle = fundo; ctx.fillRect(x, y, w, h); }
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+  };
+  const texto = (t, x, y, w, h, cor = '#111', tam = 15, alinh = 'left') => {
+    t = String(t === null || t === undefined ? '' : t);
+    escTextoCabe(ctx, t, w - 12, true, tam);
+    ctx.fillStyle = cor; ctx.textBaseline = 'middle'; ctx.textAlign = alinh;
+    ctx.fillText(t, alinh === 'center' ? x + w / 2 : (alinh === 'right' ? x + w - 6 : x + 8), y + h / 2 + 1);
+  };
+
+  const logo = await escCarregarLogo();
+  if (logo) { const lh = 62; ctx.drawImage(logo, 12, 11, lh * logo.width / logo.height, lh); }
+  texto('DISPONÍVEIS PARA SUBSTITUIÇÃO', 240, 0, W - 480, H_TIT, AZUL, 32, 'center');
+  texto(`${escDataBr(dataIso)} · ${ESC_DIAS[escDiaSemana(dataIso)] || ''}`, W - 300, 12, 300, 30, '#333', 15, 'right');
+  texto(`Emitido em ${escEmissaoBr()}`, W - 300, 42, 300, 30, '#333', 13, 'right');
+
+  let y = H_TIT, x = 0;
+  colunas.forEach(([titulo, itens, w]) => {
+    caixa(x, y, w, H_CAB, VERDE_ESCURO);
+    texto(`${titulo} (${itens.length})`, x, y, w, H_CAB, '#fff', 17, 'center');
+    for (let i = 0; i < maxLinhas; i++) {
+      caixa(x, y + H_CAB + i * H_LIN, w, H_LIN, i % 2 ? '#ffffff' : LINHA_A);
+      if (itens[i]) texto(itens[i], x, y + H_CAB + i * H_LIN, w, H_LIN, '#111', 14);
+    }
+    x += w;
+  });
+  y += H_CAB + maxLinhas * H_LIN + GAP;
+
+  tabelas.forEach(([titulo, cols, linhas]) => {
+    caixa(0, y, W, H_CAB, titulo === 'A CONFIRMAR' ? AMARELO : VERDE_CLARO);
+    texto(titulo, 0, y, W, H_CAB, '#111', 17, 'center');
+    y += H_CAB;
+    let xx = 0;
+    cols.forEach(([nome, w]) => { caixa(xx, y, w, H_CAB, LINHA_A); texto(nome, xx, y, w, H_CAB, '#111', 14); xx += w; });
+    y += H_CAB;
+    linhas.forEach(l => {
+      let xc = 0;
+      cols.forEach(([, w], k) => { caixa(xc, y, w, H_LIN, null); texto(l[k], xc, y, w, H_LIN, '#111', 14); xc += w; });
+      y += H_LIN;
+    });
+    y += GAP;
+  });
+  return canvas;
+}
+
+async function escGerarArquivoDisponiveis() {
+  const st = window._escala;
+  const canvas = await escDesenharDisponiveis(st.data);
+  escMostrarImagem(canvas, `DISPONIVEIS ${escDataBr(st.data).replace(/\//g, '.')}.png`, `Disponíveis — ${escDataBr(st.data)}`);
+}
+window.escGerarArquivoDisponiveis = escGerarArquivoDisponiveis;
+
+function escExcelDisponiveis() {
+  const st = window._escala;
+  const b = escBlocosDisponiveis(st.data);
+  const livres = [['Função', 'Nome / Placa', 'Tipo', 'Setor', 'Observação']]
+    .concat(b.motoristas.map(x => ['Motorista', x.nome, '', '', x.detalhe]))
+    .concat(b.ajudantes.map(x => ['Ajudante', x.nome, '', '', x.detalhe]))
+    .concat(b.veiculos.map(x => ['Veículo', x.nome, x.tipo, x.setor, x.detalhe]));
+  const wb = XLSX.utils.book_new();
+  const aba = (nome, dados, larguras) => {
+    const ws = XLSX.utils.aoa_to_sheet(dados);
+    ws['!cols'] = larguras.map(wch => ({ wch }));
+    XLSX.utils.book_append_sheet(wb, ws, nome);
+  };
+  aba('Disponíveis', livres, [12, 44, 14, 10, 60]);
+  aba('Retornam hoje', [['Função', 'Nome / Placa', 'Viagem']].concat(b.retornam.map(x => [x.funcao, x.nome, x.detalhe])), [12, 44, 70]);
+  aba('A confirmar', [['Função', 'Nome / Placa', 'Por quê']].concat(b.confirmar.map(x => [x.funcao, x.nome, x.detalhe])), [12, 44, 70]);
+  XLSX.writeFile(wb, `DISPONIVEIS ${escDataBr(st.data).replace(/\//g, '.')}.xlsx`);
+}
+window.escExcelDisponiveis = escExcelDisponiveis;
