@@ -6914,40 +6914,22 @@ function renderDashboardView() {
   const mttrMedioMs = countMttr > 0 ? (totalMttrMs / countMttr) : 0;
   const mttrMedioHhmmss = formatarDuracaoHHMMSS(mttrMedioMs, 'ms');
 
-  // 3. Taxa de Completude de Registro (% de ocorrências com TODOS OS CAMPOS preenchidos + pelo menos 1 foto ou 1 vídeo)
+  // 3. Taxa de Completude: mede so a ABERTURA no SAC (Tiago, 04/11/2026). Campos da abertura
+  // preenchidos e pelo menos 1 foto, video ou anexo de NF. Investigacao e gestao nao entram.
+  // A mesma regra esta na view vo_sac_indicadores (migration 72): mudou aqui, mude la.
+  const _temLista = (v) => (Array.isArray(v) ? v.length > 0 : typeof v === 'string' && !['', '[]', 'null'].includes(v.trim()));
   let countCompletas = 0;
   devs.forEach(d => {
     const temCliente = !!(d.cliente_id || d.cliente_nome);
-    const temNf = !!(d.nota_fiscal && String(d.nota_fiscal).trim() !== '');
+    const temNf = !!(d.nota_fiscal && String(d.nota_fiscal).trim() !== '') || _temLista(d.nf_paths);
     const temValor = (parseFloat(d.valor_reclamado) || 0) > 0;
     const temMotivo = !!(d.motivo_reclamado && String(d.motivo_reclamado).trim() !== '');
-    const temRota = !!(d.carga_rota && String(d.carga_rota).trim() !== '');
     const temMotorista = !!(d.motorista_nome && String(d.motorista_nome).trim() !== '' && String(d.motorista_nome).trim() !== 'N/A');
     const temVeiculo = !!(d.veiculo_placa && String(d.veiculo_placa).trim() !== '' && String(d.veiculo_placa).trim() !== 'N/A');
+    const temMidia = !!(d.foto_url || d.video_url) ||
+      [d.fotos_abertura, d.videos_abertura, d.fotos_abertura_paths, d.nf_paths].some(_temLista);
 
-    // Campos de investigação, apuração e gestão (todos os campos preenchidos)
-    const temCausaRaiz = !!(d.motivo_real_causa_raiz && String(d.motivo_real_causa_raiz).trim() !== '' && String(d.motivo_real_causa_raiz).trim() !== 'PENDENTE');
-    const temTipoErro = !!(d.tipo_erro && String(d.tipo_erro).trim() !== '' && String(d.tipo_erro).trim() !== 'NÃO CLASSIFICADO' && String(d.tipo_erro).trim() !== 'PENDENTE');
-    const temSeparador = !!(d.separador_apurado && String(d.separador_apurado).trim() !== '' && String(d.separador_apurado).trim() !== 'PENDENTE' && String(d.separador_apurado).trim() !== '—');
-    const temConferente = !!(d.conferente_apurado && String(d.conferente_apurado).trim() !== '' && String(d.conferente_apurado).trim() !== 'PENDENTE' && String(d.conferente_apurado).trim() !== '—');
-    const temAcaoGestor = !!(d.acao_gestor && String(d.acao_gestor).trim() !== '' && String(d.acao_gestor).trim() !== 'PENDENTE');
-    const temDestinoCd = !!(d.destino_cd && String(d.destino_cd).trim() !== '' && String(d.destino_cd).trim() !== 'PENDENTE');
-
-    // Pelo menos 1 Foto ou 1 Vídeo
-    const temMidia = !!(
-      d.foto_url || d.video_url || d.video_investigacao_url ||
-      (Array.isArray(d.midia_fotos) && d.midia_fotos.length > 0) ||
-      (Array.isArray(d.midia_videos) && d.midia_videos.length > 0) ||
-      (Array.isArray(d.fotos) && d.fotos.length > 0) ||
-      (Array.isArray(d.videos) && d.videos.length > 0) ||
-      (Array.isArray(d.anexos) && d.anexos.length > 0)
-    );
-
-    if (
-      temCliente && temNf && temValor && temMotivo && temRota && temMotorista && temVeiculo &&
-      temCausaRaiz && temTipoErro && temSeparador && temConferente && temAcaoGestor && temDestinoCd &&
-      temMidia
-    ) {
+    if (temCliente && temNf && temValor && temMotivo && temMotorista && temVeiculo && temMidia) {
       countCompletas++;
     }
   });
@@ -7504,7 +7486,7 @@ function renderDashboardView() {
               <span>✅</span> Taxa de Completude
             </div>
             <div class="text-xl font-black text-blue-300 mt-1">${taxaCompletude}%</div>
-            <div class="text-[10px] text-slate-400 mt-0.5">100% Campos + Foto/Vídeo</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">Abertura: campos + foto, vídeo ou NF</div>
           </div>
 
           <!-- CARD TAXA DE RESPONSABILIZAÇÃO MONITORAMENTO -->

@@ -80,7 +80,7 @@ async function carregarDados(rest, am) {
   // janeiro e dezembro do ano passado) e o mesmo mes do ano anterior. A nuvem
   // devolve no maximo 1.000 linhas por leitura: ler 2 anos inteiros cortava dados.
   const meses = [...new Set([...Array.from({ length: m }, (_, i) => a * 100 + i + 1), ant, am - 100])].join(',');
-  const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo] = await Promise.all([
+  const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo, indSac] = await Promise.all([
     rest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes'),
     rest('vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=in.(${meses})`),
     lerTudo(rest, 'vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
@@ -96,10 +96,14 @@ async function carregarDados(rest, am) {
     // do WinThor pode entrar bem depois da ocorrencia (espera a tratativa), entao uma
     // nota deste periodo pode ser de ocorrencia aberta em meses anteriores.
     rest('ocorrencias_devolucao', `select=carga_numero&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 5, 26)}&criado_em=lt.${iso(a, m + 1, 16)}&limit=5000`),
+    // Taxa de Completude: a regra e a midia ficam no banco (migration 72)
+    rest('vo_sac_indicadores', `select=id,completa,faltando&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
   ]);
   const primeiraAnalise = {};
   for (const r of analises || []) if (!primeiraAnalise[r.registro_id]) primeiraAnalise[r.registro_id] = r.data_hora;
   for (const o of sac) o.analise_em = primeiraAnalise[String(o.id)] || null;
+  const porIdSac = {}; for (const r of indSac || []) porIdSac[String(r.id)] = r;
+  for (const o of sac) { const r = porIdSac[String(o.id)]; o.completa = !!(r && r.completa); o.faltando = (r && r.faltando) || []; }
   // 1as analises feitas dentro do periodo (26 a 25), de qualquer ocorrencia
   const ini = iso(a, m - 1, 26), fim = iso(a, m, 26);
   const analisesPeriodo = Object.values(primeiraAnalise).map((t) => String(t).slice(0, 10)).filter((dt) => dt >= ini && dt < fim);
@@ -289,6 +293,8 @@ function analisar(d) {
 const META_DEV = 0.002, META_CORTE = 0.001, META_CORTE_RS = 30000, META_FAT = 30000000;
 // Despesa de cartao: valor fixo por mes (Tiago, 04/11/2026)
 const META_DESPESA = 75000;
+// S.A.C.: Taxa de Completude e % Responsabilidade do monitoramento (Tiago, 04/11/2026)
+const META_COMPLETUDE = 0.9, META_RESPONSABILIDADE = 0.95;
 // Metas do CD por setor, sobre o faturamento do setor de 26 a 25 (Tiago, 04/11/2026)
 const META_DEV_CARREG = { ideal: 0.0001, limite: 0.0005 }, META_CORTE_MESA = { ideal: 0.00025, limite: 0.001 };
 const faixaMeta = (p, m) => (p === null ? null : p <= m.ideal ? { nome: 'Ideal', cor: CH.bom } : p <= m.limite ? { nome: 'Parcial', cor: CH.ambar } : { nome: 'Fora da meta', cor: CH.ruim });
@@ -341,6 +347,11 @@ function metasOficiais(d) {
   if (ocioso !== undefined && ocioso !== null) add('MOOV', 'Ocorrências de motor ocioso', num(ocioso), '≤ 500', ocioso <= 500);
   const oc = v('rastreamento', 'ocorrencias'), sv = v('rastreamento', 'sem_vinculo');
   if (oc) add('MOOV', 'Identificadas ou em viagem', pct(1 - sv / oc, 1), '≥ 80%', 1 - sv / oc >= 0.8);
+  if (d.sac.length) {
+    const pc = d.sac.filter((o) => o.completa).length / d.sac.length, pr = d.sac.filter(temResponsavel).length / d.sac.length;
+    add('S.A.C.', 'Taxa de Completude', pct(pc, 0), '≥ 90%', pc >= META_COMPLETUDE);
+    add('S.A.C.', '% Responsabilidade (monitoramento)', pct(pr, 0), '≥ 95%', pr >= META_RESPONSABILIDADE);
+  }
   const sd = v('inventario', 'saldo');
   if (sd !== null) add('Inventário', 'Saldo acumulado no ano', reais(sd), '≥ R$ 0', sd >= 0);
   return out;
@@ -419,6 +430,8 @@ const cargasDe = (txt) => {
   return out;
 };
 const ehSobra = (o) => /SOBRA/i.test(String(o.motivo_real_causa_raiz || ''));
+// % Responsabilidade do monitoramento: mesma regra do cartao do Dashboard Executivo
+const temResponsavel = (o) => { const t = String(o.tipo_erro || '').toUpperCase().trim(); return !!t && !['RESP. NÃO IDENTIFICADO', 'NÃO CLASSIFICADO', 'OUTRO'].includes(t); };
 // Tipo de erro do Oper -> "RESP DEV" do WinThor
 const RESP_DO_TIPO = { 'ERRO COMERCIAL': 'COMERCIAL', 'ERRO INDÚSTRIA': 'FORNECEDOR', 'ERRO MOTORISTA': 'MOTORISTA', 'ERRO CARREGAMENTO': 'CARREGAMENTO', 'ERRO CLIENTE': 'CLIENTE' };
 function comparativoDevolucao(d) {
@@ -1104,7 +1117,8 @@ function gerarHtml(d, a, opcoes = {}) {
       const l = tp ? oc.filter((o) => (o.tipo_erro || 'SEM TIPO') === tp) : oc;
       const c = l.filter((o) => o.status_gestao === 'CONCLUIDO').length, vl = l.reduce((t, o) => t + Number(o.valor_reclamado || 0), 0);
       return `<div class="kpis k5">${kpi(num(l.length), tp ? `Ocorrências · ${rotT(tp)}` : 'Ocorrências', tp ? { texto: `${pct(oc.length ? l.length / oc.length : null, 0)} do total`, bom: null } : null)}${kpi(num(c), 'Concluídas', { texto: `${pct(l.length ? c / l.length : null, 0)} do total`, bom: null }, CH.bom)}
-        ${kpi(num(l.length - c), 'Aguardando gestor', null, CH.neutro)}${kpi(num(l.filter((o) => !o.data_entrada_cd && !o.sem_itens).length), 'Físico pendente', null, CH.neutro)}${kpi(reais(vl), 'Valor reclamado', tp ? { texto: `${pct(valor ? vl / valor : null, 0)} do total`, bom: null } : null)}</div>`;
+        ${kpi(num(l.length - c), 'Aguardando gestor', null, CH.neutro)}${kpi(num(l.filter((o) => !o.data_entrada_cd && !o.sem_itens).length), 'Físico pendente', null, CH.neutro)}${kpi(reais(vl), 'Valor reclamado', tp ? { texto: `${pct(valor ? vl / valor : null, 0)} do total`, bom: null } : null)}</div>
+        ${(() => { const comp = l.filter((o) => o.completa).length, ide = l.filter(temResponsavel).length; return `<div class="kpis g2k">${kpi(pct(l.length ? comp / l.length : null, 0), 'Taxa de Completude', l.length ? metaTxt(comp / l.length >= META_COMPLETUDE, `≥ 90% · ${num(comp)} de ${num(l.length)} com os campos da abertura e foto, vídeo ou NF`) : null)}${kpi(pct(l.length ? ide / l.length : null, 0), '% Responsabilidade (monitoramento)', l.length ? metaTxt(ide / l.length >= META_RESPONSABILIDADE, `≥ 95% · ${num(ide)} identificadas · ${num(l.length - ide)} não identificadas`) : null)}</div>`; })()}`;
     };
     add('sac', 'S.A.C.', secao('sac', 'S.A.C. & monitoramento', `${fech} · ocorrências lançadas no Jr-Oper`,
       `${chip('sac', 'Clique num tipo de erro para filtrar os cartões, inclusive os de SLA.')}
@@ -1112,6 +1126,8 @@ function gerarHtml(d, a, opcoes = {}) {
       <div class="grade g2">${card('Ocorrências por tipo de erro', barrasH(tipos.map(([t, o]) => ({ rotulo: rotT(t), valor: o.qtd, filtro: t, texto: `${o.qtd} · ${pct(oc.length ? o.qtd / oc.length : null, 0)}` })), { fmt: N0, cores: PALETA_H, larguraRot: 190, grupo: 'sac' }))}
         ${card('Valor reclamado por tipo de erro', barrasH(tipos.slice().sort((x, y) => y[1].valor - x[1].valor).map(([t, o]) => ({ rotulo: rotT(t), valor: o.valor, filtro: t, texto: `${reais(o.valor)} · ${pct(valor ? o.valor / valor : null, 0)}` })), { fmt: R0, cor: CH.marinho, larguraRot: 190, grupo: 'sac' }))}</div>
       ${blocoDia}
+      ${(() => { const fal = {}; for (const o of oc) for (const k of o.faltando || []) fal[k] = (fal[k] || 0) + 1; const lf = Object.entries(fal).sort((p, q) => q[1] - p[1]); return lf.length ? `<div class="grade g1">${card('O que falta para a abertura ficar completa', barrasH(lf.map(([k, n]) => ({ rotulo: k, valor: n, texto: `${num(n)} · ${pct(oc.length ? n / oc.length : null, 0)} das ocorrências` })), { fmt: N0, cor: CH.azul, larguraRot: 170, W: 1180 }))}</div>` : ''; })()}
+      <p class="nota">Taxa de Completude e % Responsabilidade são indicadores criados no Jr-Oper, sem par no Power BI. A completude mede só a abertura no SAC: cliente, nota fiscal (número ou anexo), valor, motivo, motorista, veículo e pelo menos uma foto, vídeo ou anexo de NF. Uma ocorrência pode faltar em mais de um item.</p>
       <p class="nota">Valor reclamado é o informado na abertura. Erro industrial e comercial são tratados por outra gerência; desconto de produtividade só cabe a motorista e carregamento. Monitorada = dia da 1ª análise da causa raiz registrada na trilha de auditoria, inclusive de ocorrências abertas antes do dia 26.</p>
       ${blocoComp}
       ${blocoSla}`));
@@ -1151,6 +1167,7 @@ main{max-width:1280px;margin:0 auto;padding:8px 24px 40px}
 [hidden]{display:none!important}
 .clic{cursor:pointer}.clic:hover{opacity:.82}.apagado{opacity:.25}
 .dica{color:var(--suave);font-size:12px;margin:-4px 0 8px}
+.kpis.g2k{grid-template-columns:repeat(2,1fr)}
 .abas{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}.aba{border:1px solid #BCD0EA;background:#fff;color:var(--marinho);border-radius:18px;padding:6px 16px;font-weight:600;font-size:13px;cursor:pointer}.aba.on{background:var(--azul);border-color:var(--azul);color:#fff}
 .chip{display:inline-flex;gap:8px;align-items:center;background:#E8F0FB;color:var(--marinho);border:1px solid #BCD0EA;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;margin:0 8px 10px 0}
 .chip button{border:0;background:#fff;color:var(--azul);cursor:pointer;font-weight:600;border-radius:12px;padding:2px 8px}
@@ -1203,6 +1220,6 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
 
 return {
   MESES, MES_ABREV, nf, num, reais, mil, pct, dataBr, diaMes, iso, mesAnterior, nomeMes, abrev, titulo, variacao,
-  comparar, media, mediana, hhmm, horasUteis, etapasSla, comparativoDevolucao, carregarDados, analisar, metasOficiais, gerarHtml,
+  comparar, media, mediana, hhmm, horasUteis, etapasSla, comparativoDevolucao, temResponsavel, carregarDados, analisar, metasOficiais, gerarHtml,
 };
 });
