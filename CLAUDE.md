@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 68).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 70).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -246,6 +246,9 @@ partir do branch `main` do GitHub.
   no Controle de Viagens sobe para a linha (`escAtualizarLinhaDaViagem`), guardando quem estava
   escalado em `*_escalado`/`placa_escalada`. Com hora de saída, linha e Fusion não mudam mais a
   equipe da viagem. Divergência vira selo com botão, nunca cópia automática.
+- `motoristas.uso_escala` (7.1.0, migration 69 APLICADA): ROTA, TRANSBORDO (carreta: Fagno, Célio),
+  FIXA (Silvestre, carne) e NAO. Só muda sugestões da escala e Disponibilidade; as outras abas
+  continuam vendo todos. Motorista com infração não se exclui: marcar NAO.
 - `veiculos.setor` (migration 66 APLICADA): FRIO é refrigerado e não muda de setor.
   Preenchido pelas viagens desde 01/06, editável em Cadastros Mestres. Disponibilidade
   separa por setor e deixa fora PASSEIO, UTILITARIO, CARRETA e CAVALO.
