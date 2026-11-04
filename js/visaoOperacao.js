@@ -287,6 +287,8 @@ function analisar(d) {
 // { area, indicador, real, meta, ok } ja com texto formatado.
 // Corte: ate 0,1% do faturado e no maximo R$ 30 mil no periodo; faturamento: R$ 30 mi/mes (Tiago, 29/10/2026)
 const META_DEV = 0.002, META_CORTE = 0.001, META_CORTE_RS = 30000, META_FAT = 30000000;
+// Despesa de cartao: valor fixo por mes (Tiago, 04/11/2026)
+const META_DESPESA = 75000;
 // Metas do CD por setor, sobre o faturamento do setor de 26 a 25 (Tiago, 04/11/2026)
 const META_DEV_CARREG = { ideal: 0.0001, limite: 0.0005 }, META_CORTE_MESA = { ideal: 0.00025, limite: 0.001 };
 const faixaMeta = (p, m) => (p === null ? null : p <= m.ideal ? { nome: 'Ideal', cor: CH.bom } : p <= m.limite ? { nome: 'Parcial', cor: CH.ambar } : { nome: 'Fora da meta', cor: CH.ruim });
@@ -333,8 +335,8 @@ function metasOficiais(d) {
   for (const x of cd) if (x.pCorte !== null) add('Corte por Setor', `Mesa ${x.setor}, % do faturamento do setor`, `${pct(x.pCorte, 3)} · ${faixaMeta(x.pCorte, META_CORTE_MESA).nome}`, '≤ 0,100%', x.pCorte <= META_CORTE_MESA.limite);
   const fm = v('devolucao', 'faturamento');
   if (fm !== null) add('Faturamento', 'Faturado no mês', reais(fm), `≥ ${reais(META_FAT)}`, fm >= META_FAT);
-  const dp = v('despesa', 'valor'), dly = v('despesa', 'valor_ly');
-  if (dp !== null && dly) add('Despesa de cartão', 'Gasto (25% abaixo do ano anterior)', reais(dp), `≤ ${reais(dly * 0.75)}`, dp <= dly * 0.75);
+  const dp = v('despesa', 'valor');
+  if (dp !== null) add('Despesa de cartão', 'Gasto no mês', reais(dp), `≤ ${reais(META_DESPESA)}`, dp <= META_DESPESA);
   const ocioso = (d.q('rastreamento', 'motivo').find((x) => /OCIOSO/i.test(x.rotulo)) || {}).valor;
   if (ocioso !== undefined && ocioso !== null) add('MOOV', 'Ocorrências de motor ocioso', num(ocioso), '≤ 500', ocioso <= 500);
   const oc = v('rastreamento', 'ocorrencias'), sv = v('rastreamento', 'sem_vinculo');
@@ -803,7 +805,7 @@ function gerarHtml(d, a, opcoes = {}) {
       : card('Usuários (top 15)', barrasH(us.map((x) => barraU({ nome: x.rotulo, valor: x.valor }, tot)), { fmt: R0, cor: CH.ambar, larguraRot: 210, grupo: grp })));
     const porDia = (lista, chave, titulo2) => { const m = {}; for (const x of lista) if (x.a === chave) m[x.b] = x.valor; return card(`Gasto por dia (R$)${titulo2 ? ` · ${titulo2}` : ''}`, colunas(diasMes.map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: diasMes.map((x) => m[x.rotulo] || 0) }], { fmt: N0, altura: 240, W: 1180 })); };
     const kpisGeral = `<div class="kpis k5">${kpi(reais(tot, 2), 'Valor total', comparar(tot, s('valor_ly'), 'ano anterior'))}
-        ${s('valor_ly') ? kpi(reais(s('valor_ly') * 0.75, 2), 'Meta: 25% abaixo do ano anterior', metaTxt(tot <= s('valor_ly') * 0.75, tot <= s('valor_ly') * 0.75 ? 'atingida' : `faltam ${reais(tot - s('valor_ly') * 0.75)}`)) : ''}${kpi(num(s('qtd')), 'Transações', comparar(s('qtd'), s('qtd_ly'), 'ano anterior'))}
+        ${tot !== null ? kpi(reais(META_DESPESA, 2), 'Meta do mês', metaTxt(tot <= META_DESPESA, tot <= META_DESPESA ? 'atingida' : `faltam ${reais(tot - META_DESPESA)}`)) : ''}${kpi(num(s('qtd')), 'Transações', comparar(s('qtd'), s('qtd_ly'), 'ano anterior'))}
         ${kpi(reais(s('ticket'), 2), 'Média por transação', comparar(s('ticket'), s('ticket_ly'), 'ano anterior'))}${kpi(reais(s('por_dia'), 2), 'Gasto por dia', comparar(s('por_dia'), s('por_dia_ly'), 'ano anterior'))}</div>`;
     const kpisDep = (dp) => {
       const l = doDep(dp), vl = totDep(dp), q = l.reduce((t, x) => t + (x.qtd || 0), 0);
