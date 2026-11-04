@@ -2677,7 +2677,11 @@ class Store {
       fusion: (viagemData.fusion !== undefined && viagemData.fusion !== null ? String(viagemData.fusion) : '').toUpperCase().trim(),
       checklist_saida: (viagemData.checklist_saida !== undefined && viagemData.checklist_saida !== null ? String(viagemData.checklist_saida) : '').toUpperCase().trim(),
       checklist_chegada: (viagemData.checklist_chegada !== undefined && viagemData.checklist_chegada !== null ? String(viagemData.checklist_chegada) : '').toUpperCase().trim(),
-      observacao: String(viagemData.observacao || '').toUpperCase().trim()
+      observacao: String(viagemData.observacao || '').toUpperCase().trim(),
+      // A coluna é NOT NULL. Sem a chave aqui, o igualador de chaves do
+      // upsert() a mandava null sempre que a viagem nova subia no mesmo lote
+      // de uma já editada, e o lote inteiro voltava 400 (04/11/2026).
+      criado_em: viagemData.criado_em || agoraIsoBrasilia()
     };
     this.data.controle_viagens.unshift(item);
     this.save();

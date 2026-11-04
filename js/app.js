@@ -11556,7 +11556,12 @@ function renderCdRecepcaoView() {
         ${d.sem_itens
           ? `<span class="text-amber-300 italic">Sem itens: ${d.observacao_sem_itens||''}</span>`
           : (d.itens?.length > 0
-              ? `<ul class="space-y-0.5">${d.itens.map(i=>`<li>• ${i.quantidade}x ${i.produto_descricao||'Produto'}</li>`).join('')}</ul>`
+              // Observação da conferência (item.observacao) logo abaixo do item
+              // (6.11.5): antes só aparecia na Destinação de Itens, e quem
+              // olhava esta grade achava que o CD não tinha anotado nada.
+              ? `<ul class="space-y-0.5">${d.itens.map(i=>`<li>• ${i.quantidade}x ${i.produto_descricao||'Produto'}${String(i.observacao||'').trim()
+                  ? `<div class="text-[9px] text-amber-200/80 italic ml-2.5" title="Observação da conferência no CD">📝 ${String(i.observacao).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`
+                  : ''}</li>`).join('')}</ul>`
               : '<span class="text-slate-500">Sem itens</span>')}
       </td>
       <td class="p-3">

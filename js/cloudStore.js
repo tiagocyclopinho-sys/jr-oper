@@ -656,6 +656,16 @@ class CloudStore {
     data = this._aplicarGuardaDeEscrita(tableName, data);
     if (data.length === 0) return true;
 
+    // VIAGEM SEM criado_em (04/11/2026). addViagem() não gravava o campo, e a
+    // coluna é NOT NULL. Sozinha a viagem subia pelo DEFAULT do banco; no mesmo
+    // lote de uma já editada, o igualador de chaves abaixo a mandava null e o
+    // lote inteiro voltava 400, em todo ciclo. Foi o que prendeu as viagens da
+    // escala de 04/11 no aparelho de quem importou. Fica aqui, e não só no
+    // addViagem, porque as que já estão presas nos aparelhos vêm sem o campo.
+    if (tableName === 'controle_viagens') {
+      data = data.map(r => r.criado_em ? r : Object.assign({}, r, { criado_em: r.atualizado_em || agoraIsoBrasilia() }));
+    }
+
     // LISTA BRANCA DE COLUNAS (31/08/2026). Só tem efeito nas tabelas que
     // declaram uma em CloudStore.COLUNAS_POR_TABELA — hoje, clientes e
     // produtos. Ver o comentário lá: campo que não é coluna derruba o lote
@@ -709,6 +719,12 @@ class CloudStore {
             }
             if (renumerados > 0) continue;
           }
+          // Carga repetida em viagem de outro id: número do mundo real, não se
+          // renumera. Sobe uma a uma para só a repetida ficar de fora, e não
+          // todas as viagens e edições que vieram no mesmo lote.
+          if (tableName === 'controle_viagens' && data.length > 1 && this._ehColisaoUnica(errBody)) {
+            return await this._enviarViagensUmaAUma(data);
+          }
           this._registrarFalhaSync(tableName, response.status, errBody);
           this._checkConflitoUnicidade(tableName, errBody, data).catch(() => {});
           return false;
@@ -731,6 +747,35 @@ class CloudStore {
       }
     }
     return false;
+  }
+
+  _ehColisaoUnica(errBody) {
+    try { return JSON.parse(errBody).code === '23505'; } catch(e) { return false; }
+  }
+
+  // Devolve true só se todas subiram: com false nada é confirmado no mapa de
+  // sync, e as que subiram são reenviadas no próximo ciclo (upsert, sem efeito).
+  // A repetida vai para a aba "⚠️ Conflitos" até alguém resolver.
+  async _enviarViagensUmaAUma(data) {
+    let tudoOk = true;
+    for (const registro of data) {
+      try {
+        const response = await fetch(`${this.config.url}/rest/v1/controle_viagens`, {
+          method: 'POST',
+          headers: this._headers({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+          body: JSON.stringify([registro])
+        });
+        if (response.ok) continue;
+        tudoOk = false;
+        const errBody = await response.text();
+        this._registrarFalhaSync('controle_viagens', response.status, errBody);
+        this._checkConflitoUnicidade('controle_viagens', errBody, [registro]).catch(() => {});
+      } catch(err) {
+        console.warn('[CloudStore] Falha na rede ao salvar viagem:', err.message);
+        return false;
+      }
+    }
+    return tudoOk;
   }
 
   // Guarda na escrita — decisão 7 de 22/08/2026 (Onda 1, item 7).
@@ -3384,7 +3429,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "escala-imprimir-6.11.4";
+CloudStore.BUILD = "viagem-criado-em-6.11.6";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS

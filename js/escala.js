@@ -886,6 +886,18 @@ async function escLinhaCampo(id, campo, valor) {
 }
 window.escLinhaCampo = escLinhaCampo;
 
+// Selo da coluna Viagem do Fechamento. Ter viagem_id na linha não prova que a
+// viagem existe: em 04/11 a linha dizia "criada" e a viagem estava presa no
+// aparelho de quem importou. Aqui confere se ela está no Controle de Viagens
+// deste aparelho.
+function escSeloViagem(l, dicaSemCarga) {
+  if (!l.viagem_id) return `<span class="text-slate-500" title="${escEsc(dicaSemCarga)}">sem carga</span>`;
+  const existe = typeof db !== 'undefined' && db.getControleViagens().some(v => String(v.id) === String(l.viagem_id));
+  return existe
+    ? '<span class="text-emerald-400 font-bold">✔ criada</span>'
+    : '<span class="text-amber-400 font-bold" title="A linha aponta para uma viagem que não está no Controle de Viagens deste aparelho. Pode estar presa no aparelho de quem criou.">⚠️ não chegou</span>';
+}
+
 // Cria ou atualiza a viagem do Controle de Viagens desta linha. Devolve um
 // texto para avisar o usuário quando algo não sai como o esperado.
 function escSincronizarViagem(l) {
@@ -1318,7 +1330,7 @@ function escTelaFechamento() {
                   <td class="p-1.5 text-right">${escFmt(s.peso)}</td>
                   <td class="p-1.5 text-right">R$ ${escFmt(s.valor)}</td>
                   <td class="p-1.5 text-right">${s.entregas}</td>
-                  <td class="p-1.5 text-center text-[10px]">${t.viagem_id ? '<span class="text-emerald-400 font-bold">✔ criada</span>' : '<span class="text-slate-500" title="Nasce quando uma rota que ele leva ganha carga">sem carga</span>'}</td>
+                  <td class="p-1.5 text-center text-[10px]">${escSeloViagem(t, 'Nasce quando uma rota que ele leva ganha carga')}</td>
                 </tr>`;
               }).join('')}
             </tbody>
@@ -1351,7 +1363,7 @@ function escTelaFechamento() {
                   <td class="p-1"><input id="escf-${l.id}-peso" inputmode="decimal" class="${ESC_INPUT} text-right" value="${escEsc(escFmt(l.peso))}" onchange="escLinhaCampo('${l.id}','peso',this.value)"></td>
                   <td class="p-1"><input id="escf-${l.id}-valor" inputmode="decimal" class="${ESC_INPUT} text-right" value="${escEsc(escFmt(l.valor))}" onchange="escLinhaCampo('${l.id}','valor',this.value)"></td>
                   <td class="p-1"><input id="escf-${l.id}-qt_entregas" inputmode="numeric" class="${ESC_INPUT} text-right" value="${escEsc(l.qt_entregas === null || l.qt_entregas === undefined ? '' : l.qt_entregas)}" onchange="escLinhaCampo('${l.id}','qt_entregas',this.value)"></td>
-                  <td class="p-1.5 text-center text-[10px]">${l.viagem_id ? '<span class="text-emerald-400 font-bold">✔ criada</span>' : '<span class="text-slate-500" title="Não saiu neste dia: fica fora da imagem do fechamento">sem carga</span>'}</td>
+                  <td class="p-1.5 text-center text-[10px]">${escSeloViagem(l, 'Não saiu neste dia: fica fora da imagem do fechamento')}</td>
                 </tr>`).join('')}
               <tr class="border-t-2 border-slate-700 bg-slate-950/60 font-bold">
                 <td colspan="6" class="p-1.5 text-right text-slate-400">Total ${setor.toLowerCase()}</td>
