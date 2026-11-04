@@ -545,11 +545,15 @@ function resumo(pres, d, a) {
   });
   if (!a.custos.length) semDados(s2, 4.0, 1.5, 8.7, 4.6, 'Nenhuma oportunidade calculada');
 
-  const s3 = slideConteudo(pres, 'Metas', `Oficiais (definidas pela gestão) e sugeridas (mediana de ${d.ano} com 5% de melhora)`);
-  tabela(s3, 0.6, 1.5, [{ titulo: 'Indicador', w: 3.4 }, { titulo: abrev(d.am), w: 1.6, align: 'right' }, { titulo: `Mediana ${d.ano}`, w: 1.7, align: 'right' },
-    { titulo: 'Melhor mês', w: 1.7, align: 'right' }, { titulo: 'Meta sugerida', w: 2.0, align: 'right' }, { titulo: 'Situação', w: 1.7, align: 'center' }],
-  a.metas, { fonte: 11, alturaLinha: 0.45 });
-  nota(s3, 'Sugestão para discussão. Ocorrências MOOV dependem dos parâmetros da plataforma; ajustar a meta quando a nova régua estabilizar.');
+  // 10 linhas por slide: a lista inteira passa do fim do slide
+  const pagMetas = fatias(a.metas, 10);
+  pagMetas.forEach((pag, i) => {
+    const s3 = slideConteudo(pres, 'Metas', `Oficiais (definidas pela gestão) e sugeridas (mediana de ${d.ano} com 5% de melhora)${pagMetas.length > 1 ? ` · parte ${i + 1}/${pagMetas.length}` : ''}`);
+    tabela(s3, 0.6, 1.5, [{ titulo: 'Indicador', w: 4.3 }, { titulo: abrev(d.am), w: 2.0, align: 'right' }, { titulo: `Mediana ${d.ano}`, w: 1.3, align: 'right' },
+      { titulo: 'Melhor mês', w: 1.3, align: 'right' }, { titulo: 'Meta', w: 1.7, align: 'right' }, { titulo: 'Situação', w: 1.5, align: 'center' }],
+    pag, { fonte: 10, alturaLinha: 0.42 });
+    nota(s3, 'Sugestão para discussão. Ocorrências MOOV dependem dos parâmetros da plataforma; ajustar a meta quando a nova régua estabilizar.');
+  });
 }
 
 // Texto simples para colar no e-mail de envio
