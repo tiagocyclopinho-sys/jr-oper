@@ -198,6 +198,9 @@ partir do branch `main` do GitHub.
   a 25, sobre o faturamento do setor. "Chegou vencida" = DATA PROXIMA DA VALIDADE. O modelo
   Corte não tem setor: usa o RCA → supervisor do f_FATURAMENTO (a planilha do Tiago difere
   um pouco). Só meta: nada de valor de bônus na tela.
+- 7.1.7 (04/11): he_inventario em vo_quadros, gravado à mão só para 202610 (valor = HE 100%,
+  valor2 = horas, valor3 = DSR). Fica fora de SECOES: a coleta não apaga. Já está dentro da
+  HE 100% do Power BI; a aba "sem inventário" subtrai por funcionário e setor.
 
 ## Escala de embarques (6.10.0, 30/10/2026)
 - Menu Escala (Matrizes, Convocação Escala, Fechamento) em `js/escala.js`;
