@@ -14861,9 +14861,10 @@ function renderViagensLargadaSubTab() {
                   return '<tr><td colspan="15" class="p-6 text-center text-slate-500">Nenhuma viagem encontrada no período selecionado.</td></tr>';
                 }
 
-                // Contabilizar frequência de cada carga na base
+                // Contabilizar frequência de cada carga na base (só as vivas: a excluída
+                // não ocupa a carga, e contá-la marcava 2x sem haver duplicidade)
                 const cargaCounts = {};
-                (db.data.controle_viagens || []).forEach(x => {
+                db.getControleViagens().forEach(x => {
                   const c = String(x.carga || '').trim().toUpperCase();
                   if (c) cargaCounts[c] = (cargaCounts[c] || 0) + 1;
                 });
