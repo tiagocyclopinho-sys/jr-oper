@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 64).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 68).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -230,6 +230,27 @@ partir do branch `main` do GitHub.
   chaves do upsert mandava null e tudo voltava 400 em silêncio. Hoje a viagem
   nasce com o campo, o upsert completa as presas, 23505 sobe uma a uma
   (`_enviarViagensUmaAUma`) e o Fechamento mostra "⚠️ não chegou" (`escSeloViagem`).
+- Disponibilidade e Folgas (7.0.0, migrations 64 e 65 APLICADAS em 04/11):
+  `escOcupacao` é a regra única de quem está fora por viagem, usada pelos avisos e
+  por `escDisponibilidade`. Referência geral 06:00 do dia: NÃO é corte por rota
+  (prestador não tem horário; a saída é o máximo aceitável) e não há descanso
+  mínimo (decisões do Tiago). Viagem sem status conta como aberta. Previsão vencida
+  com viagem aberta = Verificar. Retido (retenção) e Parado em rota (ocorrência
+  aberta) são situações diferentes. Inativo não aparece.
+- `escala_folgas` fora do sync: Dossiê lê por `escFolgasDoPrestador`. Atestado de
+  prestador é categoria de folga; Abonado = não gera desconto (só registro).
+- Rota de véspera: sai à tarde, em geral domingo e quarta, e pertence à matriz do
+  dia seguinte. A viagem nasce com a data da escala; quem registra acerta o dia
+  real, e editar a linha depois não sobrescreve se já houver hora de saída.
+- Equipe da viagem (7.0.0, migration 67 APLICADA): antes da viagem manda a escala; troca feita
+  no Controle de Viagens sobe para a linha (`escAtualizarLinhaDaViagem`), guardando quem estava
+  escalado em `*_escalado`/`placa_escalada`. Com hora de saída, linha e Fusion não mudam mais a
+  equipe da viagem. Divergência vira selo com botão, nunca cópia automática.
+- `veiculos.setor` (migration 66 APLICADA): FRIO é refrigerado e não muda de setor.
+  Preenchido pelas viagens desde 01/06, editável em Cadastros Mestres. Disponibilidade
+  separa por setor e deixa fora PASSEIO, UTILITARIO, CARRETA e CAVALO.
+- Migration 65 gravou os retornos pelo histórico; quem organiza as matrizes é o
+  Luizinho. Não rodar de novo: pisa nos ajustes dele.
 - SQL que mexe em escala_* (ou qualquer tabela com a guarda de carimbo):
   `atualizado_em = (now() AT TIME ZONE 'America/Sao_Paulo')`, NUNCA `now()`
   puro. O app grava hora de Brasília; um carimbo em UTC fica 3 h no futuro e
