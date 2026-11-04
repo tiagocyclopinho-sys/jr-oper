@@ -40,7 +40,7 @@ window._escala = window._escala || {
   folgas: null,            // linhas de escala_folgas (todas as vivas)
   folgaVisao: 'ABERTAS',   // ABERTAS | TODAS
   folgaBusca: '',
-  dispAba: 'MOTORISTA',    // MOTORISTA | AJUDANTE | VEICULO
+  dispAba: 'MOTORISTA',    // MOTORISTA | AJUDANTE | VEICULO | TRANSBORDO
   dispSituacao: 'TODAS',
   dispSetor: 'TODOS',      // TODOS | FRIO | SECO (só na aba Veículos)
   dispBusca: '',
@@ -52,6 +52,9 @@ window._escala = window._escala || {
 const ESC_DIAS = ['', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo'];
 const ESC_DIAS_CURTO = ['', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const ESC_JANELA_VIAGEM_DIAS = 20;
+// Uso do motorista na escala (migration 69). Nem todo motorista cadastrado faz
+// rota, mas quem tem infração não pode sair do cadastro: as outras abas não mudam.
+const ESC_USO_ESCALA = { ROTA: 'Rota', TRANSBORDO: 'Só transbordo', FIXA: 'Rota fixa', NAO: 'Não faz viagem' };
 
 function escEsc(v) {
   return String(v === null || v === undefined ? '' : v)
@@ -228,20 +231,28 @@ function escFalha(e) {
 function escListas() {
   const data = (typeof db !== 'undefined' && db.data) ? db.data : {};
   const vivo = x => x && !x.is_deleted;
-  const motoristas = (data.motoristas || []).filter(m => vivo(m) && m.ativo !== false && !m.data_desligamento).map(m => String(m.nome || '').toUpperCase());
+  const nome = m => String(m.nome || '').toUpperCase();
+  const uso = m => m.uso_escala || 'ROTA';
+  const ativos = (data.motoristas || []).filter(m => vivo(m) && m.ativo !== false && !m.data_desligamento);
+  const motoristas = ativos.map(nome);
   const ajudantes = (data.ajudantes || []).filter(a => vivo(a) && a.ativo !== false).map(a => String(a.nome || '').toUpperCase());
   const placas = (data.veiculos || []).filter(v => vivo(v) && String(v.situacao || '').toUpperCase() !== 'INATIVO').map(v => String(v.placa || '').toUpperCase());
   const rotas = new Set((data.rotas || []).map(r => String(r || '').toUpperCase()));
   (window._escala.matrizes || []).forEach(m => m.rota && rotas.add(m.rota));
   const uniq = arr => Array.from(new Set(arr.filter(Boolean))).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  return { motoristas: uniq(motoristas), ajudantes: uniq(ajudantes), pessoas: uniq(motoristas.concat(ajudantes)), placas: uniq(placas), rotas: uniq(Array.from(rotas)) };
+  return {
+    motoristas: uniq(motoristas), ajudantes: uniq(ajudantes), pessoas: uniq(motoristas.concat(ajudantes)), placas: uniq(placas), rotas: uniq(Array.from(rotas)),
+    motoristasRota: uniq(ativos.filter(m => uso(m) === 'ROTA').map(nome)),
+    motoristasTransbordo: uniq(ativos.filter(m => uso(m) === 'TRANSBORDO').map(nome)),
+    pessoasEscala: uniq(ativos.filter(m => uso(m) !== 'NAO').map(nome).concat(ajudantes))
+  };
 }
 
 function escDatalists() {
   const l = escListas();
   const opt = arr => arr.map(x => `<option value="${escEsc(x)}"></option>`).join('');
   return `
-    <datalist id="esc-dl-pessoas">${opt(l.pessoas)}</datalist>
+    <datalist id="esc-dl-pessoas">${opt(l.pessoasEscala)}</datalist>
     <datalist id="esc-dl-placas">${opt(l.placas)}</datalist>
     <datalist id="esc-dl-rotas">${opt(l.rotas)}</datalist>`;
 }
@@ -2105,11 +2116,15 @@ function escDisponibilidade(dataIso) {
 
   const ordenar = arr => arr.sort((a, b) => (ESC_DISP[a.sit].ordem - ESC_DISP[b.sit].ordem) || a.nome.localeCompare(b.nome, 'pt-BR'));
   // Passeio, utilitário, carreta e cavalo não servem de substituto na largada.
+  // Carreta e cavalo, com os motoristas de carreta, ficam na aba Transbordo.
+  const veiculos = listas.placas.map(veiculo);
   const fazRota = v => !['PASSEIO', 'UTILITARIO', 'CARRETA', 'CAVALO'].includes(escNorm(v.tipo));
+  const fazTransbordo = v => ['CARRETA', 'CAVALO'].includes(escNorm(v.tipo));
   return {
-    MOTORISTA: ordenar(listas.motoristas.map(pessoa).concat(foraDoCadastro('motoristas'))),
+    MOTORISTA: ordenar(listas.motoristasRota.map(pessoa).concat(foraDoCadastro('motoristas'))),
     AJUDANTE: ordenar(listas.ajudantes.map(pessoa).concat(foraDoCadastro('ajudantes'))),
-    VEICULO: ordenar(listas.placas.map(veiculo).filter(fazRota))
+    VEICULO: ordenar(veiculos.filter(fazRota)),
+    TRANSBORDO: ordenar(listas.motoristasTransbordo.map(pessoa).map(x => Object.assign(x, { tipo: 'MOTORISTA' })).concat(veiculos.filter(fazTransbordo)))
   };
 }
 
@@ -2128,9 +2143,10 @@ function escTelaDisponibilidade() {
   if (!st.matrizes || !st.folgas || !st.linhas[st.data]) return cab + escSeletorData() + escCarregandoHtml();
 
   const d = escDisponibilidade(st.data);
-  const abas = { MOTORISTA: 'Motoristas', AJUDANTE: 'Ajudantes', VEICULO: 'Veículos' };
-  const veiculos = st.dispAba === 'VEICULO';
-  const lista = veiculos && st.dispSetor !== 'TODOS' ? d.VEICULO.filter(x => x.setor === st.dispSetor) : d[st.dispAba];
+  const abas = { MOTORISTA: 'Motoristas', AJUDANTE: 'Ajudantes', VEICULO: 'Veículos', TRANSBORDO: 'Transbordo' };
+  const soVeiculos = st.dispAba === 'VEICULO';
+  const veiculos = soVeiculos || st.dispAba === 'TRANSBORDO';
+  const lista = soVeiculos && st.dispSetor !== 'TODOS' ? d.VEICULO.filter(x => x.setor === st.dispSetor) : d[st.dispAba];
   const qtd = sit => lista.filter(x => x.sit === sit).length;
   const presentes = Object.keys(ESC_DISP).filter(sit => qtd(sit));
   const chip = (k, texto) => `<button onclick="escDispSituacao('${k}')" class="px-2 py-1 rounded-lg border text-[11px] font-bold ${st.dispSituacao === k ? 'border-emerald-500 bg-emerald-950/60 text-white' : 'border-slate-700 bg-slate-900 text-slate-300'}">${texto}</button>`;
@@ -2144,7 +2160,7 @@ function escTelaDisponibilidade() {
         ${Object.keys(abas).map(k => `<button onclick="escDispAba('${k}')" class="px-3 py-1.5 rounded-lg text-xs font-bold ${st.dispAba === k ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-700'}">${abas[k]} (${d[k].filter(x => x.sit === 'DISPONIVEL').length})</button>`).join('')}
       </div>
     </div>
-    ${veiculos ? `<div class="flex flex-wrap gap-1">${setorBtn('TODOS', 'Frio e seco')}${setorBtn('FRIO', '❄️ Frio')}${setorBtn('SECO', '📦 Seco')}</div>` : ''}
+    ${soVeiculos ? `<div class="flex flex-wrap gap-1">${setorBtn('TODOS', 'Frio e seco')}${setorBtn('FRIO', '❄️ Frio')}${setorBtn('SECO', '📦 Seco')}</div>` : ''}
     <div class="flex flex-wrap items-center gap-1.5">
       ${chip('TODAS', `Todos (${lista.length})`)}
       ${presentes.map(sit => chip(sit, `${ESC_DISP[sit].icone} ${ESC_DISP[sit].rotulo} (${qtd(sit)})`)).join('')}
@@ -2155,7 +2171,7 @@ function escTelaDisponibilidade() {
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
       <table id="esc-tab-disp" class="w-full text-xs min-w-[640px]">
         <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase">
-          <tr><th class="p-2 text-left">${veiculos ? 'Placa' : 'Nome'}</th>${veiculos ? '<th class="p-2 text-left">Tipo</th><th class="p-2 text-left">Setor</th>' : ''}<th class="p-2 text-left">Situação</th><th class="p-2 text-left">Detalhe</th></tr>
+          <tr><th class="p-2 text-left">${soVeiculos ? 'Placa' : (veiculos ? 'Nome / Placa' : 'Nome')}</th>${veiculos ? '<th class="p-2 text-left">Tipo</th><th class="p-2 text-left">Setor</th>' : ''}<th class="p-2 text-left">Situação</th><th class="p-2 text-left">Detalhe</th></tr>
         </thead>
         <tbody>
           ${visiveis.length ? visiveis.map(x => {

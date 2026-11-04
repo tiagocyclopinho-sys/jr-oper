@@ -2533,8 +2533,8 @@ class Store {
   }
 
   // CRUD Cadastros Auxiliares (Dados SAC)
-  addMotorista(cod_erp, nome, cnh, telefone, data_admissao, data_desligamento) {
-    const item = { id: cod_erp ? parseInt(cod_erp) : Date.now(), nome: nome.toUpperCase(), cnh, telefone, data_admissao: data_admissao || null, data_desligamento: data_desligamento || null };
+  addMotorista(cod_erp, nome, cnh, telefone, data_admissao, data_desligamento, uso_escala) {
+    const item = { id: cod_erp ? parseInt(cod_erp) : Date.now(), nome: nome.toUpperCase(), cnh, telefone, data_admissao: data_admissao || null, data_desligamento: data_desligamento || null, uso_escala: uso_escala || 'ROTA' };
     if (this.data.motoristas.find(x => x.id == item.id)) {
       alert('Código ERP já cadastrado!');
       return null;

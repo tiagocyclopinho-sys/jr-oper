@@ -21051,15 +21051,16 @@ function renderCadSubTabContent() {
             <div><label class="block text-[10px] text-slate-400">CNH</label><input type="text" id="cad-mot-cnh" placeholder="00000000000" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
             <div><label class="block text-[10px] text-slate-400">Admissão</label><input type="date" id="cad-mot-admissao" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
             <div><label class="block text-[10px] text-slate-400">Desligamento</label><input type="date" id="cad-mot-desligamento" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs"></div>
+            <div><label class="block text-[10px] text-slate-400">Uso na escala</label><select id="cad-mot-uso" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs">${Object.entries(ESC_USO_ESCALA).map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select></div>
           </div>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-1.5 rounded text-xs">+ Cadastrar</button>
         </form>
         ${cadBarraBusca('motoristas', 'Buscar por nome, código ERP ou CNH...')}
         <div class="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table class="w-full text-left text-xs">
-            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 hidden sm:table-cell">CNH</th><th class="p-2 hidden sm:table-cell">Telefone</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
+            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2 hidden sm:table-cell">CNH</th><th class="p-2 hidden sm:table-cell">Telefone</th><th class="p-2">Uso na escala</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${cadFiltrar('motoristas', m => [m.id, m.nome, m.cnh, m.telefone]).map(m=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${m.id}</td><td class="p-2 font-semibold text-white">${escEsc(m.nome)}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.cnh||'—'}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.telefone||'—'}</td><td class="p-2">${cadSituacaoPessoa(m)}</td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('motoristas','${m.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('motoristas','${m.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${cadFiltrar('motoristas', m => [m.id, m.nome, m.cnh, m.telefone, ESC_USO_ESCALA[m.uso_escala || 'ROTA']]).map(m=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${m.id}</td><td class="p-2 font-semibold text-white">${escEsc(m.nome)}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.cnh||'—'}</td><td class="p-2 text-slate-400 hidden sm:table-cell">${m.telefone||'—'}</td><td class="p-2 text-slate-300 whitespace-nowrap">${ESC_USO_ESCALA[m.uso_escala || 'ROTA'] || '—'}</td><td class="p-2">${cadSituacaoPessoa(m)}</td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('motoristas','${m.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('motoristas','${m.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -21213,7 +21214,7 @@ function deleteMotivoDevolucaoCad(nome) {
 }
 
 // ---- Handlers Cadastros ----
-function handleCadMotoristaSubmit(e) { e.preventDefault(); const r=db.addMotorista(document.getElementById('cad-mot-erp').value,document.getElementById('cad-mot-nome').value,document.getElementById('cad-mot-cnh').value,'',document.getElementById('cad-mot-admissao')?.value||'',document.getElementById('cad-mot-desligamento')?.value||''); if(r) alert('✅ Motorista cadastrado!'); renderApp(); }
+function handleCadMotoristaSubmit(e) { e.preventDefault(); const r=db.addMotorista(document.getElementById('cad-mot-erp').value,document.getElementById('cad-mot-nome').value,document.getElementById('cad-mot-cnh').value,'',document.getElementById('cad-mot-admissao')?.value||'',document.getElementById('cad-mot-desligamento')?.value||'',document.getElementById('cad-mot-uso')?.value||'ROTA'); if(r) alert('✅ Motorista cadastrado!'); renderApp(); }
 function handleCadAjudanteSubmit(e) { e.preventDefault(); db.addAjudante(document.getElementById('cad-aju-erp').value,document.getElementById('cad-aju-nome').value); alert('✅ Ajudante cadastrado!'); renderApp(); }
 function handleCadProdutoSubmit(e) { e.preventDefault(); db.addProduto(document.getElementById('cad-prod-cod').value,document.getElementById('cad-prod-desc').value,document.getElementById('cad-prod-cat').value,0); alert('✅ Produto cadastrado!'); renderApp(); }
 function handleCadVeiculoSubmit(e) { e.preventDefault(); db.addVeiculo(document.getElementById('cad-veic-placa').value,document.getElementById('cad-veic-tipo').value,document.getElementById('cad-veic-situacao').value,document.getElementById('cad-veic-setor').value); alert('✅ Veículo cadastrado!'); renderApp(); }
@@ -21260,7 +21261,7 @@ function cadBarraBusca(colecao, placeholder) {
 
 function cadCamposBusca(colecao) {
   if (colecao === 'veiculos') return v => [v.placa, v.tipo, v.modelo, v.situacao, v.setor];
-  if (colecao === 'motoristas') return m => [m.id, m.nome, m.cnh, m.telefone];
+  if (colecao === 'motoristas') return m => [m.id, m.nome, m.cnh, m.telefone, ESC_USO_ESCALA[m.uso_escala || 'ROTA']];
   return a => [a.id, a.nome];
 }
 
@@ -21294,6 +21295,7 @@ function abrirEdicaoCadastro(colecao, id) {
       <div><label class="block text-[10px] text-slate-400 mb-1">Telefone</label><input id="ed-cad-telefone" class="${cls}" value="${v(item.telefone)}"></div>
       <div><label class="block text-[10px] text-slate-400 mb-1">Admissão</label><input type="date" id="ed-cad-admissao" class="${cls}" value="${v(String(item.data_admissao || '').slice(0, 10))}"></div>
       <div><label class="block text-[10px] text-slate-400 mb-1">Desligamento</label><input type="date" id="ed-cad-desligamento" class="${cls}" value="${v(String(item.data_desligamento || '').slice(0, 10))}"></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Uso na escala</label><select id="ed-cad-uso" class="${cls}">${Object.entries(ESC_USO_ESCALA).map(([k, t]) => `<option value="${k}" ${(item.uso_escala || 'ROTA') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       <div><label class="block text-[10px] text-slate-400 mb-1">Ativo</label><select id="ed-cad-ativo" class="${cls}"><option value="sim" ${item.ativo !== false ? 'selected' : ''}>Sim</option><option value="nao" ${item.ativo === false ? 'selected' : ''}>Não</option></select></div>`;
   } else if (colecao === 'ajudantes') {
     campos = `
@@ -21350,6 +21352,7 @@ async function salvarEdicaoCadastro(e, colecao, id) {
     item.telefone = val('ed-cad-telefone');
     item.data_admissao = val('ed-cad-admissao') || null;
     item.data_desligamento = val('ed-cad-desligamento') || null;
+    item.uso_escala = val('ed-cad-uso') || 'ROTA';
     item.ativo = val('ed-cad-ativo') !== 'nao';
   } else if (colecao === 'ajudantes') {
     item.ativo = val('ed-cad-ativo') !== 'nao';
