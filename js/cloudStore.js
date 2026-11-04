@@ -3438,7 +3438,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "guarda-viagens-cache-7.1.2";
+CloudStore.BUILD = "visao-operacao-he-tipos-7.1.3";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS

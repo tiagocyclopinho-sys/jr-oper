@@ -644,13 +644,57 @@ function gerarHtml(d, a, opcoes = {}) {
     };
     const topHE = (st) => card(`Funcionários com mais hora extra (top 15)${st ? ` · ${titulo(st)}` : ''}`, barrasH(doSetor(st).slice(0, 15).map((x) => { const [sto, nome] = x.rotulo.split(' | '); return { rotulo: `${titulo(nome || sto)}`, valor: x.valor, texto: `${reais(x.valor, 2)} · ${hhmm(x.valor2)} h · ${pct(tot ? x.valor / tot : null, 1)}` }; }), { fmt: R0, cor: CH.ambar, larguraRot: 260, W: 1180 }));
     const valores = ['', ...setor.map((x) => x.rotulo)];
-    add('he', 'Hora extra', secao('he', 'Gestão de hora extra', `Visão ${fech} · Hora Extra 55%`,
-      `${chip('he', 'Clique num setor (rosca ou barras) para filtrar os cartões e a lista de funcionários.')}
+    const bloco55 = `${chip('he', 'Clique num setor (rosca ou barras) para filtrar os cartões e a lista de funcionários.')}
       ${variantes('he', valores.map((st) => ({ valor: st, html: kpisHE(st) })))}
       <div class="grade g3">${card('Valor por setor', rosca(setor.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, filtro: x.rotulo })), { fmt: (x) => reais(x), grupo: 'he' }))}
         ${card('Horas por setor x meta', barrasH(setor.map((x) => { const lim = metaHoraExtra(x.rotulo), ok = (x.valor2 || 0) <= lim; return { rotulo: titulo(x.rotulo).replace('Carregamento ', 'Carreg. '), valor: x.valor2, filtro: x.rotulo, cor: ok ? CH.bom : CH.ruim, texto: `${hhmm(x.valor2)} h · meta ${lim} h` }; }), { fmt: N0, larguraRot: 120, W: 340, grupo: 'he' }))}
         ${card('Valor HE por mês (R$)', colunas(meses.map((x) => `${MES_ABREV[Number(x.rotulo.slice(5)) - 1]}/${x.rotulo.slice(2, 4)}`), [{ nome: 'Valor', cor: CH.ambar, valores: meses.map((x) => x.valor) }], { fmt: N0, W: 340 }))}</div>
-      ${variantes('he', valores.map((st) => ({ valor: st, html: `<div class="grade g1">${topHE(st)}</div>` })))}`));
+      ${variantes('he', valores.map((st) => ({ valor: st, html: `<div class="grade g1">${topHE(st)}</div>` })))}`;
+    // Abas por tipo (secao he_tipos): 100% e 55% + 100%. Meta por setor so na 55%; DSR fica a parte.
+    const ti = (k, mes) => v('he_tipos', k, mes);
+    const temTipos = d.q('he_tipos', 'setor_dsr').length > 0;
+    const somaRot = (...listas) => { const m = {}; for (const l of listas) for (const x of l) { (m[x.rotulo] ||= { rotulo: x.rotulo, valor: 0, valor2: 0 }); m[x.rotulo].valor += x.valor || 0; m[x.rotulo].valor2 += x.valor2 || 0; } return Object.values(m).sort((p, q) => q.valor - p.valor); };
+    const blocoTipo = ({ g, nome, setores, pessoas, total, kpisGerais }) => {
+      const doSt = (st) => pessoas.filter((x) => !st || x.rotulo.split(' | ')[0] === st);
+      const kpisT = (st) => {
+        if (!st) return kpisGerais;
+        const ps = doSt(st), sx = setores.find((x) => x.rotulo === st) || {};
+        return `<div class="kpis">${kpi(`${hhmm(sx.valor2)} h`, `Horas do setor · ${nome}`)}${kpi(reais(sx.valor, 2), 'Valor do setor', { texto: `${pct(total ? sx.valor / total : null, 1)} do total`, bom: null })}
+        ${kpi(num(ps.length), 'Funcionários')}${kpi(ps[0] ? titulo(ps[0].rotulo.split(' | ')[1]) : '—', 'Maior valor', ps[0] ? { texto: `${hhmm(ps[0].valor2)} h · ${reais(ps[0].valor, 2)}`, bom: null } : null)}</div>`;
+      };
+      const top = (st) => `<div class="grade g1">${card(`Funcionários com mais hora extra (top 15) · ${nome}${st ? ` · ${titulo(st)}` : ''}`, barrasH(doSt(st).slice(0, 15).map((x) => { const [sto, nm] = x.rotulo.split(' | '); return { rotulo: titulo(nm || sto), valor: x.valor, texto: `${reais(x.valor, 2)} · ${hhmm(x.valor2)} h · ${pct(total ? x.valor / total : null, 1)}` }; }), { fmt: R0, cor: CH.ambar, larguraRot: 260, W: 1180 }))}</div>`;
+      const vals = ['', ...setores.map((x) => x.rotulo)];
+      return `${chip(g, 'Clique num setor (rosca ou barras) para filtrar os cartões e a lista de funcionários.')}
+      ${variantes(g, vals.map((st) => ({ valor: st, html: kpisT(st) })))}
+      <div class="grade g2">${card(`Valor por setor · ${nome}`, rosca(setores.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, filtro: x.rotulo })), { fmt: (x) => reais(x), grupo: g }))}
+        ${card(`Horas por setor · ${nome}`, barrasH(setores.map((x) => ({ rotulo: titulo(x.rotulo).replace('Carregamento ', 'Carreg. '), valor: x.valor2, filtro: x.rotulo, texto: `${hhmm(x.valor2)} h · ${reais(x.valor)}` })), { fmt: N0, cor: CH.azul, larguraRot: 170, grupo: g }))}</div>
+      ${variantes(g, vals.map((st) => ({ valor: st, html: top(st) })))}`;
+    };
+    const mesRot = (r) => `${MES_ABREV[Number(r.slice(5)) - 1]}/${r.slice(2, 4)}`;
+    const m100 = d.q('he_tipos', 'mes_100').slice().sort((x, y) => x.ordem - y.ordem);
+    const s100 = d.q('he_tipos', 'setor_100'), p100 = d.q('he_tipos', 'funcionario_100');
+    const t100 = ti('valor_100'), h100 = ti('horas_100'), dsr = ti('valor_dsr'), tJunto = (tot || 0) + (t100 || 0), hJunto = (v('horas_extras', 'horas') || 0) + (h100 || 0);
+    // todos os meses da HE 55% no eixo: mes sem HE 100% aparece com zero
+    const ms = [...new Set([...meses, ...m100].map((x) => x.rotulo))].sort();
+    const de = (l, r) => (l.find((x) => x.rotulo === r) || {}).valor || 0;
+    const bloco100 = () => `${blocoTipo({ g: 'he100', nome: 'HE 100%', setores: s100, pessoas: p100, total: t100,
+      kpisGerais: `<div class="kpis">${kpi(`${hhmm(h100)} h`, 'Horas HE 100%', comparar(h100, v('horas_extras', 'horas_100', d.ant), 'mês anterior'))}
+        ${kpi(reais(t100, 2), 'Valor HE 100%', comparar(t100, v('horas_extras', 'valor_100', d.ant), 'mês anterior'))}
+        ${kpi(reais(ti('valor_100_ly'), 2), `Mesmo mês de ${ano - 1}`, (ti('valor_100_ly') || 0) >= 100 ? comparar(t100, ti('valor_100_ly'), String(ano - 1)) : { texto: 'base muito pequena para comparar', bom: null })}
+        ${kpi(num(ti('funcionarios_100')), 'Funcionários com HE 100%')}</div>` })}
+      <div class="grade g1">${card('Valor HE 100% por mês (R$)', colunas(ms.map(mesRot), [{ nome: 'HE 100%', cor: CH.laranja, valores: ms.map((r) => de(m100, r)) }], { fmt: N0, altura: 240, W: 1180 }))}</div>
+      <p class="nota">As metas por setor valem só para a HE 55%.</p>`;
+    const blocoJunto = () => `${blocoTipo({ g: 'heju', nome: '55% + 100%', setores: somaRot(setor, s100), pessoas: somaRot(todas, p100), total: tJunto,
+      kpisGerais: `<div class="kpis k5">${kpi(`${hhmm(hJunto)} h`, 'Horas 55% + 100%')}${kpi(reais(tJunto, 2), 'Valor 55% + 100%', { texto: `${num(ti('funcionarios_junto'))} funcionários`, bom: null })}
+        ${kpi(reais(tot, 2), 'HE 55%', { texto: `${pct(tJunto ? (tot || 0) / tJunto : null, 0)} do valor · ${hhmm(v('horas_extras', 'horas'))} h`, bom: null })}
+        ${kpi(reais(t100, 2), 'HE 100%', { texto: `${pct(tJunto ? (t100 || 0) / tJunto : null, 0)} do valor · ${hhmm(h100)} h`, bom: null })}
+        ${kpi(reais(tJunto + (dsr || 0), 2), 'Total com DSR', { texto: `DSR à parte: ${reais(dsr, 2)}`, bom: null })}</div>` })}
+      <div class="grade g1">${card('Valor por mês: 55% × 100% (R$)', colunas(ms.map(mesRot), [{ nome: 'HE 55%', cor: CH.ambar, valores: ms.map((r) => de(meses, r)) }, { nome: 'HE 100%', cor: CH.laranja, valores: ms.map((r) => de(m100, r)) }], { fmt: N0, altura: 260, W: 1180 }))}</div>
+      <p class="nota">As metas por setor valem só para a HE 55%. O DSR é reflexo em valor, sem horas: fica fora da soma e aparece só no cartão Total com DSR.</p>`;
+    const abas = `<div class="abas" data-abas="hetipo"><button type="button" class="aba on" data-valor="">HE 55%</button><button type="button" class="aba" data-valor="100">HE 100%</button><button type="button" class="aba" data-valor="junto">55% + 100%</button></div>`;
+    add('he', 'Hora extra', secao('he', 'Gestão de hora extra', temTipos ? `Visão ${fech}` : `Visão ${fech} · Hora Extra 55%`, temTipos
+      ? `${abas}${variantes('hetipo', [{ valor: '', html: bloco55 }, { valor: '100', html: bloco100() }, { valor: 'junto', html: blocoJunto() }])}`
+      : bloco55));
   }
 
   // Movimentacao CD
@@ -1057,6 +1101,7 @@ main{max-width:1280px;margin:0 auto;padding:8px 24px 40px}
 [hidden]{display:none!important}
 .clic{cursor:pointer}.clic:hover{opacity:.82}.apagado{opacity:.25}
 .dica{color:var(--suave);font-size:12px;margin:-4px 0 8px}
+.abas{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}.aba{border:1px solid #BCD0EA;background:#fff;color:var(--marinho);border-radius:18px;padding:6px 16px;font-weight:600;font-size:13px;cursor:pointer}.aba.on{background:var(--azul);border-color:var(--azul);color:#fff}
 .chip{display:inline-flex;gap:8px;align-items:center;background:#E8F0FB;color:var(--marinho);border:1px solid #BCD0EA;border-radius:16px;padding:4px 6px 4px 12px;font-size:12px;margin:0 8px 10px 0}
 .chip button{border:0;background:#fff;color:var(--azul);cursor:pointer;font-weight:600;border-radius:12px;padding:2px 8px}
 h3.sub{margin:18px 0 10px;font-size:16px;color:var(--marinho)}
@@ -1085,6 +1130,13 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
     document.body.setAttribute('data-f-' + g, val);
   }
   document.addEventListener('click', function (e) {
+    var aba = e.target.closest('.aba');
+    if (aba) {
+      var caixa = aba.parentNode, grupo = caixa.getAttribute('data-abas'), valor = aba.getAttribute('data-valor');
+      caixa.querySelectorAll('.aba').forEach(function (b) { b.classList.toggle('on', b === aba); });
+      document.querySelectorAll('.variante[data-grupo="' + grupo + '"]').forEach(function (v) { v.hidden = v.getAttribute('data-valor') !== valor; });
+      return;
+    }
     var limpar = e.target.closest('.chip button');
     if (limpar) { aplicar(limpar.parentNode.getAttribute('data-chip'), ''); return; }
     var el = e.target.closest('.clic');
