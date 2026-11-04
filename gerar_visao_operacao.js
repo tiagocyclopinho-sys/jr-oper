@@ -513,6 +513,8 @@ function sac(pres, d) {
   cartao(s, 0.6 + 3 * (w + gap), 1.5, w, 1.6, num(fisico), 'Físico pendente', { texto: 'mercadoria não recebida no CD', bom: null }, COR.neutro);
   cartao(s, 0.6 + 4 * (w + gap), 1.5, w, 1.6, num(valor / 1000, 1), 'Mil R$ reclamados', { texto: `${oc.length - jrPaga} abatimento · ${jrPaga} JR paga diferença`, bom: null });
   const porTipo = {};
+  const compl = oc.filter((o) => o.completa).length, ident = oc.filter(VO.temResponsavel).length;
+  nota(s, `Taxa de Completude: ${pct(oc.length ? compl / oc.length : null, 0)} (${compl} de ${oc.length}; meta ≥ 90%) · % Responsabilidade do monitoramento: ${pct(oc.length ? ident / oc.length : null, 0)} (${ident} identificadas; meta ≥ 95%).`);
   for (const o of oc) { const t = o.tipo_erro || 'SEM TIPO'; (porTipo[t] ||= { qtd: 0, valor: 0 }); porTipo[t].qtd++; porTipo[t].valor += Number(o.valor_reclamado || 0); }
   const tipos = Object.entries(porTipo).sort((x, y) => y[1].qtd - x[1].qtd);
   const rotTipo = (t) => (t.charAt(0) + t.slice(1).toLowerCase());
