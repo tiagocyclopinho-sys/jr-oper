@@ -192,6 +192,12 @@ partir do branch `main` do GitHub.
   horas_100, funcionarios_100, valor_dsr, *_ly, funcionarios_junto. Página: abas
   (.aba, grupo 'hetipo') com filtros he (55%), he100 e heju; metas só na 55%; DSR
   fora da soma. Sem he_tipos (2025) a seção sai sem abas. Gerador: horasExtras100().
+- 7.1.4 (04/11): metas do CD por setor (seção metas_setor: fat_, dev_, corte_ frio/seco,
+  corte_sem_setor e quadro dev_motivo; `metasSetorCD()`, `faixaMeta()`). Devolução de
+  carregamento ≤ 0,050% (ideal ≤ 0,010%) e corte da mesa ≤ 0,100% (ideal ≤ 0,025%), de 26
+  a 25, sobre o faturamento do setor. "Chegou vencida" = DATA PROXIMA DA VALIDADE. O modelo
+  Corte não tem setor: usa o RCA → supervisor do f_FATURAMENTO (a planilha do Tiago difere
+  um pouco). Só meta: nada de valor de bônus na tela.
 
 ## Escala de embarques (6.10.0, 30/10/2026)
 - Menu Escala (Matrizes, Convocação Escala, Fechamento) em `js/escala.js`;
