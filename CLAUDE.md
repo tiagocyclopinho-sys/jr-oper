@@ -186,6 +186,12 @@ partir do branch `main` do GitHub.
   R$, valor2 litros) e tudo é somado na página; o gráfico da dimensão clicada
   fica inteiro e os outros dois mostram o filtrado (itens com data-pai = filtro).
   Barra com filtro: false não é clicável (posto sem variante).
+- 7.1.3 (04/11): Hora extra por tipo. Seção he_tipos em vo_indicadores/vo_quadros,
+  separada de horas_extras para regravar sem tocar nos totais congelados da 55%:
+  setor_100/_dsr, funcionario_100/_dsr, mes_100/_dsr e indicadores valor_100,
+  horas_100, funcionarios_100, valor_dsr, *_ly, funcionarios_junto. Página: abas
+  (.aba, grupo 'hetipo') com filtros he (55%), he100 e heju; metas só na 55%; DSR
+  fora da soma. Sem he_tipos (2025) a seção sai sem abas. Gerador: horasExtras100().
 
 ## Escala de embarques (6.10.0, 30/10/2026)
 - Menu Escala (Matrizes, Convocação Escala, Fechamento) em `js/escala.js`;
