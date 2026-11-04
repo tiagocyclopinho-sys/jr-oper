@@ -274,6 +274,12 @@ function horasExtras100(pres, d) {
   const m100 = d.q('he_tipos', 'mes_100');
   grafBarras(s, 8.8, 3.0, 3.9, 3.3, 'Valor HE 100% por mês (R$)', eixo.map((r) => `${MES_ABREV[Number(r.slice(5)) - 1]}/${r.slice(2, 4)}`), eixo.map((r) => (m100.find((x) => x.rotulo === r) || {}).valor || 0), { horizontal: false, cor: COR.laranja, rotuloSize: 7 });
 
+  const inv = d.q('he_inventario', 'funcionario');
+  if (inv.length) {
+    const vInv = inv.reduce((t2, x) => t2 + (x.valor || 0), 0), dInv = inv.reduce((t2, x) => t2 + (x.valor3 || 0), 0);
+    nota(s, `Com inventário: ${reais(valor, 2)} · sem inventário: ${reais(valor - vInv, 2)} · inventário: ${reais(vInv, 2)} + DSR ${reais(dInv, 2)} (${inv.length} funcionários).`);
+  }
+
   const pessoas = d.q('he_tipos', 'funcionario_100');
   const paginas = pessoas.length ? fatias(pessoas, 18) : [];
   paginas.forEach((pag, i) => {
