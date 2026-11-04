@@ -143,7 +143,7 @@ partir do branch `main` do GitHub.
   por seco/frio (SETOR I do supervisor no Power BI; frio = TO+PA+MA); corte ≤
   0,1% (valor cortado ÷ faturado no período 26→25, `faturamento_fech`) e corte
   ≤ R$ 30 mil; faturamento do mês ≥ R$ 30 mi;
-  despesa de cartão ≤ 75% do mesmo mês do ano anterior; MOOV motor ocioso ≤ 500
+  despesa de cartão ≤ R$ 75.000 por mês (fixa desde a 7.1.6); MOOV motor ocioso ≤ 500
   e ≥ 80% identificadas/em viagem; inventário saldo acumulado no ano ≥ 0. Seção
   Transbordos (Palmas dia a dia, Marabá mês a mês × ano anterior). Filtro por
   clique (variantes pré-montadas + script na página) só onde os dados já
