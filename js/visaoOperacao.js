@@ -287,6 +287,17 @@ function analisar(d) {
 // { area, indicador, real, meta, ok } ja com texto formatado.
 // Corte: ate 0,1% do faturado e no maximo R$ 30 mil no periodo; faturamento: R$ 30 mi/mes (Tiago, 29/10/2026)
 const META_DEV = 0.002, META_CORTE = 0.001, META_CORTE_RS = 30000, META_FAT = 30000000;
+// Metas do CD por setor, sobre o faturamento do setor de 26 a 25 (Tiago, 04/11/2026)
+const META_DEV_CARREG = { ideal: 0.0001, limite: 0.0005 }, META_CORTE_MESA = { ideal: 0.00025, limite: 0.001 };
+const faixaMeta = (p, m) => (p === null ? null : p <= m.ideal ? { nome: 'Ideal', cor: CH.bom } : p <= m.limite ? { nome: 'Parcial', cor: CH.ambar } : { nome: 'Fora da meta', cor: CH.ruim });
+function metasSetorCD(d) {
+  const v = (k) => d.v('metas_setor', k);
+  if (v('fat_frio') === null) return [];
+  return [['Frio', 'frio'], ['Seco', 'seco']].map(([setor, k]) => {
+    const fat = v(`fat_${k}`), dev = v(`dev_${k}`), corte = v(`corte_${k}`);
+    return { setor, k, fat, dev, corte, pDev: fat ? dev / fat : null, pCorte: fat ? corte / fat : null };
+  });
+}
 // HE: carregamento 1o turno 40 h, 2o turno 200 h; portaria 60 h; patio e manutencao 6 h; demais 1 h (Tiago, 29/10/2026)
 function metaHoraExtra(setor) {
   const s = String(setor).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, ''), carreg = /CARREG/.test(s);
@@ -317,6 +328,10 @@ function metasOficiais(d) {
   const corte = v('cortes', 'valor'), fat = v('devolucao', 'faturamento_fech');
   if (corte !== null && fat) add('Corte', 'Valor cortado ÷ faturado', pct(corte / fat, 3), '≤ 0,10%', corte / fat <= META_CORTE);
   if (corte !== null) add('Corte', 'Valor cortado no período', reais(corte), `≤ ${reais(META_CORTE_RS)}`, corte <= META_CORTE_RS);
+  for (const x of metasSetorCD(d)) {
+    if (x.pDev !== null) add('Devolução', `Carregamento ${x.setor}, % do faturamento do setor`, `${pct(x.pDev, 3)} · ${faixaMeta(x.pDev, META_DEV_CARREG).nome}`, '≤ 0,050%', x.pDev <= META_DEV_CARREG.limite);
+    if (x.pCorte !== null) add('Corte', `Mesa ${x.setor}, % do faturamento do setor`, `${pct(x.pCorte, 3)} · ${faixaMeta(x.pCorte, META_CORTE_MESA).nome}`, '≤ 0,100%', x.pCorte <= META_CORTE_MESA.limite);
+  }
   const fm = v('devolucao', 'faturamento');
   if (fm !== null) add('Faturamento', 'Faturado no mês', reais(fm), `≥ ${reais(META_FAT)}`, fm >= META_FAT);
   const dp = v('despesa', 'valor'), dly = v('despesa', 'valor_ly');
@@ -736,6 +751,7 @@ function gerarHtml(d, a, opcoes = {}) {
         ${(() => { const fat = v('devolucao', 'faturamento_fech'), p = fat && tot !== null ? tot / fat : null; return kpi(pct(p, 3), '% do faturado no período', p === null ? null : metaTxt(p <= META_CORTE, '≤ 0,10%')); })()}</div>
       <div class="grade g2">${card('Cortes por produto (R$, top 15)', barrasH(prod.map((x) => ({ rotulo: x.rotulo, valor: x.valor, texto: `${reais(x.valor)} · ${pct(tot ? x.valor / tot : null, 1)}` })), { fmt: R0, larguraRot: 230 }))}
         ${card('Valor de corte por dia (R$)', colunas(dia.map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.laranja, valores: dia.map((x) => x.valor) }], { fmt: N0 }))}</div>
+      ${(() => { const l = metasSetorCD(d); if (!l.length) return ''; const sem = v('metas_setor', 'corte_sem_setor'); return `<div class="grade g1">${card('Corte da mesa ÷ faturamento do setor x meta de 0,100%', barrasH(l.map((x) => { const f = faixaMeta(x.pCorte, META_CORTE_MESA); return { rotulo: x.setor, valor: (x.pCorte || 0) * 100, cor: f && f.cor, texto: `${pct(x.pCorte, 3)} · ${f ? f.nome : '—'} · ${reais(x.corte)} de ${reais(x.fat)}` }; }), { fmt: N0, larguraRot: 70, W: 1180 }) + `<p class="nota">Ideal até 0,025%; parcial até 0,100%; acima, fora da meta. Só cortes da mesa (rotina 1743). Setor pelo supervisor do vendedor, como no faturamento.${sem ? ` Sem setor identificado: ${reais(sem)}.` : ''}</p>`)}</div>`; })()}
       <div class="grade g1">${card(`Valor de corte por mês em ${ano} (R$)`, colunas(serie.map((x) => MES_ABREV[(x.mes % 100) - 1]), [{ nome: 'Valor', cor: CH.laranja, valores: serie.map((x) => x.valor) }], { fmt: N0, altura: 230, W: 1180 }))}</div>`));
   }
 
@@ -765,6 +781,8 @@ function gerarHtml(d, a, opcoes = {}) {
       <div class="grade g2">${card('Responsável (R$)', barrasH(resp.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${pct(totR ? x.valor / totR : null, 0)}` })), { fmt: R0, larguraRot: 150 }))}
         ${card('Pareto por motivo (R$, top 12)', barrasH(d.q('devolucao', 'motivo').slice(0, 12).map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${reais(x.valor)} · ${pct(totR ? x.valor / totR : null, 0)}` })), { fmt: R0, cor: CH.ambar, larguraRot: 240 }))}
         </div>
+      ${(() => { const l = metasSetorCD(d); if (!l.length) return ''; const mot = d.q('metas_setor', 'dev_motivo'), totM = mot.reduce((t, x) => t + (x.valor || 0), 0); return `<div class="grade g2">${card(`Devolução de carregamento ÷ faturamento do setor x meta de 0,050% · ${fech}`, barrasH(l.map((x) => { const f = faixaMeta(x.pDev, META_DEV_CARREG); return { rotulo: x.setor, valor: (x.pDev || 0) * 100, cor: f && f.cor, texto: `${pct(x.pDev, 3)} · ${f ? f.nome : '—'} · ${reais(x.dev)}` }; }), { fmt: N0, larguraRot: 70 }) + '<p class="nota">Ideal até 0,010%; parcial até 0,050%; acima, fora da meta. Motivos: mercadoria não carregada, data próxima da validade, peso errado e inversão na expedição.</p>')}
+        ${card(`Devolução de carregamento por motivo (R$) · ${fech}`, barrasH(mot.map((x) => { const [st, mo] = x.rotulo.split(' | '); return { rotulo: `${titulo(st)} · ${titulo(mo)}`, valor: x.valor, texto: `${reais(x.valor)} · ${pct(totM ? x.valor / totM : null, 0)}` }; }), { fmt: R0, cor: CH.ambar, larguraRot: 240, vazio: 'Nenhuma devolução de carregamento no período' }))}</div>`; })()}
       <div class="grade g1">${card('Devolução por dia (R$)', colunas(d.q('devolucao', 'dia').map((x) => diaMes(x.rotulo)), [{ nome: 'Valor', cor: CH.ambar, valores: d.q('devolucao', 'dia').map((x) => x.valor) }], { fmt: N0, W: 1180, altura: 240 }))}</div>`));
   }
 
