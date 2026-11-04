@@ -690,6 +690,12 @@ function gerarHtml(d, a, opcoes = {}) {
     const m100 = d.q('he_tipos', 'mes_100').slice().sort((x, y) => x.ordem - y.ordem);
     const s100 = d.q('he_tipos', 'setor_100'), p100 = d.q('he_tipos', 'funcionario_100');
     const t100 = ti('valor_100'), h100 = ti('horas_100'), dsr = ti('valor_dsr'), tJunto = (tot || 0) + (t100 || 0), hJunto = (v('horas_extras', 'horas') || 0) + (h100 || 0);
+    const inv = d.q('he_inventario', 'funcionario'), temInv = inv.length > 0;
+    const vInv = inv.reduce((t, x) => t + (x.valor || 0), 0), hInv = inv.reduce((t, x) => t + (x.valor2 || 0), 0), dInv = inv.reduce((t, x) => t + (x.valor3 || 0), 0);
+    const porSetorInv = () => { const m = {}; for (const x of inv) { const st = x.rotulo.split(' | ')[0]; (m[st] ||= { rotulo: st, valor: 0, valor2: 0 }); m[st].valor += x.valor || 0; m[st].valor2 += x.valor2 || 0; } return Object.values(m).sort((p, q) => q.valor - p.valor); };
+    const invSetores = porSetorInv();
+    const menos = (l, tira) => l.map((x) => { const y = tira.find((z) => z.rotulo === x.rotulo); return y ? { ...x, valor: (x.valor || 0) - (y.valor || 0), valor2: (x.valor2 || 0) - (y.valor2 || 0) } : x; }).filter((x) => x.valor > 0.005).sort((p, q) => q.valor - p.valor);
+    const semSetores = menos(s100, invSetores), semPessoas = menos(p100, inv);
     // todos os meses da HE 55% no eixo: mes sem HE 100% aparece com zero
     const ms = [...new Set([...meses, ...m100].map((x) => x.rotulo))].sort();
     const de = (l, r) => (l.find((x) => x.rotulo === r) || {}).valor || 0;
@@ -697,7 +703,7 @@ function gerarHtml(d, a, opcoes = {}) {
       kpisGerais: `<div class="kpis">${kpi(`${hhmm(h100)} h`, 'Horas HE 100%', comparar(h100, v('horas_extras', 'horas_100', d.ant), 'mês anterior'))}
         ${kpi(reais(t100, 2), 'Valor HE 100%', comparar(t100, v('horas_extras', 'valor_100', d.ant), 'mês anterior'))}
         ${kpi(reais(ti('valor_100_ly'), 2), `Mesmo mês de ${ano - 1}`, (ti('valor_100_ly') || 0) >= 100 ? comparar(t100, ti('valor_100_ly'), String(ano - 1)) : { texto: 'base muito pequena para comparar', bom: null })}
-        ${kpi(num(ti('funcionarios_100')), 'Funcionários com HE 100%')}</div>` })}
+        ${kpi(num(ti('funcionarios_100')), 'Funcionários com HE 100%', vInv ? { texto: `inclui inventário: ${reais(vInv, 2)}`, bom: null } : null)}</div>` })}
       <div class="grade g1">${card('Valor HE 100% por mês (R$)', colunas(ms.map(mesRot), [{ nome: 'HE 100%', cor: CH.laranja, valores: ms.map((r) => de(m100, r)) }], { fmt: N0, altura: 240, W: 1180 }))}</div>
       <p class="nota">As metas por setor valem só para a HE 55%.</p>`;
     const blocoJunto = () => `${blocoTipo({ g: 'heju', nome: '55% + 100%', setores: somaRot(setor, s100), pessoas: somaRot(todas, p100), total: tJunto,
@@ -707,9 +713,19 @@ function gerarHtml(d, a, opcoes = {}) {
         ${kpi(reais(tJunto + (dsr || 0), 2), 'Total com DSR', { texto: `DSR à parte: ${reais(dsr, 2)}`, bom: null })}</div>` })}
       <div class="grade g1">${card('Valor por mês: 55% × 100% (R$)', colunas(ms.map(mesRot), [{ nome: 'HE 55%', cor: CH.ambar, valores: ms.map((r) => de(meses, r)) }, { nome: 'HE 100%', cor: CH.laranja, valores: ms.map((r) => de(m100, r)) }], { fmt: N0, altura: 260, W: 1180 }))}</div>
       <p class="nota">As metas por setor valem só para a HE 55%. O DSR é reflexo em valor, sem horas: fica fora da soma e aparece só no cartão Total com DSR.</p>`;
-    const abas = `<div class="abas" data-abas="hetipo"><button type="button" class="aba on" data-valor="">HE 55%</button><button type="button" class="aba" data-valor="100">HE 100%</button><button type="button" class="aba" data-valor="junto">55% + 100%</button></div>`;
+    // Inventario: excecao de out/2026. Lancado a mao em he_inventario (planilha do Tiago), ja esta
+    // dentro da HE 100% do Power BI: valor = HE 100%, valor2 = horas, valor3 = DSR.
+    const blocoSem = () => `${blocoTipo({ g: 'hesem', nome: 'HE 100% sem inventário', setores: semSetores, pessoas: semPessoas, total: t100 - vInv,
+      kpisGerais: `<div class="kpis">${kpi(`${hhmm(h100 - hInv)} h`, 'Horas HE 100% sem inventário')}${kpi(reais(t100 - vInv, 2), 'Valor sem inventário', { texto: `${pct(t100 ? (t100 - vInv) / t100 : null, 0)} da HE 100%`, bom: null })}
+        ${kpi(reais(t100, 2), 'HE 100% com inventário', { texto: `inventário: ${reais(vInv, 2)}`, bom: null })}${kpi(num(semPessoas.length), 'Funcionários')}</div>` })}
+      <p class="nota">HE 100% do mês menos a hora extra do inventário. As metas por setor valem só para a HE 55%.</p>`;
+    const blocoInv = () => `${blocoTipo({ g: 'heinv', nome: 'Inventário', setores: invSetores, pessoas: inv, total: vInv,
+      kpisGerais: `<div class="kpis k5">${kpi(`${hhmm(hInv)} h`, 'Horas do inventário')}${kpi(reais(vInv, 2), 'HE 100% do inventário', { texto: `${pct(t100 ? vInv / t100 : null, 0)} da HE 100%`, bom: null })}
+        ${kpi(reais(dInv, 2), 'DSR do inventário')}${kpi(reais(vInv + dInv, 2), 'Total com DSR')}${kpi(num(inv.length), 'Funcionários')}</div>` })}
+      <p class="nota">Inventário de outubro, lançado em uma única data. Valores da planilha de horas extras do carregamento; estão dentro da HE 100% do mês.</p>`;
+    const abas = `<div class="abas" data-abas="hetipo"><button type="button" class="aba on" data-valor="">HE 55%</button><button type="button" class="aba" data-valor="100">HE 100%</button>${temInv ? '<button type="button" class="aba" data-valor="sem">100% sem inventário</button><button type="button" class="aba" data-valor="inv">Inventário</button>' : ''}<button type="button" class="aba" data-valor="junto">55% + 100%</button></div>`;
     add('he', 'Hora extra', secao('he', 'Gestão de hora extra', temTipos ? `Visão ${fech}` : `Visão ${fech} · Hora Extra 55%`, temTipos
-      ? `${abas}${variantes('hetipo', [{ valor: '', html: bloco55 }, { valor: '100', html: bloco100() }, { valor: 'junto', html: blocoJunto() }])}`
+      ? `${abas}${variantes('hetipo', [{ valor: '', html: bloco55 }, { valor: '100', html: bloco100() }, ...(temInv ? [{ valor: 'sem', html: blocoSem() }, { valor: 'inv', html: blocoInv() }] : []), { valor: 'junto', html: blocoJunto() }])}`
       : bloco55));
   }
 
