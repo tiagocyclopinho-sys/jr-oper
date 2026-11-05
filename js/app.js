@@ -4074,7 +4074,7 @@ const NAV_GRUPOS = [
       { tab: 'escala_fechamento', icon: '✅', label: 'Fechamento', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'escala_disponibilidade', icon: '👥', label: 'Disponibilidade', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'escala_folgas', icon: '🌴', label: 'Folgas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
-      // 7.1.1: as mesmas telas de Operação & Frota, que continuam lá.
+      // 7.1.10: Reentregas e Troca de Veículos ficam só aqui (saíram de Operação & Frota).
       { tab: 'reentregas', icon: '🔁', label: 'Reentregas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'troca_veiculos', icon: '🔄', label: 'Troca de Veículos', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] }
     ]
@@ -4088,8 +4088,6 @@ const NAV_GRUPOS = [
       { tab: 'controle_viagens', icon: '🚍', label: 'Controle de Viagens', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'oc_operacional', icon: '⚠️', label: 'Oc. Operacional', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'oc_rota', icon: '🚚', label: 'Oc. em Rota', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
-      { tab: 'reentregas', icon: '🔁', label: 'Reentregas', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
-      { tab: 'troca_veiculos', icon: '🔄', label: 'Troca de Veículos', papeis: ['SAC', 'MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'disponibilidade_frota', icon: '🚛', label: 'Disponibilidade da Frota', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] },
       { tab: 'sinistros', icon: '🚨', label: 'Investigação de Sinistro', papeis: ['MANUTENCAO', 'GESTOR', 'ADMIN'] },
       // 6.8.0 (migration 48). Papéis declarados só como matéria-prima da
@@ -13788,8 +13786,8 @@ function renderTelaFrota(icone, titulo, subtitulo, contentHtml) {
 }
 
 // Controle de Viagens É a Largada (decisão 4 do plano, 6.7.0): sem barra de
-// subabas — Oc. Operacional, Oc. em Rota, Reentregas e Troca de Veículos são
-// telas irmãs no menu.
+// subabas — Oc. Operacional e Oc. em Rota são telas irmãs no menu; Reentregas e
+// Troca de Veículos ficam no grupo Escala desde a 7.1.10.
 function renderControleViagensView() {
   const contentHtml = renderViagensLargadaSubTab();
 
