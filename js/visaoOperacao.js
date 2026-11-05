@@ -80,7 +80,7 @@ async function carregarDados(rest, am) {
   // janeiro e dezembro do ano passado) e o mesmo mes do ano anterior. A nuvem
   // devolve no maximo 1.000 linhas por leitura: ler 2 anos inteiros cortava dados.
   const meses = [...new Set([...Array.from({ length: m }, (_, i) => a * 100 + i + 1), ant, am - 100])].join(',');
-  const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo, indSac] = await Promise.all([
+  const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo, indSac, colabsCd] = await Promise.all([
     rest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes'),
     rest('vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=in.(${meses})`),
     lerTudo(rest, 'vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
@@ -98,7 +98,14 @@ async function carregarDados(rest, am) {
     rest('ocorrencias_devolucao', `select=carga_numero&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 5, 26)}&criado_em=lt.${iso(a, m + 1, 16)}&limit=5000`),
     // Taxa de Completude: a regra e a midia ficam no banco (migration 72)
     rest('vo_sac_indicadores', `select=id,completa,faltando&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
+    // Movimentacao: quem esta ativo no cadastro, para tirar desligados sem kg
+    lerTudo(rest, 'colaboradores_cd', 'select=nome,ativo,is_deleted&order=id'),
   ]);
+  // Desligado continua no Power BI com pontuacao e sem kg (Tiago, 05/11/2026): quem nao moveu
+  // kg no mes e nao esta ativo no cadastro fica fora, na pagina e no pptx. Novato ativo fica.
+  const chaveNome = (n) => String(n || '').trim().toUpperCase();
+  const ativosCd = new Set((colabsCd || []).filter((c) => c.ativo !== false && !c.is_deleted).map((c) => chaveNome(c.nome)));
+  const pontosAtivos = pontos.filter((p) => p.kg_total || !ativosCd.size || ativosCd.has(chaveNome(p.nome)));
   const primeiraAnalise = {};
   for (const r of analises || []) if (!primeiraAnalise[r.registro_id]) primeiraAnalise[r.registro_id] = r.data_hora;
   for (const o of sac) o.analise_em = primeiraAnalise[String(o.id)] || null;
@@ -124,7 +131,7 @@ async function carregarDados(rest, am) {
     serie: (sec, k) => Object.entries((I[sec] || {})[k] || {}).filter(([mes]) => Math.floor(mes / 100) === a && Number(mes) <= am)
       .sort(([x], [y]) => x - y).map(([mes, o]) => ({ mes: Number(mes), valor: o.valor })),
     q: (sec, quadro) => (Q[sec] || {})[quadro] || [],
-    pontos, sac, trocas, analisesPeriodo, cargasOperAmplo: cargasOperAmplo || [],
+    pontos: pontosAtivos, sac, trocas, analisesPeriodo, cargasOperAmplo: cargasOperAmplo || [],
   };
 }
 const num0 = (v) => (v === null || v === undefined ? null : Number(v));
@@ -773,7 +780,7 @@ function gerarHtml(d, a, opcoes = {}) {
         <h3 class="sub">Onde atuar</h3>
         <div class="grade g1">${card(`Quem menos movimentou (15 menores)${st ? ` · ${st}` : ''}`, barrasH(bk.map((p) => { const r = relKg(p); return { rotulo: titulo(p.nome), valor: r * 100, cor: corRel(r), texto: `${p.kg_total ? `${num(p.kg_total)} kg · ${pct(r, 0)} da mediana do cargo` : 'sem kg no período'} · ${cargoTxt(p)} ${titulo(p.setor || '')}` }; }), { fmt: N0, larguraRot: 260, W: 1180, folga: 420 }))}</div>
         <div class="grade g1">${card(`Quem menos pontuou (15 menores)${st ? ` · ${st}` : ''}`, barrasH(bp.map((p) => { const r = medP ? p.pontuacao / medP : 1; return { rotulo: titulo(p.nome), valor: p.pontuacao, cor: corRel(r), texto: `${num(p.pontuacao, 1)} · ${pct(r, 0)} da mediana · ${cargoTxt(p)} ${titulo(p.setor || '')}` }; }), { fmt: N0, larguraRot: 260, W: 1180, folga: 420 }))}</div>
-        <p class="nota">O kg é comparado com a mediana do mesmo cargo e setor, porque empilhadeira, conferente e movimentador movem volumes muito diferentes; a pontuação é comparada com a mediana geral. Vermelho abaixo de 50% da mediana, amarelo abaixo de 80%. Antes de agir, confira férias, atestado, afastamento e admissão no mês: esta lista não enxerga isso.</p>`,
+        <p class="nota">O kg é comparado com a mediana do mesmo cargo e setor, porque empilhadeira, conferente e movimentador movem volumes muito diferentes; a pontuação é comparada com a mediana geral. Vermelho abaixo de 50% da mediana, amarelo abaixo de 80%. Quem não moveu kg e não está ativo no cadastro de colaboradores fica fora. Antes de agir, confira férias, atestado, afastamento e admissão no mês: esta lista não enxerga isso.</p>`,
       };
     };
     const vals = ['', 'FRIO', 'SECO'];
