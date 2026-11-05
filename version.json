@@ -1,6 +1,7 @@
 {
-  "build": "menu-reentregas-escala-7.1.10",
+  "build": "corte-seco-por-nome-7.1.11",
   "publicado_em": "2026-11-05",
+  "resumo_corte_seco_por_nome_7111": "7.1.11 - VISAO OPERACAO: CORTE POR SETOR PELO NOME DE QUEM CORTOU. Seco passa a ser os cortes feitos por Itajaci ou Marcos Adriano; Frio, os demais. O total nao muda.",
   "resumo_menu_reentregas_escala_7110": "7.1.10 - MENU: Reentregas e Troca de Veiculos sairam de Operacao & Frota e ficam so no grupo Escala. As telas e os dados nao mudam.",
   "resumo_visao_operacao_completude_719": "7.1.9 - VISAO OPERACAO: TAXA DE COMPLETUDE E % RESPONSABILIDADE. A secao S.A.C. & Monitoramento ganhou os dois indicadores do Dashboard Executivo, que filtram junto com o tipo de erro, com metas de 90% e 95% (tambem na tabela Metas da operacao), e o grafico do que falta para a abertura ficar completa. A Taxa de Completude, tambem no Dashboard, passa a medir so a abertura no SAC: campos da abertura e pelo menos uma foto, video ou anexo de NF. Antes misturava campos da investigacao e da gestao e procurava foto em campos que nao guardam a midia da devolucao. Migration 72 (view vo_sac_indicadores), ja aplicada.",
   "resumo_visao_operacao_onde_atuar_718": "7.1.8 - VISAO OPERACAO: ONDE ATUAR NA MOVIMENTACAO. A secao Movimentacao CD ganhou Quem menos movimentou e Quem menos pontuou (15 menores), que respeitam o filtro FRIO/SECO. O kg e comparado com a mediana do mesmo cargo e setor, e quem nao tem kg no periodo aparece primeiro; a pontuacao e comparada com a mediana geral. Vermelho abaixo de 50% da mediana, amarelo abaixo de 80%. Sem migration.",

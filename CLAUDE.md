@@ -196,8 +196,8 @@ partir do branch `main` do GitHub.
   corte_sem_setor e quadro dev_motivo; `metasSetorCD()`, `faixaMeta()`). Devolução de
   carregamento ≤ 0,050% (ideal ≤ 0,010%) e corte da mesa ≤ 0,100% (ideal ≤ 0,025%), de 26
   a 25, sobre o faturamento do setor. "Chegou vencida" = DATA PROXIMA DA VALIDADE. O modelo
-  Corte não tem setor: usa o RCA → supervisor do f_FATURAMENTO (a planilha do Tiago difere
-  um pouco). Só meta: nada de valor de bônus na tela.
+  Corte não tem setor: vai pelo f_PCCORTEI[NOMEFUNC] (7.1.11): Seco = Itajaci ou Marcos Adriano,
+  Frio = os demais. Bate com a planilha do Tiago. Só meta: nada de valor de bônus na tela.
 - 7.1.7 (04/11): he_inventario em vo_quadros, gravado à mão só para 202610 (valor = HE 100%,
   valor2 = horas, valor3 = DSR). Fica fora de SECOES: a coleta não apaga. Já está dentro da
   HE 100% do Power BI; a aba "sem inventário" subtrai por funcionário e setor.
