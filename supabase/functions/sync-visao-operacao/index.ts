@@ -466,10 +466,9 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
 
   // Metas por setor do CD (frio x seco), de 26 a 25: devolucao de carregamento e corte
   // da mesa sobre o faturamento do setor. Secao propria: regravar nao mexe em horas,
-  // cortes nem devolucao ja congelados. O modelo Corte nao tem setor: o corte herda o
-  // setor do RCA pelo supervisor do faturamento (mesmo criterio do denominador).
+  // cortes nem devolucao ja congelados. O modelo Corte nao tem setor: o corte vai pelo
+  // nome de quem cortou (abaixo).
   async metas_setor(t, am, soInd) {
-    const a = Math.floor(am / 100), m = am % 100;
     const j = janelas(am).fech, ff = datas("dim_CALENDARIO[Data]", j), fc = datas("dim_Calendario[DATA]", j);
     const SETOR = "dim_PCSUPERV[SETOR I]";
     const setorDe = (s: any) => (/SECO/i.test(String(s)) ? "seco" : /FRIO/i.test(String(s)) ? "frio" : null);
@@ -489,17 +488,12 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
       const k = `${s.toUpperCase()} | ${rot(r["f_DEVOLUCAO[MOTIVO]"])}`;
       motivos[k] = (motivos[k] ?? 0) + v;
     }
-    // RCA -> setor: o de maior faturamento nos ultimos meses (cobre RCA sem venda no periodo)
-    const mapa = await dax(t, "devolucao", `EVALUATE SUMMARIZECOLUMNS(f_FATURAMENTO[CODUSUR], ${SETOR},
-      ${datas("dim_CALENDARIO[Data]", { de: iso(a, m - 4, 26), ate: j.ate })}, "f", [Vl Fat Bruto])`);
-    const doRca: Record<string, { s: string; f: number }> = {};
-    for (const r of mapa) {
-      const rca = String(r["f_FATURAMENTO[CODUSUR]"]), s = setorDe(r[SETOR]), f = num(r["[f]"]) ?? 0;
-      if (s && (!doRca[rca] || f > doRca[rca].f)) doRca[rca] = { s, f };
-    }
-    for (const r of await dax(t, "corte", `EVALUATE SUMMARIZECOLUMNS(f_PCCORTEI[CODUSUR], ${fc}, "v", [Valor Corte])`)) {
-      const s = doRca[String(r["f_PCCORTEI[CODUSUR]"])]?.s;
-      soma[s ? `corte_${s}` : "corte_sem_setor"] += num(r["[v]"]) ?? 0;
+    // Corte por setor (Tiago, 05/11/2026): Seco = cortes feitos por Itajaci ou Marcos Adriano;
+    // os demais sao do Frio. Reproduz a planilha de supervisores ao centavo em jun e jul/26.
+    for (const r of await dax(t, "corte", `EVALUATE SUMMARIZECOLUMNS(f_PCCORTEI[NOMEFUNC], ${fc}, "v", [Valor Corte])`)) {
+      const nome = String(r["f_PCCORTEI[NOMEFUNC]"] ?? "").trim();
+      const chave = !nome ? "corte_sem_setor" : /ITAJACI|MARCOS ADRIANO/i.test(nome) ? "corte_seco" : "corte_frio";
+      soma[chave] += num(r["[v]"]) ?? 0;
     }
     const ind: Ind[] = Object.entries(soma).map(([indicador, valor]) => ({ indicador, valor, de: j.de, ate: j.ate }));
     if (soInd) return { ind, quad: [] };
