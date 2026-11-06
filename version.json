@@ -1,6 +1,7 @@
 {
-  "build": "custo-gestao-colunas-7.1.15",
+  "build": "custo-gestao-ordenar-7.1.16",
   "publicado_em": "2026-11-06",
+  "resumo_custo_gestao_ordenar_7116": "7.1.16 - VISAO OPERACAO: ORDENAR NO CUSTO DE GESTAO. Clicar no titulo da coluna ordena a tabela; clicar de novo inverte.",
   "resumo_custo_gestao_colunas_7115": "7.1.15 - VISAO OPERACAO: CUSTO DE GESTAO COM PESO E DESPESA. Tabelas ganham as colunas Peso e Despesa, e a variacao contra o ano anterior e contra a media do ano fica na mesma celula.",
   "resumo_custo_gestao_apos_despesas_7114": "7.1.14 - VISAO OPERACAO: CUSTO DE GESTAO LOGO APOS DESPESAS, na pagina e no PowerPoint.",
   "resumo_custo_gestao_7113": "7.1.13 - VISAO OPERACAO: CUSTO DE GESTAO. Combustivel e despesa de cartao sobre peso e faturamento, por gerente, supervisor e motorista, cada um comparado com ele mesmo. Supervisor comercial que vinha em Logistica passa para Supervisao.",
