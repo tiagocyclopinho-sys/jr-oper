@@ -1,6 +1,7 @@
 {
-  "build": "custo-gestao-7.1.13",
+  "build": "custo-gestao-apos-despesas-7.1.14",
   "publicado_em": "2026-11-06",
+  "resumo_custo_gestao_apos_despesas_7114": "7.1.14 - VISAO OPERACAO: CUSTO DE GESTAO LOGO APOS DESPESAS, na pagina e no PowerPoint.",
   "resumo_custo_gestao_7113": "7.1.13 - VISAO OPERACAO: CUSTO DE GESTAO. Combustivel e despesa de cartao sobre peso e faturamento, por gerente, supervisor e motorista, cada um comparado com ele mesmo. Supervisor comercial que vinha em Logistica passa para Supervisao.",
   "resumo_movimentacao_sem_desligados_7112": "7.1.12 - VISAO OPERACAO: MOVIMENTACAO SEM DESLIGADOS. Quem nao moveu kg no mes e nao esta ativo no cadastro de colaboradores sai das listas e da contagem. Novato ativo sem kg continua.",
   "resumo_corte_seco_por_nome_7111": "7.1.11 - VISAO OPERACAO: CORTE POR SETOR PELO NOME DE QUEM CORTOU. Seco passa a ser os cortes feitos por Itajaci ou Marcos Adriano; Frio, os demais. O total nao muda.",
