@@ -976,6 +976,27 @@ function gerarHtml(d, a, opcoes = {}) {
       <div class="grade g1">${diaGeral}</div>`));
   }
 
+  // Custo de gestao: combustivel e despesa sobre peso e faturamento
+  {
+    const c = custoGestao(d);
+    if (c) {
+      const R4 = (x) => (x === null ? '—' : reais(x, 4)), R3 = (x) => (x === null ? '—' : reais(x, 3)), P3 = (x) => pct(x, 3);
+      const sinal = (o) => { const x = o.mes === null || o.med === null ? null : comparar(o.mes, o.med, 'média'); return x ? `<span class="c ${x.bom === true ? 'bom' : x.bom === false ? 'ruim' : ''}">${esc(x.texto)}</span>` : '—'; };
+      const k = (o, f, nome) => kpi(f(o.mes), nome, comparar(o.mes, o.med, `média de ${ano}`));
+      const tres = (o, f) => `<td class="n">${f(o.ly)}</td><td class="n">${f(o.med)}</td><td class="n"><b>${f(o.mes)}</b></td><td>${sinal(o)}</td>`;
+      const cab = (t) => `<th class="n">${abrev(d.am - 100)}</th><th class="n">Média ${ano}</th><th class="n">${abrev(d.am)}</th><th>${t}</th>`;
+      const pessoas = (lista, rot) => `<table class="tab"><thead><tr><th>${rot}</th><th class="n">Faturamento</th><th class="n">Combustível</th>${cab('Comb./kg')}${cab('Comb./fat.')}${cab('Desp./fat.')}</tr></thead><tbody>${lista.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${reais(x.fat)}</td><td class="n">${x.comb === null ? 'sem carro' : reais(x.comb)}</td>${tres(x.combKg, R4)}${tres(x.combFat, P3)}${tres(x.despFat, P3)}</tr>`).join('')}</tbody></table>`;
+      const mots = `<table class="tab"><thead><tr><th>Motorista</th><th class="n">Cargas</th><th class="n">Peso (kg)</th>${cab('Comb./kg')}${cab('Desp./kg')}</tr></thead><tbody>${c.motoristas.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${num(x.cargas)}</td><td class="n">${num(x.peso)}</td>${tres(x.combKg, R3)}${tres(x.despKg, R3)}</tr>`).join('')}</tbody></table>`;
+      add('custo', 'Custo de gestão', secao('custo', 'Combustível e despesa sobre peso e faturamento', `${mesCheio} · cada pessoa comparada com ela mesma`,
+        `<div class="kpis">${k(c.empresa.combKg, R3, 'Combustível por kg faturado')}${k(c.empresa.combFat, (x) => pct(x, 2), 'Combustível sobre faturamento')}${k(c.empresa.despFat, P3, 'Despesa sobre faturamento')}${k(c.empresa.despKg, R3, 'Despesa por kg faturado')}</div>
+        <div class="grade g1">${card('Gerentes comerciais', pessoas(c.gerentes, 'Gerente'))}</div>
+        <div class="grade g1">${card('Gerente com a equipe', pessoas(c.equipes, 'Gerente e supervisores'))}</div>
+        <div class="grade g1">${card('Supervisores', pessoas(c.supervisores, 'Supervisor'))}</div>
+        <div class="grade g1">${card('Motoristas', mots)}</div>
+        <p class="nota">Gerente e supervisor: combustível do carro próprio, pela placa, sobre a carteira. Mês sem carro confirmado fica fora da média. Motorista: abastecimento da placa dividido pelo peso das cargas, sobre o peso carregado. Só motoristas com 5 cargas ou mais. Sem meta até haver histórico.</p>`));
+    }
+  }
+
   // Abastecimento
   {
     const s = (k) => v('abastecimento', k), pr = d.q('abastecimento', 'preco_dia'), dia = d.q('abastecimento', 'dia');
@@ -1124,27 +1145,6 @@ function gerarHtml(d, a, opcoes = {}) {
       <div class="grade g1">${card('Motor ocioso por dia', linhas(dia.map((x) => diaMes(x.rotulo)), [{ nome: 'Motor ocioso', cor: CH.laranja, valores: dia.map((x) => x.valor) }], { fmt: N0, altura: 230, W: 1180 }))}</div>
       <div class="grade g1">${card('Motorista responsável (top 15)', barrasH(mots.map((x) => ({ rotulo: titulo(x.rotulo), valor: x.valor, texto: `${num(x.valor)} · ${pctOf(x.valor)}` })), { fmt: N0, cor: CH.laranja, larguraRot: 260, W: 1180 }))}</div>`
       : '<p class="nota">Sem detalhamento de motor ocioso gravado para este mês.</p>'}</section>`);
-  }
-
-  // Custo de gestao: combustivel e despesa sobre peso e faturamento
-  {
-    const c = custoGestao(d);
-    if (c) {
-      const R4 = (x) => (x === null ? '—' : reais(x, 4)), R3 = (x) => (x === null ? '—' : reais(x, 3)), P3 = (x) => pct(x, 3);
-      const sinal = (o) => { const x = o.mes === null || o.med === null ? null : comparar(o.mes, o.med, 'média'); return x ? `<span class="c ${x.bom === true ? 'bom' : x.bom === false ? 'ruim' : ''}">${esc(x.texto)}</span>` : '—'; };
-      const k = (o, f, nome) => kpi(f(o.mes), nome, comparar(o.mes, o.med, `média de ${ano}`));
-      const tres = (o, f) => `<td class="n">${f(o.ly)}</td><td class="n">${f(o.med)}</td><td class="n"><b>${f(o.mes)}</b></td><td>${sinal(o)}</td>`;
-      const cab = (t) => `<th class="n">${abrev(d.am - 100)}</th><th class="n">Média ${ano}</th><th class="n">${abrev(d.am)}</th><th>${t}</th>`;
-      const pessoas = (lista, rot) => `<table class="tab"><thead><tr><th>${rot}</th><th class="n">Faturamento</th><th class="n">Combustível</th>${cab('Comb./kg')}${cab('Comb./fat.')}${cab('Desp./fat.')}</tr></thead><tbody>${lista.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${reais(x.fat)}</td><td class="n">${x.comb === null ? 'sem carro' : reais(x.comb)}</td>${tres(x.combKg, R4)}${tres(x.combFat, P3)}${tres(x.despFat, P3)}</tr>`).join('')}</tbody></table>`;
-      const mots = `<table class="tab"><thead><tr><th>Motorista</th><th class="n">Cargas</th><th class="n">Peso (kg)</th>${cab('Comb./kg')}${cab('Desp./kg')}</tr></thead><tbody>${c.motoristas.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${num(x.cargas)}</td><td class="n">${num(x.peso)}</td>${tres(x.combKg, R3)}${tres(x.despKg, R3)}</tr>`).join('')}</tbody></table>`;
-      add('custo', 'Custo de gestão', secao('custo', 'Combustível e despesa sobre peso e faturamento', `${mesCheio} · cada pessoa comparada com ela mesma`,
-        `<div class="kpis">${k(c.empresa.combKg, R3, 'Combustível por kg faturado')}${k(c.empresa.combFat, (x) => pct(x, 2), 'Combustível sobre faturamento')}${k(c.empresa.despFat, P3, 'Despesa sobre faturamento')}${k(c.empresa.despKg, R3, 'Despesa por kg faturado')}</div>
-        <div class="grade g1">${card('Gerentes comerciais', pessoas(c.gerentes, 'Gerente'))}</div>
-        <div class="grade g1">${card('Gerente com a equipe', pessoas(c.equipes, 'Gerente e supervisores'))}</div>
-        <div class="grade g1">${card('Supervisores', pessoas(c.supervisores, 'Supervisor'))}</div>
-        <div class="grade g1">${card('Motoristas', mots)}</div>
-        <p class="nota">Gerente e supervisor: combustível do carro próprio, pela placa, sobre a carteira. Mês sem carro confirmado fica fora da média. Motorista: abastecimento da placa dividido pelo peso das cargas, sobre o peso carregado. Só motoristas com 5 cargas ou mais. Sem meta até haver histórico.</p>`));
-    }
   }
 
   // S.A.C.
