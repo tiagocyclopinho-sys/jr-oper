@@ -80,7 +80,7 @@ async function carregarDados(rest, am) {
   // janeiro e dezembro do ano passado) e o mesmo mes do ano anterior. A nuvem
   // devolve no maximo 1.000 linhas por leitura: ler 2 anos inteiros cortava dados.
   const meses = [...new Set([...Array.from({ length: m }, (_, i) => a * 100 + i + 1), ant, am - 100])].join(',');
-  const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo, indSac, colabsCd] = await Promise.all([
+  const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo, indSac, colabsCd, custoHist] = await Promise.all([
     rest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes'),
     rest('vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=in.(${meses})`),
     lerTudo(rest, 'vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
@@ -100,6 +100,8 @@ async function carregarDados(rest, am) {
     rest('vo_sac_indicadores', `select=id,completa,faltando&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
     // Movimentacao: quem esta ativo no cadastro, para tirar desligados sem kg
     lerTudo(rest, 'colaboradores_cd', 'select=nome,ativo,is_deleted&order=id'),
+    // Custo de gestao: historico por pessoa para comparar cada uma com ela mesma
+    lerTudo(rest, 'vo_quadros', `select=ano_mes,quadro,rotulo,valor,valor2,valor3&secao=eq.custo_gestao&ano_mes=in.(${meses})&order=ano_mes,quadro,ordem`),
   ]);
   // Desligado continua no Power BI com pontuacao e sem kg (Tiago, 05/11/2026): quem nao moveu
   // kg no mes e nao esta ativo no cadastro fica fora, na pagina e no pptx. Novato ativo fica.
@@ -120,6 +122,7 @@ async function carregarDados(rest, am) {
   }
   const Q = {}; // Q[secao][quadro] = [linhas]
   for (const r of quad) ((Q[r.secao] ||= {})[r.quadro] ||= []).push({ ...r, valor: num0(r.valor), valor2: num0(r.valor2), valor3: num0(r.valor3) });
+  corrigirDepartamentos(Q);
   const per = periodos.find((p) => p.ano_mes === am);
   return {
     am, ant, ano: a, periodo: per, previa: !per || per.status !== 'fechado',
@@ -131,7 +134,90 @@ async function carregarDados(rest, am) {
     serie: (sec, k) => Object.entries((I[sec] || {})[k] || {}).filter(([mes]) => Math.floor(mes / 100) === a && Number(mes) <= am)
       .sort(([x], [y]) => x - y).map(([mes, o]) => ({ mes: Number(mes), valor: o.valor })),
     q: (sec, quadro) => (Q[sec] || {})[quadro] || [],
-    pontos: pontosAtivos, sac, trocas, analisesPeriodo, cargasOperAmplo: cargasOperAmplo || [],
+    pontos: pontosAtivos, sac, trocas, analisesPeriodo, cargasOperAmplo: cargasOperAmplo || [], custoHist: custoHist || [],
+  };
+}
+// O Power BI traz supervisor comercial em Logistica no dNome. O Tiago pediu para corrigir
+// aqui (06/11/2026): la a mudanca depende de outros sistemas de busca.
+const DEP_CORRIGIDO = { 'FERDINANDO GOMES RIBEIRO': 'SUPERVISAO' };
+function corrigirDepartamentos(Q) {
+  const D = Q.despesa;
+  if (!D || !D.usuario_dep) return;
+  const somar = (lista, rotulo, valor, qtd) => {
+    const x = lista.find((l) => l.rotulo === rotulo);
+    if (x) { x.valor = (x.valor || 0) + valor; if (qtd !== null && qtd !== undefined) x.valor2 = (x.valor2 || 0) + qtd; } else if (valor) lista.push({ rotulo, valor, valor2: qtd ?? null, valor3: null });
+  };
+  for (const [nome, novo] of Object.entries(DEP_CORRIGIDO)) {
+    for (const l of D.usuario_dep.slice()) {
+      const [dep, quem] = l.rotulo.split(' | ');
+      if (quem !== nome || dep === novo) continue;
+      l.rotulo = `${novo} | ${nome}`;
+      if (D.departamento) { somar(D.departamento, dep, -(l.valor || 0), null); somar(D.departamento, novo, l.valor || 0, null); }
+      for (const u of D.usuario_dia || []) {
+        const [q, dia] = u.rotulo.split(' | ');
+        if (q !== nome) continue;
+        somar(D.dep_dia || [], `${dep} | ${dia}`, -(u.valor || 0), -(u.valor2 || 0));
+        somar(D.dep_dia || [], `${novo} | ${dia}`, u.valor || 0, u.valor2 || 0);
+      }
+    }
+    if (D.departamento) D.departamento.sort((x, y) => (y.valor || 0) - (x.valor || 0));
+  }
+}
+
+// Custo de gestao (migration 73): cada pessoa contra ela mesma. Devolve, por pessoa, o mes,
+// o mesmo mes do ano anterior e a media dos meses anteriores do ano, sempre soma sobre soma.
+// Combustivel vazio = mes sem carro confirmado: fica fora da conta, nao vale zero.
+function custoGestao(d) {
+  const hist = d.custoHist || [];
+  if (!hist.some((x) => x.ano_mes === d.am)) return null;
+  const idx = {};
+  for (const r of hist) ((idx[r.quadro] ||= {})[r.rotulo] ||= {})[r.ano_mes] = r;
+  const nz = (v) => (v === null || v === undefined ? null : Number(v));
+  const ly = d.am - 100, anteriores = (o) => Object.keys(o).map(Number).filter((m) => Math.floor(m / 100) === d.ano && m < d.am);
+  const taxa = (n, b) => (n === null || !b ? null : n / b);
+  const medir = (quadro, quadroBase, rotulo, campoDen, campoBase) => {
+    const o = (idx[quadro] || {})[rotulo] || {}, ob = (idx[quadroBase] || {})[rotulo] || {};
+    const den = (m, campo) => { if (campo === 'kg') return nz((ob[m] || {}).valor); return nz((o[m] || {})[campoBase]); };
+    const umMes = (num, m) => { const v = nz((o[m] || {})[num]); return { n: v, kg: den(m, 'kg'), base: nz((o[m] || {})[campoBase]) }; };
+    const soma = (num) => {
+      let n = 0, kg = 0, base = 0, q = 0;
+      for (const m of anteriores(o)) { const x = umMes(num, m); if (x.n === null) continue; n += x.n; kg += x.kg || 0; base += x.base || 0; q++; }
+      return q ? { n, kg, base, q } : null;
+    };
+    return { umMes, soma };
+  };
+  const pessoa = (rot, q = 'pessoa', qb = 'pessoa_kg') => {
+    const M = medir(q, qb, rot, null, 'valor3'), a = M.umMes('valor', d.am), al = M.umMes('valor', ly), ac = M.soma('valor');
+    const b = M.umMes('valor2', d.am), bl = M.umMes('valor2', ly), bc = M.soma('valor2');
+    return {
+      fat: a.base, kg: a.kg, comb: a.n, desp: b.n,
+      combKg: { mes: taxa(a.n, a.kg), ly: taxa(al.n, al.kg), med: ac ? taxa(ac.n, ac.kg) : null },
+      combFat: { mes: taxa(a.n, a.base), ly: taxa(al.n, al.base), med: ac ? taxa(ac.n, ac.base) : null },
+      despFat: { mes: taxa(b.n, b.base), ly: taxa(bl.n, bl.base), med: bc ? taxa(bc.n, bc.base) : null },
+    };
+  };
+  const doMes = (q) => Object.entries(idx[q] || {}).filter(([, o]) => o[d.am]).map(([r]) => r);
+  const ROT = (r) => titulo(r.split('|').pop());
+  const rots = doMes('pessoa');
+  const gerentes = rots.filter((r) => r.startsWith('Gerente|')).map((r) => ({ nome: ROT(r), ...pessoa(r) }));
+  const supervisores = rots.filter((r) => r.startsWith('Supervisor|')).map((r) => ({ nome: ROT(r), ...pessoa(r) })).filter((x) => (x.fat || 0) >= 100000);
+  const equipes = doMes('equipe').map((r) => ({ nome: titulo(r), ...pessoa(r, 'equipe', 'equipe_kg') }));
+  const motoristas = doMes('motorista').map((r) => {
+    const o = idx.motorista[r], c = ((idx.motorista_carga || {})[r] || {})[d.am] || {};
+    const taxaM = (campo, m) => { const x = o[m]; return x ? taxa(nz(x[campo]), nz(x.valor3)) : null; };
+    const mediaM = (campo) => { let n = 0, p = 0, q = 0; for (const m of anteriores(o)) { const v = nz(o[m][campo]); if (v === null) continue; n += v; p += nz(o[m].valor3) || 0; q++; } return q ? taxa(n, p) : null; };
+    return {
+      nome: titulo(r), cargas: nz(c.valor), valorCarga: nz(c.valor2), peso: nz(o[d.am].valor3), comb: nz(o[d.am].valor), desp: nz(o[d.am].valor2),
+      combKg: { mes: taxaM('valor', d.am), ly: taxaM('valor', ly), med: mediaM('valor') },
+      despKg: { mes: nz(o[d.am].valor2) ? taxaM('valor2', d.am) : null, ly: taxaM('valor2', ly) || null, med: mediaM('valor2') || null },
+    };
+  }).filter((x) => (x.cargas || 0) >= 5);
+  const v = (k, m = d.am) => d.v('custo_gestao', k, m);
+  const med = (k, b) => { let n = 0, q = 0; for (let m = d.ano * 100 + 1; m < d.am; m++) { const x = v(k, m), y = v(b, m); if (x !== null && y !== null) { n += x; q += y; } } return q ? n / q : null; };
+  const emp = (k, b) => ({ mes: taxa(v(k), v(b)), ly: taxa(v(k, ly), v(b, ly)), med: med(k, b) });
+  return {
+    empresa: { combKg: emp('combustivel', 'kg_faturado'), combFat: emp('combustivel', 'faturamento'), despFat: emp('despesa', 'faturamento'), despKg: emp('despesa', 'kg_faturado') },
+    gerentes, supervisores, equipes, motoristas,
   };
 }
 const num0 = (v) => (v === null || v === undefined ? null : Number(v));
@@ -1040,6 +1126,27 @@ function gerarHtml(d, a, opcoes = {}) {
       : '<p class="nota">Sem detalhamento de motor ocioso gravado para este mês.</p>'}</section>`);
   }
 
+  // Custo de gestao: combustivel e despesa sobre peso e faturamento
+  {
+    const c = custoGestao(d);
+    if (c) {
+      const R4 = (x) => (x === null ? '—' : reais(x, 4)), R3 = (x) => (x === null ? '—' : reais(x, 3)), P3 = (x) => pct(x, 3);
+      const sinal = (o) => { const x = o.mes === null || o.med === null ? null : comparar(o.mes, o.med, 'média'); return x ? `<span class="c ${x.bom === true ? 'bom' : x.bom === false ? 'ruim' : ''}">${esc(x.texto)}</span>` : '—'; };
+      const k = (o, f, nome) => kpi(f(o.mes), nome, comparar(o.mes, o.med, `média de ${ano}`));
+      const tres = (o, f) => `<td class="n">${f(o.ly)}</td><td class="n">${f(o.med)}</td><td class="n"><b>${f(o.mes)}</b></td><td>${sinal(o)}</td>`;
+      const cab = (t) => `<th class="n">${abrev(d.am - 100)}</th><th class="n">Média ${ano}</th><th class="n">${abrev(d.am)}</th><th>${t}</th>`;
+      const pessoas = (lista, rot) => `<table class="tab"><thead><tr><th>${rot}</th><th class="n">Faturamento</th><th class="n">Combustível</th>${cab('Comb./kg')}${cab('Comb./fat.')}${cab('Desp./fat.')}</tr></thead><tbody>${lista.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${reais(x.fat)}</td><td class="n">${x.comb === null ? 'sem carro' : reais(x.comb)}</td>${tres(x.combKg, R4)}${tres(x.combFat, P3)}${tres(x.despFat, P3)}</tr>`).join('')}</tbody></table>`;
+      const mots = `<table class="tab"><thead><tr><th>Motorista</th><th class="n">Cargas</th><th class="n">Peso (kg)</th>${cab('Comb./kg')}${cab('Desp./kg')}</tr></thead><tbody>${c.motoristas.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${num(x.cargas)}</td><td class="n">${num(x.peso)}</td>${tres(x.combKg, R3)}${tres(x.despKg, R3)}</tr>`).join('')}</tbody></table>`;
+      add('custo', 'Custo de gestão', secao('custo', 'Combustível e despesa sobre peso e faturamento', `${mesCheio} · cada pessoa comparada com ela mesma`,
+        `<div class="kpis">${k(c.empresa.combKg, R3, 'Combustível por kg faturado')}${k(c.empresa.combFat, (x) => pct(x, 2), 'Combustível sobre faturamento')}${k(c.empresa.despFat, P3, 'Despesa sobre faturamento')}${k(c.empresa.despKg, R3, 'Despesa por kg faturado')}</div>
+        <div class="grade g1">${card('Gerentes comerciais', pessoas(c.gerentes, 'Gerente'))}</div>
+        <div class="grade g1">${card('Gerente com a equipe', pessoas(c.equipes, 'Gerente e supervisores'))}</div>
+        <div class="grade g1">${card('Supervisores', pessoas(c.supervisores, 'Supervisor'))}</div>
+        <div class="grade g1">${card('Motoristas', mots)}</div>
+        <p class="nota">Gerente e supervisor: combustível do carro próprio, pela placa, sobre a carteira. Mês sem carro confirmado fica fora da média. Motorista: abastecimento da placa dividido pelo peso das cargas, sobre o peso carregado. Só motoristas com 5 cargas ou mais. Sem meta até haver histórico.</p>`));
+    }
+  }
+
   // S.A.C.
   {
     const oc = d.sac, concl = oc.filter((o) => o.status_gestao === 'CONCLUIDO').length;
@@ -1169,7 +1276,7 @@ main{max-width:1280px;margin:0 auto;padding:8px 24px 40px}
 .leg{display:flex;gap:14px;font-size:12px;color:var(--suave);margin-bottom:4px}.leg span{display:flex;align-items:center;gap:5px}
 .lista{margin:0;padding-left:18px}.lista li{margin:6px 0;line-height:1.4}.lista.peq li{font-size:12.5px}
 .tab{width:100%;border-collapse:collapse;font-size:12.5px}.tab th{background:var(--marinho);color:#fff;text-align:left;padding:7px 8px;font-weight:600}
-.tab td{padding:6px 8px;border-bottom:1px solid #EEF2F6}.tab .n{text-align:right}.nota{color:var(--suave);font-size:12px;font-style:italic;margin:6px 0 0}
+.tab td{padding:6px 8px;border-bottom:1px solid #EEF2F6}.tab .n{text-align:right;white-space:nowrap}.nota{color:var(--suave);font-size:12px;font-style:italic;margin:6px 0 0}
 .vazio{color:var(--suave);text-align:center;padding:30px 0}
 [hidden]{display:none!important}
 .clic{cursor:pointer}.clic:hover{opacity:.82}.apagado{opacity:.25}
@@ -1227,6 +1334,6 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
 
 return {
   MESES, MES_ABREV, nf, num, reais, mil, pct, dataBr, diaMes, iso, mesAnterior, nomeMes, abrev, titulo, variacao,
-  comparar, media, mediana, hhmm, horasUteis, etapasSla, comparativoDevolucao, temResponsavel, carregarDados, analisar, metasOficiais, gerarHtml,
+  comparar, media, mediana, hhmm, horasUteis, etapasSla, comparativoDevolucao, temResponsavel, carregarDados, analisar, metasOficiais, gerarHtml, custoGestao,
 };
 });
