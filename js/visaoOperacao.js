@@ -985,22 +985,25 @@ function gerarHtml(d, a, opcoes = {}) {
       const linhaVar = (x) => (x ? `<span class="c ${x.bom === true ? 'bom' : x.bom === false ? 'ruim' : ''}">${esc(x.texto)}</span>` : '');
       const sinal = (o) => [o.mes === null ? null : comparar(o.mes, o.ly, 'LY'), o.mes === null ? null : comparar(o.mes, o.med, 'média')].map(linhaVar).filter(Boolean).join('<br>') || '—';
       const k = (o, f, nome) => kpi(f(o.mes), nome, comparar(o.mes, o.med, `média de ${ano}`));
-      const tres = (o, f) => `<td class="n ini">${f(o.ly)}</td><td class="n">${f(o.med)}</td><td class="n"><b>${f(o.mes)}</b></td><td>${sinal(o)}</td>`;
+      const dv = (x) => (x === null || x === undefined || !isFinite(x) ? '' : x);
+      const cel = (x, html) => `<td class="n" data-v="${dv(x)}">${html}</td>`;
+      // Variacao ordena pela diferenca contra a media do ano
+      const tres = (o, f) => `<td class="n ini" data-v="${dv(o.ly)}">${f(o.ly)}</td>${cel(o.med, f(o.med))}${cel(o.mes, `<b>${f(o.mes)}</b>`)}<td data-v="${o.mes === null || !o.med ? '' : o.mes / o.med - 1}">${sinal(o)}</td>`;
       const grupos = (l) => l.map((g) => `<th colspan="4" class="grupo">${g}</th>`).join('');
-      const sub = (l) => l.map(() => `<th class="n ini">${abrev(d.am - 100)}</th><th class="n">Média</th><th class="n">${abrev(d.am)}</th><th>Variação</th>`).join('');
-      const fixas = (l) => l.map(([x, n]) => `<th rowspan="2"${n ? ' class="n"' : ''}>${x}</th>`).join('');
-      const tabela = (cols, gs, corpo) => `<div class="rola"><table class="tab tab-custo"><thead><tr>${fixas(cols)}${grupos(gs)}</tr><tr>${sub(gs)}</tr></thead><tbody>${corpo}</tbody></table></div>`;
+      const sub = (l, base) => l.map((_, i) => { const c = base + i * 4; return `<th class="n ini" data-col="${c}">${abrev(d.am - 100)}</th><th class="n" data-col="${c + 1}">Média</th><th class="n" data-col="${c + 2}">${abrev(d.am)}</th><th data-col="${c + 3}">Variação</th>`; }).join('');
+      const fixas = (l) => l.map(([x, n], i) => `<th rowspan="2" data-col="${i}"${n ? ' class="n"' : ''}>${x}</th>`).join('');
+      const tabela = (cols, gs, corpo) => `<div class="rola"><table class="tab tab-custo"><thead><tr>${fixas(cols)}${grupos(gs)}</tr><tr>${sub(gs, cols.length)}</tr></thead><tbody>${corpo}</tbody></table></div>`;
       const pessoas = (lista, rot) => tabela([[rot, 0], ['Faturamento', 1], ['Peso (kg)', 1], ['Combustível', 1], ['Despesa', 1]], ['Combustível por kg', 'Combustível sobre faturamento', 'Despesa sobre faturamento'],
-        lista.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${reais(x.fat)}</td><td class="n">${num(x.kg)}</td><td class="n">${x.comb === null ? 'sem carro' : reais(x.comb)}</td><td class="n">${reais(x.desp)}</td>${tres(x.combKg, R4)}${tres(x.combFat, P3)}${tres(x.despFat, P3)}</tr>`).join(''));
+        lista.map((x) => `<tr><td data-v="${esc(x.nome)}">${esc(x.nome)}</td>${cel(x.fat, reais(x.fat))}${cel(x.kg, num(x.kg))}${cel(x.comb, x.comb === null ? 'sem carro' : reais(x.comb))}${cel(x.desp, reais(x.desp))}${tres(x.combKg, R4)}${tres(x.combFat, P3)}${tres(x.despFat, P3)}</tr>`).join(''));
       const mots = tabela([['Motorista', 0], ['Cargas', 1], ['Peso (kg)', 1], ['Combustível', 1], ['Despesa', 1]], ['Combustível por kg', 'Despesa por kg'],
-        c.motoristas.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${num(x.cargas)}</td><td class="n">${num(x.peso)}</td><td class="n">${x.comb === null ? '—' : reais(x.comb)}</td><td class="n">${x.desp ? reais(x.desp) : '—'}</td>${tres(x.combKg, R3)}${tres(x.despKg, R3)}</tr>`).join(''));
+        c.motoristas.map((x) => `<tr><td data-v="${esc(x.nome)}">${esc(x.nome)}</td>${cel(x.cargas, num(x.cargas))}${cel(x.peso, num(x.peso))}${cel(x.comb, x.comb === null ? '—' : reais(x.comb))}${cel(x.desp || null, x.desp ? reais(x.desp) : '—')}${tres(x.combKg, R3)}${tres(x.despKg, R3)}</tr>`).join(''));
       add('custo', 'Custo de gestão', secao('custo', 'Combustível e despesa sobre peso e faturamento', `${mesCheio} · cada pessoa comparada com ela mesma`,
         `<div class="kpis">${k(c.empresa.combKg, R3, 'Combustível por kg faturado')}${k(c.empresa.combFat, (x) => pct(x, 2), 'Combustível sobre faturamento')}${k(c.empresa.despFat, P3, 'Despesa sobre faturamento')}${k(c.empresa.despKg, R3, 'Despesa por kg faturado')}</div>
         <div class="grade g1">${card('Gerentes comerciais', pessoas(c.gerentes, 'Gerente'))}</div>
         <div class="grade g1">${card('Gerente com a equipe', pessoas(c.equipes, 'Gerente e supervisores'))}</div>
         <div class="grade g1">${card('Supervisores', pessoas(c.supervisores, 'Supervisor'))}</div>
         <div class="grade g1">${card('Motoristas', mots)}</div>
-        <p class="nota">Gerente e supervisor: combustível do carro próprio, pela placa, sobre a carteira. Mês sem carro confirmado fica fora da média. Motorista: abastecimento da placa dividido pelo peso das cargas, sobre o peso carregado. Só motoristas com 5 cargas ou mais. Sem meta até haver histórico.</p>`));
+        <p class="nota">Gerente e supervisor: combustível do carro próprio, pela placa, sobre a carteira. Mês sem carro confirmado fica fora da média. Motorista: abastecimento da placa dividido pelo peso das cargas, sobre o peso carregado. Só motoristas com 5 cargas ou mais. Sem meta até haver histórico. Clique no título de uma coluna para ordenar.</p>`));
     }
   }
 
@@ -1283,7 +1286,7 @@ main{max-width:1280px;margin:0 auto;padding:8px 24px 40px}
 .leg{display:flex;gap:14px;font-size:12px;color:var(--suave);margin-bottom:4px}.leg span{display:flex;align-items:center;gap:5px}
 .lista{margin:0;padding-left:18px}.lista li{margin:6px 0;line-height:1.4}.lista.peq li{font-size:12.5px}
 .tab{width:100%;border-collapse:collapse;font-size:12.5px}.tab th{background:var(--marinho);color:#fff;text-align:left;padding:7px 8px;font-weight:600}
-.tab td{padding:6px 8px;border-bottom:1px solid #EEF2F6}.tab .n{text-align:right;white-space:nowrap}.rola{overflow-x:auto}.tab-custo{font-size:11px}.tab-custo th,.tab-custo td{padding:5px 4px;vertical-align:middle}.tab-custo .c{white-space:nowrap;font-size:10.5px}.tab-custo .grupo{text-align:center;border-left:2px solid #fff}.tab-custo th.ini{border-left:2px solid #fff}.tab-custo td.ini{border-left:2px solid #DCE3EA}.nota{color:var(--suave);font-size:12px;font-style:italic;margin:6px 0 0}
+.tab td{padding:6px 8px;border-bottom:1px solid #EEF2F6}.tab .n{text-align:right;white-space:nowrap}.rola{overflow-x:auto}.tab-custo{font-size:11px}.tab-custo th,.tab-custo td{padding:5px 4px;vertical-align:middle}.tab-custo .c{white-space:nowrap;font-size:10.5px}.tab-custo .grupo{text-align:center;border-left:2px solid #fff}.tab-custo th[data-col]{cursor:pointer;user-select:none}.tab-custo th[data-col]:hover{text-decoration:underline}.tab-custo th[data-ordem="desc"]::after{content:" ▼"}.tab-custo th[data-ordem="asc"]::after{content:" ▲"}.tab-custo th.ini{border-left:2px solid #fff}.tab-custo td.ini{border-left:2px solid #DCE3EA}.nota{color:var(--suave);font-size:12px;font-style:italic;margin:6px 0 0}
 .vazio{color:var(--suave);text-align:center;padding:30px 0}
 [hidden]{display:none!important}
 .clic{cursor:pointer}.clic:hover{opacity:.82}.apagado{opacity:.25}
@@ -1302,6 +1305,29 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
 <nav>${indice.map(([id, nome]) => `<a href="#${id}">${esc(nome)}</a>`).join('').replace('>Rastreamento</a>', '>Rastreamento</a><a href="#ocioso">Motor ocioso</a>')}</nav>
 <main>${partes.join('\n')}</main>
 <script>
+// Custo de gestao: clicar no titulo ordena so aquela tabela; clicar de novo inverte.
+// Numero comeca do maior, nome de A a Z; celula vazia fica sempre no fim.
+(function () {
+  document.querySelectorAll('.tab-custo th[data-col]').forEach(function (th) {
+    th.title = 'Clique para ordenar';
+    th.addEventListener('click', function () {
+      var tabela = th.closest('table'), corpo = tabela.tBodies[0], col = Number(th.getAttribute('data-col'));
+      var linhas = Array.prototype.slice.call(corpo.rows);
+      var valor = function (l) { return l.cells[col].getAttribute('data-v') || ''; };
+      var numerico = linhas.some(function (l) { var v = valor(l); return v !== '' && !isNaN(Number(v)); });
+      var ordem = th.getAttribute('data-ordem') ? (th.getAttribute('data-ordem') === 'desc' ? 'asc' : 'desc') : (numerico ? 'desc' : 'asc');
+      tabela.querySelectorAll('th[data-ordem]').forEach(function (x) { x.removeAttribute('data-ordem'); });
+      th.setAttribute('data-ordem', ordem);
+      var sinal = ordem === 'desc' ? -1 : 1;
+      linhas.sort(function (a, b) {
+        var x = valor(a), y = valor(b);
+        if (x === '' || y === '') return x === y ? 0 : x === '' ? 1 : -1;
+        return sinal * (numerico ? Number(x) - Number(y) : x.localeCompare(y, 'pt-BR'));
+      });
+      linhas.forEach(function (l) { corpo.appendChild(l); });
+    });
+  });
+})();
 // Filtro das secoes: clicar numa barra/fatia mostra o bloco daquele valor (cartoes e listas);
 // clicar de novo, ou no "limpar", volta para todos.
 (function () {
