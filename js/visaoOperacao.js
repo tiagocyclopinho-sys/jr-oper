@@ -981,12 +981,19 @@ function gerarHtml(d, a, opcoes = {}) {
     const c = custoGestao(d);
     if (c) {
       const R4 = (x) => (x === null ? '—' : reais(x, 4)), R3 = (x) => (x === null ? '—' : reais(x, 3)), P3 = (x) => pct(x, 3);
-      const sinal = (o) => { const x = o.mes === null || o.med === null ? null : comparar(o.mes, o.med, 'média'); return x ? `<span class="c ${x.bom === true ? 'bom' : x.bom === false ? 'ruim' : ''}">${esc(x.texto)}</span>` : '—'; };
+      // LY e media do ano na mesma celula, cada um na sua linha
+      const linhaVar = (x) => (x ? `<span class="c ${x.bom === true ? 'bom' : x.bom === false ? 'ruim' : ''}">${esc(x.texto)}</span>` : '');
+      const sinal = (o) => [o.mes === null ? null : comparar(o.mes, o.ly, 'LY'), o.mes === null ? null : comparar(o.mes, o.med, 'média')].map(linhaVar).filter(Boolean).join('<br>') || '—';
       const k = (o, f, nome) => kpi(f(o.mes), nome, comparar(o.mes, o.med, `média de ${ano}`));
-      const tres = (o, f) => `<td class="n">${f(o.ly)}</td><td class="n">${f(o.med)}</td><td class="n"><b>${f(o.mes)}</b></td><td>${sinal(o)}</td>`;
-      const cab = (t) => `<th class="n">${abrev(d.am - 100)}</th><th class="n">Média ${ano}</th><th class="n">${abrev(d.am)}</th><th>${t}</th>`;
-      const pessoas = (lista, rot) => `<table class="tab"><thead><tr><th>${rot}</th><th class="n">Faturamento</th><th class="n">Combustível</th>${cab('Comb./kg')}${cab('Comb./fat.')}${cab('Desp./fat.')}</tr></thead><tbody>${lista.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${reais(x.fat)}</td><td class="n">${x.comb === null ? 'sem carro' : reais(x.comb)}</td>${tres(x.combKg, R4)}${tres(x.combFat, P3)}${tres(x.despFat, P3)}</tr>`).join('')}</tbody></table>`;
-      const mots = `<table class="tab"><thead><tr><th>Motorista</th><th class="n">Cargas</th><th class="n">Peso (kg)</th>${cab('Comb./kg')}${cab('Desp./kg')}</tr></thead><tbody>${c.motoristas.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${num(x.cargas)}</td><td class="n">${num(x.peso)}</td>${tres(x.combKg, R3)}${tres(x.despKg, R3)}</tr>`).join('')}</tbody></table>`;
+      const tres = (o, f) => `<td class="n ini">${f(o.ly)}</td><td class="n">${f(o.med)}</td><td class="n"><b>${f(o.mes)}</b></td><td>${sinal(o)}</td>`;
+      const grupos = (l) => l.map((g) => `<th colspan="4" class="grupo">${g}</th>`).join('');
+      const sub = (l) => l.map(() => `<th class="n ini">${abrev(d.am - 100)}</th><th class="n">Média</th><th class="n">${abrev(d.am)}</th><th>Variação</th>`).join('');
+      const fixas = (l) => l.map(([x, n]) => `<th rowspan="2"${n ? ' class="n"' : ''}>${x}</th>`).join('');
+      const tabela = (cols, gs, corpo) => `<div class="rola"><table class="tab tab-custo"><thead><tr>${fixas(cols)}${grupos(gs)}</tr><tr>${sub(gs)}</tr></thead><tbody>${corpo}</tbody></table></div>`;
+      const pessoas = (lista, rot) => tabela([[rot, 0], ['Faturamento', 1], ['Peso (kg)', 1], ['Combustível', 1], ['Despesa', 1]], ['Combustível por kg', 'Combustível sobre faturamento', 'Despesa sobre faturamento'],
+        lista.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${reais(x.fat)}</td><td class="n">${num(x.kg)}</td><td class="n">${x.comb === null ? 'sem carro' : reais(x.comb)}</td><td class="n">${reais(x.desp)}</td>${tres(x.combKg, R4)}${tres(x.combFat, P3)}${tres(x.despFat, P3)}</tr>`).join(''));
+      const mots = tabela([['Motorista', 0], ['Cargas', 1], ['Peso (kg)', 1], ['Combustível', 1], ['Despesa', 1]], ['Combustível por kg', 'Despesa por kg'],
+        c.motoristas.map((x) => `<tr><td>${esc(x.nome)}</td><td class="n">${num(x.cargas)}</td><td class="n">${num(x.peso)}</td><td class="n">${x.comb === null ? '—' : reais(x.comb)}</td><td class="n">${x.desp ? reais(x.desp) : '—'}</td>${tres(x.combKg, R3)}${tres(x.despKg, R3)}</tr>`).join(''));
       add('custo', 'Custo de gestão', secao('custo', 'Combustível e despesa sobre peso e faturamento', `${mesCheio} · cada pessoa comparada com ela mesma`,
         `<div class="kpis">${k(c.empresa.combKg, R3, 'Combustível por kg faturado')}${k(c.empresa.combFat, (x) => pct(x, 2), 'Combustível sobre faturamento')}${k(c.empresa.despFat, P3, 'Despesa sobre faturamento')}${k(c.empresa.despKg, R3, 'Despesa por kg faturado')}</div>
         <div class="grade g1">${card('Gerentes comerciais', pessoas(c.gerentes, 'Gerente'))}</div>
@@ -1276,7 +1283,7 @@ main{max-width:1280px;margin:0 auto;padding:8px 24px 40px}
 .leg{display:flex;gap:14px;font-size:12px;color:var(--suave);margin-bottom:4px}.leg span{display:flex;align-items:center;gap:5px}
 .lista{margin:0;padding-left:18px}.lista li{margin:6px 0;line-height:1.4}.lista.peq li{font-size:12.5px}
 .tab{width:100%;border-collapse:collapse;font-size:12.5px}.tab th{background:var(--marinho);color:#fff;text-align:left;padding:7px 8px;font-weight:600}
-.tab td{padding:6px 8px;border-bottom:1px solid #EEF2F6}.tab .n{text-align:right;white-space:nowrap}.nota{color:var(--suave);font-size:12px;font-style:italic;margin:6px 0 0}
+.tab td{padding:6px 8px;border-bottom:1px solid #EEF2F6}.tab .n{text-align:right;white-space:nowrap}.rola{overflow-x:auto}.tab-custo{font-size:11px}.tab-custo th,.tab-custo td{padding:5px 4px;vertical-align:middle}.tab-custo .c{white-space:nowrap;font-size:10.5px}.tab-custo .grupo{text-align:center;border-left:2px solid #fff}.tab-custo th.ini{border-left:2px solid #fff}.tab-custo td.ini{border-left:2px solid #DCE3EA}.nota{color:var(--suave);font-size:12px;font-style:italic;margin:6px 0 0}
 .vazio{color:var(--suave);text-align:center;padding:30px 0}
 [hidden]{display:none!important}
 .clic{cursor:pointer}.clic:hover{opacity:.82}.apagado{opacity:.25}
