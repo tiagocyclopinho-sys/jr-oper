@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 72).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 74).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -83,6 +83,18 @@ partir do branch `main` do GitHub.
   workspace, basta dar ao JR-Oper Sync a permissão Build no modelo
   (⋯ → Gerenciar permissões); preferir isso a pôr o app no workspace inteiro.
 - `.claude/settings.local.json` libera `deploy_edge_function` do Supabase.
+
+## Custo de gestão (7.1.13, 06/11/2026)
+- Edge Function `sync-custo-gestao` (migration 73) grava a seção `custo_gestao` em
+  vo_indicadores/vo_quadros, separada da sync-visao-operacao para não travar o
+  congelamento. pg_cron `vo-custo-gestao` 06h40. Mês cheio. Carga: corpo
+  `{"meses":[...]}`, começando pelos meses recentes (eles ensinam CODVEICULO → placa).
+- Gerente e supervisor: combustível do carro, pela placa e pelo período de
+  `vo_veiculo_responsavel`; sem certeza fica fora. Colaborador do Abastecimento não é
+  usado (decisão do Tiago: só placa, para não mexer no Power Query).
+- Motorista: abastecimento da placa dividido pelo peso das cargas, sobre
+  `[Total Peso Mot]`. Equipe Gladiador entra só na carteira do Carlos Alexandre.
+- Todos os perfis veem os valores por pessoa (gestão à vista). Sem meta até ter histórico.
 
 ## Visão Operação (apresentação mensal, 28/10/2026)
 - Apresentação para Gerência/Diretoria em `S:\Logistica\01 - LOGISTICA
