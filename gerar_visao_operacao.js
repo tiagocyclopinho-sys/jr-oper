@@ -496,6 +496,31 @@ function rastreamento(pres, d) {
   });
 }
 
+function custoGestaoSlides(pres, d) {
+  const c = VO.custoGestao(d);
+  if (!c) return;
+  const a = d.ano, m = d.am % 100;
+  const sub = `${dataBr(iso(a, m, 1))} a ${dataBr(iso(a, m + 1, 0))} · cada pessoa comparada com ela mesma`;
+  const R4 = (x) => (x === null ? '—' : reais(x, 4)), R3 = (x) => (x === null ? '—' : reais(x, 3)), P3 = (x) => pct(x, 3);
+  const s = slideConteudo(pres, 'Combustível e despesa sobre peso e faturamento', sub);
+  const e = c.empresa, md = `média de ${a}`;
+  cartao(s, 0.6, 1.5, 2.9, 1.2, R3(e.combKg.mes), 'Combustível por kg faturado', comparar(e.combKg.mes, e.combKg.med, md));
+  cartao(s, 3.65, 1.5, 2.9, 1.2, pct(e.combFat.mes, 2), 'Combustível sobre faturamento', comparar(e.combFat.mes, e.combFat.med, md));
+  cartao(s, 6.7, 1.5, 2.9, 1.2, P3(e.despFat.mes), 'Despesa sobre faturamento', comparar(e.despFat.mes, e.despFat.med, md));
+  cartao(s, 9.75, 1.5, 2.95, 1.2, R3(e.despKg.mes), 'Despesa por kg faturado', comparar(e.despKg.mes, e.despKg.med, md));
+  const cols = [{ titulo: 'Gerente / Supervisor', w: 3.5 }, { titulo: 'Faturamento', w: 1.5, align: 'right' }, { titulo: 'Combustível', w: 1.2, align: 'right' }, { titulo: 'Comb./kg média', w: 1.3, align: 'right' }, { titulo: 'Comb./kg mês', w: 1.25, align: 'right' }, { titulo: 'Comb./fat. mês', w: 1.25, align: 'right' }, { titulo: 'Desp./fat. média', w: 1.1, align: 'right' }, { titulo: 'Desp./fat. mês', w: 1.0, align: 'right' }];
+  const linhas = [...c.gerentes, ...c.supervisores].map((x) => [x.nome.slice(0, 34), reais(x.fat), x.comb === null ? 'sem carro' : reais(x.comb), R4(x.combKg.med), R4(x.combKg.mes), P3(x.combFat.mes), P3(x.despFat.med), P3(x.despFat.mes)]);
+  tabela(s, 0.6, 2.85, cols, linhas, { fonte: 9, alturaLinha: 0.25 });
+  const n = 19, paginas = Math.max(Math.ceil(c.motoristas.length / (n * 2)), 1);
+  for (let i = 0; i < paginas; i++) {
+    const sm = slideConteudo(pres, 'Motoristas — combustível e despesa por peso', `${sub}${paginas > 1 ? ` · parte ${i + 1}/${paginas}` : ''}`);
+    const colsM = [{ titulo: 'Motorista', w: 2.6 }, { titulo: 'Comb./kg média', w: 1.15, align: 'right' }, { titulo: 'Comb./kg mês', w: 1.1, align: 'right' }, { titulo: 'Desp./kg mês', w: 1.05, align: 'right' }];
+    const l = (x) => [x.nome.slice(0, 30), R3(x.combKg.med), R3(x.combKg.mes), R3(x.despKg.mes)];
+    tabela(sm, 0.6, 1.5, colsM, c.motoristas.slice(i * n * 2, i * n * 2 + n).map(l), { fonte: 9, alturaLinha: 0.255 });
+    tabela(sm, 6.75, 1.5, colsM, c.motoristas.slice(i * n * 2 + n, (i + 1) * n * 2).map(l), { fonte: 9, alturaLinha: 0.255 });
+  }
+}
+
 function sac(pres, d) {
   slideImagem(pres, 'divisor_sac.jpg');
   const a = d.ano, m = d.am % 100;
@@ -610,6 +635,7 @@ async function main() {
   abastecimento(pres, d);
   motoristas(pres, d);
   rastreamento(pres, d);
+  custoGestaoSlides(pres, d);
   sac(pres, d);
   slideImagem(pres, 'fim.jpg');
 
