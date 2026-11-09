@@ -3438,7 +3438,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "custo-gestao-ordenar-7.1.16";
+CloudStore.BUILD = "zoom-midias-7.1.18";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3530,7 +3530,9 @@ CloudStore.COLUNAS_POR_TABELA = {
     texto:    ['numero_retencao', 'placa', 'tipo_veiculo', 'motivo', 'tipo_os',
                'local', 'status', 'criado_por', 'deleted_by_nome', 'numero_os',
                'link_os', 'descricao_acao_liberacao'],
-    numero:   ['veiculo_id'],
+    // ocorrencia_rota_id (7.1.19, migration 75): prévia que nasceu de uma
+    // ocorrência em rota. Só no banco, sem campo na tela.
+    numero:   ['veiculo_id', 'ocorrencia_rota_id'],
     booleano: ['is_deleted'],
     data:     ['data_parada', 'data_previsao', 'data_liberacao', 'criado_em',
                'deleted_at', 'atualizado_em']

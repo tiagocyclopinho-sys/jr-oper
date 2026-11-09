@@ -8254,18 +8254,223 @@ function abrirMidiaLightbox(url, tipo) {
                   + 'flex items-center justify-center p-3 sm:p-4';
     document.body.appendChild(box);
   }
+  // ZOOM (7.1.18, 09/11/2026): ler etiqueta em foto e video sem baixar.
+  // So mexe na TELA: nada e gravado, comprimido ou enviado. A foto continua
+  // vindo do mesmo lugar (Storage, fila local ou base64 antigo) e a regra
+  // de envio (comprimirImagem, 1280 px) nao mudou - foi o base64 grande que
+  // estourou a cota do aparelho em setembro, e isso fica de fora de proposito.
+  // Se o zoom falhar por qualquer motivo, a midia continua aparecendo como
+  // antes (try/catch em _midiaZoomLigar).
+  if (_midiaZoom) {   // reabrindo por cima de outro: solta os ouvintes do anterior
+    try { document.removeEventListener('keydown', _midiaZoom.tecla); } catch (e) {}
+    try { window.removeEventListener('resize', _midiaZoom.redim); } catch (e) {}
+    _midiaZoom = null;
+  }
+  const ehVideo = tipo === 'video';
+  const btn ='bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-white font-bold h-9 min-w-[36px] px-2 rounded-full shadow-lg text-sm';
+  box.className = 'hidden fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex flex-col p-2 sm:p-4';
   box.innerHTML = `
-    <div class="max-w-3xl w-full" onclick="event.stopPropagation()">
-      <div class="flex justify-end mb-2">
-        <button onclick="fecharMidiaLightbox()"
-          class="bg-slate-800 hover:bg-slate-700 text-white font-bold w-9 h-9 rounded-full shadow-lg">✕</button>
-      </div>
-      ${tipo === 'video'
-        ? `<video src="${url}" controls autoplay class="w-full max-h-[80vh] rounded-lg shadow-2xl bg-black"></video>`
-        : `<img src="${url}" class="w-full max-h-[80vh] object-contain rounded-lg shadow-2xl bg-slate-950" alt="Mídia da ocorrência">`}
+    <div class="flex flex-wrap items-center justify-end gap-1.5 mb-2 shrink-0">
+      ${ehVideo ? `
+        <button type="button" data-z="quadro-" class="${btn}" title="Voltar um quadro">⏮</button>
+        <button type="button" data-z="play" class="${btn}" title="Tocar / pausar">⏯</button>
+        <button type="button" data-z="quadro+" class="${btn}" title="Avançar um quadro">⏭</button>
+        <span class="w-2"></span>` : ''}
+      <button type="button" data-z="menos" class="${btn}" title="Diminuir zoom">−</button>
+      <span data-z="nivel" class="text-white text-xs font-bold w-12 text-center select-none">100%</span>
+      <button type="button" data-z="mais" class="${btn}" title="Aumentar zoom">＋</button>
+      <button type="button" data-z="ajustar" class="${btn}" title="Voltar ao tamanho da tela">⤢</button>
+      <button type="button" onclick="fecharMidiaLightbox()" class="${btn} ml-1" title="Fechar (Esc)">✕</button>
+    </div>
+    <div data-z="palco" class="relative flex-1 min-h-0 overflow-hidden flex items-center justify-center rounded-lg"
+         style="touch-action:none">
+    </div>
+    <div class="text-center text-[10px] text-slate-400 mt-1 shrink-0 select-none">
+      Zoom: rodinha do mouse, pinça com dois dedos ou toque duplo · arraste para mover${ehVideo ? ' · o vídeo pausa ao dar zoom' : ''}
     </div>`;
+  const palco = box.querySelector('[data-z="palco"]');
+  const midia = document.createElement(ehVideo ? 'video' : 'img');
+  if (ehVideo) { midia.controls = true; midia.autoplay = true; midia.playsInline = true; }
+  else { midia.alt = 'Mídia da ocorrência'; midia.draggable = false; }
+  midia.className = 'rounded-lg shadow-2xl ' + (ehVideo ? 'bg-black' : 'bg-slate-950');
+  midia.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;transform-origin:center center;user-select:none;-webkit-user-select:none;-webkit-user-drag:none';
+  midia.src = url;   // propriedade, e nao texto no HTML: base64 grande nao quebra o atributo
+  palco.appendChild(midia);
   box.classList.remove('hidden');
-  box.onclick = fecharMidiaLightbox;
+  // Fechar so pelo ✕, pelo Esc ou tocando no fundo SEM zoom. Antes qualquer
+  // clique fora fechava; com zoom, soltar o dedo depois de arrastar fecharia
+  // a foto no meio da leitura.
+  box.onclick = null;
+  _midiaZoomLigar(box, palco, midia, ehVideo);
+}
+
+// Estado do zoom aberto (um visualizador por vez).
+let _midiaZoom = null;
+
+function _midiaZoomLigar(box, palco, midia, ehVideo) {
+  try {
+    const st = { s: 1, x: 0, y: 0, ptrs: new Map(), ant: null, moveu: false,
+                 ultimoToque: 0, controlesVideo: true };
+    const MAX = 8;
+    const nivel = box.querySelector('[data-z="nivel"]');
+
+    const limitar = () => {
+      // Nao deixa a foto "fugir" da tela: so anda o quanto ela passa da borda.
+      const w = midia.offsetWidth * st.s, h = midia.offsetHeight * st.s;
+      const mx = Math.max(0, (w - palco.clientWidth) / 2);
+      const my = Math.max(0, (h - palco.clientHeight) / 2);
+      st.x = Math.min(mx, Math.max(-mx, st.x));
+      st.y = Math.min(my, Math.max(-my, st.y));
+    };
+    const aplicar = () => {
+      if (st.s <= 1.001) { st.s = 1; st.x = 0; st.y = 0; }
+      limitar();
+      midia.style.transform = `translate(${st.x}px, ${st.y}px) scale(${st.s})`;
+      if (nivel) nivel.textContent = Math.round(st.s * 100) + '%';
+      palco.style.cursor = st.s > 1 ? 'grab' : '';
+      if (ehVideo) {
+        // Com zoom, os controles do proprio video ficariam ampliados e fora da
+        // tela: some com eles e pausa; voltando a 100%, eles voltam.
+        const querControles = st.s === 1;
+        if (querControles !== st.controlesVideo) {
+          st.controlesVideo = querControles;
+          midia.controls = querControles;
+          if (!querControles) { try { midia.pause(); } catch (e) {} }
+        }
+      }
+    };
+    // Zoom mantendo parado o ponto (cx, cy) da tela - o dedo ou o mouse.
+    const zoomEm = (novo, cx, cy) => {
+      novo = Math.min(MAX, Math.max(1, novo));
+      const r = palco.getBoundingClientRect();
+      const dx = cx - (r.left + r.width / 2), dy = cy - (r.top + r.height / 2);
+      const k = novo / st.s;
+      st.x = dx - (dx - st.x) * k;
+      st.y = dy - (dy - st.y) * k;
+      st.s = novo;
+      aplicar();
+    };
+    const zoomCentro = fator => {
+      const r = palco.getBoundingClientRect();
+      zoomEm(st.s * fator, r.left + r.width / 2, r.top + r.height / 2);
+    };
+    const alternar = (cx, cy) => { if (st.s > 1) zoomEm(1, cx, cy); else zoomEm(2.5, cx, cy); };
+
+    box.querySelectorAll('button[data-z]').forEach(b => {
+      b.addEventListener('click', ev => {
+        ev.stopPropagation();
+        const z = b.getAttribute('data-z');
+        if (z === 'mais') zoomCentro(1.5);
+        else if (z === 'menos') zoomCentro(1 / 1.5);
+        else if (z === 'ajustar') { st.s = 1; aplicar(); }
+        else if (ehVideo && z === 'play') { try { midia.paused ? midia.play() : midia.pause(); } catch (e) {} }
+        else if (ehVideo && (z === 'quadro+' || z === 'quadro-')) {
+          try {
+            midia.pause();
+            const passo = 1 / 30;
+            midia.currentTime = Math.max(0, midia.currentTime + (z === 'quadro+' ? passo : -passo));
+          } catch (e) {}
+        }
+      });
+    });
+
+    palco.addEventListener('wheel', ev => {
+      ev.preventDefault();
+      zoomEm(st.s * Math.exp(-ev.deltaY * 0.0015), ev.clientX, ev.clientY);
+    }, { passive: false });
+
+    palco.addEventListener('dblclick', ev => {
+      ev.preventDefault();   // no video, o duplo clique abriria a tela cheia do navegador
+      if (Date.now() - (st.toggleToque || 0) < 600) return;   // o toque duplo ja tratou
+      alternar(ev.clientX, ev.clientY);
+    });
+
+    palco.addEventListener('pointerdown', ev => {
+      st.ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY, sx: ev.clientX, sy: ev.clientY });
+      if (st.ptrs.size === 1) {
+        st.moveu = false;
+        // Guardado AQUI: com o ponteiro preso no palco, o pointerup chega
+        // sempre com target = palco, mesmo tocando em cima da foto.
+        st.alvoDown = ev.target;
+      }
+      st.ant = null;
+      // Video em 100% com um dedo/clique so: e dos controles do proprio video,
+      // entao nao "prende" o ponteiro (a pinca com dois dedos continua valendo).
+      const deixarParaOVideo = ehVideo && st.s === 1 && ev.target === midia && st.ptrs.size === 1;
+      if (!deixarParaOVideo) { try { palco.setPointerCapture(ev.pointerId); } catch (e) {} }
+      if (st.s > 1) palco.style.cursor = 'grabbing';
+    });
+    palco.addEventListener('pointermove', ev => {
+      if (!st.ptrs.has(ev.pointerId)) return;
+      const p0 = st.ptrs.get(ev.pointerId);
+      if (Math.abs(ev.clientX - p0.sx) > 6 || Math.abs(ev.clientY - p0.sy) > 6) st.moveu = true;
+      st.ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY, sx: p0.sx, sy: p0.sy });
+      const pts = [...st.ptrs.values()];
+      if (pts.length >= 2) {
+        // Pinca: distancia entre os dedos manda no zoom, o meio deles no movimento.
+        const a = pts[0], b = pts[1];
+        const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        if (st.ant && st.ant.dist) {
+          st.x += mx - st.ant.mx; st.y += my - st.ant.my;
+          zoomEm(st.s * (dist / st.ant.dist), mx, my);
+        }
+        st.ant = { dist, mx, my };
+      } else if (st.s > 1) {
+        if (st.ant && !st.ant.dist) {
+          st.x += ev.clientX - st.ant.mx; st.y += ev.clientY - st.ant.my;
+          aplicar();
+        }
+        st.ant = { mx: ev.clientX, my: ev.clientY };
+      }
+    });
+    const soltar = ev => {
+      if (!st.ptrs.has(ev.pointerId)) return;
+      const eraUmSo = st.ptrs.size === 1;
+      st.ptrs.delete(ev.pointerId);
+      st.ant = null;   // o dedo que sobrou recomeça do zero (sem "pulo")
+      if (st.s > 1) palco.style.cursor = 'grab';
+      if (ev.type !== 'pointerup' || !eraUmSo || st.moveu) return;
+      const noFundo = st.alvoDown === palco && st.s === 1;
+      if (ev.pointerType === 'mouse') {
+        // Clique no fundo escuro, sem zoom e sem arrastar: fecha, como antes.
+        if (noFundo) fecharMidiaLightbox();
+        return;
+      }
+      // Toque duplo no celular (o dblclick nao e confiavel com touch-action:none).
+      const agora = Date.now();
+      if (agora - st.ultimoToque < 320) {
+        st.ultimoToque = 0; st.toggleToque = agora;
+        alternar(ev.clientX, ev.clientY);
+        return;
+      }
+      st.ultimoToque = agora;
+      // Toque simples no fundo: espera para ver se nao vem o segundo toque.
+      if (noFundo) {
+        setTimeout(() => {
+          if (_midiaZoom === st && st.ultimoToque === agora && st.s === 1) fecharMidiaLightbox();
+        }, 340);
+      }
+    };
+    palco.addEventListener('pointerup', soltar);
+    palco.addEventListener('pointercancel', soltar);
+    // Safari (iPhone) faz o zoom da pagina inteira na pinca se nao for barrado.
+    ['gesturestart', 'gesturechange'].forEach(t => palco.addEventListener(t, ev => ev.preventDefault()));
+
+    st.tecla = ev => {
+      if (ev.key === 'Escape') fecharMidiaLightbox();
+      else if (ev.key === '+' || ev.key === '=') zoomCentro(1.5);
+      else if (ev.key === '-') zoomCentro(1 / 1.5);
+      else if (ev.key === '0') { st.s = 1; aplicar(); }
+    };
+    document.addEventListener('keydown', st.tecla);
+    st.redim = () => aplicar();
+    window.addEventListener('resize', st.redim);
+    _midiaZoom = st;
+  } catch (e) {
+    // Sem zoom, mas com a midia na tela - nunca pior que antes.
+    console.warn('[midia] zoom indisponivel:', e);
+  }
 }
 
 // Fecha SO o visualizador. O modal que estava por baixo continua aberto e
@@ -8273,6 +8478,11 @@ function abrirMidiaLightbox(url, tipo) {
 // conferencia inteira por ter olhado uma foto.
 function fecharMidiaLightbox() {
   const box = document.getElementById('lightbox-container');
+  if (_midiaZoom) {
+    try { document.removeEventListener('keydown', _midiaZoom.tecla); } catch (e) {}
+    try { window.removeEventListener('resize', _midiaZoom.redim); } catch (e) {}
+    _midiaZoom = null;
+  }
   if (!box) return;
   // Sem o pause, fechar um video deixa o audio tocando atras da tela.
   const v = box.querySelector('video');
@@ -8281,6 +8491,7 @@ function fecharMidiaLightbox() {
   box.classList.add('hidden');
 }
 window.fecharMidiaLightbox = fecharMidiaLightbox;
+window.abrirMidiaLightbox = abrirMidiaLightbox;
 
 // Monta a galeria de mídia de uma devolução, separando por etapa
 // (Abertura no SAC / Análise e Investigação), para dar o "histórico
@@ -16052,7 +16263,7 @@ function _galeriaFotosReentrega(r, etapa) {
 
   const idLocais = `fotos-locais-${etapa}-${r.id}`;
   const thumb = (src, titulo, classe) =>
-    `<img src="${src}" title="${titulo}" onclick="window.open('${src}')" class="w-14 h-14 object-cover rounded cursor-pointer ${classe}">`;
+    `<img src="${src}" title="${titulo}" onclick="abrirMidiaLightbox('${src}', 'foto')" class="w-14 h-14 object-cover rounded cursor-pointer ${classe}">`;
 
   const nuvem =
       est.paths.map(p => thumb(window.fotoStore.urlPublica(p), 'Arquivada no servidor', 'border border-slate-700')).join('')
@@ -16160,7 +16371,7 @@ async function _preencherFotosLocaisReentrega(registroId, etapa, containerId) {
   box.innerHTML = regs.map(reg => {
     const u = window.fotoStore.urlLocal(reg);
     return `<span class="relative inline-block">
-        <img src="${u}" onclick="window.open('${u}')"
+        <img src="${u}" onclick="abrirMidiaLightbox('${u}', 'foto')"
              title="Ainda só neste aparelho — aguardando rede para subir"
              class="w-14 h-14 object-cover rounded border-2 border-amber-500 cursor-pointer">
         <span class="absolute -top-1 -right-1 bg-amber-500 text-slate-950 text-[9px] font-black rounded-full w-4 h-4 flex items-center justify-center">↑</span>
@@ -17513,7 +17724,14 @@ function removeRotaVideo(index) {
   }
 }
 
+// 7.1.18: passa a usar o mesmo visualizador (com zoom) do resto do app. O
+// desenho antigo escrevia no #modal-container e, aberto de dentro de um
+// formulario (ex.: reentrega), apagava o formulario - o defeito ja corrigido
+// no abrirMidiaLightbox em 05/09. O corpo antigo fica como reserva.
 function visualizarMidiaModal(src, type) {
+  if (typeof abrirMidiaLightbox === 'function') {
+    return abrirMidiaLightbox(src, type === 'video' ? 'video' : 'foto');
+  }
   const container = document.getElementById('modal-container');
   if (!container) return;
   container.innerHTML = `
@@ -19791,6 +20009,14 @@ async function handleNovaRotaSubmit(e) {
     await _enfileirarFotosDevolucao(novaRota, 'fotos', uploadedRotaFotos, 'rota');
   }
 
+  // 7.1.19: toda ocorrência nova gera uma prévia (A_VALIDAR) na
+  // Indisponibilidade da Frota, para a oficina validar ou descartar.
+  // Falhar aqui não pode derrubar o registro da ocorrência.
+  let previaRet = null;
+  if (novaRota && novaRota.id && typeof db.criarPreviaRetencaoDaOcorrenciaRota === 'function') {
+    try { previaRet = db.criarPreviaRetencaoDaOcorrenciaRota(novaRota); } catch (errPrev) { console.warn('[Prévia retenção]', errPrev); }
+  }
+
   uploadedRotaFotos = [];
   uploadedRotaVideos = [];
   closeModal();
@@ -19801,7 +20027,10 @@ async function handleNovaRotaSubmit(e) {
     window.cloudStore.syncLocalToCloud().catch(() => {});
   }
 
-  alert('✅ Ocorrência de frota em rota registrada com sucesso!');
+  const avisoPrevia = (previaRet && previaRet.success && previaRet.retencao)
+    ? `\n\nPrévia ${previaRet.retencao.numero_retencao} enviada para a Indisponibilidade da Frota (aguarda validação da oficina).`
+    : '';
+  alert('✅ Ocorrência de frota em rota registrada com sucesso!' + avisoPrevia);
   renderApp();
 }
 
@@ -21894,8 +22123,12 @@ function renderDisponibilidadeFrotaView() {
     </button>`;
   };
 
+  const previas = typeof db.getPreviasRetencaoFrota === 'function' ? db.getPreviasRetencaoFrota() : [];
+  const nPrevias = previas.length;
+
   let painelHtml = '';
   switch (activeFrotaSubTab) {
+    case 'validar':   painelHtml = renderPainelPreviasRetencao(previas); break;
     case 'retidos':   painelHtml = renderPainelRetidos(retencoes);   break;
     case 'liberados': painelHtml = renderPainelLiberados(retencoes); break;
     default:          painelHtml = renderPainelReterVeiculo();        break;
@@ -21914,6 +22147,7 @@ function renderDisponibilidadeFrotaView() {
         <div class="flex items-center gap-2 flex-wrap">
           <div class="flex items-center gap-1 bg-slate-950 border border-slate-700 p-1 rounded-xl">
             ${tabBtn('reter',    '➕ Reter Veículo', 'amber')}
+            ${tabBtn('validar',  `🟣 A validar <span class="${nPrevias > 0 ? 'bg-violet-500 animate-pulse' : 'bg-slate-600'} text-white text-[10px] font-black px-1.5 py-0.5 rounded-full ml-1">${nPrevias}</span>`, 'violet')}
             ${tabBtn('retidos',  `🔴 Retidos <span class="bg-red-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full ml-1">${nRetidos}</span>`, 'red')}
             ${tabBtn('liberados',`✅ Liberados <span class="bg-emerald-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full ml-1">${nLiberados}</span>`, 'emerald')}
           </div>
@@ -21958,6 +22192,60 @@ function renderDisponibilidadeFrotaView() {
       <!-- PAINEL ATIVO -->
       ${painelHtml}
     </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3A — PAINEL "A VALIDAR" (7.1.19): prévias geradas pela ocorrência em rota.
+// A oficina valida (vira RETIDO, com tipo de OS) ou descarta. Enquanto está
+// aqui, o veículo não conta como indisponível em lugar nenhum.
+// ─────────────────────────────────────────────────────────────────────────────
+function renderPainelPreviasRetencao(previas) {
+  if (!previas || previas.length === 0) {
+    return `
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center">
+        <div class="text-3xl mb-2">✅</div>
+        <div class="text-sm font-bold text-slate-300">Nenhuma prévia aguardando validação</div>
+        <div class="text-[11px] text-slate-500 mt-1">Toda ocorrência em rota nova aparece aqui para a oficina validar ou descartar.</div>
+      </div>`;
+  }
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `
+    <div class="bg-slate-900 border border-violet-900/60 rounded-xl p-4 space-y-3">
+      <div class="text-[11px] text-violet-300">
+        Prévias criadas a partir das ocorrências em rota. Valide para reter o veículo (com tipo de OS, link e previsão) ou descarte se ele não ficou indisponível.
+      </div>
+      ${previas.map(r => `
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-3.5 flex flex-wrap items-start gap-3">
+          <div class="flex-1 min-w-[220px] space-y-1">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-black text-white tracking-wider text-sm">${esc(r.placa || '—')}</span>
+              <span class="text-[10px] text-slate-500 font-mono">${esc(r.numero_retencao || '')}</span>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-violet-900/60 text-violet-300">A VALIDAR</span>
+            </div>
+            <div class="text-xs text-slate-300">${esc(r.motivo || '')}</div>
+            <div class="text-[11px] text-slate-500">
+              📅 ${r.data_parada ? formatarData(r.data_parada) : '—'}
+              ${r.local ? ` · 📍 ${esc(r.local)}` : ''}
+              ${r.criado_por ? ` · por ${esc(r.criado_por)}` : ''}
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="abrirModalEdicaoFrota('${r.id}', { validar: true })"
+              class="bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition">✅ Validar</button>
+            <button onclick="descartarPreviaRetencao('${r.id}')"
+              class="bg-slate-800 hover:bg-red-900/70 text-slate-300 hover:text-white text-xs font-bold px-3 py-2 rounded-lg transition">🗑️ Descartar</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+
+/** Descarta a prévia: o veículo não ficou indisponível. */
+function descartarPreviaRetencao(id) {
+  if (!confirm('Descartar esta prévia? O veículo não entra como indisponível. A ocorrência em rota continua com a CCO.')) return;
+  const res = db.descartarPreviaRetencaoFrota(id);
+  if (!res || !res.success) { alert(`❌ ${(res && res.message) || 'Não foi possível descartar.'}`); return; }
+  showToast('Prévia descartada.', 'info');
+  renderApp();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22027,6 +22315,8 @@ function renderPainelReterVeiculo() {
               <option value="CORRETIVA">Corretiva</option>
               <option value="PREVENTIVA">Preventiva</option>
               <option value="SINISTRO">Sinistro</option>
+              <option value="PNEUS">Pneus</option>
+              <option value="GARANTIA FABRICA">Garantia de Fábrica</option>
             </select>
           </div>
 
@@ -22087,6 +22377,8 @@ function renderPainelRetidos(retencoes) {
             <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold
               ${r.tipo_os === 'SINISTRO' ? 'bg-red-900/60 text-red-300' :
                 r.tipo_os === 'PREVENTIVA' ? 'bg-blue-900/60 text-blue-300' :
+                r.tipo_os === 'PNEUS' ? 'bg-slate-700/80 text-slate-200' :
+                r.tipo_os === 'GARANTIA FABRICA' ? 'bg-emerald-900/60 text-emerald-300' :
                 'bg-amber-900/60 text-amber-300'}">
               ${r.tipo_os || '—'}
             </span>
@@ -22212,6 +22504,8 @@ function renderPainelLiberados(retencoes) {
             <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold
               ${r.tipo_os === 'SINISTRO' ? 'bg-red-900/60 text-red-300' :
                 r.tipo_os === 'PREVENTIVA' ? 'bg-blue-900/60 text-blue-300' :
+                r.tipo_os === 'PNEUS' ? 'bg-slate-700/80 text-slate-200' :
+                r.tipo_os === 'GARANTIA FABRICA' ? 'bg-emerald-900/60 text-emerald-300' :
                 'bg-amber-900/60 text-amber-300'}">
               ${r.tipo_os || '—'}
             </span>
@@ -22446,12 +22740,18 @@ function fecharModalLiberacao() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Abre o modal de edição preenchido com os dados do registro. */
-function abrirModalEdicaoFrota(id) {
-  const retencoes = db.getRetencoesFrota();
+function abrirModalEdicaoFrota(id, opcoes) {
+  // { validar: true } (7.1.19): mesma tela, para a oficina completar a prévia
+  // vinda da ocorrência em rota. Tipo de OS passa a ser obrigatório e salvar
+  // transforma a prévia em RETIDO.
+  const validar = !!(opcoes && opcoes.validar);
+  const retencoes = db.getRetencoesFrota({ incluirPrevias: validar });
   const r = retencoes.find(x => x.id == id);
   if (!r) { alert('⚠️ Registro não encontrado.'); return; }
+  if (validar && r.status !== 'A_VALIDAR') { alert('⚠️ Esta prévia já foi tratada.'); renderApp(); return; }
 
   window._frotaEdicaoId = id;
+  window._frotaValidando = validar;
 
   // Remove modal anterior se existir
   const old = document.getElementById('modal-edicao-frota');
@@ -22465,8 +22765,8 @@ function abrirModalEdicaoFrota(id) {
       class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-5">
-          <h3 class="text-sm font-black text-sky-400 flex items-center gap-2">
-            ✏️ Editar Retenção
+          <h3 class="text-sm font-black ${validar ? 'text-violet-400' : 'text-sky-400'} flex items-center gap-2">
+            ${validar ? '✅ Validar Retenção' : '✏️ Editar Retenção'}
             <span class="text-slate-500 font-mono text-[10px] font-normal">${r.numero_retencao || ''}</span>
           </h3>
           <button onclick="fecharModalEdicaoFrota()"
@@ -22491,12 +22791,15 @@ function abrirModalEdicaoFrota(id) {
             </div>
             <!-- Tipo de OS -->
             <div class="flex flex-col gap-1">
-              <label class="text-[11px] text-slate-400 font-bold uppercase tracking-wide">Tipo de OS</label>
+              <label class="text-[11px] ${validar ? 'text-violet-300' : 'text-slate-400'} font-bold uppercase tracking-wide">Tipo de OS${validar ? ' *' : ''}</label>
               <select id="edit-frt-tipo-os"
-                class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition">
+                class="bg-slate-950 border ${validar ? 'border-violet-600' : 'border-slate-700'} rounded-lg px-3 py-2 text-white focus:outline-none focus:border-sky-500 transition">
+                ${(validar || !r.tipo_os) ? `<option value="" ${!r.tipo_os ? 'selected' : ''}>Selecione…</option>` : ''}
                 <option value="CORRETIVA"  ${r.tipo_os==='CORRETIVA'  ?'selected':''}>Corretiva</option>
                 <option value="PREVENTIVA" ${r.tipo_os==='PREVENTIVA' ?'selected':''}>Preventiva</option>
                 <option value="SINISTRO"   ${r.tipo_os==='SINISTRO'   ?'selected':''}>Sinistro</option>
+                <option value="PNEUS"      ${r.tipo_os==='PNEUS'      ?'selected':''}>Pneus</option>
+                <option value="GARANTIA FABRICA" ${r.tipo_os==='GARANTIA FABRICA' ?'selected':''}>Garantia de Fábrica</option>
               </select>
             </div>
           </div>
@@ -22553,8 +22856,8 @@ function abrirModalEdicaoFrota(id) {
             Cancelar
           </button>
           <button onclick="salvarEdicaoFrota()"
-            class="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition flex items-center gap-2">
-            💾 Salvar Alterações
+            class="px-5 py-2 rounded-lg ${validar ? 'bg-violet-600 hover:bg-violet-500' : 'bg-sky-600 hover:bg-sky-500'} text-white text-xs font-bold transition flex items-center gap-2">
+            ${validar ? '✅ Validar e reter' : '💾 Salvar Alterações'}
           </button>
         </div>
       </div>
@@ -22568,6 +22871,7 @@ function fecharModalEdicaoFrota() {
   const modal = document.getElementById('modal-edicao-frota');
   if (modal) modal.remove();
   window._frotaEdicaoId = null;
+  window._frotaValidando = false;
 }
 
 /** Lê os campos do modal, chama updateRetencaoFrota e re-renderiza. */
@@ -22577,7 +22881,7 @@ function salvarEdicaoFrota() {
 
   const dados = {
     data_parada:    document.getElementById('edit-frt-data-parada')?.value    || null,
-    tipo_os:        document.getElementById('edit-frt-tipo-os')?.value         || 'CORRETIVA',
+    tipo_os:        document.getElementById('edit-frt-tipo-os')?.value         || '',
     motivo:         (document.getElementById('edit-frt-motivo')?.value         || '').trim(),
     link_os:        normalizarCaseLinkOs((document.getElementById('edit-frt-link-os')?.value        || '').trim()) || null,
     local:          (document.getElementById('edit-frt-local')?.value          || '').trim(),
@@ -22595,12 +22899,27 @@ function salvarEdicaoFrota() {
   // link informado (ver extrairIdentificadorOsDoLink).
   dados.numero_os = extrairIdentificadorOsDoLink(dados.link_os);
 
-  const result = db.updateRetencaoFrota(id, dados);
+  const validando = !!window._frotaValidando;
+  if (validando && !dados.tipo_os) {
+    alert('⚠️ Selecione o tipo de OS para validar a retenção.');
+    document.getElementById('edit-frt-tipo-os')?.focus();
+    return;
+  }
+  // Prévia sem tipo de OS só existe antes da validação; nas edições comuns o
+  // padrão antigo continua valendo.
+  if (!validando && !dados.tipo_os) dados.tipo_os = 'CORRETIVA';
+  // Data de liberação só existe para liberado (o campo vem desabilitado).
+  if (validando) delete dados.data_liberacao;
+
+  const result = validando
+    ? db.validarPreviaRetencaoFrota(id, dados)
+    : db.updateRetencaoFrota(id, dados);
   fecharModalEdicaoFrota();
 
   if (result.success) {
+    if (validando) activeFrotaSubTab = 'retidos';
     renderApp();
-    setTimeout(() => alert('✅ Registro atualizado com sucesso!'), 100);
+    setTimeout(() => alert(validando ? '✅ Retenção validada: o veículo agora conta como retido.' : '✅ Registro atualizado com sucesso!'), 100);
   } else {
     alert(`❌ ${result.message || 'Erro ao salvar alterações.'}`);
   }
@@ -22688,6 +23007,8 @@ function emitirRelatorioFrota(tipo) {
   const totalSinistro = lista.filter(r => r.tipo_os === 'SINISTRO').length;
   const totalCorretiva = lista.filter(r => r.tipo_os === 'CORRETIVA').length;
   const totalPreventiva = lista.filter(r => r.tipo_os === 'PREVENTIVA').length;
+  const totalPneus = lista.filter(r => r.tipo_os === 'PNEUS').length;
+  const totalGarantia = lista.filter(r => r.tipo_os === 'GARANTIA FABRICA').length;
   
   let mediaDiasStr = '—';
   const diasLiberados = lista
@@ -23001,7 +23322,7 @@ function emitirRelatorioFrota(tipo) {
     /* MINI KPIS DE APOIO */
     .kpi-strip {
       display: grid;
-      grid-template-columns: repeat(5, 1fr);
+      grid-template-columns: repeat(7, 1fr);
       gap: 6px;
       margin-bottom: 8px;
     }
@@ -23117,6 +23438,14 @@ function emitirRelatorioFrota(tipo) {
         <div class="kpi-card">
           <div class="kpi-card-val" style="color:#0369a1;">${totalPreventiva}</div>
           <div class="kpi-card-lbl">Preventiva</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card-val" style="color:#475569;">${totalPneus}</div>
+          <div class="kpi-card-lbl">Pneus</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-card-val" style="color:#047857;">${totalGarantia}</div>
+          <div class="kpi-card-lbl">Garantia de Fábrica</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-card-val" style="color:#047857;">${mediaDiasStr}</div>
