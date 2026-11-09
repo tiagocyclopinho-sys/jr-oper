@@ -20009,7 +20009,7 @@ async function handleNovaRotaSubmit(e) {
     await _enfileirarFotosDevolucao(novaRota, 'fotos', uploadedRotaFotos, 'rota');
   }
 
-  // 7.1.19: toda ocorrência nova gera uma prévia (A_VALIDAR) na
+  // 7.2.0: toda ocorrência nova gera uma prévia (A_VALIDAR) na
   // Indisponibilidade da Frota, para a oficina validar ou descartar.
   // Falhar aqui não pode derrubar o registro da ocorrência.
   let previaRet = null;
@@ -22195,7 +22195,7 @@ function renderDisponibilidadeFrotaView() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3A — PAINEL "A VALIDAR" (7.1.19): prévias geradas pela ocorrência em rota.
+// 3A — PAINEL "A VALIDAR" (7.2.0): prévias geradas pela ocorrência em rota.
 // A oficina valida (vira RETIDO, com tipo de OS) ou descarta. Enquanto está
 // aqui, o veículo não conta como indisponível em lugar nenhum.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22741,7 +22741,7 @@ function fecharModalLiberacao() {
 
 /** Abre o modal de edição preenchido com os dados do registro. */
 function abrirModalEdicaoFrota(id, opcoes) {
-  // { validar: true } (7.1.19): mesma tela, para a oficina completar a prévia
+  // { validar: true } (7.2.0): mesma tela, para a oficina completar a prévia
   // vinda da ocorrência em rota. Tipo de OS passa a ser obrigatório e salvar
   // transforma a prévia em RETIDO.
   const validar = !!(opcoes && opcoes.validar);

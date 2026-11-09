@@ -4335,12 +4335,18 @@ class Store {
    * Retorna lista de retenções (não deletadas), enriquecida com dados do
    * veículo cadastrado via veiculo_id (FK para db.data.veiculos).
    */
-  getRetencoesFrota() {
+  getRetencoesFrota(opcoes) {
     const retencoes = Array.isArray(this.data.retencoes_frota)
       ? this.data.retencoes_frota
       : [];
+    // Prévias (7.2.0): A_VALIDAR e DESCARTADO ficam fora de toda tela, KPI,
+    // relatório e da escala. O veículo só conta como indisponível depois que
+    // a oficina valida (decisão do Tiago, 09/11). Quem precisa delas pede
+    // { incluirPrevias: true } ou usa getPreviasRetencaoFrota().
+    const incluirPrevias = !!(opcoes && opcoes.incluirPrevias);
     return retencoes
       .filter(r => !r.is_deleted)
+      .filter(r => incluirPrevias || (r.status !== 'A_VALIDAR' && r.status !== 'DESCARTADO'))
       .map(r => {
         const veiculo = (this.data.veiculos || []).find(v => v.id == r.veiculo_id) || {};
         return {
@@ -4391,6 +4397,85 @@ class Store {
     this.data.retencoes_frota.push(retencao);
     this.save();
     return { success: true, retencao };
+  }
+
+  // ---------------------------------------------------------------------------
+  // PRÉVIA DE RETENÇÃO A PARTIR DA OCORRÊNCIA EM ROTA (7.2.0, migration 75)
+  //
+  // Decisões do Tiago (09/11/2026): toda ocorrência em rota NOVA gera sozinha
+  // uma prévia (status A_VALIDAR) na Indisponibilidade da Frota, só com o que
+  // a CCO tem na abertura. Tipo de OS, link e previsão ficam vazios: a oficina
+  // completa ao validar (vira RETIDO) ou descarta (DESCARTADO). A prévia não
+  // conta como indisponível em lugar nenhum. O vínculo (ocorrencia_rota_id)
+  // fica só no banco, e cada uma fecha por conta própria.
+  // ---------------------------------------------------------------------------
+
+  /** Prévias aguardando a oficina, mais novas primeiro. */
+  getPreviasRetencaoFrota() {
+    return this.getRetencoesFrota({ incluirPrevias: true })
+      .filter(r => r.status === 'A_VALIDAR');
+  }
+
+  criarPreviaRetencaoDaOcorrenciaRota(rota) {
+    if (!rota || !rota.id) return { success: false, message: 'Ocorrência sem id.' };
+    if (!Array.isArray(this.data.retencoes_frota)) this.data.retencoes_frota = [];
+    const jaExiste = this.data.retencoes_frota.find(r => r.ocorrencia_rota_id == rota.id && !r.is_deleted);
+    if (jaExiste) return { success: true, retencao: jaExiste, jaExistia: true };
+
+    const veiculo = (this.data.veiculos || []).find(v =>
+      (rota.veiculo_id && v.id == rota.veiculo_id) ||
+      (rota.veiculo_placa && String(v.placa || '').toUpperCase().trim() === String(rota.veiculo_placa).toUpperCase().trim())
+    ) || null;
+    const placa = String(rota.veiculo_placa || (veiculo && veiculo.placa) || '').toUpperCase().trim();
+    if (!placa) return { success: false, message: 'Ocorrência sem placa: prévia não criada.' };
+
+    const motivo = [rota.motivo_resumido || rota.tipo_ocorrencia || '', rota.descricao || '']
+      .map(s => String(s).trim()).filter(Boolean).join(' - ');
+
+    const ano = new Date().getFullYear();
+    const numero_retencao = this.getNextSequenceNumber('retencoes_frota', 'numero_retencao', `RET-${ano}-`, 3);
+    const agora = agoraIsoBrasilia();
+    const retencao = {
+      id: this.gerarIdUnico(),
+      numero_retencao,
+      veiculo_id: veiculo ? (parseInt(veiculo.id) || null) : (parseInt(rota.veiculo_id) || null),
+      placa,
+      tipo_veiculo: String((veiculo && (veiculo.tipo || veiculo.modelo)) || '').toUpperCase().trim(),
+      data_parada: String(rota.criado_em || '').slice(0, 10) || hojeIsoBrasilia(),
+      motivo: (motivo || 'OCORRÊNCIA EM ROTA').toUpperCase(),
+      tipo_os: '',
+      local: String(rota.localizacao || '').toUpperCase().trim(),
+      data_previsao: null,
+      numero_os: null,
+      link_os: null,
+      data_liberacao: null,
+      status: 'A_VALIDAR',
+      ocorrencia_rota_id: parseInt(rota.id) || null,
+      criado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      criado_em: agora,
+      atualizado_em: agora,
+      is_deleted: false
+    };
+    this.data.retencoes_frota.push(retencao);
+    this.save();
+    return { success: true, retencao };
+  }
+
+  /** A oficina confirma a prévia: vira RETIDO com os dados da OS. */
+  validarPreviaRetencaoFrota(id, dados) {
+    const retencao = (this.data.retencoes_frota || []).find(r => r.id == id && !r.is_deleted);
+    if (!retencao) return { success: false, message: `Retenção ID ${id} não encontrada.` };
+    if (retencao.status !== 'A_VALIDAR') return { success: false, message: 'Esta prévia já foi tratada por outra pessoa.' };
+    if (!dados || !dados.tipo_os) return { success: false, message: 'Informe o tipo de OS para validar.' };
+    return this.updateRetencaoFrota(id, { ...dados, status: 'RETIDO' });
+  }
+
+  /** A oficina descarta a prévia: o veículo não ficou indisponível. */
+  descartarPreviaRetencaoFrota(id) {
+    const retencao = (this.data.retencoes_frota || []).find(r => r.id == id && !r.is_deleted);
+    if (!retencao) return { success: false, message: `Retenção ID ${id} não encontrada.` };
+    if (retencao.status !== 'A_VALIDAR') return { success: false, message: 'Esta prévia já foi tratada por outra pessoa.' };
+    return this.updateRetencaoFrota(id, { status: 'DESCARTADO' });
   }
 
   /**
