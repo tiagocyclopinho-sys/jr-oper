@@ -1,6 +1,8 @@
 {
-  "build": "custo-gestao-ordenar-7.1.16",
-  "publicado_em": "2026-11-06",
+  "build": "zoom-midias-7.1.18",
+  "publicado_em": "2026-11-09",
+  "resumo_zoom_midias_7118": "7.1.18 - ZOOM NAS FOTOS E VIDEOS. O visualizador de midia ganhou zoom ate 8x (botoes + e -, rodinha do mouse, pinca com dois dedos, duplo clique ou toque duplo) e arrastar para mover, para ler etiquetas sem baixar o arquivo. No video, o zoom pausa e ha botoes para voltar e avancar um quadro. Fotos da reentrega e as que ainda aguardam envio passam a abrir no mesmo visualizador, por cima do formulario, sem apaga-lo. So tela: a forma de gravar e enviar as fotos (1280 px) nao mudou. Sem migration.",
+  "resumo_tipos_os_pneus_garantia_7117": "7.1.17 - INDISPONIBILIDADE DE FROTA: TIPOS DE OS PNEUS E GARANTIA DE FABRICA. Novos tipos no cadastro e na edicao da retencao, com selo proprio e contagem no relatorio. Migration 74 (aplicada em 09/11).",
   "resumo_custo_gestao_ordenar_7116": "7.1.16 - VISAO OPERACAO: ORDENAR NO CUSTO DE GESTAO. Clicar no titulo da coluna ordena a tabela; clicar de novo inverte.",
   "resumo_custo_gestao_colunas_7115": "7.1.15 - VISAO OPERACAO: CUSTO DE GESTAO COM PESO E DESPESA. Tabelas ganham as colunas Peso e Despesa, e a variacao contra o ano anterior e contra a media do ano fica na mesma celula.",
   "resumo_custo_gestao_apos_despesas_7114": "7.1.14 - VISAO OPERACAO: CUSTO DE GESTAO LOGO APOS DESPESAS, na pagina e no PowerPoint.",
