@@ -1,6 +1,7 @@
 {
-  "build": "zoom-midias-7.1.18",
+  "build": "previa-retencao-ocorrencia-7.2.0",
   "publicado_em": "2026-11-09",
+  "resumo_previa_retencao_ocorrencia_720": "7.2.0 - OCORRENCIA EM ROTA GERA PREVIA NA INDISPONIBILIDADE DA FROTA. Toda ocorrencia em rota nova cria sozinha uma previa (A VALIDAR) com placa, data, motivo e local. A oficina valida na nova aba A validar (completa tipo de OS, link e previsao e o veiculo passa a contar como retido) ou descarta. Enquanto nao e validada, nao conta como indisponivel em nenhum indicador, relatorio ou na escala. O vinculo com a ocorrencia fica so no banco; cada uma fecha por conta propria (CCO a ocorrencia, oficina a retencao). Ocorrencias ja abertas nao geram previa. Migration 75 (aplicada em 09/11).",
   "resumo_zoom_midias_7118": "7.1.18 - ZOOM NAS FOTOS E VIDEOS. O visualizador de midia ganhou zoom ate 8x (botoes + e -, rodinha do mouse, pinca com dois dedos, duplo clique ou toque duplo) e arrastar para mover, para ler etiquetas sem baixar o arquivo. No video, o zoom pausa e ha botoes para voltar e avancar um quadro. Fotos da reentrega e as que ainda aguardam envio passam a abrir no mesmo visualizador, por cima do formulario, sem apaga-lo. So tela: a forma de gravar e enviar as fotos (1280 px) nao mudou. Sem migration.",
   "resumo_tipos_os_pneus_garantia_7117": "7.1.17 - INDISPONIBILIDADE DE FROTA: TIPOS DE OS PNEUS E GARANTIA DE FABRICA. Novos tipos no cadastro e na edicao da retencao, com selo proprio e contagem no relatorio. Migration 74 (aplicada em 09/11).",
   "resumo_custo_gestao_ordenar_7116": "7.1.16 - VISAO OPERACAO: ORDENAR NO CUSTO DE GESTAO. Clicar no titulo da coluna ordena a tabela; clicar de novo inverte.",
