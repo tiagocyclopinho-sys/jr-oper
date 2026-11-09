@@ -612,11 +612,11 @@ CREATE TABLE IF NOT EXISTS retencoes_frota (
     numero_retencao VARCHAR(20) UNIQUE NOT NULL,    -- Ex.: RET-2026-001
     veiculo_id INT REFERENCES veiculos(id) ON DELETE SET NULL,
     placa VARCHAR(10) NOT NULL,                     -- Desnormalizado (consulta rápida)
-    tipo_veiculo VARCHAR(50) NOT NULL,              -- TOCO, TRUCK, VAN, etc.
+    tipo_veiculo VARCHAR(50),                            -- TOCO, TRUCK, VAN, etc.
     data_parada DATE NOT NULL,                      -- Data que o veículo foi parado
     motivo TEXT NOT NULL,                           -- Descrição livre do motivo
-    tipo_os VARCHAR(20) NOT NULL DEFAULT 'CORRETIVA'
-        CHECK (tipo_os IN ('SINISTRO', 'CORRETIVA', 'PREVENTIVA')),
+    tipo_os VARCHAR(20) DEFAULT 'CORRETIVA'
+        CHECK (tipo_os IN ('SINISTRO', 'CORRETIVA', 'PREVENTIVA', 'PNEUS', 'GARANTIA FABRICA')),
     local VARCHAR(150),                             -- Oficina / local de parada
     data_previsao DATE,                             -- Previsão de liberação
     data_liberacao DATE,                            -- Data efetiva de liberação
@@ -1280,11 +1280,13 @@ ALTER TABLE reentregas_rota ALTER COLUMN status DROP NOT NULL;
 
 ALTER TABLE retencoes_frota DROP CONSTRAINT IF EXISTS retencoes_frota_tipo_os_check;
 ALTER TABLE retencoes_frota ADD  CONSTRAINT retencoes_frota_tipo_os_check
-  CHECK (tipo_os IS NULL OR tipo_os IN ('', 'SINISTRO', 'CORRETIVA', 'PREVENTIVA'));
+  CHECK (tipo_os IS NULL OR tipo_os IN ('', 'SINISTRO', 'CORRETIVA', 'PREVENTIVA', 'PNEUS', 'GARANTIA FABRICA'));
 
 ALTER TABLE retencoes_frota DROP CONSTRAINT IF EXISTS retencoes_frota_status_check;
 ALTER TABLE retencoes_frota ADD  CONSTRAINT retencoes_frota_status_check
-  CHECK (status IS NULL OR status IN ('', 'RETIDO', 'LIBERADO'));
+  CHECK (status IS NULL OR status IN ('', 'RETIDO', 'LIBERADO', 'A_VALIDAR', 'DESCARTADO'));
+-- migration 75: previa vinda da ocorrencia em rota (so no banco, sem campo na tela)
+ALTER TABLE retencoes_frota ADD COLUMN IF NOT EXISTS ocorrencia_rota_id bigint;
 
 ALTER TABLE usuarios DROP CONSTRAINT IF EXISTS usuarios_role_check;
 ALTER TABLE usuarios ADD  CONSTRAINT usuarios_role_check
