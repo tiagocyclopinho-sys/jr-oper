@@ -3438,7 +3438,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "previa-retencao-ocorrencia-7.2.0";
+CloudStore.BUILD = "devolucao-itens-ferias-7.2.1";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS

@@ -8503,6 +8503,39 @@ window.abrirMidiaLightbox = abrirMidiaLightbox;
 //
 // colapsar: na tela do gestor os cards vem em lista, e um relato inteiro em
 // cada um torna a rolagem impraticavel. <details> resolve sem esconder nada.
+// Motivo do ITEM (itens_devolucao.motivo_item, escolhido na abertura). 7.2.1:
+// pedido dos operadores, porque numa inversão a análise e a tratativa precisam
+// ver qual produto sobrou e qual faltou. Sobra em azul, falta em vermelho.
+function seloMotivoItem(motivo) {
+  const m = String(motivo || '').trim();
+  if (!m) return '<span class="ml-1 text-[10px] text-slate-500 italic">· sem motivo do item</span>';
+  const txt = m.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const cor = /SOBRA/.test(m) ? 'text-sky-300 border-sky-800 bg-sky-950/60'
+    : /FALTA/.test(m) ? 'text-red-300 border-red-800 bg-red-950/60'
+    : /INVERS/.test(m) ? 'text-amber-300 border-amber-800 bg-amber-950/60'
+    : 'text-slate-300 border-slate-700 bg-slate-900';
+  return `<span class="ml-1 inline-block text-[10px] font-bold px-1.5 py-0.5 rounded border ${cor}">${txt}</span>`;
+}
+
+// Abertura e correção (7.2.1): todo item precisa do próprio motivo. Linha
+// vazia fica com a borda vermelha para o operador achar qual é.
+function itensComMotivo(itens) {
+  let faltando = 0;
+  document.querySelectorAll('#items-tbody tr').forEach(r => {
+    const sel = r.querySelector('.item-motivo');
+    if (!sel || !r.querySelector('.item-prod-id')?.value) return;
+    const vazio = !String(sel.value || '').trim();
+    sel.classList.toggle('border-red-500', vazio);
+    if (vazio) faltando++;
+  });
+  if (!faltando && itens.some(i => !String(i.motivo_item || '').trim())) faltando = 1;
+  if (faltando) {
+    alert(`Informe o motivo de cada item reclamado (${faltando} sem motivo).\nEx.: numa inversão, um item como SOBRA DE MERCADORIA e o outro como FALTA.`);
+    return false;
+  }
+  return true;
+}
+
 function renderRelatoAbertura(d, opcoes = {}) {
   const { titulo = 'Relato da Abertura', colapsar = false } = opcoes;
   const texto    = String(d.detalhamento_texto || '').trim();
@@ -8518,7 +8551,8 @@ function renderRelatoAbertura(d, opcoes = {}) {
            <div class="font-bold text-slate-400 mb-1 text-[10px] uppercase">Itens reclamados</div>
            <div class="space-y-1">
              ${itens.map(i => `<div class="flex justify-between gap-3 text-[11px] text-slate-300">
-                 <span>${i.produto_codigo} — ${i.produto_descricao} (x${i.quantidade})</span>
+                 <span>${i.produto_codigo} — ${i.produto_descricao} (x${i.quantidade})
+                   ${seloMotivoItem(i.motivo_item)}</span>
                  <span class="text-emerald-400 font-semibold shrink-0">R$ ${(i.valor_total || 0).toFixed(2)}</span>
                </div>`).join('')}
            </div>
@@ -9971,6 +10005,7 @@ async function _handleSacAberturaSubmitInterno(e) {
       alert('Adicione ao menos 1 produto ou marque "Sem produtos a listar"!');
       return;
     }
+    if (!itensComMotivo(itens)) return;
   } else if (!obsSemItens.trim()) {
     alert('Informe o motivo de não haver produtos a listar.');
     return;
@@ -10086,8 +10121,12 @@ function renderSacInvestigacaoView() {
   devsFiltrados = devsFiltrados.filter(d => devolucaoCasaBusca(d, fTexto));
   devsFiltrados = devsFiltrados.filter(d => devolucaoCasaResponsavel(d, fResp));
 
-  const pendentes = devsFiltrados.filter(d => !d.motivo_real_causa_raiz || d.motivo_real_causa_raiz.trim() === '');
-  const monitorados = devsFiltrados.filter(d => d.motivo_real_causa_raiz && d.motivo_real_causa_raiz.trim() !== '');
+  // 7.2.1: devolução corrigida pelo SAC depois de apurada volta para
+  // Pendentes (reanalise_pendente, migration 76) com a apuração anterior
+  // já preenchida; salvar a análise de novo a devolve para Monitorados.
+  const semApuracao = d => !d.motivo_real_causa_raiz || d.motivo_real_causa_raiz.trim() === '' || d.reanalise_pendente === true;
+  const pendentes = devsFiltrados.filter(d => semApuracao(d));
+  const monitorados = devsFiltrados.filter(d => !semApuracao(d));
 
   const sortCampo = window._invSortCampo || 'data_desc';
   let exibidos = activeInvestigacaoSubTab === 'pendentes' ? [...pendentes] : [...monitorados];
@@ -10206,6 +10245,7 @@ function renderSacInvestigacaoView() {
               <div class="text-xs text-slate-300 mt-1">📍 <b>${d.carga_rota}</b> | Carga: ${d.carga_numero} • 👤 <b>${d.motorista_nome}</b></div>
               <div class="text-xs text-slate-400">Cliente: <b>${d.cliente_nome}</b>${d.nota_fiscal ? ` • NF: <b class="text-emerald-400">${d.nota_fiscal}</b>` : ''}</div>
               ${d.atualizado_em ? `<div class="text-[10px] text-purple-300 mt-1">🕒 Atualizado em ${new Date(d.atualizado_em).toLocaleString('pt-BR')} por <b>${d.atualizado_por || '—'}</b></div>` : ''}
+              ${d.reanalise_pendente === true ? `<div class="text-[11px] text-amber-300 bg-amber-950/50 border border-amber-800 rounded px-2 py-1 mt-1">🔁 <b>Corrigida pelo SAC depois da análise</b>${d.reanalise_desde ? ` em ${new Date(d.reanalise_desde).toLocaleString('pt-BR')}` : ''}${d.reanalise_motivo ? ` — ${String(d.reanalise_motivo).replace(/&/g, '&amp;').replace(/</g, '&lt;')}` : ''}. Revise a apuração abaixo e salve de novo.</div>` : ''}
               <button type="button" onclick="abrirHistoricoRegistro('ocorrencias_devolucao', '${d.id}', '${(d.numero_devolucao||d.numero_protocolo||'').replace(/'/g, "\\'")}')" class="text-[10px] text-blue-400 hover:text-blue-300 hover:underline mt-1 inline-flex items-center gap-1">📜 Ver histórico</button>
             </div>
             <div class="flex items-center gap-3 shrink-0">
@@ -20522,6 +20562,7 @@ function handleSalvarEdicaoDevolucaoSac(e, id) {
       alert('Adicione ao menos 1 produto ou marque "Sem produtos a listar"!');
       return;
     }
+    if (!itensComMotivo(itens)) return;
   } else if (!obsSemItens.trim()) {
     alert('Informe o motivo de não haver produtos a listar.');
     return;
@@ -20576,7 +20617,7 @@ function handleSalvarEdicaoDevolucaoSac(e, id) {
   if (res.removidos) partes.push(`${res.removidos} retirado(s)`);
   showToast(
     `✏️ ${res.protocolo} corrigida${partes.length ? ' — ' + partes.join(', ') : ''}.`
-    + (res.reabriuGestor ? ' Voltou para as Tratativas do Gestor.' : ''),
+    + (res.reabriuGestor ? ' Voltou para Pendentes na Análise; só volta ao Gestor depois da nova análise.' : ''),
     'success'
   );
   renderApp();
@@ -24489,7 +24530,7 @@ function renderSubabaResumoDiario(p) {
                   p.faltas.map((f, idx) => `
                     <tr>
                       <td class="p-1.5 font-bold text-white">${f.nome}</td>
-                      <td class="p-1.5 text-amber-300 font-medium">${f.conduta}</td>
+                      <td class="p-1.5 text-amber-300 font-medium">${f.conduta}${f.ferias_grupo ? `<div class="text-[9px] text-sky-300 font-normal">🏖️ ${formatarData(f.ferias_inicio)} a ${formatarData(f.ferias_fim)}</div>` : ''}</td>
                       <td class="p-1.5 text-center"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${f.avisado==='SIM'?'bg-emerald-950 text-emerald-300':'bg-red-950 text-red-300'}">${f.avisado}</span></td>
                       <td class="p-1.5 text-center text-slate-300 text-[11px]">${f.periodo||'Integral'}</td>
                       <td class="p-1.5 text-center text-slate-300 text-[11px]">${f.compensar||'NÃO'}</td>
@@ -25063,10 +25104,28 @@ function adicionarFaltaResumo(data, turno) {
 
         <div>
           <label class="block text-[10px] text-slate-400 font-bold uppercase mb-1">Conduta / Ausência *</label>
-          <select id="md-fl-conduta" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
+          <select id="md-fl-conduta" onchange="document.getElementById('md-fl-ferias-box').classList.toggle('hidden', this.value !== 'FÉRIAS')" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold uppercase">
             ${CONDUTAS_RESUMO.map(c => `<option value="${c}">${c}</option>`).join('')}
           </select>
           <p class="text-[9px] text-blue-300 mt-1">Falta com atestado: ao salvar, abre o atestado médico, que vai para o Acompanhamento de Funcionário.</p>
+        </div>
+
+        <!-- 7.2.1: férias por período. Lança o colaborador em todos os dias do
+             período (segunda a sábado) neste turno; o gestor não repete mais
+             o lançamento dia a dia, e o Acompanhamento de Funcionário recebe
+             cada dia pelo mesmo caminho de sempre. -->
+        <div id="md-fl-ferias-box" class="hidden bg-sky-950/40 border border-sky-800 rounded p-2 space-y-2">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-[10px] text-sky-300 font-bold uppercase mb-1">Férias de *</label>
+              <input type="date" id="md-fl-ferias-ini" value="${data}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+            </div>
+            <div>
+              <label class="block text-[10px] text-sky-300 font-bold uppercase mb-1">Até *</label>
+              <input type="date" id="md-fl-ferias-fim" value="${data}" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
+            </div>
+          </div>
+          <p class="text-[9px] text-sky-300">Entra sozinho no Resumo Diário deste turno em cada dia do período (domingo fica de fora) e no Acompanhamento de Funcionário.</p>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -25127,6 +25186,20 @@ function confirmarSalvarFaltaResumo(data, turno) {
     return;
   }
 
+  if (falta.conduta === 'FÉRIAS') {
+    const ini = document.getElementById('md-fl-ferias-ini')?.value || data;
+    const fim = document.getElementById('md-fl-ferias-fim')?.value || ini;
+    if (fim < ini) { alert('A data final das férias é anterior à inicial.'); return; }
+    const dias = diasDeFerias(ini, fim);
+    if (dias.length > 45) { alert(`Período de ${dias.length} dias úteis: confira as datas (máximo 45).`); return; }
+    if (!dias.length) { alert('O período não tem nenhum dia de segunda a sábado.'); return; }
+    const r = gravarFeriasResumo(turno, falta, ini, fim, dias);
+    showToast(`🏖️ Férias de ${falta.nome}: ${r.lancados} dia(s) lançado(s)${r.jaTinha ? `, ${r.jaTinha} já estava(m) lançado(s)` : ''} (${formatarData(ini)} a ${formatarData(fim)}).`);
+    fecharModalResumo();
+    renderApp();
+    return;
+  }
+
   gravarFaltaResumo(data, turno, falta);
   fecharModalResumo();
   renderApp();
@@ -25137,6 +25210,60 @@ function gravarFaltaResumo(data, turno, falta) {
   if (!resumo.faltas_condutas) resumo.faltas_condutas = [];
   resumo.faltas_condutas.push(falta);
   db.saveResumoDiarioCD(resumo);
+}
+
+// Dias de segunda a sábado entre ini e fim (AAAA-MM-DD), inclusive. O CD
+// nunca teve Resumo Diário no domingo. Conta em UTC para o fuso não pular dia.
+function diasDeFerias(ini, fim) {
+  const dias = [];
+  const d = new Date(ini + 'T12:00:00Z');
+  const f = new Date(fim + 'T12:00:00Z');
+  while (d <= f && dias.length < 400) {
+    if (d.getUTCDay() !== 0) dias.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return dias;
+}
+
+// Férias por período (7.2.1): uma linha FÉRIAS em cada dia, ligadas pelo
+// ferias_grupo, para excluir o período inteiro de uma vez. Cada linha é uma
+// falta comum: Acompanhamento de Funcionário, Dashboard e PDFs leem como
+// sempre leram. Dia que já tinha FÉRIAS do mesmo colaborador não duplica.
+function gravarFeriasResumo(turno, base, ini, fim, dias) {
+  const grupo = 'ferias_' + db.gerarIdUnico();
+  let lancados = 0, jaTinha = 0;
+  dias.forEach(dia => {
+    const resumo = db.getResumoDiarioCD(dia, turno);
+    if (!resumo.faltas_condutas) resumo.faltas_condutas = [];
+    const existe = resumo.faltas_condutas.some(f => f.nome === base.nome && f.conduta === 'FÉRIAS');
+    if (existe) { jaTinha++; return; }
+    resumo.faltas_condutas.push(Object.assign({}, base, {
+      id: db.gerarIdUnico(),
+      ferias_grupo: grupo,
+      ferias_inicio: ini,
+      ferias_fim: fim
+    }));
+    db.saveResumoDiarioCD(resumo);
+    lancados++;
+  });
+  return { lancados, jaTinha };
+}
+
+// Tira do período as linhas de hoje em diante (as passadas ficam: já
+// aconteceram) ou o período inteiro.
+function removerFeriasGrupo(turno, grupo, aPartirDe) {
+  let removidos = 0;
+  (db.data.resumo_diario_cd || []).forEach(r => {
+    if (r.turno !== turno || !Array.isArray(r.faltas_condutas)) return;
+    if (aPartirDe && r.data < aPartirDe) return;
+    const antes = r.faltas_condutas.length;
+    r.faltas_condutas = r.faltas_condutas.filter(f => f.ferias_grupo !== grupo);
+    if (r.faltas_condutas.length !== antes) {
+      removidos += antes - r.faltas_condutas.length;
+      db.saveResumoDiarioCD(r);
+    }
+  });
+  return removidos;
 }
 
 // Mesmos campos do bloco "Atestados Médicos" do Acompanhamento de Funcionário
@@ -25228,7 +25355,17 @@ function confirmarAtestadoFaltaResumo() {
 }
 
 function removerFaltaResumo(data, turno, index) {
-  if (!confirm('Excluir esta falta/conduta registrada?')) return;
+  const alvo = db.getResumoDiarioCD(data, turno).faltas_condutas?.[index];
+  if (alvo && alvo.ferias_grupo) {
+    const periodo = `${formatarData(alvo.ferias_inicio)} a ${formatarData(alvo.ferias_fim)}`;
+    if (confirm(`Férias de ${alvo.nome} (${periodo}).\n\nOK = excluir deste dia (${formatarData(data)}) até o fim do período.\nCancelar = escolher outra opção.`)) {
+      const n = removerFeriasGrupo(turno, alvo.ferias_grupo, data);
+      showToast(`🗑️ ${n} dia(s) de férias excluído(s).`);
+      renderApp();
+      return;
+    }
+    if (!confirm(`Excluir as férias só do dia ${formatarData(data)}?`)) return;
+  } else if (!confirm('Excluir esta falta/conduta registrada?')) return;
   const resumo = db.getResumoDiarioCD(data, turno);
   if (resumo.faltas_condutas) {
     // O atestado lançado junto com a falta sai com ela do Acompanhamento.

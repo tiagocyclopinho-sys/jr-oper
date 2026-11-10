@@ -2018,12 +2018,21 @@ class Store {
     dev.atualizado_em = agora;
     dev.atualizado_por = usuarioNome;
 
-    // Reabre a tratativa SO se ja havia apuracao. updateInvestigacao reabre
-    // sempre porque la, por definicao, alguem acabou de apurar; aqui a
-    // devolucao pode nunca ter passado pela Analise, e marcar PENDENTE_GESTOR
-    // colocaria na mesa do gestor um chamado sem causa raiz nenhuma. Quando ha
-    // apuracao, reabrir e obrigatorio: ela foi feita sobre o item antigo.
-    if (dev.motivo_real_causa_raiz) dev.status_gestao = 'PENDENTE_GESTOR';
+    // 7.2.1 (10/11/2026, migration 76; decisao do Tiago): com apuracao feita,
+    // a correcao VOLTA A ETAPA DA ANALISE. A ocorrencia vai para "Pendentes"
+    // na Analise (antes ficava em Monitorados, porque a aba e decidida pela
+    // causa raiz preenchida) e SAI da fila do gestor: status_gestao volta a
+    // PENDENTE, o mesmo de quem nunca foi analisada. Ate a 7.2.0 ia direto
+    // para PENDENTE_GESTOR, e o gestor decidia sobre uma apuracao feita com o
+    // item antigo. Quando a Analise salvar de novo, updateInvestigacao
+    // desmarca a reanalise e poe PENDENTE_GESTOR, como na 1a apuracao.
+    // Sem apuracao nada muda: a devolucao ja estava na mesa do analista.
+    if (dev.motivo_real_causa_raiz) {
+      dev.status_gestao = 'PENDENTE';
+      dev.reanalise_pendente = true;
+      dev.reanalise_motivo = String(entrada.motivo_correcao || '').toUpperCase().trim() || 'CORRECAO DO SAC';
+      dev.reanalise_desde = agora;
+    }
 
     this.logAudit({
       acao: 'EDICAO_DEVOLUCAO_SAC',
@@ -2224,6 +2233,8 @@ class Store {
       // quando o status ainda era PENDENTE/vazio, o que fazia a Gestão de
       // Tratativas "não perceber" edições feitas depois da 1ª apuração.
       dev.status_gestao = 'PENDENTE_GESTOR';
+      // Reanalise feita (7.2.1): sai de Pendentes e volta para Monitorados.
+      if (dev.reanalise_pendente) dev.reanalise_pendente = false;
       dev.atualizado_em = agoraIsoBrasilia();
       dev.atualizado_por = this.currentUser ? this.currentUser.nome : 'SISTEMA';
 
