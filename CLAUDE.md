@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 76).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 77).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -114,6 +114,11 @@ partir do branch `main` do GitHub.
   `f_DEVOLUCAO[MOTIVO]` / `f_DEVOLUCAO["RESP DEV"]` (CODDEV não filtra).
 - `pbi-explorar` (Edge Function só de leitura) lista modelos/relatórios e roda
   DAX: chamar por `net.http_post` com o token do Vault e ler `net._http_response`.
+- `shelf-life` (Edge Function só de leitura, fora do app, desde 09/11/2026) devolve a
+  tabela do relatório "Shelf Life" e os vencidos para o script local
+  `..\shelf-life\shelf.ps1` (impressão semanal da conferência de datas do CD).
+  Cabeçalho `x-shelf-token`; a chave fica só no PC do Tiago
+  (`%LOCALAPPDATA%\ShelfLife\token.txt`) e a função guarda só o SHA-256 dela.
 - Gerador: `tools/gerar_visao_operacao.bat [AAAAMM]` (pptxgenjs em
   `tools/node_modules`, fora do Git; o .bat instala). Visual (fundo, divisores,
   capa, logo) em `tools/visao_operacao/`, exportado da apresentação de set/26.
@@ -209,7 +214,8 @@ partir do branch `main` do GitHub.
   carregamento ≤ 0,050% (ideal ≤ 0,010%) e corte da mesa ≤ 0,100% (ideal ≤ 0,025%), de 26
   a 25, sobre o faturamento do setor. "Chegou vencida" = DATA PROXIMA DA VALIDADE. O modelo
   Corte não tem setor: vai pelo f_PCCORTEI[NOMEFUNC] (7.1.11): Seco = Itajaci ou Marcos Adriano,
-  Frio = os demais. Bate com a planilha do Tiago. Só meta: nada de valor de bônus na tela.
+  Frio = os demais. Bate com a planilha do Tiago. Margarinas (26739-26742) e maioneses
+  (26743, 26744, 27387, 27436) são do Comercial (7.2.2): saem do frio/seco, indicador corte_comercial. Só meta: nada de valor de bônus na tela.
 - 7.1.7 (04/11): he_inventario em vo_quadros, gravado à mão só para 202610 (valor = HE 100%,
   valor2 = horas, valor3 = DSR). Fica fora de SECOES: a coleta não apaga. Já está dentro da
   HE 100% do Power BI; a aba "sem inventário" subtrai por funcionário e setor.
