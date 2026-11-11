@@ -214,6 +214,10 @@ const horas = (v: any) => {
   return Math.floor(n / 10000) + Math.floor((n % 10000) / 100) / 60 + (n % 100) / 3600;
 };
 
+// Cortes do Comercial (Tiago, 11/11/2026): margarinas 26739 a 26742 e maioneses 26743,
+// 26744, 27387 e 27436. Saem da meta do CD por setor.
+const CORTE_COMERCIAL = new Set(["26739", "26740", "26741", "26742", "26743", "26744", "27387", "27436"]);
+
 const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<Resultado>> = {
   async cortes(t, am, soInd) {
     const j = janelas(am).fech, f = datas("dim_Calendario[DATA]", j);
@@ -473,7 +477,7 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
     const SETOR = "dim_PCSUPERV[SETOR I]";
     const setorDe = (s: any) => (/SECO/i.test(String(s)) ? "seco" : /FRIO/i.test(String(s)) ? "frio" : null);
     const MOTIVOS = ["MERCADORIA NAO CARREGADA", "DATA PROXIMA DA VALIDADE", "PESO ERRADO", "INVERSAO MERCADORIA EXPEDICAO"];
-    const soma: Record<string, number> = { fat_frio: 0, fat_seco: 0, dev_frio: 0, dev_seco: 0, corte_frio: 0, corte_seco: 0, corte_sem_setor: 0 };
+    const soma: Record<string, number> = { fat_frio: 0, fat_seco: 0, dev_frio: 0, dev_seco: 0, corte_frio: 0, corte_seco: 0, corte_sem_setor: 0, corte_comercial: 0 };
     for (const r of await dax(t, "devolucao", `EVALUATE SUMMARIZECOLUMNS(${SETOR}, ${ff}, "f", [Vl Fat Bruto])`)) {
       const s = setorDe(r[SETOR]);
       if (s) soma[`fat_${s}`] += num(r["[f]"]) ?? 0;
@@ -490,15 +494,27 @@ const SECOES: Record<string, (t: string, am: number, soInd: boolean) => Promise<
     }
     // Corte por setor (Tiago, 05/11/2026): Seco = cortes feitos por Itajaci ou Marcos Adriano;
     // os demais sao do Frio. Reproduz a planilha de supervisores ao centavo em jun e jul/26.
-    for (const r of await dax(t, "corte", `EVALUATE SUMMARIZECOLUMNS(f_PCCORTEI[NOMEFUNC], ${fc}, "v", [Valor Corte])`)) {
+    // Margarinas e maioneses (Tiago, 11/11/2026): o RCA faz o pedido na filial errada e o
+    // corte e do Comercial, nao do CD, seja quem for que cortou.
+    const comercial: Record<string, number> = {};
+    for (const r of await dax(t, "corte", `EVALUATE SUMMARIZECOLUMNS(f_PCCORTEI[NOMEFUNC], f_PCCORTEI[CODPROD], f_PCCORTEI[PRODUTO], ${fc}, "v", [Valor Corte])`)) {
+      const v = num(r["[v]"]) ?? 0;
+      if (CORTE_COMERCIAL.has(String(r["f_PCCORTEI[CODPROD]"] ?? "").trim())) {
+        soma.corte_comercial += v;
+        const p = rot(r["f_PCCORTEI[PRODUTO]"]);
+        comercial[p] = (comercial[p] ?? 0) + v;
+        continue;
+      }
       const nome = String(r["f_PCCORTEI[NOMEFUNC]"] ?? "").trim();
       const chave = !nome ? "corte_sem_setor" : /ITAJACI|MARCOS ADRIANO/i.test(nome) ? "corte_seco" : "corte_frio";
-      soma[chave] += num(r["[v]"]) ?? 0;
+      soma[chave] += v;
     }
     const ind: Ind[] = Object.entries(soma).map(([indicador, valor]) => ({ indicador, valor, de: j.de, ate: j.ate }));
     if (soInd) return { ind, quad: [] };
     const quad: Quad[] = Object.entries(motivos).sort((x, y) => y[1] - x[1])
       .map(([rotulo, valor], i) => ({ quadro: "dev_motivo", rotulo, ordem: i + 1, valor }));
+    quad.push(...Object.entries(comercial).sort((x, y) => y[1] - x[1])
+      .map(([rotulo, valor], i) => ({ quadro: "corte_comercial", rotulo, ordem: i + 1, valor })));
     return { ind, quad };
   },
 
