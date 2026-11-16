@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 77).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 78).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -222,6 +222,24 @@ partir do branch `main` do GitHub.
 - 7.1.9 (04/11): Taxa de Completude e % Responsabilidade no S.A.C. A completude mede só a abertura (campos + foto, vídeo ou anexo de NF). A regra fica
   na view vo_sac_indicadores (migration 72), com a lista do que falta; mudou a regra no
   Dashboard (js/app.js), mude a view junto. % Responsabilidade: `temResponsavel()`. Metas: completude ≥ 90%, responsabilidade ≥ 95%.
+
+## Banco de horas do RH (7.3.0, 13/11/2026)
+- Página de envio SEM login em `/banco-horas` (`banco-horas/index.html`, mesmo repositório,
+  rewrite no vercel.json, fora do service worker). O RH sobe o "Saldo de Horas"; grava pela
+  função `bh_receber_envio` (security definer, migration 77). Tabelas `bh_envios` /
+  `bh_saldos` / `bh_he_dia`, só leitura para o anon, fora da sincronização (egress).
+- Conta única em `js/bancoHoras.js` (UMD: página do RH, app, Visão Operação, gerador). Lê só
+  as abas BANCO DE HORAS (negativas/positivas até a 10ª hora, decimal, período MM/AAAA) e
+  HORAS EXTRAS (Nome, Dia em série 1904, HE 100%, HE 55% depois da 10ª hora). A aba SALDO
+  DE HORAS do RH tem 55% e 100% trocados nas fórmulas: não usar.
+- Regras do Tiago: colaborador = saldo + 55% + 100% (colunas separadas); setor = só saldos
+  POSITIVOS + 55% + 100% (devendo nunca abate); banco positivo é pago como 55%, então a meta
+  em horas (`metaHoraExtra`) compara Banco + com 55%; 100% fica fora da meta. Só operação;
+  "3 TURNO" = 2º turno. Só horas, sem R$. Vale o último envio do dia (os outros ficam
+  `substituido`). Entre fotos: negativas que crescem = compensação; que diminuem = abono.
+- Tela: Boletim Gerencial → Banco de Horas (`boletim_banco_horas`, todos os perfis), no fim
+  de `js/app.js`. Visão Operação: quadro "Acompanhamento do RH" na seção Hora extra (`d.bh`).
+- Próximo passo combinado: cruzar compensação com saída antecipada/falta do Oper ("Vai compensar?").
 
 ## Escala de embarques (6.10.0, 30/10/2026)
 - Menu Escala (Matrizes, Convocação Escala, Fechamento) em `js/escala.js`;

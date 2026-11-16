@@ -8,7 +8,7 @@
 // APAGAR o cache da versao anterior, entao nenhum aparelho fica servindo um
 // js/app.js velho quando abrir sem sinal. Trocar o byte do sw.js e tambem o
 // que faz o navegador reinstalar o service worker.
-const CACHE_NAME = 'jr-oper-v7.2.2';
+const CACHE_NAME = 'jr-oper-v7.3.0';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
@@ -26,6 +26,7 @@ const FILES_TO_CACHE = [
   // de arquivos e localStorage são baldes diferentes.
   './js/mockData.js',
   './js/visaoOperacao.js',
+  './js/bancoHoras.js',
   './js/escala.js',
   './js/app.js',
   './js/tailwind.cdn.js',
@@ -92,6 +93,10 @@ self.addEventListener('fetch', (event) => {
 
   // Ignora requisições para o Supabase (banco de dados online - não cacheável)
   if (event.request.url.includes('supabase.co')) return;
+
+  // 7.3.0: a pagina de envio do RH (/banco-horas) fica fora do service worker.
+  // Sem rede ela tem que dizer que nao carregou, nunca abrir o JR Oper no lugar.
+  if (new URL(event.request.url).pathname.startsWith('/banco-horas')) return;
 
   event.respondWith(
     fetchComTimeout(event.request)

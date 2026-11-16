@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Banco de Horas · Envio do RH</title>
+<link rel="icon" href="/favicon.ico">
+<!--
+  Pagina de envio do RH (7.3.0, 13/11/2026). Sem login (decisao do Tiago): so o
+  RH tem o relatorio "Saldo de Horas". Le as abas BANCO DE HORAS e HORAS EXTRAS
+  no navegador (js/bancoHoras.js, a mesma conta do Oper) e grava pela funcao
+  bh_receber_envio (migration 77). Cada envio fica registrado; vale o ultimo do dia.
+-->
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --tx:#1f2937; --mut:#6b7280; --bd:#e5e7eb; --verde:#0f7a4a; --verde2:#e7f5ee; --amb:#9a6700; --amb2:#fff6dd; --verm:#b42318; --verm2:#fdecea; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--tx); }
+  header { background:#0b3d2a; color:#fff; padding:16px; }
+  header .in { max-width:860px; margin:0 auto; display:flex; align-items:center; gap:12px; }
+  header img { height:36px; }
+  header h1 { font-size:18px; margin:0; }
+  header p { font-size:13px; margin:2px 0 0; opacity:.8; }
+  main { max-width:860px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:16px; margin-bottom:16px; }
+  h2 { font-size:15px; margin:0 0 12px; }
+  .drop { border:2px dashed #9ca3af; border-radius:12px; padding:28px 16px; text-align:center; cursor:pointer; background:#fafafa; }
+  .drop.on { border-color:var(--verde); background:var(--verde2); }
+  .drop b { display:block; font-size:16px; margin-bottom:4px; }
+  .drop span { color:var(--mut); font-size:13px; }
+  .btn { border:0; border-radius:10px; padding:12px 18px; font-weight:700; font-size:15px; cursor:pointer; }
+  .btn.pri { background:var(--verde); color:#fff; }
+  .btn.sec { background:#e5e7eb; color:var(--tx); }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .acoes { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }
+  .kpi { border:1px solid var(--bd); border-radius:10px; padding:10px; }
+  .kpi small { display:block; color:var(--mut); font-size:12px; }
+  .kpi b { font-size:18px; }
+  .msg { border-radius:10px; padding:12px; font-size:14px; margin-top:12px; }
+  .msg.ok { background:var(--verde2); color:var(--verde); }
+  .msg.av { background:var(--amb2); color:var(--amb); }
+  .msg.er { background:var(--verm2); color:var(--verm); }
+  .msg ul { margin:6px 0 0; padding-left:18px; }
+  .tab { width:100%; border-collapse:collapse; font-size:13px; }
+  .tab th, .tab td { padding:7px 6px; border-bottom:1px solid var(--bd); text-align:left; }
+  .tab th { color:var(--mut); font-weight:600; font-size:12px; }
+  .tab .n { text-align:right; white-space:nowrap; }
+  .rola { overflow-x:auto; }
+  .tag { display:inline-block; border-radius:999px; padding:2px 8px; font-size:11px; font-weight:700; }
+  .tag.v { background:var(--verde2); color:var(--verde); }
+  .tag.s { background:#eef0f3; color:var(--mut); }
+  .esc { display:none; }
+  footer { text-align:center; color:var(--mut); font-size:12px; padding:8px 16px 24px; }
+</style>
+</head>
+<body>
+<header><div class="in">
+  <img src="/public/logo_jr_branca.png" alt="JR" onerror="this.style.display='none'">
+  <div><h1>Banco de Horas · Envio do RH</h1><p>Relatório "Saldo de Horas" para o acompanhamento diário no JR Oper</p></div>
+</div></header>
+
+<main>
+  <section class="card">
+    <h2>1. Escolha o arquivo</h2>
+    <label class="drop" id="drop">
+      <b>Clique aqui ou arraste o relatório</b>
+      <span>Arquivo .xlsx com as abas BANCO DE HORAS e HORAS EXTRAS</span>
+      <input type="file" id="arquivo" class="esc" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    </label>
+    <div id="erro"></div>
+  </section>
+
+  <section class="card esc" id="conferir">
+    <h2>2. Confira antes de enviar</h2>
+    <div class="kpis" id="kpis"></div>
+    <div id="avisos"></div>
+    <div class="rola" style="margin-top:12px"><table class="tab" id="tabSetores"></table></div>
+    <div class="acoes">
+      <button class="btn pri" id="enviar">Enviar para o JR Oper</button>
+      <button class="btn sec" id="cancelar">Escolher outro arquivo</button>
+    </div>
+    <div id="resultado"></div>
+  </section>
+
+  <section class="card">
+    <h2>Últimos recebimentos</h2>
+    <p style="font-size:13px;color:var(--mut);margin:-4px 0 10px">Todo envio fica registrado. Se houver mais de um no mesmo dia, vale o último.</p>
+    <div class="rola"><table class="tab" id="historico"><tr><td>Carregando…</td></tr></table></div>
+  </section>
+</main>
+<footer>JR Distribuidora · os dados vão direto para o JR Oper (Boletim Gerencial → Banco de Horas)</footer>
+
+<script src="/js/config.js"></script>
+<script src="/js/xlsx.full.min.js"></script>
+<script src="/js/bancoHoras.js"></script>
+<script>
+(function () {
+  'use strict';
+  const BH = window.BancoHoras;
+  const SB = (window.JR_CONFIG || {}).supabase || {};
+  const H = { apikey: SB.anonKey, Authorization: 'Bearer ' + SB.anonKey, 'Content-Type': 'application/json' };
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const dataHora = (t) => new Date(t).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const diaBr = (d) => d ? d.split('-').reverse().join('/') : '—';
+  const msg = (tipo, html) => `<div class="msg ${tipo}">${html}</div>`;
+  let atual = null; // { nome, hash, lido }
+
+  async function sha256(buf) {
+    if (!(window.crypto && crypto.subtle)) return '';
+    const h = await crypto.subtle.digest('SHA-256', buf);
+    return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function abrir(file) {
+    $('erro').innerHTML = ''; $('resultado').innerHTML = '';
+    $('conferir').classList.add('esc'); atual = null;
+    if (!file) return;
+    if (!/\.xlsx?$/i.test(file.name)) { $('erro').innerHTML = msg('er', 'Envie o arquivo do Excel (.xlsx) do relatório Saldo de Horas.'); return; }
+    try {
+      const buf = await file.arrayBuffer();
+      const lido = BH.lerPlanilha(XLSX, new Uint8Array(buf));
+      atual = { nome: file.name, hash: await sha256(buf), lido };
+      mostrar();
+    } catch (e) {
+      $('erro').innerHTML = msg('er', `<b>Este arquivo não pode ser enviado.</b><br>${esc(e.message || e)}`);
+    }
+  }
+
+  function mostrar() {
+    const { lido } = atual;
+    const m = BH.montar(lido.saldos, lido.he);
+    const dias = [...new Set(lido.he.map((x) => x.dia))].sort();
+    const c = lido.competencia;
+    $('kpis').innerHTML = [
+      ['Competência', `${lido.periodoTexto}`, `${diaBr(c.ini)} a ${diaBr(c.fim)}`],
+      ['Colaboradores no banco', lido.saldos.length, `${m.pessoas.length} da operação`],
+      ['Dias com hora extra', dias.length, dias.length ? `${diaBr(dias[0])} a ${diaBr(dias[dias.length - 1])}` : 'sem a aba HORAS EXTRAS'],
+      ['Arquivo', esc(atual.nome), ''],
+    ].map(([t, v, s]) => `<div class="kpi"><small>${t}</small><b>${v}</b>${s ? `<small>${s}</small>` : ''}</div>`).join('');
+    $('avisos').innerHTML = lido.avisos.length ? msg('av', `<b>Atenção</b><ul>${lido.avisos.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>`) : '';
+    $('tabSetores').innerHTML = `<thead><tr><th>Setor (operação)</th><th class="n">Pessoas</th><th class="n">Banco +</th><th class="n">HE 55%</th><th class="n">HE 100%</th></tr></thead><tbody>${
+      m.setores.map((s) => `<tr><td>${esc(s.rotulo)}</td><td class="n">${s.pessoas}</td><td class="n">${BH.hhmm(s.bancoPos)}</td><td class="n">${BH.hhmm(s.he55)}</td><td class="n">${BH.hhmm(s.he100)}</td></tr>`).join('')}</tbody>`;
+    $('enviar').disabled = false;
+    $('conferir').classList.remove('esc');
+    $('conferir').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function enviar() {
+    if (!atual) return;
+    $('enviar').disabled = true; $('resultado').innerHTML = msg('av', 'Enviando…');
+    const { lido } = atual;
+    try {
+      const r = await fetch(`${SB.url}/rest/v1/rpc/bh_receber_envio`, { method: 'POST', headers: H,
+        body: JSON.stringify({ p: { periodo: lido.periodo, arquivo: atual.nome, hash: atual.hash, saldos: lido.saldos, he: lido.he } }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.message || `Erro ${r.status}`);
+      $('resultado').innerHTML = msg('ok', `<b>✓ Recebido.</b> Competência ${esc(lido.periodoTexto)}, ${j.pessoas} colaboradores e ${j.he} lançamentos de hora extra.${
+        j.substituidos ? ` O envio anterior de hoje foi substituído por este (continua registrado).` : ''}`);
+      atual = null;
+      $('arquivo').value = '';
+      historico();
+    } catch (e) {
+      $('enviar').disabled = false;
+      $('resultado').innerHTML = msg('er', `<b>Não foi possível enviar.</b> ${esc(e.message || e)}<br>Tente de novo; se continuar, avise a Logística.`);
+    }
+  }
+
+  async function historico() {
+    try {
+      const r = await fetch(`${SB.url}/rest/v1/bh_envios?select=periodo,recebido_em,arquivo,qtd_pessoas,qtd_he,substituido&order=recebido_em.desc&limit=30`, { headers: H });
+      if (!r.ok) throw new Error(r.status);
+      const l = await r.json();
+      $('historico').innerHTML = l.length ? `<thead><tr><th>Recebido em</th><th>Competência</th><th>Arquivo</th><th class="n">Pessoas</th><th class="n">HE</th><th></th></tr></thead><tbody>${
+        l.map((e) => `<tr><td>${dataHora(e.recebido_em)}</td><td>${e.periodo.slice(5)}/${e.periodo.slice(0, 4)}</td><td>${esc(e.arquivo || '—')}</td><td class="n">${e.qtd_pessoas}</td><td class="n">${e.qtd_he}</td><td>${
+          e.substituido ? '<span class="tag s">substituído</span>' : '<span class="tag v">vale</span>'}</td></tr>`).join('')}</tbody>` : '<tr><td>Nenhum envio ainda.</td></tr>';
+    } catch (e) {
+      $('historico').innerHTML = '<tr><td>Não foi possível ler o histórico agora.</td></tr>';
+    }
+  }
+
+  const drop = $('drop');
+  $('arquivo').addEventListener('change', (e) => abrir(e.target.files[0]));
+  ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('on'); }));
+  ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('on'); }));
+  drop.addEventListener('drop', (e) => abrir(e.dataTransfer.files[0]));
+  $('enviar').addEventListener('click', enviar);
+  $('cancelar').addEventListener('click', () => { atual = null; $('arquivo').value = ''; $('conferir').classList.add('esc'); $('resultado').innerHTML = ''; });
+  if (!BH || !window.XLSX || !SB.url) $('erro').innerHTML = msg('er', 'A página não carregou por completo. Atualize (F5).');
+  historico();
+})();
+</script>
+</body>
+</html>

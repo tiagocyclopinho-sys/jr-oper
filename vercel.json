@@ -2,6 +2,8 @@
   "version": 2,
   "rewrites": [
     { "source": "/", "destination": "/index.html" },
+    { "source": "/banco-horas", "destination": "/banco-horas/index.html" },
+    { "source": "/banco-horas/", "destination": "/banco-horas/index.html" },
     { "source": "/(.*)", "destination": "/$1" }
   ],
   "headers": [
