@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 78).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 79).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -310,6 +310,14 @@ partir do branch `main` do GitHub.
   separa por setor e deixa fora PASSEIO, UTILITARIO, CARRETA e CAVALO.
 - Migration 65 gravou os retornos pelo histórico; quem organiza as matrizes é o
   Luizinho. Não rodar de novo: pisa nos ajustes dele.
+- Previsão de largada (7.4.0, migration 78 APLICADA em 16/11): `largada_dias` (0 no dia,
+  -1 véspera) e `largada_hora` na matriz; `previsao_largada` na linha. Decisões do Tiago:
+  linha da matriz usa SEMPRE a da matriz (`escLargadaDaLinha`); viagem avulsa (à mão ou
+  nova pelo Fusion) informa a sua. A largada NUNCA vai para as imagens dos grupos (prestador);
+  sai só na Via da portaria do Fechamento (`escViaPortaria`): rotas com carga + transbordos
+  na mesma lista, da largada mais cedo para a mais tarde, formato "16/11/2026 - 15:00",
+  sem peso/valor/entregas, coluna "Saída real / visto". Aviso automático de quem não saiu
+  fica para quando houver API do WhatsApp.
 - SQL que mexe em escala_* (ou qualquer tabela com a guarda de carimbo):
   `atualizado_em = (now() AT TIME ZONE 'America/Sao_Paulo')`, NUNCA `now()`
   puro. O app grava hora de Brasília; um carimbo em UTC fica 3 h no futuro e
