@@ -121,6 +121,53 @@ function escPrevisaoBr(ts) {
   return `${escDataBr(d)} ${String(h || '').slice(0, 5)}`.trim();
 }
 
+// PREVISÃO DE LARGADA (7.4.0, migration 78). Sai só na Via da portaria, nunca
+// nas imagens dos grupos: prestador não tem horário a cumprir, mas a portaria
+// precisa saber quem deveria ter saído. A matriz guarda a hora e se a saída é
+// no dia da escala (0) ou na véspera (-1, rota longa que sai à tarde do dia
+// anterior). Linha que veio da matriz usa SEMPRE a da matriz; viagem avulsa
+// (incluída à mão ou nova pelo Fusion) informa a sua em previsao_largada.
+function escLargadaDaMatriz(m, dataIso) {
+  if (!m || !/^\d{1,2}:\d{2}$/.test(String(m.largada_hora || ''))) return null;
+  return `${somaDiasIso(dataIso, Number(m.largada_dias) === -1 ? -1 : 0)}T${String(m.largada_hora).padStart(5, '0')}`;
+}
+
+function escMatrizDaLinha(l) {
+  if (!l || !l.matriz_id) return null;
+  return (window._escala.matrizes || []).find(m => String(m.id) === String(l.matriz_id)) || null;
+}
+
+function escLargadaDaLinha(l) {
+  const m = escMatrizDaLinha(l);
+  const propria = String(l.previsao_largada || '').replace(' ', 'T').slice(0, 16) || null;
+  return m ? (escLargadaDaMatriz(m, l.data_escala) || propria) : propria;
+}
+
+// "16/11/2026 - 15:00"
+function escLargadaBr(ts) {
+  if (!ts) return '';
+  const [d, h] = String(ts).replace(' ', 'T').split('T');
+  return `${escDataBr(d)} - ${String(h || '').slice(0, 5)}`;
+}
+
+// Célula de largada da Convocação e do Fechamento: da matriz, só leitura;
+// avulsa, campo obrigatório (vermelho enquanto vazio).
+function escLargadaCelula(l, prefixo) {
+  const lg = escLargadaDaLinha(l);
+  if (l.matriz_id && escMatrizDaLinha(l)) {
+    return lg
+      ? `<span class="text-slate-200 whitespace-nowrap" title="Vem da matriz. Para mudar, ajuste a matriz do dia.">${escEsc(escLargadaBr(lg))}</span>`
+      : `<span class="text-[10px] text-amber-300" title="Informe a largada na matriz do dia">matriz sem horário</span>`;
+  }
+  return `<input id="${prefixo}-${l.id}-previsao_largada" type="datetime-local" class="${ESC_INPUT} ${lg ? '' : '!border-red-500'}" value="${escEsc(lg || '')}" onchange="escLinhaCampo('${l.id}','previsao_largada',this.value)">
+    ${lg ? '' : '<div class="text-[10px] text-red-300 mt-0.5">viagem avulsa: informe a largada</div>'}`;
+}
+
+// Viagens fora da matriz ainda sem a largada prevista.
+function escAvulsasSemLargada(linhas) {
+  return linhas.filter(l => !escMatrizDaLinha(l) && !escLargadaDaLinha(l));
+}
+
 function escUsuario() {
   return (typeof db !== 'undefined' && db.currentUser && db.currentUser.nome) ? db.currentUser.nome : 'SISTEMA';
 }
@@ -345,17 +392,18 @@ function escTelaMatrizes() {
     return `
       <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
         <div class="flex items-center justify-between px-3 py-2 ${escCorSetor(setor)} border-b border-slate-800">
-          <span class="text-xs font-black text-white">${escTituloSetor(setor)} <span class="text-slate-400 font-normal">— ${ls.length} ${tr ? 'veículo(s)' : 'rota(s)'}</span></span>
+          <span class="text-xs font-black text-white">${escTituloSetor(setor)} <span class="text-slate-400 font-normal">— ${ls.length} ${tr ? 'veículo(s)' : 'rota(s)'}</span>${ls.filter(m => !m.largada_hora).length ? ` <span class="text-amber-300 font-normal">· ${ls.filter(m => !m.largada_hora).length} sem largada</span>` : ''}</span>
           <button onclick="escMatrizNova('${setor}')" class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold px-2.5 py-1 rounded-lg text-[11px]">＋ Incluir ${tr ? 'transbordo' : 'rota'}</button>
         </div>
         ${tr ? `<p class="px-3 pt-2 text-[11px] text-slate-400">Só veículo NOSSO que leva carga do CD até o cross-docking (Palmas, Marabá…). Terceiro não entra: fica só a observação, como antes. Cada rota escolhe o seu transbordo na coluna "Transbordo".</p>` : ''}
         <div class="overflow-x-auto">
-          <table class="w-full text-xs min-w-[1300px]">
+          <table class="w-full text-xs min-w-[1460px]">
             <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase">
               <tr>
                 <th class="p-1.5 w-8">#</th><th class="p-1.5 text-left">${tr ? 'Destino (cross-docking)' : 'Rota - Destino'}</th><th class="p-1.5 text-left w-24">Placa</th>
                 <th class="p-1.5 text-left">Motorista</th><th class="p-1.5 text-left">Ajudante</th><th class="p-1.5 text-left">2º Ajudante</th><th class="p-1.5 text-left">${tr ? 'Leva as rotas' : 'Observação'}</th>
                 ${tr ? '' : '<th class="p-1.5 text-left w-40">Transbordo</th>'}
+                <th class="p-1.5 w-40" title="Previsão de largada: hora em que a viagem deve sair, no dia da escala ou na véspera. Vai só para a Via da portaria, não para as imagens dos grupos.">Largada</th>
                 <th class="p-1.5 w-32" title="Previsão de chegada: saída + N dias, na hora indicada">Retorno</th><th class="p-1.5 w-20"></th>
               </tr>
             </thead>
@@ -373,6 +421,15 @@ function escTelaMatrizes() {
                   <td class="p-1">${escSelectTransbordo(m, linhas, `escMatrizCampo('${m.id}','transbordo_id',this.value)`, `escm-${m.id}-transbordo_id`)}</td>`}
                   <td class="p-1">
                     <div class="flex items-center gap-1">
+                      <select id="escm-${m.id}-largada_dias" class="${ESC_INPUT} !w-20" onchange="escMatrizCampo('${m.id}','largada_dias',this.value)">
+                        <option value="0" ${Number(m.largada_dias) === -1 ? '' : 'selected'}>No dia</option>
+                        <option value="-1" ${Number(m.largada_dias) === -1 ? 'selected' : ''}>Véspera</option>
+                      </select>
+                      <input id="escm-${m.id}-largada_hora" type="time" class="${ESC_INPUT} ${m.largada_hora ? '' : '!border-amber-500'}" value="${escEsc(m.largada_hora || '')}" onchange="escMatrizCampo('${m.id}','largada_hora',this.value)">
+                    </div>
+                  </td>
+                  <td class="p-1">
+                    <div class="flex items-center gap-1">
                       <select id="escm-${m.id}-retorno_dias" class="${ESC_INPUT} !w-16" onchange="escMatrizCampo('${m.id}','retorno_dias',this.value)">
                         ${[0, 1, 2, 3, 4, 5, 6].map(n => `<option value="${n}" ${Number(m.retorno_dias) === n ? 'selected' : ''}>+${n}d</option>`).join('')}
                       </select>
@@ -384,7 +441,7 @@ function escTelaMatrizes() {
                     <button onclick="escMatrizMover('${m.id}',1)" class="text-slate-400 hover:text-white px-1" title="Descer">▼</button>
                     <button onclick="escMatrizExcluir('${m.id}')" class="text-red-400 hover:text-red-300 px-1" title="Retirar da matriz">🗑</button>
                   </td>
-                </tr>`).join('') : `<tr><td colspan="10" class="p-4 text-center text-slate-500">${tr ? 'Nenhum transbordo com veículo próprio nesta matriz.' : `Nenhuma rota ${setor === 'FRIO' ? 'no frio' : 'no seco'} nesta matriz.`}</td></tr>`}
+                </tr>`).join('') : `<tr><td colspan="11" class="p-4 text-center text-slate-500">${tr ? 'Nenhum transbordo com veículo próprio nesta matriz.' : `Nenhuma rota ${setor === 'FRIO' ? 'no frio' : 'no seco'} nesta matriz.`}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -466,6 +523,8 @@ async function escMatrizCampo(id, campo, valor) {
   if (!m) return;
   if (campo === 'retorno_dias') m[campo] = Number(valor) || 0;
   else if (campo === 'retorno_hora') m[campo] = valor || '23:59';
+  else if (campo === 'largada_dias') m[campo] = Number(valor) === -1 ? -1 : 0;
+  else if (campo === 'largada_hora') m[campo] = valor || null;
   else if (campo === 'transbordo_id') m[campo] = valor ? Number(valor) : null;
   else m[campo] = String(valor || '').toUpperCase().trim();
   escCarimbar(m, false);
@@ -482,7 +541,7 @@ async function escMatrizNova(setor) {
     id: db.gerarIdUnico(), dia_semana: st.diaMatriz, setor,
     ordem: doDia.reduce((mx, m) => Math.max(mx, Number(m.ordem) || 0), 0) + 1,
     rota: setor === 'TRANSBORDO' ? 'TRANSBORDO PALMAS' : 'NOVA ROTA', placa: '', motorista: '', ajudante: '', observacao: '',
-    retorno_dias: 0, retorno_hora: '23:59', is_deleted: false
+    retorno_dias: 0, retorno_hora: '23:59', largada_dias: 0, largada_hora: null, is_deleted: false
   }, true);
   st.matrizes.push(nova);
   renderApp();
@@ -757,12 +816,13 @@ function escTelaConvocacao() {
         </div>
         ${tr ? `<p class="px-3 pt-2 text-[11px] text-slate-400">Só veículo NOSSO. Terceiro: deixe a observação na rota, como antes. A observação da imagem ("NOME - PLACA") sai sozinha nas rotas que escolherem este transbordo.</p>` : ''}
         <div class="overflow-x-auto">
-          <table class="w-full text-xs min-w-[940px]">
+          <table class="w-full text-xs min-w-[1100px]">
             <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase">
               <tr>
                 <th class="p-1.5 w-8">#</th><th class="p-1.5 text-left">${tr ? 'Destino (cross-docking)' : 'Rota - Destino'}</th><th class="p-1.5 text-left w-28">Placa</th>
                 <th class="p-1.5 text-left">Motorista</th><th class="p-1.5 text-left">Ajudante</th><th class="p-1.5 text-left">2º Ajudante</th><th class="p-1.5 text-left">${tr ? 'Leva as rotas' : 'Observação'}</th>
                 ${tr ? '' : '<th class="p-1.5 text-left w-28">Transbordo</th>'}
+                <th class="p-1.5 text-left w-40" title="Vem da matriz. Viagem avulsa informa aqui. Não sai na imagem do grupo, só na Via da portaria.">Largada prevista</th>
                 <th class="p-1.5 w-16"></th>
               </tr>
             </thead>
@@ -785,14 +845,15 @@ function escTelaConvocacao() {
                   <td class="p-1"><input id="escl-${l.id}-observacao" class="${ESC_INPUT}" value="${escEsc(l.observacao)}" placeholder="${escEsc(escRotuloTransbordo(escTransbordoDe(l, linhas)))}" onchange="escLinhaCampo('${l.id}','observacao',this.value)">
                     ${escRotuloTransbordo(escTransbordoDe(l, linhas)) && String(l.observacao || '').trim() ? `<div class="text-[10px] text-sky-300 mt-0.5">na imagem: ${escEsc(escRotuloTransbordo(escTransbordoDe(l, linhas)))}</div>` : ''}</td>
                   <td class="p-1">${escSelectTransbordo(l, linhas, `escLinhaCampo('${l.id}','transbordo_id',this.value)`, `escl-${l.id}-transbordo_id`)}</td>`}
+                  <td class="p-1">${escLargadaCelula(l, 'escl')}</td>
                   <td class="p-1 whitespace-nowrap text-center">
                     <button onclick="escLinhaMover('${l.id}',-1)" class="text-slate-400 hover:text-white px-0.5" title="Subir">▲</button>
                     <button onclick="escLinhaMover('${l.id}',1)" class="text-slate-400 hover:text-white px-0.5" title="Descer">▼</button>
                     <button onclick="escLinhaExcluir('${l.id}')" class="text-red-400 hover:text-red-300 px-0.5" title="Retirar viagem">🗑</button>
                   </td>
                 </tr>
-                ${av.length ? `<tr class="bg-amber-950/20"><td></td><td colspan="8" class="px-2 pb-2 text-[11px] text-amber-200 space-y-0.5">${av.map(t => `<div>${escEsc(t)}</div>`).join('')}</td></tr>` : ''}`;
-              }).join('') : `<tr><td colspan="9" class="p-4 text-center text-slate-500">${tr ? 'Nenhum transbordo com veículo próprio nesta data.' : `Nenhuma viagem ${setor === 'FRIO' ? 'no frio' : 'no seco'}.`}</td></tr>`}
+                ${av.length ? `<tr class="bg-amber-950/20"><td></td><td colspan="9" class="px-2 pb-2 text-[11px] text-amber-200 space-y-0.5">${av.map(t => `<div>${escEsc(t)}</div>`).join('')}</td></tr>` : ''}`;
+              }).join('') : `<tr><td colspan="10" class="p-4 text-center text-slate-500">${tr ? 'Nenhum transbordo com veículo próprio nesta data.' : `Nenhuma viagem ${setor === 'FRIO' ? 'no frio' : 'no seco'}.`}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -805,6 +866,7 @@ function escTelaConvocacao() {
       <div class="flex flex-wrap gap-2 text-[11px]">
         <span class="px-2 py-1 rounded-lg border ${totalAvisos ? 'border-amber-700 text-amber-300 bg-amber-950/40' : 'border-emerald-800 text-emerald-300 bg-emerald-950/40'}">${totalAvisos ? `⚠️ ${totalAvisos} viagem(ns) com aviso` : '✅ Sem avisos'}</span>
         ${trocasPendentes.length ? `<span class="px-2 py-1 rounded-lg border border-amber-700 text-amber-300 bg-amber-950/40">🔄 ${trocasPendentes.length} troca(s) de veículo sem registro</span>` : ''}
+        ${escAvulsasSemLargada(linhas).length ? `<span class="px-2 py-1 rounded-lg border border-red-800 text-red-300 bg-red-950/40">🕒 ${escAvulsasSemLargada(linhas).length} viagem(ns) avulsa(s) sem largada prevista</span>` : ''}
       </div>
     </div>
     <p class="text-[11px] text-slate-500">Avisos não travam nada: a pessoa é procurada como motorista e como ajudante nesta escala, nas viagens abertas do Controle de Viagens (previsão calculada pela escala ou pela matriz da rota) e nas folgas. A placa é procurada também nas retenções e nos veículos parados em rota.</p>
@@ -819,6 +881,7 @@ function escLinhaDaMatriz(m, data) {
     rota: m.rota, placa: m.placa || '', placa_matriz: m.placa || '',
     motorista: m.motorista || '', ajudante: m.ajudante || '', ajudante_2: m.ajudante_2 || '', observacao: m.observacao || '',
     previsao_retorno: escPrevisao(data, m.retorno_dias, m.retorno_hora),
+    previsao_largada: escLargadaDaMatriz(m, data),
     matriz_id: m.id, transbordo_id: null, is_deleted: false
   }, true);
 }
@@ -936,7 +999,7 @@ async function escLinhaNova(setor) {
     id: db.gerarIdUnico(), data_escala: st.data, setor,
     ordem: ls.filter(l => l.setor === setor).reduce((mx, l) => Math.max(mx, Number(l.ordem) || 0), 0) + 1,
     rota: setor === 'TRANSBORDO' ? 'TRANSBORDO PALMAS' : 'NOVA ROTA', placa: '', placa_matriz: '', motorista: '', ajudante: '', observacao: '',
-    previsao_retorno: escPrevisao(st.data, 0, '23:59'), is_deleted: false
+    previsao_retorno: escPrevisao(st.data, 0, '23:59'), previsao_largada: null, is_deleted: false
   }, true);
   ls.push(nova);
   renderApp();
@@ -961,6 +1024,7 @@ async function escLinhaCampo(id, campo, valor) {
     return;
   }
   if (campo === 'previsao_retorno') l[campo] = valor || null;
+  else if (campo === 'previsao_largada') l[campo] = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(valor || '')) ? String(valor).slice(0, 16) : null;
   else if (campo === 'peso' || campo === 'valor') l[campo] = escNumero(valor);
   else if (campo === 'qt_entregas') { const n = escNumero(valor); l[campo] = n === null ? null : Math.round(n); }
   else if (campo === 'carga') l[campo] = escNormalizarCarga(valor);
@@ -1424,7 +1488,7 @@ async function escAplicarFusion() {
         id: db.gerarIdUnico(), data_escala: st.data, setor,
         ordem: ls.filter(x => x.setor === setor).reduce((mx, x) => Math.max(mx, Number(x.ordem) || 0), 0) + 1,
         rota: f.destino || 'SEM DESTINO', placa: f.placa, placa_matriz: '', motorista: f.motorista, ajudante: f.ajudante, ajudante_2: f.ajudante_2,
-        observacao: '', previsao_retorno: escPrevisao(st.data, 0, '23:59'), is_deleted: false
+        observacao: '', previsao_retorno: escPrevisao(st.data, 0, '23:59'), previsao_largada: null, is_deleted: false
       }, true);
       ls.push(l);
     } else {
@@ -1464,6 +1528,7 @@ async function escAplicarFusion() {
     + (transbordos.length ? `\n\n🔀 ${transbordos.length} transbordo(s) com viagem no Controle de Viagens.` : '')
     + (semTransbordo.length ? `\n\nℹ️ Cargas por cross-docking sem transbordo próprio ligado (terceiro, ou escolha o transbordo na Convocação): ${semTransbordo.join(', ')}.` : '')
     + (trocas ? `\n\n🔄 ${trocas} placa(s) diferente(s) da matriz: registre a troca na Convocação Escala ("registrar troca").` : '')
+    + (escAvulsasSemLargada(ls).length ? `\n\n🕒 ${escAvulsasSemLargada(ls).length} viagem(ns) fora da matriz sem largada prevista: informe na coluna "Largada prevista" (vai para a Via da portaria).` : '')
     + (avisos.length ? '\n\n' + avisos.join('\n') : ''));
 }
 window.escAplicarFusion = escAplicarFusion;
@@ -1482,7 +1547,8 @@ function escTelaFechamento() {
   const linhas = escLinhasDaData();
   const cab = escCabecalho('✅', 'Fechamento', 'Importe as roteirizações do Fusion (ou digite carga, peso, valor e entregas). Com a carga, a linha vira viagem no Controle de Viagens.',
     (linhas.length ? `<button onclick="escImportarFusion()" class="bg-sky-700 hover:bg-sky-600 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">📥 Importar Fusion</button>` : '')
-    + (linhas.length ? `<button onclick="escGerarImagem('fechamento')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">🖼️ Imagem do fechamento</button>` : ''));
+    + (linhas.length ? `<button onclick="escGerarImagem('fechamento')" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">🖼️ Imagem do fechamento</button>` : '')
+    + (linhas.length ? `<button onclick="escViaPortaria()" title="Folha para a portaria com a previsão de largada de cada viagem, da mais cedo para a mais tarde. Não vai para o grupo." class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow">🚧 Via da portaria</button>` : ''));
   if (!st.matrizes || !st.linhas[st.data]) return cab + escSeletorData() + escCarregandoHtml();
   if (!linhas.length) {
     return `${cab}${escSeletorData()}
@@ -1506,7 +1572,7 @@ function escTelaFechamento() {
           <table class="w-full text-xs min-w-[1000px]">
             <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase">
               <tr><th class="p-1.5 w-8">#</th><th class="p-1.5 text-left w-48">Nº no Controle de Viagens</th><th class="p-1.5 text-left">Destino</th><th class="p-1.5 text-left">Placa</th>
-              <th class="p-1.5 text-left">Motorista</th><th class="p-1.5 text-left">Leva as rotas</th><th class="p-1.5 text-right w-28">Peso</th><th class="p-1.5 text-right w-32">Valor</th><th class="p-1.5 text-right w-20">Entregas</th><th class="p-1.5 w-20">Viagem</th></tr>
+              <th class="p-1.5 text-left">Motorista</th><th class="p-1.5 text-left">Leva as rotas</th><th class="p-1.5 text-left w-40">Largada prevista</th><th class="p-1.5 text-right w-28">Peso</th><th class="p-1.5 text-right w-32">Valor</th><th class="p-1.5 text-right w-20">Entregas</th><th class="p-1.5 w-20">Viagem</th></tr>
             </thead>
             <tbody>
               ${ts.map((t, i) => {
@@ -1518,6 +1584,7 @@ function escTelaFechamento() {
                   <td class="p-1.5">${escEsc(t.placa)}</td>
                   <td class="p-1.5">${escEsc(t.motorista)}</td>
                   <td class="p-1.5">${escChipsRotas(t, linhas)}</td>
+                  <td class="p-1">${escLargadaCelula(t, 'escft')}</td>
                   <td class="p-1.5 text-right">${escFmt(s.peso)}</td>
                   <td class="p-1.5 text-right">R$ ${escFmt(s.valor)}</td>
                   <td class="p-1.5 text-right">${s.entregas}</td>
@@ -1540,7 +1607,7 @@ function escTelaFechamento() {
           <table class="w-full text-xs min-w-[1000px]">
             <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase">
               <tr><th class="p-1.5 w-8">#</th><th class="p-1.5 text-left w-36">Carreg</th><th class="p-1.5 text-left">Rota - Destino</th><th class="p-1.5 text-left">Placa</th>
-              <th class="p-1.5 text-left">Motorista</th><th class="p-1.5 text-left">Ajudante</th><th class="p-1.5 w-28">Peso</th><th class="p-1.5 w-32">Valor</th><th class="p-1.5 w-20">Qt Entregas</th><th class="p-1.5 w-20">Viagem</th></tr>
+              <th class="p-1.5 text-left">Motorista</th><th class="p-1.5 text-left">Ajudante</th><th class="p-1.5 text-left w-40">Largada prevista</th><th class="p-1.5 w-28">Peso</th><th class="p-1.5 w-32">Valor</th><th class="p-1.5 w-20">Qt Entregas</th><th class="p-1.5 w-20">Viagem</th></tr>
             </thead>
             <tbody>
               ${ls.map((l, i) => `
@@ -1551,13 +1618,14 @@ function escTelaFechamento() {
                   <td class="p-1.5 text-slate-300">${escEsc(l.placa)}${escEscaladoHtml(l, 'placa_escalada')}</td>
                   <td class="p-1.5 text-slate-300">${escEsc(l.motorista)}${escEscaladoHtml(l, 'motorista_escalado')}</td>
                   <td class="p-1.5 text-slate-300">${escEsc(escAjudantesTexto(l))}${escEscaladoHtml(l, 'ajudante_escalado')}${escEscaladoHtml(l, 'ajudante_2_escalado')}</td>
+                  <td class="p-1">${escLargadaCelula(l, 'escf')}</td>
                   <td class="p-1"><input id="escf-${l.id}-peso" inputmode="decimal" class="${ESC_INPUT} text-right" value="${escEsc(escFmt(l.peso))}" onchange="escLinhaCampo('${l.id}','peso',this.value)"></td>
                   <td class="p-1"><input id="escf-${l.id}-valor" inputmode="decimal" class="${ESC_INPUT} text-right" value="${escEsc(escFmt(l.valor))}" onchange="escLinhaCampo('${l.id}','valor',this.value)"></td>
                   <td class="p-1"><input id="escf-${l.id}-qt_entregas" inputmode="numeric" class="${ESC_INPUT} text-right" value="${escEsc(l.qt_entregas === null || l.qt_entregas === undefined ? '' : l.qt_entregas)}" onchange="escLinhaCampo('${l.id}','qt_entregas',this.value)"></td>
                   <td class="p-1.5 text-center text-[10px]">${escSeloViagem(l, 'Não saiu neste dia: fica fora da imagem do fechamento')}</td>
                 </tr>`).join('')}
               <tr class="border-t-2 border-slate-700 bg-slate-950/60 font-bold">
-                <td colspan="6" class="p-1.5 text-right text-slate-400">Total ${setor.toLowerCase()}</td>
+                <td colspan="7" class="p-1.5 text-right text-slate-400">Total ${setor.toLowerCase()}</td>
                 <td class="p-1.5 text-right text-white">${escFmt(t.peso)}</td><td class="p-1.5 text-right text-white">R$ ${escFmt(t.valor)}</td><td class="p-1.5 text-right text-white">${t.entregas}</td><td></td>
               </tr>
             </tbody>
@@ -1568,7 +1636,10 @@ function escTelaFechamento() {
   return `${cab}
     <div class="flex flex-wrap items-center justify-between gap-2">
       ${escSeletorData()}
-      <span class="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-300">${comCarga} de ${rotas.length} com carga informada · as sem carga não entram na imagem do fechamento</span>
+      <div class="flex flex-wrap gap-2 text-[11px]">
+        ${escAvulsasSemLargada(linhas).length ? `<span class="px-2 py-1 rounded-lg border border-red-800 text-red-300 bg-red-950/40">🕒 ${escAvulsasSemLargada(linhas).length} viagem(ns) avulsa(s) sem largada prevista</span>` : ''}
+        <span class="px-2 py-1 rounded-lg border border-slate-700 text-slate-300">${comCarga} de ${rotas.length} com carga informada · as sem carga não entram na imagem do fechamento</span>
+      </div>
     </div>
     ${bloco('FRIO')}
     ${bloco('SECO')}
@@ -1807,6 +1878,115 @@ function escImagemImprimir() {
   img.src = canvas.toDataURL('image/png');
 }
 window.escImagemImprimir = escImagemImprimir;
+
+// =============================================================================
+// VIA DA PORTARIA (7.4.0, migration 78)
+// =============================================================================
+// Folha impressa para a portaria com a previsão de largada de cada viagem do
+// fechamento, da mais cedo para a mais tarde, para cobrar ou avisar quem não
+// saiu (15/11: um veículo não saiu e só se soube no dia seguinte). Entram as
+// rotas com carga e os transbordos que viraram viagem, na mesma lista, como no
+// Controle de Viagens. Sem peso, valor e entregas. NÃO vai para os grupos.
+function escLinhasPortaria() {
+  const dia = escLinhasDaData();
+  const saiu = l => l.setor === 'TRANSBORDO'
+    ? escRotasDoTransbordo(l).some(r => String(r.carga || '').trim())
+    : !!String(l.carga || '').trim();
+  return dia.filter(saiu)
+    .map((l, i) => ({ l, i, largada: escLargadaDaLinha(l) }))
+    .sort((a, b) => ((a.largada ? 0 : 1) - (b.largada ? 0 : 1))
+      || String(a.largada || '').localeCompare(String(b.largada || '')) || (a.i - b.i));
+}
+
+function escHtmlPortaria() {
+  const st = window._escala;
+  const itens = escLinhasPortaria();
+  const logo = new URL('./public/logo_jr_verde.png', location.href).href;
+  const semLargada = itens.filter(x => !x.largada).length;
+  const linhas = itens.map((x, n) => {
+    const l = x.l;
+    const tr = l.setor === 'TRANSBORDO';
+    return `<tr>
+      <td class="c">${n + 1}</td>
+      <td class="lg ${x.largada ? '' : 'falta'}">${x.largada ? escEsc(escLargadaBr(x.largada)) : 'NÃO INFORMADA'}</td>
+      <td class="c">${escEsc(l.carga || '')}</td>
+      <td>${escEsc(l.rota)}${tr ? '' : ` <span class="setor">${escEsc(l.setor)}</span>`}</td>
+      <td class="c">${escEsc(l.placa)}</td>
+      <td>${escEsc(l.motorista)}</td>
+      <td>${escEsc(escAjudantesTexto(l))}</td>
+      <td></td>
+    </tr>`;
+  }).join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>PORTARIA ${escEsc(escDataBr(st.data).replace(/\//g, '.'))}</title>
+    <style>
+      @page{size:A4 landscape;margin:10mm}
+      html,body{margin:0;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif}
+      body{padding:6px}
+      .cab{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:3px solid #25541c;padding-bottom:6px;margin-bottom:8px}
+      .cab img{height:42px}
+      h1{font-size:20px;margin:0;color:#1f5fa8;text-align:center;flex:1}
+      .data{font-size:13px;font-weight:bold;text-align:right;white-space:nowrap}
+      .sub{font-size:11px;color:#334155;margin:0 0 8px}
+      .alerta{font-size:12px;font-weight:bold;color:#b91c1c;margin:0 0 8px}
+      table{width:100%;border-collapse:collapse;font-size:12px}
+      thead{display:table-header-group}
+      tr{page-break-inside:avoid}
+      th{background:#b6e3a6;border:1px solid #333;padding:5px 4px;font-size:11px;text-transform:uppercase}
+      td{border:1px solid #333;padding:7px 5px}
+      tbody tr:nth-child(even) td{background:#f2f2f2}
+      .c{text-align:center}
+      .lg{font-weight:bold;white-space:nowrap;text-align:center}
+      .falta{color:#b91c1c}
+      .setor{font-size:9px;color:#555}
+      .rod{margin-top:10px;font-size:11px}
+      .ass{margin-top:34px;display:flex;gap:60px;font-size:11px}
+      .ass div{flex:1;border-top:1px solid #333;padding-top:4px;text-align:center}
+    </style></head><body>
+    <div class="cab"><img src="${escEsc(logo)}" alt=""><h1>CONTROLE DE LARGADA — PORTARIA</h1>
+      <div class="data">${escEsc(escDataBr(st.data))}<br>${escEsc(ESC_DIAS[escDiaSemana(st.data)] || '')}</div></div>
+    <p class="sub">${itens.length} viagem(ns) do fechamento, da largada mais cedo para a mais tarde · impresso em ${escEsc(escPrevisaoBr(agoraIsoBrasilia()))} por ${escEsc(escUsuario())}</p>
+    ${semLargada ? `<p class="alerta">⚠ ${semLargada} viagem(ns) sem largada prevista: confirmar o horário com a Logística.</p>` : ''}
+    <table>
+      <thead><tr><th style="width:30px">Nº</th><th style="width:130px">Largada prevista</th><th style="width:120px">Carga</th><th>Rota - Destino</th><th style="width:80px">Placa</th><th>Motorista</th><th>Ajudante</th><th style="width:150px">Saída real / visto</th></tr></thead>
+      <tbody>${linhas || '<tr><td colspan="8" class="c">Nenhuma viagem com carga neste fechamento.</td></tr>'}</tbody>
+    </table>
+    <p class="rod">Viagem que não sair até a largada prevista: avisar a Logística na hora.</p>
+    <div class="ass"><div>Portaria</div><div>Logística</div></div>
+  </body></html>`;
+}
+
+function escViaPortaria() {
+  const st = window._escala;
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+  const itens = escLinhasPortaria();
+  if (!itens.length) { alert('Nenhuma viagem com carga neste fechamento. A via da portaria lista só o que vai sair.'); return; }
+  const semLargada = itens.filter(x => !x.largada).length;
+  modal.innerHTML = `
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-4 max-w-5xl w-full shadow-2xl space-y-3 h-[92vh] flex flex-col">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-2">
+        <h3 class="font-bold text-white text-sm">🚧 Via da portaria — ${escEsc(escDataBr(st.data))}</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white text-sm">✕</button>
+      </div>
+      <p class="text-[11px] text-slate-400">Só para imprimir e entregar na portaria. Não copie para os grupos: a largada prevista não vai para os prestadores.</p>
+      ${semLargada ? `<p class="text-[11px] text-red-300 font-bold">🕒 ${semLargada} viagem(ns) sem largada prevista (saem como "NÃO INFORMADA"). Informe na matriz ou, se for avulsa, na coluna "Largada prevista".</p>` : ''}
+      <iframe id="esc-portaria-frame" class="bg-white rounded flex-1 w-full border-0"></iframe>
+      <div class="flex flex-wrap justify-end gap-2 text-xs">
+        <button onclick="escImprimirPortaria()" class="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-2 rounded-lg">🖨️ Imprimir</button>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+  document.getElementById('esc-portaria-frame').srcdoc = escHtmlPortaria();
+}
+window.escViaPortaria = escViaPortaria;
+
+function escImprimirPortaria() {
+  const f = document.getElementById('esc-portaria-frame');
+  if (!f || !f.contentWindow) return;
+  f.contentWindow.focus();
+  f.contentWindow.print();
+}
+window.escImprimirPortaria = escImprimirPortaria;
 
 // =============================================================================
 // FOLGAS (7.0.0, migration 64)
