@@ -1223,7 +1223,7 @@ function renderBlocoAusencias(nome, tipo, varDe, varAte, formVisivelVar) {
               registros.map(r => `<tr>
                 <td class="p-2">${formatarData(r.data)}</td>
                 <td class="p-2">${r.turno || '—'}</td>
-                <td class="p-2 text-amber-300 font-medium">${r.conduta || '—'}</td>
+                <td class="p-2 ${contaComoFalta(r) ? 'text-amber-300' : 'text-sky-300'} font-medium">${r.conduta || '—'}${contaComoFalta(r) ? '' : ' <span class="text-[9px] text-slate-500">(não conta como falta)</span>'}</td>
                 <td class="p-2 text-center"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${r.avisado==='SIM'?'bg-emerald-950 text-emerald-300':'bg-red-950 text-red-300'}">${r.avisado || '—'}</span></td>
                 <td class="p-2 text-center">${r.periodo || 'Integral'}</td>
                 <td class="p-2 text-center">${r.compensar || 'NÃO'}</td>
@@ -1622,7 +1622,8 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
     ['Viagens', viagens.length],
     ['Orientações', orientacoes.length],
     ['Atestados', atestados.length],
-    ['Faltas / Condutas', ausencias.length],
+    ['Faltas / Condutas', ausencias.filter(contaComoFalta).length],
+    ['Folgas concedidas', ausencias.filter(f => !contaComoFalta(f)).length],
     ['Folgas', folgas.length],
     ['Devoluções (erro motorista)', devsErro.length],
     ['Deduções', brl(totalDeducoes)],
@@ -1632,7 +1633,8 @@ function gerarRelatorioAcompanhamentoPdf(nome, tipo) {
   ] : [
     ['Orientações', orientacoes.length],
     ['Atestados', atestados.length],
-    ['Faltas / Condutas', ausencias.length],
+    ['Faltas / Condutas', ausencias.filter(contaComoFalta).length],
+    ['Folgas concedidas', ausencias.filter(f => !contaComoFalta(f)).length],
     ['Medidas Administrativas', medidas.length],
     ['Devoluções (erro carregamento)', devsCarreg.length]
   ];
@@ -6839,7 +6841,7 @@ function renderDashboardView() {
   const pctFusionIniciado = viagensIniciadas > 0 ? Math.round((totFusionIniciado / viagensIniciadas) * 100) : 0;
 
   // ===== NOVOS KPIs: CD =====
-  const totFaltasColab = faltasColabList.length;
+  const totFaltasColab = faltasColabList.filter(contaComoFalta).length;
 
   // ===== SLA CRÍTICO DE MANUTENÇÃO (4H / 8H) =====
   const retidosCriticos = retencoes.filter(r => calcularSlaManutencao(r).nivel === 'CRITICO');
@@ -7044,7 +7046,7 @@ function renderDashboardView() {
     if (sep && sep !== 'PENDENTE' && sep !== '—') contarPorChave(porColaboradorMap, `${sep} (Separador)`);
     if (conf && conf !== 'PENDENTE' && conf !== '—') contarPorChave(porColaboradorMap, `${conf} (Conferente)`);
   });
-  faltasColabList.forEach(f => { if (f && f.colaborador) contarPorChave(porColaboradorMap, `${f.colaborador} (Operacional CD)`); });
+  faltasColabList.filter(contaComoFalta).forEach(f => { if (f && f.colaborador) contarPorChave(porColaboradorMap, `${f.colaborador} (Operacional CD)`); });
   ocorrenciasCdList.forEach(o => { if (o && o.colaborador) contarPorChave(porColaboradorMap, `${o.colaborador} (Operacional CD)`); });
   const topColaboradoresArr = Object.entries(porColaboradorMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
@@ -7095,7 +7097,7 @@ function renderDashboardView() {
       if (sep && sep !== 'PENDENTE' && sep !== '—') pushItemRec(`${sep} (Separador)`, 'Colaborador CD', 'DEV_SAC', d, d.valor_reclamado);
       if (conf && conf !== 'PENDENTE' && conf !== '—') pushItemRec(`${conf} (Conferente)`, 'Colaborador CD', 'DEV_SAC', d, d.valor_reclamado);
     });
-    faltasColabList.forEach(f => {
+    faltasColabList.filter(contaComoFalta).forEach(f => {
       if (f && f.colaborador) pushItemRec(`${f.colaborador} (Operacional CD)`, 'Colaborador CD', 'CONDUTA_CD', f, 0);
     });
     ocorrenciasCdList.forEach(o => {
@@ -7436,7 +7438,7 @@ function renderDashboardView() {
           </div>
           <div class="bg-slate-950 border border-slate-800 p-3 rounded-xl">
             <div class="text-[10px] text-slate-400 font-bold uppercase">Ocorrências do CD</div>
-            <div class="text-xl font-black text-orange-400 mt-1">${ocorrenciasCdList.length + faltasColabList.length}</div>
+            <div class="text-xl font-black text-orange-400 mt-1">${ocorrenciasCdList.length + faltasColabList.filter(contaComoFalta).length}</div>
             <div class="text-[10px] text-slate-500 mt-0.5">Apontamentos internos</div>
           </div>
           <!-- NOVO: FALTAS COLABORADORES -->
@@ -25082,7 +25084,14 @@ function fecharModalResumo() {
   }
 }
 
-const CONDUTAS_RESUMO = ['FALTA INJUSTIFICADA', 'FALTA COM ATESTADO', 'FÉRIAS', 'SAÍDA ANTECIPADA', 'ATRASO NA CHEGADA'];
+const CONDUTAS_RESUMO = ['FALTA INJUSTIFICADA', 'FALTA COM ATESTADO', 'FÉRIAS', 'FOLGA CONCEDIDA', 'SAÍDA ANTECIPADA', 'ATRASO NA CHEGADA'];
+
+// 7.4.1 (pedido do Tiago, 16/11): FOLGA CONCEDIDA fica registrada no Resumo
+// Diário e no Acompanhamento de Funcionário, mas NÃO conta como falta em
+// nenhum total (Dashboard, Boletim, exportação, resumo do Acompanhamento).
+function contaComoFalta(f) {
+  return !!f && String(f.conduta || '').toUpperCase().trim() !== 'FOLGA CONCEDIDA';
+}
 
 function adicionarFaltaResumo(data, turno) {
   if (!turno) { alert('Selecione o turno antes de lançar uma falta.'); return; }
@@ -26189,7 +26198,7 @@ function imprimirBoletimGerencialExecutivo() {
 
   // KPIs CD
   const qtdOcorrenciasCd = ocorrenciasCdList.length;
-  const qtdFaltaColaborador = faltasColabList.length;
+  const qtdFaltaColaborador = faltasColabList.filter(contaComoFalta).length;
 
   // KPIs Expedição & SAC
   const totalDevValor = devs.reduce((acc, d) => acc + (parseFloat(d.valor_reclamado)||0), 0);
@@ -26978,7 +26987,7 @@ function getValorCampoRelatorio(row, modulo, campoId) {
     if (campoId === 'qtd_cortes') return Array.isArray(row.cortes) ? row.cortes.length : 0;
     if (campoId === 'valor_cortes') return Array.isArray(row.cortes) ? row.cortes.reduce((acc, cr) => acc + (parseFloat(cr.valor)||0), 0) : 0;
     if (campoId === 'qtd_ocorrencias_cd') return Array.isArray(row.ocorrencias) ? row.ocorrencias.length : 0;
-    if (campoId === 'qtd_faltas_colaborador') return Array.isArray(row.faltas_condutas) ? row.faltas_condutas.length : 0;
+    if (campoId === 'qtd_faltas_colaborador') return Array.isArray(row.faltas_condutas) ? row.faltas_condutas.filter(contaComoFalta).length : 0;
     if (campoId === 'observacoes_gerais') return row.observacoes || '';
     if (campoId.includes('data') || campoId.includes('criado') || campoId.includes('atualizado')) return formatarData(row[campoId], '');
     return row[campoId];
@@ -27321,7 +27330,7 @@ function renderBoletimGerencialView() {
 
   // KPIs CD
   const qtdOcorrenciasCd = ocorrenciasCdList.length;
-  const qtdFaltaColaborador = faltasColabList.length;
+  const qtdFaltaColaborador = faltasColabList.filter(contaComoFalta).length;
 
   // KPIs Expedição & SAC
   const totalDevValor = devs.reduce((acc, d) => acc + (parseFloat(d.valor_reclamado)||0), 0);
