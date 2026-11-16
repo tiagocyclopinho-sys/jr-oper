@@ -4038,7 +4038,10 @@ const NAV_GRUPOS = [
     itens: [
       { tab: 'boletim_gerencial', icon: '📊', label: 'Visão Executiva', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] },
       { tab: 'boletim_export_csv', icon: '📥', label: 'Exportação CSV', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] },
-      { tab: 'boletim_pdfs', icon: '📄', label: 'Central de PDFs', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] }
+      { tab: 'boletim_pdfs', icon: '📄', label: 'Central de PDFs', papeis: ['GESTOR', 'FINANCEIRO', 'ADMIN'] },
+      // 7.3.0: acompanhamento diario do banco de horas enviado pelo RH. Todos veem
+      // (decisao do Tiago em 13/11: ainda nao ha divisao por area).
+      { tab: 'boletim_banco_horas', icon: '⏱️', label: 'Banco de Horas', papeis: null }
     ]
   },
   {
@@ -4429,6 +4432,9 @@ function renderApp() {
       case 'boletim_export_csv':
       case 'boletim_pdfs':
         html = renderBoletimGerencialView();
+        break;
+      case 'boletim_banco_horas':
+        html = renderBancoHorasView();
         break;
       // Apelido antigo do Conector Power BI: nenhum switchTab() aponta para
       // cá hoje, mas ele chamava renderConectorDadosView() direto e por isso
@@ -31059,4 +31065,197 @@ function renderVisaoOperacaoView() {
       class="w-full rounded-xl border border-slate-700 bg-white block" style="height:calc(100vh - 190px);min-height:520px"
       srcdoc="${html.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe>
   </div>`;
+}
+
+// ===== BOLETIM GERENCIAL -> BANCO DE HORAS (7.3.0, 13/11/2026) =====
+// Acompanhamento diario do banco de horas que o RH envia pela pagina /banco-horas
+// (sem login). A conta fica em js/bancoHoras.js (a mesma da pagina do RH e da
+// Visao Operacao): colaborador = saldo do banco + 55% + 100%; setor = so saldos
+// positivos + 55% + 100% (quem esta devendo nao abate); meta do setor em horas
+// compara Banco + com 55% (o banco positivo e pago como 55%); 100% a parte.
+// So horas, sem R$. Todos os perfis veem (decisao do Tiago: nao ha divisao por area).
+// - Le a nuvem so quando a tela abre: bh_* nao entram na sincronizacao (egress).
+// - Cada envio e uma foto acumulada da competencia (26 a 25); vale o ultimo do dia.
+window._bh = window._bh || { envios: null, periodo: null, dados: {}, carregando: false, erro: '', aba: 'setores', setor: '' };
+
+async function carregarBancoHoras(forcar = false) {
+  const st = window._bh, BH = window.BancoHoras;
+  if (st.carregando) return;
+  if (!window.cloudStore || !window.cloudStore.isConfigured()) { st.erro = 'Sem conexão com a nuvem configurada neste aparelho.'; renderApp(); return; }
+  if (!BH) { st.erro = 'O arquivo js/bancoHoras.js não carregou. Atualize a página.'; renderApp(); return; }
+  st.carregando = true; st.erro = '';
+  try {
+    if (forcar || !st.envios) {
+      st.envios = await voRest('bh_envios', 'select=id,periodo,recebido_em,dia_ref,arquivo,qtd_pessoas,qtd_he,substituido&order=recebido_em.desc&limit=1000');
+      if (!st.periodo || !st.envios.some(e => e.periodo === st.periodo)) st.periodo = (st.envios[0] || {}).periodo || null;
+    }
+    if (st.periodo && (forcar || !st.dados[st.periodo])) st.dados[st.periodo] = await bhMontarPeriodo(st.periodo, st.envios);
+  } catch (e) {
+    st.erro = /\(404\)/.test(e.message || '') ? 'As tabelas do banco de horas ainda não existem na nuvem (migration 77).' : (e.message || String(e));
+  } finally {
+    st.carregando = false;
+    renderApp();
+  }
+}
+
+async function bhMontarPeriodo(periodo, envios) {
+  const BH = window.BancoHoras;
+  const meta = (window.VisaoOperacao && window.VisaoOperacao.metaHoraExtra) || (() => null);
+  const vig = BH.vigentes(envios, periodo);
+  if (!vig.length) return null;
+  const ids = vig.map(e => e.id).join(',');
+  const [saldos, he] = await Promise.all([
+    BH.lerTudo(voRest, 'bh_saldos', `select=envio_id,nome,departamento,filial,negativas,positivas&envio_id=in.(${ids})&order=envio_id,nome`),
+    BH.lerTudo(voRest, 'bh_he_dia', `select=envio_id,nome,dia,he55,he100&envio_id=in.(${ids})&order=envio_id,dia,nome`),
+  ]);
+  const fotos = vig.map(e => BH.montar(saldos.filter(s => s.envio_id === e.id), he.filter(x => x.envio_id === e.id), { meta }));
+  const n = vig.length - 1;
+  // Movimento entre fotos consecutivas (o que aconteceu de um envio para o outro)
+  const seq = vig.map((e, i) => ({ envio: e, dif: i ? BH.diferenca(fotos[i], fotos[i - 1]) : null }));
+  // Mesmo ponto da competencia anterior: o ultimo envio valido ate o mesmo dia do mes anterior
+  let mesAnt = null;
+  const perAnt = BH.periodoAnterior(periodo), alvo = BH.diaMesAnterior(vig[n].dia_ref);
+  const vigAnt = BH.vigentes(envios, perAnt).filter(e => e.dia_ref <= alvo);
+  if (vigAnt.length) {
+    const e = vigAnt[vigAnt.length - 1], r = await BH.lerEnvio(voRest, e.id);
+    mesAnt = { envio: e, foto: BH.montar(r.saldos, r.he, { meta }) };
+  }
+  return { periodo, vig, atual: vig[n], foto: fotos[n], fotoAnt: n ? fotos[n - 1] : null, anterior: n ? vig[n - 1] : null,
+    dif: n ? BH.diferenca(fotos[n], fotos[n - 1]) : null, seq, mesAnt };
+}
+
+function bhSelecionarPeriodo(p) { window._bh.periodo = p; renderApp(); if (!window._bh.dados[p]) carregarBancoHoras(); }
+function bhAba(a) { window._bh.aba = a; renderApp(); }
+function bhSetor(s) { window._bh.setor = s; renderApp(); }
+function bhCopiarLink() {
+  const url = `${location.origin}/banco-horas`;
+  const ok = () => alert(`Link da página do RH copiado:\n${url}`);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(ok, () => prompt('Copie o link da página do RH:', url));
+  else prompt('Copie o link da página do RH:', url);
+}
+
+function renderBancoHorasView() {
+  const st = window._bh, BH = window.BancoHoras;
+  const h = (x, o) => (BH ? BH.hhmm(x, o) : '—');
+  const dh = (t) => new Date(t).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const dia = (d) => d ? d.slice(8, 10) + '/' + d.slice(5, 7) : '—';
+  const perTxt = (p) => p ? `${p.slice(5)}/${p.slice(0, 4)}` : '—';
+  const cabecalho = (extra = '') => `
+    <div class="bg-gradient-to-r from-slate-900 via-amber-950/40 to-slate-900 p-4 rounded-xl shadow-xl border border-amber-800/40 flex flex-col lg:flex-row items-center justify-between gap-4 text-white">
+      <div class="flex items-center gap-3">
+        <div class="bg-amber-600/30 p-2.5 rounded-xl border border-amber-500/40 text-2xl">⏱️</div>
+        <div>
+          <h2 class="text-lg font-black tracking-wider uppercase">Banco de Horas <span class="bg-amber-800 text-amber-100 text-[10px] px-2 py-0.5 rounded font-extrabold">ACOMPANHAMENTO DO RH</span></h2>
+          <p class="text-[11px] text-slate-300 font-medium">Prévia diária enviada pelo RH, só em horas. O consolidado pago continua vindo do Power BI.</p>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">${extra}
+        <button onclick="bhCopiarLink()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-amber-500/40 shadow">🔗 Link da página do RH</button>
+      </div>
+    </div>`;
+  const aviso = (txt) => `<div class="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">
+      ${st.erro ? `<div class="text-red-400 font-bold mb-3">⚠️ ${prodEsc(st.erro)}</div><button onclick="carregarBancoHoras(true)" class="bg-amber-700 hover:bg-amber-600 text-white font-bold px-3 py-1.5 rounded-lg text-xs">Tentar de novo</button>` : txt}
+    </div>`;
+
+  if (!st.envios) {
+    if (!st.carregando && !st.erro) setTimeout(() => carregarBancoHoras(), 0);
+    return `<div class="space-y-5">${cabecalho()}${aviso('⏳ Carregando o banco de horas da nuvem...')}</div>`;
+  }
+  if (!st.envios.length) return `<div class="space-y-5">${cabecalho()}${aviso(`Nenhum envio do RH ainda. A página de envio fica em <b class="text-amber-300">${prodEsc(location.origin)}/banco-horas</b>.`)}</div>`;
+
+  const periodos = [...new Set(st.envios.map(e => e.periodo))].sort().reverse();
+  const botoes = `
+    <select onchange="bhSelecionarPeriodo(this.value)" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2 py-1.5 font-bold">${periodos.map(p => `<option value="${p}" ${p === st.periodo ? 'selected' : ''}>Competência ${perTxt(p)}</option>`).join('')}</select>
+    <button onclick="carregarBancoHoras(true)" class="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold px-3 py-1.5 rounded-lg text-xs border border-amber-500/40 shadow" ${st.carregando ? 'disabled' : ''}>${st.carregando ? '⏳ Atualizando...' : '🔄 Atualizar'}</button>`;
+  const D = st.dados[st.periodo];
+  if (!D) {
+    if (!st.carregando && !st.erro) setTimeout(() => carregarBancoHoras(), 0);
+    return `<div class="space-y-5">${cabecalho(botoes)}${aviso('⏳ Montando a competência...')}</div>`;
+  }
+
+  const f = D.foto, T = f.total, dif = D.dif, comp = BH.competencia(D.periodo);
+  const metaTot = f.setores.reduce((t, s) => t + (s.meta || 0), 0);
+  const recebidos = st.envios.filter(e => e.periodo === D.periodo);
+  const cor = (x) => x > 0.005 ? 'text-amber-300' : x < -0.005 ? 'text-emerald-300' : 'text-slate-500';
+  const card = (titulo, valor, sub, cls = 'text-white') => `<div class="bg-slate-950 border border-slate-800 p-3.5 rounded-xl">
+      <div class="text-[10px] text-slate-400 font-bold uppercase">${titulo}</div><div class="text-xl font-black ${cls} mt-1">${valor}</div><div class="text-[10px] text-slate-500 mt-0.5">${sub}</div></div>`;
+  const kpis = `<div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+    ${card('Horas a pagar até agora', h(T.total), 'Banco + · 55% · 100%', 'text-amber-300')}
+    ${card('Banco + e HE 55% × meta', `${h(T.previa55)} <span class="text-xs text-slate-400">/ ${metaTot} h</span>`, 'banco positivo é pago como 55%', T.previa55 <= metaTot ? 'text-emerald-300' : 'text-red-400')}
+    ${card('HE 100%', h(T.he100), 'feriado · fora da meta', 'text-orange-300')}
+    ${card('Devendo (fora da conta)', h(T.devendo), 'saldo negativo não abate o setor', 'text-slate-300')}
+    ${card('Compensado desde o envio anterior', dif ? h(dif.total.compensado) : '—', D.anterior ? `desde ${dia(D.anterior.dia_ref)}` : 'só há um envio', 'text-sky-300')}
+  </div>`;
+  const info = `<div class="text-[11px] text-slate-400 flex flex-wrap gap-x-4 gap-y-1">
+    <span>📥 Último envio: <b class="text-slate-200">${dh(D.atual.recebido_em)}</b> · ${prodEsc(D.atual.arquivo || '')}</span>
+    <span>📅 Competência ${perTxt(D.periodo)}: ${dia(comp.ini)} a ${dia(comp.fim)}</span>
+    <span>🧾 ${recebidos.length} recebimento(s), ${D.vig.length} dia(s) com envio</span>
+    ${D.mesAnt ? `<span>↩️ Mês anterior no mesmo ponto: envio de ${dia(D.mesAnt.envio.dia_ref)}</span>` : '<span>↩️ Sem envio da competência anterior para comparar</span>'}
+  </div>`;
+
+  const abas = [['setores', '🏭 Setores'], ['colaboradores', '👥 Colaboradores'], ['dias', '📅 Dia a dia'], ['compensacoes', '🔁 Compensações'], ['recebimentos', '🧾 Recebimentos']];
+  const barraAbas = `<div class="flex flex-wrap gap-2 no-print">${abas.map(([k, t]) => `<button onclick="bhAba('${k}')" class="px-3 py-1.5 rounded-lg text-xs font-bold border ${st.aba === k ? 'bg-amber-600 border-amber-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}">${t}</button>`).join('')}</div>`;
+  const tabela = (cab, linhas, rodape = '') => `<div class="overflow-x-auto rounded-xl border border-slate-800"><table class="w-full text-xs">
+    <thead class="bg-slate-950 text-slate-400 text-[10px] uppercase"><tr>${cab.map(c => `<th class="p-2 ${c.startsWith('>') ? 'text-right' : 'text-left'} whitespace-nowrap">${c.replace(/^>/, '')}</th>`).join('')}</tr></thead>
+    <tbody class="divide-y divide-slate-800">${linhas || `<tr><td colspan="${cab.length}" class="p-4 text-center text-slate-500">Nada no período.</td></tr>`}</tbody>${rodape}</table></div>`;
+  const td = (v, cls = '') => `<td class="p-2 text-right whitespace-nowrap ${cls}">${v}</td>`;
+
+  let corpo = '';
+  if (st.aba === 'setores') {
+    const ant = D.mesAnt ? Object.fromEntries(D.mesAnt.foto.setores.map(s => [s.setor, s])) : {};
+    const linhas = f.setores.map(s => {
+      const d = dif && dif.setores[s.setor], a = ant[s.setor];
+      return `<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-white whitespace-nowrap">${prodEsc(s.rotulo)}</td>${td(s.pessoas, 'text-slate-400')}
+        ${td(h(s.bancoPos))}${td(h(s.he55))}${td(`<b>${h(s.previa55)}</b>`)}${td(s.meta == null ? '—' : `${s.meta} h`, 'text-slate-400')}
+        ${td(s.dentroMeta == null ? '—' : s.dentroMeta ? '✓ dentro' : '✗ acima', s.dentroMeta ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold')}
+        ${td(h(s.he100), 'text-orange-300')}${td(`<b>${h(s.total)}</b>`, 'text-amber-300')}
+        ${td(d ? h(d.contaSetor, { sinal: true }) : '—', d ? cor(d.contaSetor) : 'text-slate-500')}
+        ${td(a ? `${h(a.total)} <span class="${cor(s.total - a.total)}">(${h(s.total - a.total, { sinal: true })})</span>` : '—', 'text-slate-300')}
+        ${td(h(s.devendo), 'text-slate-500')}</tr>`;
+    }).join('');
+    const tA = D.mesAnt ? D.mesAnt.foto.total : null;
+    const rod = `<tfoot class="bg-slate-950 font-bold text-white"><tr><td class="p-2">Total da operação</td>${td(T.pessoas)}${td(h(T.bancoPos))}${td(h(T.he55))}${td(h(T.previa55))}${td(`${metaTot} h`)}${td('')}${td(h(T.he100))}${td(h(T.total), 'text-amber-300')}
+      ${td(dif ? h(dif.total.contaSetor, { sinal: true }) : '—')}${td(tA ? `${h(tA.total)} (${h(T.total - tA.total, { sinal: true })})` : '—')}${td(h(T.devendo), 'text-slate-500')}</tr></tfoot>`;
+    corpo = tabela(['Setor', '>Pessoas', '>Banco +', '>HE 55% (após 10ª)', '>Banco + 55%', '>Meta', '>Situação', '>HE 100%', '>Total', `>Desde ${D.anterior ? dia(D.anterior.dia_ref) : 'anterior'}`, '>Mês anterior (mesmo ponto)', '>Devendo'], linhas, rod)
+      + `<p class="text-[11px] text-slate-500 mt-2">Banco + soma só quem tem saldo positivo: quem está devendo entra como zero e aparece à parte em "Devendo". A meta do setor (em horas) vale para Banco + e HE 55%; a HE 100% fica fora da meta.</p>`;
+  } else if (st.aba === 'colaboradores') {
+    const dP = dif ? Object.fromEntries(dif.pessoas.map(x => [BH.chave(x.nome), x])) : {};
+    const lista = f.pessoas.filter(p => !st.setor || p.setor === st.setor);
+    const filtro = `<div class="flex items-center gap-2 mb-2"><span class="text-xs text-slate-400 font-bold">Setor:</span>
+      <select onchange="bhSetor(this.value)" class="bg-slate-800 border border-slate-600 text-white text-xs rounded-lg px-2 py-1.5 font-bold"><option value="">Todos</option>${BH.SETORES.map(s => `<option value="${s.setor}" ${st.setor === s.setor ? 'selected' : ''}>${s.rotulo}</option>`).join('')}</select>
+      <span class="text-[11px] text-slate-500">${lista.length} colaborador(es)</span></div>`;
+    const linhas = lista.map(p => {
+      const d = dP[BH.chave(p.nome)];
+      return `<tr class="hover:bg-slate-800/40 ${p.saldo < 0 ? 'bg-red-950/20' : ''}"><td class="p-2 font-bold text-white whitespace-nowrap">${prodEsc(p.nome)}</td><td class="p-2 text-slate-400 whitespace-nowrap">${prodEsc(BH.rotuloSetor(p.setor))}</td><td class="p-2 text-slate-500 whitespace-nowrap">${prodEsc(p.coligada)}</td>
+        ${td(h(p.negativas), 'text-slate-400')}${td(h(p.positivas), 'text-slate-400')}${td(`<b>${h(p.saldo)}</b>${p.saldo < 0 ? ' <span class="text-red-400">devendo</span>' : ''}`, p.saldo < 0 ? 'text-red-300' : '')}
+        ${td(h(p.he55))}${td(h(p.he100), 'text-orange-300')}${td(h(p.total))}${td(`<b>${h(p.contaSetor)}</b>`, 'text-amber-300')}
+        ${td(d ? h(d.contaSetor, { sinal: true }) : '—', d ? cor(d.contaSetor) : 'text-slate-500')}${td(d && d.compensado ? h(d.compensado) : '—', 'text-sky-300')}</tr>`;
+    }).join('');
+    corpo = filtro + tabela(['Colaborador', 'Setor', 'Coligada', '>Negativas', '>Positivas', '>Saldo banco', '>HE 55%', '>HE 100%', '>Total', '>Conta p/ setor', `>Desde ${D.anterior ? dia(D.anterior.dia_ref) : 'anterior'}`, '>Compensou'], linhas)
+      + `<p class="text-[11px] text-slate-500 mt-2">Total = saldo do banco + HE 55% + HE 100% (o que vale para o colaborador). Conta p/ setor = só o saldo positivo + 55% + 100%: quem está devendo não abate a hora extra paga.</p>`;
+  } else if (st.aba === 'dias') {
+    const lDias = f.dias.map(x => `<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-white">${dia(x.dia)}</td>${td(h(x.he55))}${td(h(x.he100), 'text-orange-300')}${td(h(x.he55 + x.he100), 'text-amber-300 font-bold')}${td(x.pessoas, 'text-slate-400')}</tr>`).join('');
+    const lSeq = D.seq.slice(1).reverse().map(({ envio, dif: d }) => `<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-white whitespace-nowrap">${dia(envio.dia_ref)} <span class="text-slate-500 font-normal">${dh(envio.recebido_em).slice(-5)}</span></td>
+      ${td(h(d.total.bancoFeito, { sinal: true }), cor(d.total.bancoFeito))}${td(h(d.total.compensado), 'text-sky-300')}${td(d.abonos.length ? h(d.abonos.reduce((t, x) => t + x.abonado, 0)) : '—', 'text-slate-400')}
+      ${td(h(d.total.he55, { sinal: true }), cor(d.total.he55))}${td(h(d.total.he100, { sinal: true }), cor(d.total.he100))}${td(`<b>${h(d.total.contaSetor, { sinal: true })}</b>`, cor(d.total.contaSetor))}</tr>`).join('');
+    corpo = `<div class="grid lg:grid-cols-2 gap-4">
+      <div class="space-y-2"><h3 class="text-xs font-bold text-slate-200 uppercase">Hora extra por dia (aba HORAS EXTRAS, operação)</h3>${tabela(['Dia', '>HE 55%', '>HE 100%', '>Total', '>Pessoas'], lDias)}</div>
+      <div class="space-y-2"><h3 class="text-xs font-bold text-slate-200 uppercase">Movimento entre envios</h3>${tabela(['Envio', '>Banco feito', '>Compensado', '>Abonado', '>HE 55%', '>HE 100%', '>Conta p/ setor'], lSeq || '')}
+        <p class="text-[11px] text-slate-500">O banco não vem por dia: o movimento é a diferença entre um envio e o anterior. Compensado = negativas que cresceram (folga, saída antecipada, atraso). Abonado = negativas que diminuíram (ajuste do RH).</p></div></div>`;
+  } else if (st.aba === 'compensacoes') {
+    const linhas = (lst, campo, cls) => lst.map(x => `<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-white">${prodEsc(x.nome)}</td><td class="p-2 text-slate-400">${prodEsc(BH.rotuloSetor(x.setor))}</td>${td(h(x[campo]), cls)}</tr>`).join('');
+    corpo = !dif ? aviso('Só há um envio nesta competência. As compensações aparecem a partir do segundo envio.') : `<div class="grid lg:grid-cols-2 gap-4">
+      <div class="space-y-2"><h3 class="text-xs font-bold text-slate-200 uppercase">Compensações desde ${dia(D.anterior.dia_ref)} (${dif.compensacoes.length})</h3>${tabela(['Colaborador', 'Setor', '>Compensou'], linhas(dif.compensacoes, 'compensado', 'text-sky-300 font-bold'))}</div>
+      <div class="space-y-2"><h3 class="text-xs font-bold text-slate-200 uppercase">Negativas reduzidas (abono ou ajuste do RH) (${dif.abonos.length})</h3>${tabela(['Colaborador', 'Setor', '>Reduziu'], linhas(dif.abonos, 'abonado', 'text-slate-300 font-bold'))}</div></div>
+      <p class="text-[11px] text-slate-500 mt-2">Em breve: cruzar cada compensação com a saída antecipada ou a falta lançada no Oper (campo "Vai compensar?").</p>`;
+  } else {
+    const linhas = recebidos.map(e => `<tr class="hover:bg-slate-800/40 ${e.substituido ? 'opacity-60' : ''}"><td class="p-2 font-bold text-white whitespace-nowrap">${dh(e.recebido_em)}</td><td class="p-2 text-slate-300">${prodEsc(e.arquivo || '—')}</td>${td(e.qtd_pessoas)}${td(e.qtd_he)}
+      <td class="p-2">${e.substituido ? '<span class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-bold">substituído no dia</span>' : '<span class="text-[10px] bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded font-bold">vale</span>'}</td></tr>`).join('');
+    corpo = tabela(['Recebido em', 'Arquivo', '>Pessoas', '>Linhas de HE', 'Situação'], linhas)
+      + `<p class="text-[11px] text-slate-500 mt-2">Todo recebimento fica registrado. Havendo mais de um no mesmo dia, vale o último.</p>`;
+  }
+
+  return `<div class="space-y-4 max-w-7xl mx-auto pb-12">${cabecalho(botoes)}
+    ${st.erro ? `<div class="text-red-400 text-xs font-bold">⚠️ ${prodEsc(st.erro)}</div>` : ''}
+    ${info}${kpis}${barraAbas}${corpo}</div>`;
 }

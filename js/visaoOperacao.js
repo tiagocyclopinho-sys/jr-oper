@@ -124,7 +124,13 @@ async function carregarDados(rest, am) {
   for (const r of quad) ((Q[r.secao] ||= {})[r.quadro] ||= []).push({ ...r, valor: num0(r.valor), valor2: num0(r.valor2), valor3: num0(r.valor3) });
   corrigirDepartamentos(Q);
   const per = periodos.find((p) => p.ano_mes === am);
+  // 7.3.0: ultima foto do banco de horas enviada pelo RH (competencia 26 a 25, a
+  // mesma da HE). Sem envio, ou sem a migration 77, a secao sai sem o quadro.
+  const BH = moduloBancoHoras();
+  let bh = null;
+  if (BH) { try { bh = await BH.ultimaFoto(rest, BH.periodoDeAnoMes(am), { meta: metaHoraExtra }); } catch (e) { bh = null; } }
   return {
+    bh,
     am, ant, ano: a, periodo: per, previa: !per || per.status !== 'fechado',
     statusAnt: (periodos.find((p) => p.ano_mes === ant) || {}).status,
     // valor do mes; v(secao, ind, mes = am)
@@ -400,6 +406,11 @@ function metasSetorCD(d) {
   });
 }
 // HE: carregamento 1o turno 40 h, 2o turno 200 h; portaria 60 h; patio e manutencao 6 h; demais 1 h (Tiago, 29/10/2026)
+// Banco de horas do RH (js/bancoHoras.js): window.BancoHoras no app, require no gerador.
+function moduloBancoHoras() {
+  if (typeof self !== 'undefined' && self.BancoHoras) return self.BancoHoras;
+  try { return typeof require === 'function' ? require('./bancoHoras.js') : null; } catch (e) { return null; }
+}
 function metaHoraExtra(setor) {
   const s = String(setor).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, ''), carreg = /CARREG/.test(s);
   if (carreg) return /1\s*TURNO/.test(s) ? 40 : /2\s*TURNO/.test(s) ? 200 : 1;
@@ -830,9 +841,24 @@ function gerarHtml(d, a, opcoes = {}) {
         ${kpi(reais(dInv, 2), 'DSR do inventário')}${kpi(reais(vInv + dInv, 2), 'Total com DSR')}${kpi(num(inv.length), 'Funcionários')}</div>` })}
       <p class="nota">Inventário de outubro, lançado em uma única data. Valores da planilha de horas extras do carregamento; estão dentro da HE 100% do mês.</p>`;
     const abas = `<div class="abas" data-abas="hetipo"><button type="button" class="aba on" data-valor="">HE 55%</button><button type="button" class="aba" data-valor="100">HE 100%</button>${temInv ? '<button type="button" class="aba" data-valor="sem">100% sem inventário</button><button type="button" class="aba" data-valor="inv">Inventário</button>' : ''}<button type="button" class="aba" data-valor="junto">55% + 100%</button></div>`;
-    add('he', 'Hora extra', secao('he', 'Gestão de hora extra', temTipos ? `Visão ${fech}` : `Visão ${fech} · Hora Extra 55%`, temTipos
+    // 7.3.0: acompanhamento do RH (banco de horas). So horas. Setor = saldos positivos
+    // do banco + 55% (depois da 10a hora) + 100%; quem esta devendo nao abate. A meta
+    // em horas compara Banco + com 55% (o banco positivo e pago como 55%).
+    const blocoRH = (() => {
+      const rh = d.bh;
+      if (!rh) return '';
+      const hm = (x) => { const m = Math.round(Math.abs(x || 0) * 60); return `${x < 0 && m ? '-' : ''}${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`; };
+      const env = rh.envio, quando = `${env.dia_ref.split('-').reverse().join('/')}`;
+      const T = rh.total, metaTot = rh.setores.reduce((t, s) => t + (s.meta || 0), 0);
+      const linhas = rh.setores.map((s) => `<tr><td>${esc(s.rotulo)}</td><td class="n">${hm(s.bancoPos)}</td><td class="n">${hm(s.he55)}</td><td class="n"><b>${hm(s.previa55)}</b></td><td class="n">${s.meta == null ? '—' : `${s.meta} h`}</td>
+        <td class="${s.dentroMeta ? 'bom' : 'ruim'}"><b>${s.dentroMeta == null ? '—' : s.dentroMeta ? '✓ Dentro' : '✗ Acima'}</b></td><td class="n">${hm(s.he100)}</td><td class="n"><b>${hm(s.total)}</b></td><td class="n">${hm(s.devendo)}</td></tr>`).join('');
+      const tab = `<table class="tab"><thead><tr><th>Setor</th><th class="n">Banco +</th><th class="n">HE 55% (após 10ª)</th><th class="n">Banco + 55%</th><th class="n">Meta</th><th>Situação</th><th class="n">HE 100%</th><th class="n">Total</th><th class="n">Devendo</th></tr></thead>
+        <tbody>${linhas}<tr><td><b>Total da operação</b></td><td class="n"><b>${hm(T.bancoPos)}</b></td><td class="n"><b>${hm(T.he55)}</b></td><td class="n"><b>${hm(T.previa55)}</b></td><td class="n"><b>${metaTot} h</b></td><td></td><td class="n"><b>${hm(T.he100)}</b></td><td class="n"><b>${hm(T.total)}</b></td><td class="n">${hm(T.devendo)}</td></tr></tbody></table>`;
+      return `<div class="grade g1">${card(`Acompanhamento do RH · banco de horas até ${quando}`, `${tab}<p class="nota">Prévia do RH, só em horas (envio de ${quando}). Banco + soma só quem tem saldo positivo; quem está devendo aparece à parte e não abate o setor. A meta vale para Banco + e HE 55%; a 100% fica fora. O fechamento pago continua sendo o do Power BI.</p>`)}</div>`;
+    })();
+    add('he', 'Hora extra', secao('he', 'Gestão de hora extra', temTipos ? `Visão ${fech}` : `Visão ${fech} · Hora Extra 55%`, (temTipos
       ? `${abas}${variantes('hetipo', [{ valor: '', html: bloco55 }, { valor: '100', html: bloco100() }, ...(temInv ? [{ valor: 'sem', html: blocoSem() }, { valor: 'inv', html: blocoInv() }] : []), { valor: 'junto', html: blocoJunto() }])}`
-      : bloco55));
+      : bloco55) + blocoRH));
   }
 
   // Movimentacao CD
@@ -1369,5 +1395,6 @@ footer{max-width:1280px;margin:0 auto;padding:16px 24px 30px;color:var(--suave);
 return {
   MESES, MES_ABREV, nf, num, reais, mil, pct, dataBr, diaMes, iso, mesAnterior, nomeMes, abrev, titulo, variacao,
   comparar, media, mediana, hhmm, horasUteis, etapasSla, comparativoDevolucao, temResponsavel, carregarDados, analisar, metasOficiais, gerarHtml, custoGestao,
+  metaHoraExtra,
 };
 });
