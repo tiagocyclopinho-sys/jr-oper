@@ -6759,6 +6759,11 @@ function renderDashboardView() {
   // Quando este alerta foi escrito havia 15 chamados nesse estado, nenhum com
   // parecer, o mais antigo parado desde 23/08 — nove dias sem ninguém ver.
   const tratativasGestorAlerta = tratativasPendentesGestor(allDevs);
+  // 7.5.0: condutas (Rota + Operacional) com o gestor. Relógio = enviado_em,
+  // gravado uma vez no envio; editar o relato não zera.
+  const condutasGestorAlerta = typeof trtCondutasPendentesGestor === 'function' ? trtCondutasPendentesGestor() : [];
+  const slaCondutas = getSlaBreakdown(condutasGestorAlerta, ['enviado_em']);
+  const maisAntigaConduta = getMaisAntigaPendente(condutasGestorAlerta, ['enviado_em'], { atencao: 24, estourado: 48 });
 
   // Idade da ocorrência pendente mais antiga em cada painel de alerta —
   // complementa a contagem por faixa (🔴🟡🟢) com "há quanto tempo está
@@ -7140,7 +7145,7 @@ function renderDashboardView() {
   // retidosCriticos/retidosAtencao sairam desta condicao junto com os dois
   // cards de SLA: veicRetidos > 0 ja cobre os mesmos veiculos, e mante-los
   // aqui so mantinha a secao acesa por um alerta que nao existe mais.
-  const temAlertasCriticos = (reentregasPendentes.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || tratativasGestorAlerta.length > 0 || sinistrosPendentesDash.length > 0);
+  const temAlertasCriticos = (reentregasPendentes.length > 0 || veicParadosAlerta.length > 0 || veicRetidos > 0 || pendCdAlerta.length > 0 || abertasCausaRaizAlerta.length > 0 || tratativasGestorAlerta.length > 0 || condutasGestorAlerta.length > 0 || sinistrosPendentesDash.length > 0);
 
   return `
     <div class="space-y-6">
@@ -7266,7 +7271,26 @@ function renderDashboardView() {
                     </div>
                   </div>
                 </div>
-                <button onclick="window._activeGestorSubTab='pendentes'; switchTab('gestao_gestor')" class="bg-sky-900/50 hover:bg-sky-800 border border-sky-600 text-sky-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Tratar</button>
+                <button onclick="window._gestorModulo='devolucoes'; window._activeGestorSubTab='pendentes'; switchTab('gestao_gestor')" class="bg-sky-900/50 hover:bg-sky-800 border border-sky-600 text-sky-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Tratar</button>
+              </div>` : ''}
+
+            <!-- ALERTA CONDUTAS COM O GESTOR (7.5.0) -->
+            ${condutasGestorAlerta.length > 0 ? `
+              <div class="bg-slate-950 border border-red-800/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-md">
+                <div class="flex items-center gap-3 overflow-hidden">
+                  <div class="w-9 h-9 rounded-lg bg-red-950 border border-red-700 text-red-300 flex items-center justify-center shrink-0 text-base font-bold">🚨</div>
+                  <div class="truncate">
+                    <div class="text-xs font-black text-red-300 truncate">${condutasGestorAlerta.length} Conduta(s) com o Gestor</div>
+                    <div class="text-[10px] text-slate-400 truncate">Rota e Operacional, aguardando decisão</div>
+                    ${_linhaSla(maisAntigaConduta, 'Mais antiga')}
+                    <div class="flex items-center gap-2 mt-0.5 text-[10px] font-bold">
+                      <span class="text-red-400" title="Mais de 48h com o gestor">🔴 ${slaCondutas.critico}</span>
+                      <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaCondutas.alerta}</span>
+                      <span class="text-emerald-400" title="Menos de 24h">🟢 ${slaCondutas.ok}</span>
+                    </div>
+                  </div>
+                </div>
+                <button onclick="trtAbrirFilaGestor()" class="bg-red-900/50 hover:bg-red-800 border border-red-600 text-red-200 font-bold px-2.5 py-1 rounded text-[11px] shrink-0 transition">Tratar</button>
               </div>` : ''}
 
             <!-- ALERTA SINISTROS PENDENTES -->
@@ -7541,7 +7565,8 @@ function renderDashboardView() {
               <span id="chevron-tratativa-gestor" class="text-slate-600 transition-transform">▾</span>
             </div>
             <div class="text-xl font-black ${tratativasGestorAlerta.length > 0 ? 'text-sky-300' : 'text-emerald-400'} mt-1">${tratativasGestorAlerta.length}</div>
-            <div class="text-[10px] text-slate-500 mt-0.5">Parecer pendente</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">Parecer pendente (devoluções)</div>
+            <div class="text-[10px] font-bold mt-0.5 ${condutasGestorAlerta.length ? 'text-red-300' : 'text-slate-500'}" title="Condutas da Ocorrência em Rota e da Operacional com o gestor">🚨 ${condutasGestorAlerta.length} conduta(s)${slaCondutas.critico ? ` · 🔴 ${slaCondutas.critico}` : ''}</div>
             <div class="flex items-center gap-2 mt-1.5 text-[10px] font-bold">
               <span class="text-red-400" title="Mais de 48h na mesa do gestor">🔴 ${slaTratativaGestor.critico}</span>
               <span class="text-amber-400" title="Entre 24h e 48h">🟡 ${slaTratativaGestor.alerta}</span>
@@ -10879,6 +10904,12 @@ async function handleInvestigacaoSubmit(e, devId) {
 // ===== MÓDULO: GESTÃO DO GESTOR =====
 function renderGestaoGestorView() {
   const todosDevs = db.getDevolucoes();
+  // 7.5.0: Condutas (Ocorrência em Rota + Operacional) na mesma tela, em
+  // js/tratativas.js. As devoluções seguem abaixo, como sempre.
+  if (window._gestorModulo === 'condutas' && typeof renderGestorCondutasView === 'function') {
+    return renderGestorCondutasView(tratativasPendentesGestor(todosDevs).length);
+  }
+  const qtdCondutasPend = typeof trtCondutasPendentesGestor === 'function' ? trtCondutasPendentesGestor().length : 0;
 
   const activeGestorTab = window._activeGestorSubTab || 'pendentes';
 
@@ -10972,6 +11003,8 @@ function renderGestaoGestorView() {
           </button>
         </div>
       </div>
+
+      ${typeof trtSeletorModuloGestor === 'function' ? trtSeletorModuloGestor(todosPendentes.length, qtdCondutasPend) : ''}
 
       <!-- CARDS DE INDICADORES DO GESTOR -->
       <div class="grid grid-cols-3 gap-3">
@@ -16198,7 +16231,10 @@ function pendenciasEmAbertoBoletim() {
     // faltava. maisAntigaGestor acompanha para o boletim dizer HÁ QUANTO TEMPO,
     // que é o que sustenta a cobrança — contagem sozinha não cobra ninguém.
     tratativasGestor: filaGestor.length,
-    maisAntigaGestor: getMaisAntigaPendente(filaGestor, CAMPOS_SLA_TRATATIVA_GESTOR, { atencao: 24, estourado: 48 })
+    maisAntigaGestor: getMaisAntigaPendente(filaGestor, CAMPOS_SLA_TRATATIVA_GESTOR, { atencao: 24, estourado: 48 }),
+    // 7.5.0: condutas com o gestor (Rota + Operacional). Fica fora do total
+    // de pendências para não mudar a régua do boletim; aparece na linha do gestor.
+    condutasGestor: typeof trtCondutasPendentesGestor === 'function' ? trtCondutasPendentesGestor().length : 0
   };
 }
 
@@ -17083,10 +17119,11 @@ function renderViagensOcorrenciasSubTab() {
       <td class="p-2 border-r border-slate-800 text-[10px] text-slate-400">${o.funcao}</td>
       <td class="p-2 border-r border-slate-800"><span class="bg-slate-800 text-amber-300 font-bold px-1.5 py-0.5 rounded text-[10px]">${o.motivo}</span></td>
       <td class="p-2 border-r border-slate-800 text-amber-300 font-medium">${o.causa}</td>
-      <td class="p-2 border-r border-slate-800 text-slate-200 font-medium">${o.ocorrencia}</td>
-      <td class="p-2 border-r border-slate-800 text-emerald-300 font-semibold">${o.acao||'<span class="text-amber-400 italic">Aguardando Ação</span>'}</td>
+      <td class="p-2 border-r border-slate-800 text-slate-200 font-medium">${o.ocorrencia}${_galeriaFotosModulo(o, 'fotos', 'ocoper', { compacta: true })}</td>
+      <td class="p-2 border-r border-slate-800 text-emerald-300 font-semibold">${o.acao||'<span class="text-amber-400 italic">Aguardando Ação</span>'}${trtOcvSeloGestor(o)}</td>
       <td class="p-2 text-right whitespace-nowrap">
-        ${o.status !== 'FINALIZADA' ? `<button onclick="editarOcViagemModal('${o.id}', 'FINALIZADA')" class="bg-emerald-700/80 hover:bg-emerald-600 text-white px-2 py-0.5 rounded text-[11px] font-bold shadow mr-1 inline-flex items-center gap-1" title="Finalizar Ocorrência"><span>✅</span> Finalizar</button>` : ''}
+        ${o.status !== 'FINALIZADA' && !Store.gestorPendente(o) ? `<button onclick="editarOcViagemModal('${o.id}', 'FINALIZADA')" class="bg-emerald-700/80 hover:bg-emerald-600 text-white px-2 py-0.5 rounded text-[11px] font-bold shadow mr-1 inline-flex items-center gap-1" title="Finalizar Ocorrência"><span>✅</span> Finalizar</button>` : ''}
+        ${!Store.tratativaGestorDe(o) ? `<button onclick="trtEncaminharAoGestor('oper', '${o.id}')" class="text-sky-400 hover:text-sky-300 p-1 font-bold text-sm" title="Enviar para o gestor (conduta)">👔</button>` : ''}
         <button onclick="editarOcViagemModal('${o.id}')" class="text-blue-400 hover:text-blue-300 p-1 font-bold text-sm" title="Editar Ocorrência">✏️</button>
         <button onclick="deleteOcViagem('${o.id}')" class="text-red-400 hover:text-red-300 p-1 font-bold text-sm" title="Excluir Ocorrência">🗑️</button>
       </td>
@@ -17188,6 +17225,8 @@ function renderViagensOcorrenciasSubTab() {
               <label class="block text-[10px] text-emerald-400 font-bold mb-1">Ação Tomada <span class="text-emerald-300 font-normal">(Obrigatório ao Finalizar)</span></label>
               <textarea id="ocv-acao" rows="2" placeholder="Ex: JOSE PAIXAO SUBSTITUTO / FEITO PROCEDIMENTO PARA REGULARIZAR..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs" oninput="forcarMaiuscula(this)"></textarea>
             </div>
+            ${trtOcvCampoFotos('nova')}
+            <p class="text-[10px] text-sky-300/80">👔 Conduta e desvio de rota vão sozinhos para Tratativas do Gestor → Condutas e ficam pendentes até o gestor decidir.</p>
           </div>
           <div class="flex justify-end gap-2 pt-2">
             <button type="button" onclick="toggleFormNovaOcViagem()" class="bg-slate-800 text-slate-300 px-3 py-1.5 rounded text-xs font-bold">Cancelar</button>
@@ -17471,7 +17510,7 @@ function toggleFormNovaOcViagem() {
   document.getElementById('form-nova-oc-viagem')?.classList.toggle('hidden');
 }
 
-function handleNovaOcViagemSubmit(e) {
+async function handleNovaOcViagemSubmit(e) {
   e.preventDefault();
   const ocorrencia = (document.getElementById('ocv-ocorrencia')?.value || '').trim();
   const acao = (document.getElementById('ocv-acao')?.value || '').trim();
@@ -17488,7 +17527,7 @@ function handleNovaOcViagemSubmit(e) {
     return;
   }
 
-  db.addOcorrenciaViagem({
+  const novaOc = db.addOcorrenciaViagem({
     data: document.getElementById('ocv-data').value,
     carga: document.getElementById('ocv-carga').value,
     rota: document.getElementById('ocv-rota').value,
@@ -17501,7 +17540,14 @@ function handleNovaOcViagemSubmit(e) {
     acao: acao,
     status: status
   });
-  alert(status === 'FINALIZADA' ? '✅ Ocorrência operacional registrada e finalizada!' : '⚠️ Ocorrência operacional registrada como PENDENTE!');
+  // 7.5.0: evidências vão para a fila de fotos depois de o registro existir.
+  const nFotos = await trtOcvEnviarFotos(novaOc, 'nova');
+  if (window.cloudStore && window.cloudStore.isConfigured()) window.cloudStore.syncLocalToCloud().catch(() => {});
+  const comGestor = novaOc && Store.gestorPendente(novaOc);
+  alert((comGestor
+      ? '👔 Ocorrência registrada e enviada para Tratativas do Gestor → Condutas. Fica PENDENTE até o gestor decidir.'
+      : (novaOc.status === 'FINALIZADA' ? '✅ Ocorrência operacional registrada e finalizada!' : '⚠️ Ocorrência operacional registrada como PENDENTE!'))
+    + (nFotos ? `\n\n📷 ${nFotos} evidência(s) anexada(s).` : ''));
   renderApp();
 }
 
@@ -17516,8 +17562,9 @@ function editarOcViagemModal(id, forceStatus = null) {
   const modalContainer = document.getElementById('modal-container');
   if (!modalContainer) return;
 
+  window._ocvFotosEdicao.length = 0;
   modalContainer.innerHTML = `
-    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl space-y-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-5 max-w-lg w-full shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
       <div class="flex justify-between items-center border-b border-slate-800 pb-2">
         <h3 class="font-bold text-white text-sm">Tratamento / Edição de Ocorrência — Carga ${o.carga}</h3>
         <button onclick="closeModal()" class="text-slate-400 hover:text-white text-sm">✕</button>
@@ -17593,6 +17640,10 @@ function editarOcViagemModal(id, forceStatus = null) {
           <textarea id="ed-ocv-acao" rows="2" placeholder="Descreva a ação corretiva/adotada..." class="w-full bg-slate-800 border border-slate-700 text-white rounded p-1.5" oninput="forcarMaiuscula(this)">${o.acao||''}</textarea>
         </div>
 
+        ${Store.gestorPendente(o) ? `<div class="text-[11px] text-sky-300 bg-sky-950/40 border border-sky-800 rounded p-2">👔 Esta ocorrência está com o gestor. Ela é finalizada quando ele concluir em Tratativas do Gestor → Condutas.</div>` : ''}
+        ${_galeriaFotosModulo(o, 'fotos', 'ocoper', { titulo: 'Evidências já anexadas', cor: 'sky' })}
+        ${trtOcvCampoFotos('edicao')}
+
         <div class="flex justify-end gap-2 pt-2">
           <button type="button" onclick="closeModal()" class="bg-slate-800 text-slate-300 font-bold px-3 py-1.5 rounded">Cancelar</button>
           <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-1.5 rounded shadow">Salvar Ocorrência</button>
@@ -17602,9 +17653,14 @@ function editarOcViagemModal(id, forceStatus = null) {
   modalContainer.classList.remove('hidden');
 }
 
-function handleSalvarEdicaoOcViagem(e, id) {
+async function handleSalvarEdicaoOcViagem(e, id) {
   e.preventDefault();
   const status = document.getElementById('ed-ocv-status').value;
+  const atual = db.getOcorrenciasViagens().find(x => x.id == id);
+  if (status === 'FINALIZADA' && atual && Store.gestorPendente(atual)) {
+    alert('👔 Esta ocorrência está com o gestor. Ela é finalizada quando ele concluir em Tratativas do Gestor → Condutas.\n\nSalve como PENDENTE para gravar as outras alterações.');
+    return;
+  }
   const ocorrencia = (document.getElementById('ed-ocv-ocorrencia')?.value || '').trim();
   const acao = (document.getElementById('ed-ocv-acao')?.value || '').trim();
 
@@ -17634,8 +17690,14 @@ function handleSalvarEdicaoOcViagem(e, id) {
     ocorrencia: ocorrencia,
     acao: acao
   });
+  const editada = db.getOcorrenciasViagens().find(x => x.id == id);
+  const nFotos = await trtOcvEnviarFotos(editada, 'edicao');
+  if (window.cloudStore && window.cloudStore.isConfigured()) window.cloudStore.syncLocalToCloud().catch(() => {});
   closeModal();
-  alert(status === 'FINALIZADA' ? '✅ Ocorrência finalizada e movida para as Finalizadas!' : '✅ Ocorrência operacional atualizada!');
+  const foiProGestor = editada && Store.gestorPendente(editada) && !(atual && Store.gestorPendente(atual));
+  alert((foiProGestor ? '👔 Ocorrência atualizada e enviada para Tratativas do Gestor → Condutas.'
+      : (status === 'FINALIZADA' ? '✅ Ocorrência finalizada e movida para as Finalizadas!' : '✅ Ocorrência operacional atualizada!'))
+    + (nFotos ? `\n\n📷 ${nFotos} evidência(s) anexada(s).` : ''));
   renderApp();
 }
 
@@ -18094,6 +18156,13 @@ function renderRotaOcorrenciasView() {
           </div>
         ` : rotasFiltradas.map(r => {
           const isFinalizado = r.status_chamado === 'finalizado';
+          // 7.5.0: a coluna da direita mostra a MANUTENÇÃO só quando ela se
+          // aplica (conduta com o veículo seguindo viagem não tem oficina) e,
+          // embaixo, a tratativa do gestor (migration 80).
+          const temGestor = !!Store.tratativaGestorDe(r);
+          const precisaManut = r.tipo_ocorrencia !== 'CONDUTA_INADEQUADA' || !!r.retorno_manutencao_descricao
+            || !!r.veiculo_parado || (!!r.status_veiculo && r.status_veiculo !== 'Em Rota');
+          const manutConcluida = isFinalizado || (!r.veiculo_parado && r.status_veiculo === 'Em Rota' && !!r.retorno_manutencao_data);
           return `
             <div class="bg-slate-900 border ${isFinalizado ? 'border-emerald-700/60 bg-emerald-950/5' : (r.veiculo_parado || r.status_veiculo === 'Aguardando Manutenção' ? 'border-red-600/80 shadow-red-950/20' : 'border-slate-800')} rounded-2xl p-4 sm:p-5 shadow-xl space-y-3.5 transition">
               <!-- TOPO DO CARD -->
@@ -18103,7 +18172,7 @@ function renderRotaOcorrenciasView() {
                     <span class="text-xs font-black text-red-400 uppercase tracking-wider">${r.numero_protocolo}</span>
                     <span class="bg-slate-800 text-amber-300 border border-amber-800/60 font-bold px-2 py-0.5 rounded text-[10px]">${r.motivo_resumido || r.tipo_ocorrencia || 'PROBLEMA MECÂNICO'}</span>
                     <span class="px-2 py-0.5 rounded text-[10px] font-black ${isFinalizado ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-red-950 text-red-300 border border-red-800'}">
-                      ${isFinalizado ? '✔ FINALIZADO' : '⏳ PENDENTE'}
+                      ${isFinalizado ? '✔ FINALIZADO' : (Store.gestorPendente(r) && (!precisaManut || manutConcluida) ? '👔 COM O GESTOR' : '⏳ PENDENTE')}
                     </span>
                   </div>
                   <div class="text-sm sm:text-base font-extrabold text-white mt-1">🚛 ${r.veiculo_placa} (${r.veiculo_modelo || 'Veículo'}) • 👤 ${r.motorista_nome}</div>
@@ -18167,8 +18236,9 @@ function renderRotaOcorrenciasView() {
                     </div>` : ''}
                 </div>
 
-                <!-- Coluna 2: Retorno da Manutenção (Pendente vs Finalizado) -->
-                ${isFinalizado ? `
+                <!-- Coluna 2: Retorno da Manutenção (Pendente vs Finalizado) + Tratativa do Gestor -->
+                <div class="space-y-3">
+                ${!precisaManut ? '' : manutConcluida ? `
                   <!-- FICHA TÉCNICA DE RETORNO CONCLUÍDO -->
                   <div class="bg-emerald-950/20 p-3.5 rounded-xl border border-emerald-700/60 space-y-2.5 flex flex-col justify-between">
                     <div class="space-y-2">
@@ -18249,6 +18319,16 @@ function renderRotaOcorrenciasView() {
                     </div>
                   </div>
                 `}
+                ${trtBlocoGestorCard(r, 'rota')}
+                ${!temGestor && !precisaManut ? `
+                  <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-[11px] text-slate-400">
+                    Conduta registrada antes da 7.5.0, sem tratativa do gestor.
+                  </div>` : ''}
+                ${!temGestor ? `
+                  <button onclick="trtEncaminharAoGestor('rota', '${r.id}')" class="w-full bg-slate-800 hover:bg-sky-900 border border-sky-800/70 text-sky-300 font-bold py-2 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition" title="Para conduta, desvio ou qualquer caso que precise da decisão do gestor">
+                    <span>👔</span> Enviar para o gestor (conduta)
+                  </button>` : ''}
+                </div>
               </div>
             </div>
           `;
@@ -20078,7 +20158,10 @@ async function handleNovaRotaSubmit(e) {
   const avisoPrevia = (previaRet && previaRet.success && previaRet.retencao)
     ? `\n\nPrévia ${previaRet.retencao.numero_retencao} enviada para a Indisponibilidade da Frota (aguarda validação da oficina).`
     : '';
-  alert('✅ Ocorrência de frota em rota registrada com sucesso!' + avisoPrevia);
+  const avisoGestor = (novaRota && Store.gestorPendente(novaRota))
+    ? '\n\nConduta enviada para Tratativas do Gestor → Condutas. O chamado fecha quando o gestor concluir.'
+    : '';
+  alert('✅ Ocorrência de frota em rota registrada com sucesso!' + avisoPrevia + avisoGestor);
   renderApp();
 }
 
@@ -20874,6 +20957,11 @@ function handleEditarRotaSubmit(e, id) {
   }
 
   const isFinalizado = statusVeic === 'Em Rota';
+  // 7.5.0: conduta com o veículo em rota não tem retorno de oficina — a
+  // decisão é do gestor (Tratativas do Gestor → Condutas). Exigir o campo
+  // aqui era o que levava a decisão do gestor para "serviço realizado".
+  const ehConduta = db._tipoOcorrenciaDoMotivo(motivoResumido) === 'CONDUTA_INADEQUADA';
+  const exigeRetorno = isFinalizado && !(ehConduta && !retornoDesc.trim());
 
   // Obrigatoriedade da ação de manutenção ao liberar o veículo (item 0.2 da
   // auditoria de 17/08/2026): o modal de edição permitia mudar o Status do
@@ -20881,12 +20969,12 @@ function handleEditarRotaSubmit(e, id) {
   // a ficha técnica de retorno da manutenção, já que esses campos aqui não
   // eram obrigatórios — diferente do modal correto de liberação
   // (confirmarLiberacaoVeiculo), que já valida isso.
-  if (isFinalizado && !retornoDesc.trim()) {
+  if (exigeRetorno && !retornoDesc.trim()) {
     alert('⚠️ Para liberar o veículo (Status "Em Rota"), descreva o "Serviço Realizado / Parecer Técnico" na Ficha Técnica de Retorno da Manutenção.');
     document.getElementById('ed-rota-retorno-descricao')?.focus();
     return;
   }
-  if (isFinalizado && !retornoResp.trim()) {
+  if (exigeRetorno && !retornoResp.trim()) {
     alert('⚠️ Para liberar o veículo (Status "Em Rota"), informe o "Responsável Técnico" na Ficha Técnica de Retorno da Manutenção.');
     document.getElementById('ed-rota-retorno-responsavel')?.focus();
     return;
@@ -20907,8 +20995,8 @@ function handleEditarRotaSubmit(e, id) {
     descricao: desc.trim(),
     retorno_manutencao_descricao: retornoDesc,
     acao_mecanico: retornoDesc,
-    retorno_manutencao_responsavel: retornoResp,
-    retorno_manutencao_data: isFinalizado ? agoraIsoBrasilia() : null,
+    retorno_manutencao_responsavel: (ehConduta && !retornoDesc.trim()) ? null : retornoResp,
+    retorno_manutencao_data: (isFinalizado && retornoDesc.trim()) ? agoraIsoBrasilia() : null,
     pecas_trocadas: pecas,
     custo_socorro: custo,
     guincho_acionado: guincho,
@@ -26439,6 +26527,7 @@ function imprimirBoletimGerencialExecutivo() {
         <div style="font-size: 7.5px; color: #64748b; line-height: 1.3;">
           • Devoluções Pendentes Físico CD: <b>${totalPendCd}</b><br>
           • Tratativas do Gestor sem parecer: <b>${tratativasGestorPend}</b>${pend.maisAntigaGestor && pend.maisAntigaGestor.texto ? ` <span style="color:#b45309;">(mais antiga: ${pend.maisAntigaGestor.texto})</span>` : ''}<br>
+          • Condutas com o Gestor (Rota e Operacional): <b>${pend.condutasGestor || 0}</b><br>
           • Reentregas Pendentes: <b>${reentregasPendentes}</b><br>
           • Socorros Aguardando Oficina: <b>${socorrosEmAberto}</b>
         </div>
@@ -27766,6 +27855,7 @@ function renderBoletimGerencialView() {
                 <div class="space-y-1 text-xs border-t border-slate-800 pt-2 text-slate-300">
                   <div class="flex justify-between"><span>• Devoluções Pend. Físico CD:</span><b class="${totalPendCd>0?'text-amber-400':'text-white'}">${totalPendCd}</b></div>
                   <div class="flex justify-between"><span>• Tratativas do Gestor sem parecer:</span><b class="${tratativasGestorPend>0?'text-sky-300':'text-white'}">${tratativasGestorPend}</b></div>
+                  <div class="flex justify-between"><span>• Condutas com o Gestor:</span><b class="${(pend.condutasGestor||0)>0?'text-red-300':'text-white'}">${pend.condutasGestor || 0}</b></div>
                   ${pend.maisAntigaGestor && pend.maisAntigaGestor.texto ? `<div class="text-[10px] text-slate-500 -mt-0.5 pl-2">↳ mais antiga: ${pend.maisAntigaGestor.texto}</div>` : ''}
                   <div class="flex justify-between"><span>• Reentregas Pendentes:</span><b class="${reentregasPendentes>0?'text-amber-400':'text-white'}">${reentregasPendentes}</b></div>
                   <div class="flex justify-between"><span>• Socorros Aguardando Oficina:</span><b class="${socorrosEmAberto>0?'text-amber-400':'text-white'}">${socorrosEmAberto}</b></div>

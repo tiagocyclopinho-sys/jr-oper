@@ -2431,6 +2431,21 @@ class Store {
       is_deleted: false
     };
 
+    // 7.5.0 (migration 80): conduta vai para a fila do gestor, nao para a
+    // manutencao. Com o veiculo seguindo viagem, o chamado fica PENDENTE ate
+    // o gestor concluir (antes nascia RESOLVIDO e ninguem tratava).
+    newRota.tratativas = [];
+    newRota.tratativa_fotos_paths = [];
+    newRota.tratativa_fotos_pendentes = 0;
+    if (newRota.tipo_ocorrencia === 'CONDUTA_INADEQUADA') {
+      newRota.tratativas.push(this._novaTratativaGestor('AUTOMATICA'));
+      if (isEmRota) {
+        newRota.status = 'EM_ATENDIMENTO';
+        newRota.status_chamado = 'pendente';
+        newRota.resolvido_em = null;
+      }
+    }
+
     this.data.ocorrencias_rota.unshift(newRota);
     this.logAudit({
       acao: 'CRIACAO_CHAMADO_ROTA',
@@ -2489,14 +2504,36 @@ class Store {
                             updateData.status === 'RESOLVIDO' || 
                             r.status_veiculo === 'Em Rota';
 
-      if (isFinalizacao) {
+      // 7.5.0: virou conduta numa edicao de chamado ainda aberto -> fila do gestor.
+      if (r.tipo_ocorrencia === 'CONDUTA_INADEQUADA' && r.status_chamado !== 'finalizado' && !Store.tratativaGestorDe(r)) {
+        if (!Array.isArray(r.tratativas)) r.tratativas = [];
+        r.tratativas.push(this._novaTratativaGestor('AUTOMATICA'));
+      }
+      const gestorPendente = Store.gestorPendente(r);
+      const ehConduta = r.tipo_ocorrencia === 'CONDUTA_INADEQUADA';
+
+      if (isFinalizacao && gestorPendente) {
+        // Veiculo liberado, mas a conduta ainda esta com o gestor: o chamado
+        // so fecha quando ele concluir (concluirTratativaGestor).
+        r.status_veiculo = 'Em Rota';
+        r.veiculo_parado = false;
+        r.status = 'EM_ATENDIMENTO';
+        r.status_chamado = 'pendente';
+        if (!ehConduta || updateData.retorno_manutencao_descricao) {
+          r.retorno_manutencao_data = updateData.retorno_manutencao_data || r.retorno_manutencao_data || agoraIsoBrasilia();
+          r.retorno_manutencao_responsavel = updateData.retorno_manutencao_responsavel || (this.currentUser ? this.currentUser.nome : 'MANUTENÇÃO');
+        }
+      } else if (isFinalizacao) {
         r.status = 'RESOLVIDO';
         r.status_chamado = 'finalizado';
         r.status_veiculo = 'Em Rota';
         r.veiculo_parado = false;
         if (!r.resolvido_em) r.resolvido_em = agoraIsoBrasilia();
-        r.retorno_manutencao_data = updateData.retorno_manutencao_data || r.retorno_manutencao_data || agoraIsoBrasilia();
-        r.retorno_manutencao_responsavel = updateData.retorno_manutencao_responsavel || (this.currentUser ? this.currentUser.nome : 'MANUTENÇÃO');
+        // Conduta sem servico de oficina nao ganha "retorno da manutencao".
+        if (!ehConduta || updateData.retorno_manutencao_descricao || r.retorno_manutencao_descricao) {
+          r.retorno_manutencao_data = updateData.retorno_manutencao_data || r.retorno_manutencao_data || agoraIsoBrasilia();
+          r.retorno_manutencao_responsavel = updateData.retorno_manutencao_responsavel || (this.currentUser ? this.currentUser.nome : 'MANUTENÇÃO');
+        }
       } else {
         r.status = updateData.status || r.status || 'EM_ATENDIMENTO';
         r.status_chamado = updateData.status_chamado || r.status_chamado || 'pendente';
@@ -2541,6 +2578,197 @@ class Store {
 
   deleteOcorrenciaRota(id) {
     return this.softDelete('ocorrencias_rota', id);
+  }
+
+  // ===========================================================================
+  // TRATATIVAS DO GESTOR - CONDUTAS (7.5.0, migration 80)
+  //
+  // Conduta / desvio de rota, venha da Ocorrencia em Rota ou da Operacional,
+  // ganha um item { area: 'GESTOR' } na lista `tratativas` e cai na fila
+  // Tratativas do Gestor -> Condutas. O relogio do SLA e `enviado_em`, gravado
+  // uma vez: editar o relato nao zera a contagem (o que ainda acontece com o
+  // atualizado_em da devolucao).
+  //
+  // modulo: 'rota' (ocorrencias_rota) ou 'oper' (ocorrencias_viagens).
+  // ===========================================================================
+  _novaTratativaGestor(origem) {
+    return {
+      id: 'trat_' + this.gerarIdUnico(),
+      area: 'GESTOR',
+      status: 'PENDENTE',
+      origem: origem || 'MANUAL',
+      enviado_em: agoraIsoBrasilia(),
+      enviado_por: this.currentUser ? this.currentUser.nome : 'SISTEMA',
+      medida: '',
+      parecer: '',
+      responsavel: '',
+      concluida_em: null
+    };
+  }
+
+  _colecaoTratativa(modulo) {
+    return modulo === 'oper' ? 'ocorrencias_viagens' : 'ocorrencias_rota';
+  }
+
+  _registroTratativa(modulo, id) {
+    return (this.data[this._colecaoTratativa(modulo)] || []).find(x => x.id == id && !x.is_deleted) || null;
+  }
+
+  /** Manda (ou devolve) a ocorrencia para a fila do gestor. */
+  encaminharAoGestor(modulo, id, origem) {
+    const item = this._registroTratativa(modulo, id);
+    if (!item) return { success: false, message: 'Ocorrência não encontrada.' };
+    if (Store.gestorPendente(item)) return { success: true, jaEstava: true };
+    const antes = JSON.parse(JSON.stringify(item));
+    if (!Array.isArray(item.tratativas)) item.tratativas = [];
+    item.tratativas.push(this._novaTratativaGestor(origem || 'MANUAL'));
+    if (modulo === 'oper') {
+      item.status = 'PENDENTE';
+    } else {
+      this.saveVersion('ocorrencias_rota', antes);
+      // Reabre o chamado sem parar o veiculo.
+      item.status = 'EM_ATENDIMENTO';
+      item.status_chamado = 'pendente';
+    }
+    this.carimbarEdicao(this._colecaoTratativa(modulo), item);
+    this.logAudit({
+      acao: 'ENVIO_TRATATIVA_GESTOR',
+      modulo: this._colecaoTratativa(modulo),
+      registro_id: id,
+      diff: { antes, depois: item }
+    });
+    this.save();
+    return { success: true };
+  }
+
+  /**
+   * O gestor conclui. d = { medida, parecer, responsavel }.
+   * Rota: fecha o chamado se a manutencao nao estiver pendente.
+   * Operacional: grava a decisao na Acao Tomada e finaliza.
+   */
+  concluirTratativaGestor(modulo, id, d) {
+    const item = this._registroTratativa(modulo, id);
+    if (!item) return { success: false, message: 'Ocorrência não encontrada.' };
+    const t = Store.tratativaGestorDe(item);
+    if (!t || t.status !== 'PENDENTE') return { success: false, message: 'Não há tratativa pendente com o gestor nesta ocorrência.' };
+    const medida = String((d && d.medida) || '').toUpperCase().trim();
+    const parecer = String((d && d.parecer) || '').toUpperCase().trim();
+    if (!medida) return { success: false, message: 'Escolha a medida aplicada.' };
+    if (!parecer) return { success: false, message: 'Escreva o parecer.' };
+
+    const antes = JSON.parse(JSON.stringify(item));
+    t.status = 'CONCLUIDA';
+    t.medida = medida;
+    t.parecer = parecer;
+    t.responsavel = String((d && d.responsavel) || (this.currentUser ? this.currentUser.nome : '')).toUpperCase().trim();
+    t.concluida_em = agoraIsoBrasilia();
+
+    if (modulo === 'oper') {
+      const rotulo = (Store.MEDIDAS_GESTOR.find(m => m.id === medida) || { label: medida }).label.toUpperCase();
+      const decisao = `GESTOR ${t.responsavel}: ${rotulo} - ${parecer}`;
+      item.acao = item.acao ? `${item.acao} / ${decisao}` : decisao;
+      if (!item.ocorrencia) item.ocorrencia = item.causa || parecer;
+      item.status = 'FINALIZADA';
+    } else {
+      this.saveVersion('ocorrencias_rota', antes);
+      const manutPendente = item.veiculo_parado || (item.status_veiculo && item.status_veiculo !== 'Em Rota');
+      if (!manutPendente) {
+        item.status = 'RESOLVIDO';
+        item.status_chamado = 'finalizado';
+        if (!item.resolvido_em) item.resolvido_em = agoraIsoBrasilia();
+      }
+    }
+    this.carimbarEdicao(this._colecaoTratativa(modulo), item);
+    this.logAudit({
+      acao: 'CONCLUSAO_TRATATIVA_GESTOR',
+      modulo: this._colecaoTratativa(modulo),
+      registro_id: id,
+      diff: { antes, depois: item }
+    });
+    this.save();
+    return { success: true, item };
+  }
+
+  /**
+   * A fila do gestor, das duas origens, no mesmo formato. Cada linha traz o
+   * registro (`reg`) e a tratativa (`trat`).
+   */
+  getCondutasGestor() {
+    const linhas = [];
+    (this.data.ocorrencias_rota || []).forEach(r => {
+      if (r.is_deleted) return;
+      const t = Store.tratativaGestorDe(r);
+      if (!t) return;
+      const veiculo = (this.data.veiculos || []).find(v => v.id == r.veiculo_id) || {};
+      const motorista = (this.data.motoristas || []).find(m => m.id == r.motorista_id) || {};
+      const carga = (this.data.cargas || []).find(c => c.id == r.carga_id) || {};
+      linhas.push({
+        modulo: 'rota', id: r.id, reg: r, trat: t,
+        protocolo: r.numero_protocolo || 'ROT',
+        origemRotulo: 'Ocorrência em Rota',
+        data: r.criado_em || r.data_chamado || '',
+        pessoa: String(motorista.nome || r.motorista_nome || '').toUpperCase(),
+        funcao: 'MOTORISTA',
+        placa: veiculo.placa || r.veiculo_placa || '',
+        carga: carga.numero_carga || r.carga_numero || '',
+        rota: carga.rota || carga.rota_nome || r.rota_nome || '',
+        local: r.localizacao || '',
+        motivo: r.motivo_resumido || r.tipo_ocorrencia || '',
+        relato: r.descricao || '',
+        acaoCco: ''
+      });
+    });
+    (this.data.ocorrencias_viagens || []).forEach(o => {
+      if (o.is_deleted) return;
+      const t = Store.tratativaGestorDe(o);
+      if (!t) return;
+      linhas.push({
+        modulo: 'oper', id: o.id, reg: o, trat: t,
+        protocolo: 'OC OPER · ' + (o.carga || 's/ carga'),
+        origemRotulo: 'Ocorrência Operacional',
+        data: o.data || o.criado_em || '',
+        pessoa: String(o.funcionario || '').toUpperCase(),
+        funcao: o.funcao || '',
+        placa: o.placa || '',
+        carga: o.carga || '',
+        rota: o.rota || '',
+        local: '',
+        motivo: o.motivo || '',
+        relato: [o.causa ? 'CAUSA: ' + o.causa : '', o.ocorrencia || ''].filter(Boolean).join('\n'),
+        acaoCco: o.acao || ''
+      });
+    });
+    return linhas;
+  }
+
+  /**
+   * Condutas da mesma pessoa nos `dias` anteriores a `dataRef` (as duas
+   * origens; a propria ocorrencia fica de fora). Liga pelo NOME normalizado,
+   * como o resto do app.
+   */
+  condutasAnterioresDe(pessoa, dataRef, ignorarId, dias = 90) {
+    const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+    const alvo = norm(pessoa);
+    if (!alvo) return [];
+    const fim = String(dataRef || '').slice(0, 10) || hojeIsoBrasilia();
+    const ini = new Date(fim + 'T12:00:00');
+    ini.setDate(ini.getDate() - dias);
+    const iniIso = ini.toISOString().slice(0, 10);
+    const saida = [];
+    (this.data.ocorrencias_rota || []).forEach(r => {
+      if (r.is_deleted || r.id == ignorarId || r.tipo_ocorrencia !== 'CONDUTA_INADEQUADA') return;
+      const motorista = (this.data.motoristas || []).find(m => m.id == r.motorista_id) || {};
+      if (norm(motorista.nome || r.motorista_nome) !== alvo) return;
+      const d = String(r.criado_em || r.data_chamado || '').slice(0, 10);
+      if (d && d >= iniIso && d <= fim) saida.push({ data: d, motivo: r.motivo_resumido || 'CONDUTA', ref: r.numero_protocolo, medida: (Store.tratativaGestorDe(r) || {}).medida || '' });
+    });
+    (this.data.ocorrencias_viagens || []).forEach(o => {
+      if (o.is_deleted || o.id == ignorarId || !Store.motivoEhConduta(o.motivo)) return;
+      if (norm(o.funcionario) !== alvo) return;
+      const d = String(o.data || o.criado_em || '').slice(0, 10);
+      if (d && d >= iniIso && d <= fim) saida.push({ data: d, motivo: o.motivo, ref: 'OC OPER ' + (o.carga || ''), medida: (Store.tratativaGestorDe(o) || {}).medida || '' });
+    });
+    return saida.sort((a, b) => b.data.localeCompare(a.data));
   }
 
   // CRUD Cadastros Auxiliares (Dados SAC)
@@ -2761,9 +2989,26 @@ class Store {
       motivo: String(ocData.motivo || 'OUTRO').toUpperCase().trim(),
       causa: String(ocData.causa || '').toUpperCase().trim(),
       ocorrencia: String(ocData.ocorrencia || '').toUpperCase().trim(),
-      acao: String(ocData.acao || '').toUpperCase().trim()
+      acao: String(ocData.acao || '').toUpperCase().trim(),
+      // 7.5.0: o status vinha da tela e era jogado fora aqui (22 registros
+      // com status vazio no banco em 17/11). A tela trata vazio como pendente.
+      status: ocData.status === 'FINALIZADA' ? 'FINALIZADA' : 'PENDENTE',
+      // Evidencias (migration 80): caminho no Storage, nunca base64.
+      fotos_paths: [],
+      fotos_pendentes: 0,
+      tratativas: [],
+      tratativa_fotos_paths: [],
+      tratativa_fotos_pendentes: 0,
+      criado_em: agoraIsoBrasilia()
     };
+    // Conduta / desvio de rota vai para o gestor e fica pendente ate ele
+    // concluir, mesmo que a CCO ja tenha escrito uma acao.
+    if (Store.motivoEhConduta(item.motivo)) {
+      item.tratativas.push(this._novaTratativaGestor('AUTOMATICA'));
+      item.status = 'PENDENTE';
+    }
     this.data.ocorrencias_viagens.unshift(item);
+    this.carimbarEdicao('ocorrencias_viagens', item);
     this.save();
     return item;
   }
@@ -2773,6 +3018,13 @@ class Store {
     const item = this.data.ocorrencias_viagens.find(x => x.id == id);
     if (item) {
       Object.assign(item, updateData);
+      // Virou conduta numa edicao de ocorrencia ainda aberta -> gestor.
+      if (Store.motivoEhConduta(item.motivo) && item.status !== 'FINALIZADA' && !Store.tratativaGestorDe(item)) {
+        if (!Array.isArray(item.tratativas)) item.tratativas = [];
+        item.tratativas.push(this._novaTratativaGestor('AUTOMATICA'));
+      }
+      // Com o gestor, a CCO nao finaliza por cima.
+      if (Store.gestorPendente(item)) item.status = 'PENDENTE';
       this.carimbarEdicao('ocorrencias_viagens', item);
       this.save();
     }
@@ -4429,6 +4681,10 @@ class Store {
 
   criarPreviaRetencaoDaOcorrenciaRota(rota) {
     if (!rota || !rota.id) return { success: false, message: 'Ocorrência sem id.' };
+    // 7.5.0: conduta com o veiculo seguindo viagem nao e caso de oficina.
+    if (rota.tipo_ocorrencia === 'CONDUTA_INADEQUADA' && !rota.veiculo_parado) {
+      return { success: false, semPrevia: true, message: 'Conduta com veículo em rota: sem prévia de retenção.' };
+    }
     if (!Array.isArray(this.data.retencoes_frota)) this.data.retencoes_frota = [];
     const jaExiste = this.data.retencoes_frota.find(r => r.ocorrencia_rota_id == rota.id && !r.is_deleted);
     if (jaExiste) return { success: true, retencao: jaExiste, jaExistia: true };
@@ -5283,7 +5539,20 @@ class Store {
         colecao: 'ocorrencias_rota',
         etapaPadrao: 'fotos',
         etapas: {
-          fotos: { paths: 'midia_fotos_paths', pendentes: 'midia_fotos_pendentes', legado: 'midia_fotos' }
+          fotos: { paths: 'midia_fotos_paths', pendentes: 'midia_fotos_pendentes', legado: 'midia_fotos' },
+          // 7.5.0 (migration 80): anexo da tratativa do gestor (documento
+          // assinado, prova). Sem legado: chave declarada sem coluna.
+          tratativa: { paths: 'tratativa_fotos_paths', pendentes: 'tratativa_fotos_pendentes', legado: 'tratativa_fotos_legado' }
+        }
+      },
+      // OCORRENCIA OPERACIONAL (7.5.0, migration 80). Bucket rota-fotos, pasta
+      // ocoper/ (ver FOTO_BUCKETS em fotoStore.js). Nunca houve base64.
+      ocoper: {
+        colecao: 'ocorrencias_viagens',
+        etapaPadrao: 'fotos',
+        etapas: {
+          fotos:     { paths: 'fotos_paths',           pendentes: 'fotos_pendentes',           legado: 'fotos_legado' },
+          tratativa: { paths: 'tratativa_fotos_paths', pendentes: 'tratativa_fotos_pendentes', legado: 'tratativa_fotos_legado' }
         }
       },
       // SINISTRO (21/09/2026, migration 42). Seis grupos de foto e DUAS
@@ -5664,6 +5933,34 @@ Store.COLECOES_COM_ATUALIZADO_EM = new Set([
 ]);
 Store.COLECOES_COM_ATUALIZADO_POR = new Set(['ocorrencias_devolucao', 'ocorrencias_rota', 'reentregas',
   'infracoes_relatorios', 'infracoes']);  // 6.8.0, migration 48
+
+// ---------------------------------------------------------------------------
+// TRATATIVAS DO GESTOR - CONDUTAS (7.5.0). Fora da classe pelo mesmo motivo
+// das listas acima. A tela, o Dashboard e o store perguntam por aqui.
+// ---------------------------------------------------------------------------
+// Motivo da Ocorrencia Operacional que vai para o gestor. "DESVIO DE ROTA" entra
+// porque a ROT-2026-028 (desvio) era conduta.
+Store.motivoEhConduta = function (motivo) {
+  const v = String(motivo || '').toUpperCase();
+  return v.indexOf('CONDUTA') !== -1 || v.indexOf('DESVIO') !== -1;
+};
+// A tratativa do gestor da ocorrencia: a pendente, se houver; senao a ultima.
+Store.tratativaGestorDe = function (item) {
+  const lista = (item && Array.isArray(item.tratativas)) ? item.tratativas.filter(t => t && t.area === 'GESTOR') : [];
+  if (!lista.length) return null;
+  return lista.find(t => t.status === 'PENDENTE') || lista[lista.length - 1];
+};
+Store.gestorPendente = function (item) {
+  const t = Store.tratativaGestorDe(item);
+  return !!(t && t.status === 'PENDENTE');
+};
+Store.MEDIDAS_GESTOR = [
+  { id: 'SEM_MEDIDA',  label: 'Sem medida (improcedente)' },
+  { id: 'ORIENTACAO',  label: 'Orientação / feedback' },
+  { id: 'ADVERTENCIA', label: 'Advertência' },
+  { id: 'SUSPENSAO',   label: 'Suspensão' },
+  { id: 'DISTRATO',    label: 'Distrato / desligamento' }
+];
 
 // Gestor padrão de cada turno do Resumo Diário (6.7.0). Único lugar: antes
 // vivia aqui E em app.js:renderResumoDiarioCdView, com risco de divergirem.

@@ -66,7 +66,10 @@ const FOTO_BUCKETS = {
   // Buckets proprios, e nao o da devolucao: as policies sao por bucket e o
   // prazo de guarda de prova de acidente e outro.
   rota:       'rota-fotos',
-  sinistros:  'sinistros-fotos'
+  sinistros:  'sinistros-fotos',
+  // Ocorrencia Operacional (7.5.0, migration 80): mesma prova de viagem que a
+  // ocorrencia em rota, pasta propria no mesmo bucket.
+  ocoper:     'rota-fotos'
 };
 const FOTO_MODULO_PADRAO = 'reentregas';
 const FOTO_BUCKET     = FOTO_BUCKETS[FOTO_MODULO_PADRAO];
