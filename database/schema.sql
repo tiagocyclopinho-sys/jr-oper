@@ -351,6 +351,15 @@ ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS status_chamado VARCHAR(30)
 ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS retorno_manutencao_descricao TEXT;
 ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS retorno_manutencao_data TIMESTAMP;
 ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS retorno_manutencao_responsavel VARCHAR(120);
+-- 7.5.0 (migration 80): tratativas por area (GESTOR = conduta) e evidencias da Oc. Operacional
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS tratativas JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS tratativa_fotos_paths JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE ocorrencias_rota ADD COLUMN IF NOT EXISTS tratativa_fotos_pendentes INTEGER DEFAULT 0;
+ALTER TABLE ocorrencias_viagens ADD COLUMN IF NOT EXISTS tratativas JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE ocorrencias_viagens ADD COLUMN IF NOT EXISTS fotos_paths JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE ocorrencias_viagens ADD COLUMN IF NOT EXISTS fotos_pendentes INTEGER DEFAULT 0;
+ALTER TABLE ocorrencias_viagens ADD COLUMN IF NOT EXISTS tratativa_fotos_paths JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE ocorrencias_viagens ADD COLUMN IF NOT EXISTS tratativa_fotos_pendentes INTEGER DEFAULT 0;
 
 -- 10.2 Trilha de auditoria — espelha this.data.audit_logs do store.js local
 CREATE TABLE IF NOT EXISTS audit_logs (
