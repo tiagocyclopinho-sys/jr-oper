@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 80).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 81).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -322,6 +322,20 @@ partir do branch `main` do GitHub.
   `atualizado_em = (now() AT TIME ZONE 'America/Sao_Paulo')`, NUNCA `now()`
   puro. O app grava hora de Brasília; um carimbo em UTC fica 3 h no futuro e
   a guarda passa a ignorar as edições do app nessa linha.
+
+## Tratativas do Gestor: Condutas (7.5.0, 17/11/2026)
+- Conduta / desvio de rota (Oc. em Rota tipo CONDUTA_INADEQUADA; Oc. Operacional com
+  motivo contendo CONDUTA ou DESVIO: `Store.motivoEhConduta`) ganha item `{area:'GESTOR'}`
+  na lista JSONB `tratativas` (migration 80, APLICADA em 17/11) e cai em Tratativas do
+  Gestor → subaba Condutas (`js/tratativas.js`). Só fecha quando o gestor conclui
+  (`concluirTratativaGestor`): Rota fecha se a manutenção não estiver pendente;
+  Operacional grava a decisão na Ação Tomada e finaliza.
+- A manutenção continua em `retorno_manutencao_*` (Power BI, OS e relatórios leem de lá).
+  Área nova vira item da lista, não coluna nova.
+- SLA do gestor nas condutas = `enviado_em` da tratativa (24 h/48 h), gravado uma vez.
+- Conduta com veículo em rota não gera prévia de retenção nem exige "serviço realizado".
+- Evidências da Oc. Operacional: módulo de foto `ocoper` (bucket rota-fotos, pasta
+  ocoper/), etapas `fotos` e `tratativa`; anexo do gestor na Rota = etapa `tratativa`.
 
 ## Pendências
 - Segurança: repositório público; todas as tabelas com política
