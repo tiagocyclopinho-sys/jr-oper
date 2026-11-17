@@ -1371,10 +1371,15 @@ class CloudStore {
   //    20/08 em diante é `gerarIdUnico()` = `Date.now() * 1000 + contador`
   //    (~1,7e15). Confundir os dois joga o registro para o ano 57000 ou
   //    para 1970 — e some da janela, ou nunca sai dela.
+  //
+  // 7.4.2: `data_hora` entra depois de criado_em — é a data do audit_logs,
+  // que não tem criado_em. Nenhuma outra tabela da janela tem data_hora.
   _momentoDoRegistro(r) {
-    if (r && r.criado_em) {
-      const t = Date.parse(r.criado_em);
-      if (!isNaN(t)) return t;
+    for (const campo of ['criado_em', 'data_hora']) {
+      if (r && r[campo]) {
+        const t = Date.parse(r[campo]);
+        if (!isNaN(t)) return t;
+      }
     }
     const id = Number(r && r.id);
     if (!isFinite(id) || id <= 0) return null;
@@ -3438,7 +3443,7 @@ class CloudStore {
 //                        nenhum aparelho e mandado atualizar.
 //   store.js          -> todo aparelho loga migracao de versao a cada
 //                        abertura, para sempre.
-CloudStore.BUILD = "folga-concedida-7.4.1";
+CloudStore.BUILD = "janela-auditoria-7.4.2";
 
 // =================================================================
 // CATÁLOGO — as duas tabelas que NÃO passam pelo MAPA_TABELAS
@@ -3786,9 +3791,20 @@ CloudStore.carimboDoAparelho = function() {
 // ~2 MB que sobram da cota. Se a operação precisar enxergar mais tempo no
 // próprio app, é só aumentar o número; se a cota apertar (fotos de devolução
 // pesam muito mais que viagem), é só diminuir.
+// 7.4.2 (17/11/2026): audit_logs e registro_versoes entram com 60 dias.
+// Desciam inteiros para todo aparelho a cada ciclo (1.189 + 346 KB em
+// 17/11, crescendo ~500 KB/mês) e o aparelho do Marcos Adriano passou a
+// recusar gravação com 82% de cota. O corte de 1.000 do logAudit() não
+// adiantava: o pull seguinte trazia tudo de volta. Tudo continua na nuvem;
+// quem lê histórico antigo (Visão Operação, SLA) lê direto do banco.
+// Efeito na tela: Lixeira/histórico do dossiê e "Restaurar versão" mostram
+// só os últimos 60 dias, e a data da causa apurada de devolução mais antiga
+// fica em branco (causaVigenteDevolucao já trata a falta da linha).
 CloudStore.JANELA_OPERACIONAL_DIAS = {
   controle_viagens: 90,
-  ocorrencias_viagens: 90
+  ocorrencias_viagens: 90,
+  audit_logs: 60,
+  registro_versoes: 60
 };
 
 window.cloudStore = new CloudStore();
