@@ -143,6 +143,14 @@ function escLargadaDaLinha(l) {
   return m ? (escLargadaDaMatriz(m, l.data_escala) || propria) : propria;
 }
 
+// Campo de hora/data (type=time, datetime-local): o navegador dispara "change"
+// a cada dígito ("1" já vira 01:30), o app gravava e redesenhava a tela e o
+// segundo dígito se perdia (7.5.1, 17/11). Grava só ao sair do campo ou no Enter,
+// e só se o valor mudou.
+function escAoSair(acao) {
+  return `onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="if(this.value!==this.defaultValue){${acao}}"`;
+}
+
 // "16/11/2026 - 15:00"
 function escLargadaBr(ts) {
   if (!ts) return '';
@@ -159,7 +167,7 @@ function escLargadaCelula(l, prefixo) {
       ? `<span class="text-slate-200 whitespace-nowrap" title="Vem da matriz. Para mudar, ajuste a matriz do dia.">${escEsc(escLargadaBr(lg))}</span>`
       : `<span class="text-[10px] text-amber-300" title="Informe a largada na matriz do dia">matriz sem horário</span>`;
   }
-  return `<input id="${prefixo}-${l.id}-previsao_largada" type="datetime-local" class="${ESC_INPUT} ${lg ? '' : '!border-red-500'}" value="${escEsc(lg || '')}" onchange="escLinhaCampo('${l.id}','previsao_largada',this.value)">
+  return `<input id="${prefixo}-${l.id}-previsao_largada" type="datetime-local" class="${ESC_INPUT} ${lg ? '' : '!border-red-500'}" value="${escEsc(lg || '')}" ${escAoSair(`escLinhaCampo('${l.id}','previsao_largada',this.value)`)}>
     ${lg ? '' : '<div class="text-[10px] text-red-300 mt-0.5">viagem avulsa: informe a largada</div>'}`;
 }
 
@@ -425,7 +433,7 @@ function escTelaMatrizes() {
                         <option value="0" ${Number(m.largada_dias) === -1 ? '' : 'selected'}>No dia</option>
                         <option value="-1" ${Number(m.largada_dias) === -1 ? 'selected' : ''}>Véspera</option>
                       </select>
-                      <input id="escm-${m.id}-largada_hora" type="time" class="${ESC_INPUT} ${m.largada_hora ? '' : '!border-amber-500'}" value="${escEsc(m.largada_hora || '')}" onchange="escMatrizCampo('${m.id}','largada_hora',this.value)">
+                      <input id="escm-${m.id}-largada_hora" type="time" class="${ESC_INPUT} ${m.largada_hora ? '' : '!border-amber-500'}" value="${escEsc(m.largada_hora || '')}" ${escAoSair(`escMatrizCampo('${m.id}','largada_hora',this.value)`)}>
                     </div>
                   </td>
                   <td class="p-1">
@@ -433,7 +441,7 @@ function escTelaMatrizes() {
                       <select id="escm-${m.id}-retorno_dias" class="${ESC_INPUT} !w-16" onchange="escMatrizCampo('${m.id}','retorno_dias',this.value)">
                         ${[0, 1, 2, 3, 4, 5, 6].map(n => `<option value="${n}" ${Number(m.retorno_dias) === n ? 'selected' : ''}>+${n}d</option>`).join('')}
                       </select>
-                      <input id="escm-${m.id}-retorno_hora" type="time" class="${ESC_INPUT}" value="${escEsc(m.retorno_hora)}" onchange="escMatrizCampo('${m.id}','retorno_hora',this.value)">
+                      <input id="escm-${m.id}-retorno_hora" type="time" class="${ESC_INPUT}" value="${escEsc(m.retorno_hora)}" ${escAoSair(`escMatrizCampo('${m.id}','retorno_hora',this.value)`)}>
                     </div>
                   </td>
                   <td class="p-1 whitespace-nowrap text-center">
