@@ -5619,11 +5619,16 @@ const DEPARTAMENTOS_PADRAO = [
   "FATURAMENTO",
   "MONTAGEM CARGA",
   "GERENTE GERAL",
-  "ANALISTA/BI"
+  "ANALISTA/BI",
+  // 7.6.1: o operador do cross se cadastra sozinho na tela de login. Sem isto
+  // ele escolhia OUTRO, digitava CROSS PALMAS e caía como SAC.
+  "CROSS PALMAS"
 ];
 
 function mapDeptToRoleAndCargo(dept) {
   const d = String(dept || '').toUpperCase();
+  // Primeiro, porque "CROSS PALMAS" não pode cair em nenhuma regra abaixo.
+  if (d.includes('CROSS')) return { role: 'CROSS', cargo: 'Conferente Cross Palmas' };
   if (d.includes('ANALISTA') || d.includes('BI')) return { role: 'ADMIN', cargo: 'Analista de BI / Logística' };
   if (d.includes('GERENTE') || d.includes('SUPERVISOR OPERAÇÃO')) return { role: 'GESTOR', cargo: 'Gestor Operacional' };
   if (d.includes('CENTRO DE DISTRIBUIÇÃO') || d.includes('MONTAGEM') || d.includes('SUPERVISOR CD')) return { role: 'CD', cargo: 'Operador / Líder CD' };
