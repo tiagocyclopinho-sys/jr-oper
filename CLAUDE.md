@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 81).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 82).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -264,6 +264,14 @@ partir do branch `main` do GitHub.
   `TRANSB dd.mm.aaaa PLACA` (setor TRANSBORDO). Fusion "CROSS DOCKING PALMAS"
   liga ao transbordo de Palmas se houver um só no dia. Peso do transbordo =
   soma das rotas, fora do total da montagem.
+- Cross Palmas (7.6.0, migration 81): tabela `cross_movimentos` (RECEBIDO_CROSS
+  e EMBARQUE, item a item, `manifesto` agrupa o transbordo), gravada direto na
+  nuvem por `js/crossPalmas.js` (fora do localStorage e do pull). Perfil novo
+  CROSS (departamento CROSS PALMAS), vê todas as telas. Local atual da
+  devolução é DERIVADO (na rota → no cross → em transbordo → no CD), nunca
+  gravado. Confronto = registrado × cross × embarcado × conferido no CD.
+  Terceiro nunca traz de Palmas (só deixa e segue): não há transbordo avulso.
+  Reentrega de Palmas sai do cross: `local_armazenagem` "CROSS PALMAS...".
 - 2º ajudante (6.11.0, migration 58 APLICADA): coluna `ajudante_2` em matrizes
   e linhas. "A / B" vindo das planilhas é separado ao carregar
   (`escSepararAjudantes`) e gravado separado na próxima edição. Fusion:
