@@ -310,6 +310,11 @@ class Store {
 
     ensureArray('departamentos');
     ensureArray('roles_disponiveis');
+    // 7.6.0: perfil CROSS (Cross Palmas). A lista de papéis fica salva no
+    // aparelho; sem isto quem já usava o app não veria o papel novo.
+    if (!this.data.roles_disponiveis.some(r => r && r.value === 'CROSS')) {
+      this.data.roles_disponiveis.push({ value: 'CROSS', label: 'Cross Palmas', desc: 'Recebimento no cross, embarque no transbordo e reentregas de Palmas' });
+    }
     ensureArray('usuarios');
     ensureArray('separadores_conferentes');
     ensureArray('colaboradores_cd');

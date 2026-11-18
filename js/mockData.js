@@ -10,7 +10,8 @@ const INITIAL_DATA = {
     { value: "FINANCEIRO", label: "Financeiro",           desc: "Acertos, notas e abatimentos" },
     { value: "MANUTENCAO", label: "Manutenção",           desc: "Socorro mecânico e gestão de frota" },
     { value: "GESTOR",     label: "Gestor / Gerência",    desc: "Ação do gestor e controle de produtividade" },
-    { value: "ADMIN",      label: "Admin / BI",           desc: "Acesso total + Power BI" }
+    { value: "ADMIN",      label: "Admin / BI",           desc: "Acesso total + Power BI" },
+    { value: "CROSS",      label: "Cross Palmas",         desc: "Recebimento no cross, embarque no transbordo e reentregas de Palmas" }
   ],
 
   // Usuários de demonstração REMOVIDOS em 19/08/2026 — a lista anterior

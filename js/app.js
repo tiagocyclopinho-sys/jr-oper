@@ -4060,7 +4060,10 @@ const NAV_GRUPOS = [
     // identidade e data próprias (migration 44).
     id: 'cd', icon: '📦', titulo: 'Centro de Distribuição',
     itens: [
-      { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico', papeis: ['CD', 'GESTOR', 'ADMIN'] },
+      { tab: 'cd_recepcao', icon: '📦', label: 'Retorno Físico', papeis: ['CD', 'CROSS', 'GESTOR', 'ADMIN'] },
+      // 7.6.0 (migration 81): recebimento no cross, embarque no transbordo e
+      // confronto com o Retorno Físico. Tela em js/crossPalmas.js.
+      { tab: 'cross_palmas', icon: '📍', label: 'Cross Palmas', papeis: ['CROSS', 'CD', 'SAC', 'GESTOR', 'ADMIN'] },
       { tab: 'resumo_diario_cd', icon: '📋', label: 'Resumo Diário', papeis: ['CD', 'GESTOR', 'ADMIN'] },
       { tab: 'ocorrencia_colaborador', icon: '👤', label: 'Ocorrência Colaborador', papeis: ['CD', 'GESTOR', 'ADMIN'] },
       { tab: 'ocorrencia_cd', icon: '📢', label: 'Ocorrência CD', papeis: ['CD', 'GESTOR', 'ADMIN'] },
@@ -4141,7 +4144,7 @@ const NAV_GRUPOS = [
 // reconhecido vê o menu inteiro em vez de ver o menu errado.
 function navPapelDoUsuario(user) {
   if (!user) return null;
-  const papeisValidos = ['SAC', 'CD', 'FINANCEIRO', 'MANUTENCAO', 'GESTOR', 'ADMIN'];
+  const papeisValidos = ['SAC', 'CD', 'FINANCEIRO', 'MANUTENCAO', 'GESTOR', 'ADMIN', 'CROSS'];
   const papelGravado = String(user.role || '').toUpperCase().trim();
   if (papeisValidos.indexOf(papelGravado) > -1) return papelGravado;
 
@@ -4357,6 +4360,9 @@ function renderApp() {
         break;
       case 'cd_recepcao':
         html = renderCdRecepcaoView();
+        break;
+      case 'cross_palmas':
+        html = renderCrossPalmasView();
         break;
       case 'controle_viagens':
         activeViagensSubTab = 'largada';
@@ -11751,6 +11757,9 @@ function pendenteCasaComBusca(d, termo) {
 }
 
 function renderCdRecepcaoView() {
+  // 7.6.0: o local atual pelo Cross Palmas (js/crossPalmas.js) aparece na grade
+  // e no modal de conferência. Lê uma vez da nuvem e redesenha ao chegar.
+  if (typeof crossGarantirDados === 'function') crossGarantirDados();
   const devs = db.getDevolucoes();
   const pendentes = devs.filter(d => d.status_fechamento === 'PENDENTE_FISICO');
 
@@ -11852,6 +11861,7 @@ function renderCdRecepcaoView() {
         <div class="text-[10px] text-slate-400">📍 ${d.carga_rota} | ${d.carga_numero}</div>
         <div class="text-[10px] text-slate-400">👤 ${d.motorista_nome}</div>
         ${statusViagemBadge}
+        ${typeof crossSeloRetornoFisico === 'function' ? `<div>${crossSeloRetornoFisico(d)}</div>` : ''}
         <div class="sm:hidden mt-1.5">${causaHtml}</div>
       </td>
       <td class="p-3 hidden sm:table-cell">
@@ -13397,6 +13407,8 @@ function openCdModal(devId, { edicao = false } = {}) {
       ${edicao ? `<div class="bg-amber-950/40 border border-amber-700/60 rounded-lg p-3 text-[11px] text-amber-200">
         ✏️ Você está corrigindo uma conferência já confirmada${dev.data_entrada_cd ? ` em ${new Date(dev.data_entrada_cd).toLocaleDateString('pt-BR')}` : ''}. A data de entrada no CD não muda${relAtual ? ', e o relatório de divergência existente é corrigido (não sai um segundo)' : ''}.
       </div>` : ''}
+
+      ${typeof crossBlocoConferenciaCd === 'function' ? crossBlocoConferenciaCd(dev) : ''}
 
       <form onsubmit="handleCdModalSubmit(event, '${dev.id}', ${edicao ? 'true' : 'false'})" class="space-y-4 text-xs">
         ${itensHtml}
@@ -16547,6 +16559,15 @@ function abrirModalReceberReentrega(id) {
         <div id="rc-aviso-divergencia" class="hidden bg-amber-950/60 border border-amber-600 rounded-lg p-2.5 text-[11px] text-amber-200 font-semibold"></div>
 
         <div>
+          <!-- 7.6.0: reentrega de Palmas fica no cross e sai de lá na próxima
+               rota (decisão do Tiago, 18/11). Gravado no próprio
+               local_armazenagem, prefixo "CROSS PALMAS", que já aparece em
+               todas as telas de reentrega. -->
+          <label class="block text-[10px] text-blue-300 font-black uppercase mb-1">Onde está recebendo</label>
+          <select id="rc-onde" class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs font-bold mb-2">
+            <option value="CD" ${String(db.currentUser?.role || '').toUpperCase() === 'CROSS' ? '' : 'selected'}>CD Araguaína</option>
+            <option value="CROSS" ${String(db.currentUser?.role || '').toUpperCase() === 'CROSS' ? 'selected' : ''}>Cross Palmas (sai de lá na próxima rota)</option>
+          </select>
           <label class="block text-[10px] text-blue-300 font-black uppercase mb-1">Local de armazenagem</label>
           <input type="text" id="rc-local" placeholder="Ex: RUA 4, BOX 12" oninput="forcarMaiuscula(this)"
                  class="w-full bg-slate-800 border border-slate-700 text-white rounded p-2 text-xs">
@@ -16600,10 +16621,16 @@ async function handleSalvarRecebimentoReentrega(e, id) {
       qtd_recebida: document.getElementById('rc-qtd').value,
       condicao: document.getElementById('rc-condicao').value,
       observacao: document.getElementById('rc-obs').value,
-      local_armazenagem: document.getElementById('rc-local').value
+      local_armazenagem: (() => {
+        const local = String(document.getElementById('rc-local').value || '').trim();
+        const onde = (document.getElementById('rc-onde') || {}).value;
+        return onde === 'CROSS' ? ('CROSS PALMAS' + (local ? ' - ' + local : '')) : local;
+      })()
     },
     gravar: (d) => db.receberReentregaCd(id, d),
-    sucesso: '📦 Recebimento registrado no CD.'
+    sucesso: (document.getElementById('rc-onde') || {}).value === 'CROSS'
+      ? '📦 Recebimento registrado no Cross Palmas.'
+      : '📦 Recebimento registrado no CD.'
   });
 }
 
