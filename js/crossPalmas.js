@@ -168,15 +168,23 @@ function crossMovsDaDevolucao(devId) {
   return movs.filter(m => String(m.devolucao_id) === String(devId) && !m.is_deleted);
 }
 
-// Quantidade conferida pelo CD para um item (null enquanto não conferiu).
-function crossQtdConferidaCd(dev, item) {
+// Destinos do CD em que nada chega fisicamente ao CD (7.7.0).
+const CROSS_DESTINOS_SEM_FISICO = ['FALTA_SEM_RETORNO', 'RENEGOCIADO_ROTA'];
+
+// Quantidade que o CD conferiu FISICAMENTE de um item (null enquanto não
+// conferiu). Sem divergência, a conferência é a quantidade registrada; com
+// divergência, a do relatório. Item fechado como falta/renegociado = 0. Do
+// total sai o que Palmas descartou (7.7.0): isso nunca chegaria ao CD.
+function crossQtdConferidaCd(dev, item, descartado = 0) {
   if (!dev || dev.status_fechamento === 'PENDENTE_FISICO') return null;
+  let base = crossNum(item.quantidade);
+  if (CROSS_DESTINOS_SEM_FISICO.indexOf(String(item.destino_item || '').toUpperCase()) > -1) return 0;
   try {
     const rel = (typeof relatorioDivergenciaDaDevolucao === 'function') ? relatorioDivergenciaDaDevolucao(dev.id) : null;
     const div = (rel && typeof itemDivergenteCorrespondente === 'function') ? itemDivergenteCorrespondente(rel, item) : null;
-    if (div && div.quantidade_recebida !== undefined && div.quantidade_recebida !== null) return crossNum(div.quantidade_recebida);
+    if (div && div.quantidade_recebida !== undefined && div.quantidade_recebida !== null) base = crossNum(div.quantidade_recebida);
   } catch (e) {}
-  return crossNum(item.quantidade);
+  return Math.max(0, base - descartado);
 }
 
 // Estado de cada item e da devolução no cross. `via` = a devolução passou pelo
@@ -186,26 +194,33 @@ function crossEstadoDevolucao(dev) {
   const movs = crossMovsDaDevolucao(dev.id);
   const itens = (Array.isArray(dev.itens) ? dev.itens : []).map(item => {
     const doItem = movs.filter(m => String(m.item_id) === String(item.id));
+    const soma = tipo => doItem.filter(m => m.tipo === tipo).reduce((s, m) => s + crossNum(m.quantidade), 0);
     const recs = doItem.filter(m => m.tipo === 'RECEBIDO_CROSS');
     const rec = recs.reduce((s, m) => s + crossNum(m.quantidade), 0);
-    // Item já conferido no cross: tem lançamento de recebimento, mesmo que de
-    // quantidade menor ou zero ("não chegou"). Sai da lista "Receber da rota";
-    // a diferença fica no Confronto.
-    const recebido = recs.length > 0;
+    // 7.7.0: sem produto físico (falta, inversão, renegociado) e descarte de
+    // avaria em Palmas. Nenhum dos dois entra no transbordo.
+    const semProduto = soma('SEM_PRODUTO');
+    const temSemProduto = doItem.some(m => m.tipo === 'SEM_PRODUTO');
+    const desc = soma('DESCARTE');
+    // Item já conferido no cross: tem lançamento de recebimento (mesmo que de
+    // quantidade menor ou zero, "não chegou") ou foi marcado sem produto. Sai
+    // da lista "Receber da rota"; a diferença fica no Confronto.
+    const recebido = recs.length > 0 || temSemProduto;
     const embs = doItem.filter(m => m.tipo === 'EMBARQUE');
     const emb = embs.reduce((s, m) => s + crossNum(m.quantidade), 0);
     const reg = crossNum(item.quantidade);
-    const cd = crossQtdConferidaCd(dev, item);
+    const cd = crossQtdConferidaCd(dev, item, desc);
     const divergencias = [];
     if (recebido || emb > 0) {
-      if (rec < reg) divergencias.push(`chegou ${crossQtdTxt(rec)} de ${crossQtdTxt(reg)} no cross`);
-      if (rec > reg) divergencias.push(`cross recebeu ${crossQtdTxt(rec)}, registrado ${crossQtdTxt(reg)}`);
+      const conta = rec + semProduto;
+      if (conta < reg) divergencias.push(`chegou ${crossQtdTxt(rec)} de ${crossQtdTxt(reg)} no cross`);
+      if (conta > reg) divergencias.push(`cross recebeu ${crossQtdTxt(rec)}${semProduto ? ` + ${crossQtdTxt(semProduto)} sem produto` : ''}, registrado ${crossQtdTxt(reg)}`);
       if (cd !== null && cd < emb) divergencias.push(`embarcou ${crossQtdTxt(emb)}, CD conferiu ${crossQtdTxt(cd)}`);
       if (cd !== null && cd > emb) divergencias.push(`CD conferiu ${crossQtdTxt(cd)}, embarque só de ${crossQtdTxt(emb)}`);
     }
     return {
-      item, reg, rec, recebido, emb, cd,
-      saldo: Math.max(0, rec - emb),
+      item, reg, rec, recebido, emb, cd, semProduto, desc,
+      saldo: Math.max(0, rec - emb - desc),
       manifestos: Array.from(new Set(embs.map(m => m.manifesto).filter(Boolean))),
       placas: Array.from(new Set(embs.map(m => m.placa).filter(Boolean))),
       divergencias
@@ -215,21 +230,28 @@ function crossEstadoDevolucao(dev) {
   const totRec = itens.reduce((s, i) => s + i.rec, 0);
   const totEmb = itens.reduce((s, i) => s + i.emb, 0);
   const totSaldo = itens.reduce((s, i) => s + i.saldo, 0);
+  const totSemProduto = itens.reduce((s, i) => s + i.semProduto, 0);
+  const totDesc = itens.reduce((s, i) => s + i.desc, 0);
   const pendenteCd = dev.status_fechamento === 'PENDENTE_FISICO';
   const recebidoEm = movs.filter(m => m.tipo === 'RECEBIDO_CROSS').map(m => m.criado_em).sort()[0] || null;
+  const todosConferidos = itens.length > 0 && itens.every(i => i.recebido);
   let local = 'NA_ROTA';
   if (!pendenteCd) local = 'NO_CD';
   else if (totSaldo > 0) local = 'NO_CROSS';
   else if (totEmb > 0) local = 'EM_TRANSBORDO';
+  // Tudo conferido em Palmas e nada para embarcar: só sem produto e/ou
+  // descartado. O CD fecha sem esperar transbordo (7.7.0).
+  else if (todosConferidos && (totSemProduto + totDesc) > 0) local = 'SEM_RETORNO';
   else if (totRec > 0) local = 'NO_CROSS';
   const rotulo = {
     NA_ROTA: 'Na rota',
     NO_CROSS: totEmb > 0 ? `No cross Palmas (parte embarcada)` : 'No cross Palmas',
     EM_TRANSBORDO: 'Em transbordo para Araguaína',
+    SEM_RETORNO: 'Nada a voltar de Palmas',
     NO_CD: 'Conferido no CD'
   }[local];
   return {
-    via, local, rotulo, itens, totRec, totEmb, totSaldo, recebidoEm,
+    via, local, rotulo, itens, totRec, totEmb, totSaldo, totSemProduto, totDesc, recebidoEm,
     divergencias: itens.reduce((n, i) => n + i.divergencias.length, 0),
     manifestos: Array.from(new Set(itens.flatMap(i => i.manifestos))),
     placas: Array.from(new Set(itens.flatMap(i => i.placas)))
@@ -253,12 +275,19 @@ function crossSeloRetornoFisico(dev) {
   const cls = {
     NO_CROSS: 'bg-orange-950 text-orange-300 border-orange-700',
     EM_TRANSBORDO: 'bg-sky-950 text-sky-300 border-sky-700',
+    SEM_RETORNO: 'bg-violet-950 text-violet-300 border-violet-700',
     NO_CD: 'bg-emerald-950 text-emerald-300 border-emerald-700',
     NA_ROTA: 'bg-slate-800 text-slate-300 border-slate-600'
   }[e.local];
+  const extras = [
+    e.totSemProduto ? `${crossQtdTxt(e.totSemProduto)} sem produto` : '',
+    e.totDesc ? `${crossQtdTxt(e.totDesc)} descartado(s) em Palmas` : ''
+  ].filter(Boolean).join(', ');
   const detalhe = e.local === 'NO_CROSS'
     ? ` · ${crossQtdTxt(e.totSaldo)} un. em Palmas${e.recebidoEm ? ` há ${crossDiasDesde(e.recebidoEm)} d` : ''}`
-    : (e.placas.length ? ` · ${e.placas.join(', ')}` : '');
+    : e.local === 'SEM_RETORNO'
+      ? ` · ${extras} · o CD pode fechar`
+      : (e.placas.length ? ` · ${e.placas.join(', ')}` : '');
   const div = e.divergencias ? `<span class="inline-block mt-0.5 ml-1 bg-red-950 text-red-300 border border-red-700 px-1.5 py-0.5 rounded text-[9px] font-bold" title="Registrado × cross × embarque × CD não batem">⚠ ${e.divergencias} divergência(s)</span>` : '';
   return `<span class="inline-block mt-0.5 border px-1.5 py-0.5 rounded text-[9px] font-bold ${cls}" title="Local atual pelo Cross Palmas">📍 ${crossEsc(e.rotulo)}${crossEsc(detalhe)}</span>${div}`;
 }
@@ -270,22 +299,51 @@ function crossBlocoConferenciaCd(dev) {
   if (!st.movs) return '';
   const e = crossEstadoDevolucao(dev);
   if (!e.via) return '';
-  const aviso = e.local === 'NO_CROSS'
-    ? `<div class="text-orange-300 font-bold mb-1">⚠️ Pelo Cross Palmas, ${crossQtdTxt(e.totSaldo)} unidade(s) desta devolução ainda NÃO embarcaram. Se chegou aqui, marque como divergência e anote.</div>`
-    : `<div class="text-sky-300 font-bold mb-1">🚛 Veio pelo transbordo ${crossEsc(e.placas.join(', ') || '')}${e.manifestos.length ? ` · manifesto ${crossEsc(e.manifestos.join(', '))}` : ''}. Confira contra a coluna "Embarcado".</div>`;
+  const avisos = [];
+  if (e.local === 'NO_CROSS') avisos.push(`<div class="text-orange-300 font-bold mb-1">⚠️ Pelo Cross Palmas, ${crossQtdTxt(e.totSaldo)} unidade(s) desta devolução ainda NÃO embarcaram. Se chegou aqui, marque como divergência e anote.</div>`);
+  if (e.totEmb > 0) avisos.push(`<div class="text-sky-300 font-bold mb-1">🚛 Veio pelo transbordo ${crossEsc(e.placas.join(', ') || '')}${e.manifestos.length ? ` · manifesto ${crossEsc(e.manifestos.join(', '))}` : ''}. Confira contra a coluna "Embarcado".</div>`);
+  if (e.totSemProduto || e.totDesc) avisos.push(`<div class="text-violet-300 font-bold mb-1">🟣 Não volta de Palmas: ${e.totSemProduto ? `${crossQtdTxt(e.totSemProduto)} sem produto físico (falta/inversão) → destino "Falta — Não Retorna Produto"` : ''}${e.totSemProduto && e.totDesc ? '; ' : ''}${e.totDesc ? `${crossQtdTxt(e.totDesc)} descartado(s) por avaria no cross, com foto → destino "Avaria / Descarte"` : ''}. Os destinos já vêm sugeridos abaixo.</div>`);
+  const fotos = crossFotosDescarteHtml(crossMovsDaDevolucao(dev.id).filter(m => m.tipo === 'DESCARTE'));
   return `
     <div class="bg-slate-950 p-3 rounded border border-sky-800 text-[11px]">
-      <div class="font-black text-sky-300 uppercase tracking-wider text-[10px] mb-1">📍 Cross Palmas · manifesto do transbordo</div>
-      ${aviso}
+      <div class="font-black text-sky-300 uppercase tracking-wider text-[10px] mb-1">📍 Cross Palmas · o que Palmas lançou</div>
+      ${avisos.join('')}
       <table class="w-full text-left mt-1">
-        <thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1">Produto</th><th class="py-1 text-right">Registrado</th><th class="py-1 text-right">No cross</th><th class="py-1 text-right">Embarcado</th></tr></thead>
-        <tbody>${e.itens.map(i => `<tr class="border-t border-slate-800 ${i.emb !== i.reg ? 'text-amber-200' : 'text-slate-200'}">
+        <thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1">Produto</th><th class="py-1 text-right">Registrado</th><th class="py-1 text-right">No cross</th><th class="py-1 text-right">Sem produto</th><th class="py-1 text-right">Descartado</th><th class="py-1 text-right">Embarcado</th></tr></thead>
+        <tbody>${e.itens.map(i => `<tr class="border-t border-slate-800 ${(i.emb + i.semProduto + i.desc) !== i.reg ? 'text-amber-200' : 'text-slate-200'}">
           <td class="py-1">${crossEsc(i.item.produto_descricao || 'Produto')}</td>
           <td class="py-1 text-right">${crossQtdTxt(i.reg)}</td>
           <td class="py-1 text-right">${crossQtdTxt(i.rec)}</td>
+          <td class="py-1 text-right">${i.semProduto ? crossQtdTxt(i.semProduto) : '—'}</td>
+          <td class="py-1 text-right">${i.desc ? crossQtdTxt(i.desc) : '—'}</td>
           <td class="py-1 text-right font-bold">${crossQtdTxt(i.emb)}</td></tr>`).join('')}</tbody>
       </table>
+      ${fotos ? `<div class="mt-2"><span class="text-slate-400">Fotos do descarte:</span> ${fotos}</div>` : ''}
     </div>`;
+}
+
+// Destino sugerido para o modal de conferência do CD (app.js, openCdModal):
+// item todo sem produto → falta; todo descartado em Palmas → avaria/descarte.
+function crossDestinoSugerido(dev, item) {
+  const st = window._cross;
+  if (!st || !st.movs) return null;
+  const est = crossEstadoDevolucao(dev).itens.find(i => String(i.item.id) === String(item.id));
+  if (!est) return null;
+  if (est.semProduto > 0 && est.semProduto >= est.reg) return 'FALTA_SEM_RETORNO';
+  if (est.desc > 0 && est.emb === 0 && est.saldo === 0) return 'AVARIA_DESCARTE';
+  return null;
+}
+window.crossDestinoSugerido = crossDestinoSugerido;
+
+// Link das fotos de descarte (bucket devolucoes-fotos, pasta cross/).
+function crossUrlFoto(caminho) {
+  const cfg = (window.JR_CONFIG && window.JR_CONFIG.supabase) || {};
+  return `${cfg.url}/storage/v1/object/public/devolucoes-fotos/${String(caminho).replace(/^\/+/, '')}`;
+}
+function crossFotosDescarteHtml(movs) {
+  const caminhos = [];
+  (movs || []).forEach(m => (Array.isArray(m.fotos_paths) ? m.fotos_paths : []).forEach(c => caminhos.push(c)));
+  return caminhos.map((c, n) => `<a href="${crossEsc(crossUrlFoto(c))}" target="_blank" rel="noopener" class="text-sky-300 underline mr-2">📷 foto ${n + 1}</a>`).join('');
 }
 window.crossBlocoConferenciaCd = crossBlocoConferenciaCd;
 
@@ -402,6 +460,7 @@ function crossRenderReceber() {
     <div class="space-y-3">
       <div class="bg-slate-900 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-300">
         Marque o que <b>chegou fisicamente no cross</b>, item a item. Se veio menos, ajuste a quantidade e escreva o que houve. Depois o produto aparece em <b>No cross</b> para embarcar no transbordo.
+        <div class="mt-1 text-violet-300"><b>Sem produto:</b> falta, inversão ou renegociado em rota, quando não existe mercadoria para voltar. Itens com motivo FALTA já vêm marcados assim; confira.</div>
       </div>
       <div class="flex flex-wrap gap-2 items-center">
         ${crossCampoBusca()}
@@ -417,14 +476,19 @@ function crossRenderReceber() {
         <div class="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-2">
           ${crossCabecalhoDev(d)}
           <table class="w-full text-left text-xs">
-            <thead class="text-[10px] uppercase text-slate-500"><tr><th class="py-1">Produto</th><th class="py-1 text-right">Registrado</th><th class="py-1 text-right w-28">Chegou no cross</th></tr></thead>
+            <thead class="text-[10px] uppercase text-slate-500"><tr><th class="py-1">Produto</th><th class="py-1 text-right">Registrado</th><th class="py-1 text-right w-28">Chegou no cross</th><th class="py-1 text-center w-24">Sem produto</th></tr></thead>
             <tbody>${e.itens.map(i => {
+              const idBase = `${d.id}-${i.item.id}`;
+              const sugereSem = crossItemSugereSemProduto(i.item);
               return `<tr class="border-t border-slate-800">
-                <td class="py-1.5 text-slate-200">${i.item.produto_codigo ? `<span class="text-emerald-400 font-mono">[${crossEsc(i.item.produto_codigo)}]</span> ` : ''}${crossEsc(i.item.produto_descricao)}</td>
+                <td class="py-1.5 text-slate-200">${i.item.produto_codigo ? `<span class="text-emerald-400 font-mono">[${crossEsc(i.item.produto_codigo)}]</span> ` : ''}${crossEsc(i.item.produto_descricao)}${i.item.motivo_item ? `<div class="text-[10px] text-slate-500">Motivo: ${crossEsc(i.item.motivo_item)}</div>` : ''}</td>
                 <td class="py-1.5 text-right">${crossQtdTxt(i.reg)}</td>
                 <td class="py-1.5 text-right">${!i.recebido
-                  ? `<input type="number" min="0" step="0.01" id="crx-rec-${d.id}-${i.item.id}" value="${i.reg}" class="${CROSS_INPUT} w-24 text-right" title="0 = não chegou">`
-                  : `<span class="text-emerald-400 font-bold">✔ ${crossQtdTxt(i.rec)}</span>`}</td></tr>`;
+                  ? `<input type="number" min="0" step="0.01" id="crx-rec-${idBase}" value="${sugereSem ? 0 : i.reg}" ${sugereSem ? 'disabled' : ''} class="${CROSS_INPUT} w-24 text-right disabled:opacity-40" title="0 = não chegou">`
+                  : `<span class="text-emerald-400 font-bold">✔ ${i.semProduto ? '<span class="text-violet-300">sem produto</span>' : crossQtdTxt(i.rec)}</span>`}</td>
+                <td class="py-1.5 text-center">${!i.recebido
+                  ? `<input type="checkbox" id="crx-sem-${idBase}" ${sugereSem ? 'checked' : ''} onchange="const q=document.getElementById('crx-rec-${idBase}');q.disabled=this.checked;q.value=this.checked?0:'${i.reg}';" title="Não existe mercadoria para voltar (falta, inversão, renegociado)">`
+                  : ''}</td></tr>`;
             }).join('')}</tbody>
           </table>
           <div class="flex flex-col sm:flex-row gap-2 sm:items-center">
@@ -434,6 +498,13 @@ function crossRenderReceber() {
         </div>`;
       }).join('')}
     </div>`;
+}
+
+// Item que, pelo motivo, normalmente não tem mercadoria física para voltar.
+// Só SUGERE (vem marcado); o operador desmarca se o produto estiver ali.
+function crossItemSugereSemProduto(item) {
+  const m = crossNorm(item && item.motivo_item);
+  return m.indexOf('FALTA') > -1 || m.indexOf('INVERS') > -1 || m.indexOf('RENEGOCI') > -1;
 }
 
 async function crossConfirmarRecebimento(devId) {
@@ -446,6 +517,13 @@ async function crossConfirmarRecebimento(devId) {
   for (const i of e.itens) {
     const el = document.getElementById(`crx-rec-${devId}-${i.item.id}`);
     if (!el) continue;
+    const sem = document.getElementById(`crx-sem-${devId}-${i.item.id}`);
+    if (sem && sem.checked) {
+      // 7.7.0: não existe mercadoria para voltar. Lança a quantidade
+      // registrada como "sem produto": não vira estoque nem transbordo.
+      novos.push(crossNovoMov('SEM_PRODUTO', dev, i.item, i.reg, { observacao: obs || (i.item.motivo_item ? String(i.item.motivo_item).toUpperCase() : null) }));
+      continue;
+    }
     const q = crossNum(el.value);
     if (q < 0) { alert('Quantidade não pode ser negativa.'); return; }
     if (q !== i.reg) diferente = true;
@@ -499,7 +577,7 @@ function crossRenderEstoque() {
         <table class="w-full text-left text-xs">
           <thead class="bg-slate-950 text-[10px] uppercase text-slate-500"><tr>
             <th class="p-2"><input type="checkbox" onchange="document.querySelectorAll('.crx-emb-chk').forEach(c=>c.checked=this.checked)" title="Marcar todos"></th>
-            <th class="p-2">Devolução</th><th class="p-2">Produto</th><th class="p-2 text-right">No cross</th><th class="p-2 text-right w-28">Embarcar</th><th class="p-2 text-right">Parado</th></tr></thead>
+            <th class="p-2">Devolução</th><th class="p-2">Produto</th><th class="p-2 text-right">No cross</th><th class="p-2 text-right w-28">Embarcar</th><th class="p-2 text-right">Parado</th><th class="p-2"></th></tr></thead>
           <tbody>${linhas.map(({ d, e, dias }) => e.itens.filter(i => i.saldo > 0).map(i => `
             <tr class="border-t border-slate-800">
               <td class="p-2"><input type="checkbox" class="crx-emb-chk" data-dev="${d.id}" data-item="${i.item.id}"></td>
@@ -508,6 +586,7 @@ function crossRenderEstoque() {
               <td class="p-2 text-right font-bold">${crossQtdTxt(i.saldo)}</td>
               <td class="p-2 text-right"><input type="number" min="0" max="${i.saldo}" step="0.01" id="crx-emb-${d.id}-${i.item.id}" value="${i.saldo}" class="${CROSS_INPUT} w-24 text-right"></td>
               <td class="p-2 text-right ${dias !== null && dias >= 5 ? 'text-red-300 font-bold' : dias !== null && dias >= 2 ? 'text-orange-300 font-bold' : 'text-slate-400'}">${dias === null ? '—' : dias + ' d'}</td>
+              <td class="p-2 text-right"><button onclick="crossAbrirDescarte('${d.id}','${i.item.id}')" class="bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 px-2 py-1 rounded text-[11px] font-bold whitespace-nowrap" title="Avaria sem condição de voltar: descartar aqui em Palmas, com foto">🗑️ Descartar</button></td>
             </tr>`).join('')).join('')}</tbody>
         </table>
       </div>
@@ -535,8 +614,124 @@ function crossRenderEstoque() {
         <div class="flex justify-end"><button onclick="crossGerarManifesto()" class="bg-sky-600 hover:bg-sky-500 text-white ${CROSS_BTN}">🚛 Gerar manifesto com os itens marcados</button></div>
         <p class="text-[10px] text-slate-500">Só veículo próprio traz produto de Palmas. Terceiro que deixa carga no cross não entra aqui.</p>
       </div>`}
+      ${crossRenderNaoVoltam()}
     </div>`;
 }
+
+// Lista do que NÃO volta de Palmas (sem produto e descartado), com desfazer
+// enquanto o CD não fechou a devolução (7.7.0).
+function crossRenderNaoVoltam() {
+  const devs = db.getDevolucoes();
+  const movs = (window._cross.movs || []).filter(m => (m.tipo === 'SEM_PRODUTO' || m.tipo === 'DESCARTE') && !m.is_deleted)
+    .filter(m => { const d = devs.find(x => String(x.id) === String(m.devolucao_id)); return d && crossBuscaCasa(d); })
+    .sort((a, b) => String(b.criado_em || '').localeCompare(String(a.criado_em || '')))
+    .slice(0, 60);
+  if (!movs.length) return '';
+  return `
+    <div class="bg-slate-900 border border-violet-800 rounded-lg p-3 space-y-2">
+      <div class="font-black text-violet-300 text-xs uppercase tracking-wider">🟣 Não voltam de Palmas: sem produto e descartados</div>
+      <div class="overflow-x-auto"><table class="w-full text-left text-xs">
+        <thead class="text-[10px] uppercase text-slate-500"><tr><th class="py-1">Devolução</th><th class="py-1">Produto</th><th class="py-1">Tipo</th><th class="py-1 text-right">Qtd</th><th class="py-1">Detalhe</th><th></th></tr></thead>
+        <tbody>${movs.map(m => {
+          const d = devs.find(x => String(x.id) === String(m.devolucao_id));
+          const podeDesfazer = d && d.status_fechamento === 'PENDENTE_FISICO';
+          return `<tr class="border-t border-slate-800">
+            <td class="py-1 text-amber-400 font-bold">${crossEsc(m.numero_devolucao || (d && (d.numero_devolucao || d.numero_protocolo)) || '')}</td>
+            <td class="py-1 text-slate-200">${crossEsc(m.produto_descricao || '')}</td>
+            <td class="py-1">${m.tipo === 'DESCARTE' ? '<span class="text-red-300 font-bold">🗑️ Descartado</span>' : '<span class="text-violet-300 font-bold">Sem produto</span>'}</td>
+            <td class="py-1 text-right font-bold">${crossQtdTxt(m.quantidade)}</td>
+            <td class="py-1 text-[10px] text-slate-400">${crossEsc(m.observacao || '')}${m.autorizado_por ? ` · autorizado por ${crossEsc(m.autorizado_por)}` : ''} · ${crossEsc(crossDataHora(m.criado_em))} ${crossFotosDescarteHtml([m])}</td>
+            <td class="py-1 text-right">${podeDesfazer ? `<button onclick="crossExcluirMovimento('${m.id}')" class="text-red-400 hover:text-red-300 text-[11px]" title="Lançado errado: desfazer">✕</button>` : ''}</td></tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>`;
+}
+
+// --- DESCARTE NO CROSS (7.7.0) ---------------------------------------------------
+function crossAbrirDescarte(devId, itemId) {
+  const dev = db.getDevolucoes().find(d => String(d.id) === String(devId));
+  if (!dev) return;
+  const est = crossEstadoDevolucao(dev).itens.find(i => String(i.item.id) === String(itemId));
+  if (!est || est.saldo <= 0) { alert('Este item não tem saldo no cross.'); return; }
+  const mc = document.getElementById('modal-container');
+  if (!mc) return;
+  mc.innerHTML = `
+    <div onclick="event.stopPropagation()" class="bg-slate-900 border border-red-800 rounded-xl p-5 max-w-lg w-full shadow-2xl space-y-3 max-h-[90vh] overflow-y-auto text-xs">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-2">
+        <h3 class="font-bold text-white text-base">🗑️ Descartar no cross — ${crossEsc(dev.numero_devolucao || dev.numero_protocolo)}</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white font-bold text-xl leading-none">✕</button>
+      </div>
+      <div class="bg-slate-950 border border-slate-800 rounded p-2 text-slate-300">
+        <b class="text-white">${crossEsc(est.item.produto_descricao)}</b> · no cross: <b>${crossQtdTxt(est.saldo)}</b><br>
+        Use só para avaria sem condição de voltar a Araguaína. O item sai do estoque do cross e o CD fecha como Avaria / Descarte.
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="block text-[10px] text-slate-400 font-bold mb-0.5">Quantidade descartada *</label>
+          <input type="number" id="crx-desc-qtd" min="0.01" max="${est.saldo}" step="0.01" value="${est.saldo}" class="${CROSS_INPUT} w-full"></div>
+        <div><label class="block text-[10px] text-slate-400 font-bold mb-0.5">Autorizado por *</label>
+          <input type="text" id="crx-desc-aut" class="${CROSS_INPUT} w-full" oninput="forcarMaiuscula(this)" placeholder="Quem liberou o descarte"></div>
+      </div>
+      <div><label class="block text-[10px] text-slate-400 font-bold mb-0.5">O que tem de avaria *</label>
+        <input type="text" id="crx-desc-obs" class="${CROSS_INPUT} w-full" oninput="forcarMaiuscula(this)" placeholder="Ex: EMBALAGEM ESTOURADA, PRODUTO VAZANDO"></div>
+      <div><label class="block text-[10px] text-slate-400 font-bold mb-0.5">Foto da avaria * (uma ou mais)</label>
+        <input type="file" id="crx-desc-fotos" accept="image/*" capture="environment" multiple class="w-full text-slate-300"></div>
+      <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+        <button onclick="closeModal()" class="bg-slate-800 text-slate-300 ${CROSS_BTN}">Cancelar</button>
+        <button id="crx-desc-btn" onclick="crossConfirmarDescarte('${dev.id}','${est.item.id}')" class="bg-red-700 hover:bg-red-600 text-white ${CROSS_BTN}">🗑️ Confirmar descarte</button>
+      </div>
+    </div>`;
+  mc.classList.remove('hidden');
+}
+window.crossAbrirDescarte = crossAbrirDescarte;
+
+async function crossSubirFoto(dataUrl, devId) {
+  const cfg = (window.JR_CONFIG && window.JR_CONFIG.supabase) || {};
+  if (!cfg.url || !cfg.anonKey) throw new Error('Sem configuração da nuvem neste aparelho.');
+  const blob = await (await fetch(dataUrl)).blob();
+  const caminho = `cross/${devId}/descarte/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.jpg`;
+  const resp = await fetch(`${cfg.url}/storage/v1/object/devolucoes-fotos/${caminho}`, {
+    method: 'POST',
+    headers: { 'apikey': cfg.anonKey, 'Authorization': 'Bearer ' + cfg.anonKey, 'Content-Type': 'image/jpeg', 'x-upsert': 'true', 'Cache-Control': 'max-age=31536000' },
+    body: blob
+  });
+  if (!resp.ok) throw new Error(`A foto não subiu (${resp.status}). Confira a internet e tente de novo.`);
+  return caminho;
+}
+
+async function crossConfirmarDescarte(devId, itemId) {
+  const dev = db.getDevolucoes().find(d => String(d.id) === String(devId));
+  if (!dev) return;
+  const est = crossEstadoDevolucao(dev).itens.find(i => String(i.item.id) === String(itemId));
+  if (!est) return;
+  const qtd = crossNum(document.getElementById('crx-desc-qtd').value);
+  const aut = String(document.getElementById('crx-desc-aut').value || '').trim().toUpperCase();
+  const obs = String(document.getElementById('crx-desc-obs').value || '').trim().toUpperCase();
+  const arquivos = Array.from((document.getElementById('crx-desc-fotos') || {}).files || []);
+  if (qtd <= 0) { alert('Informe a quantidade descartada.'); return; }
+  if (qtd > est.saldo) { alert(`Só há ${crossQtdTxt(est.saldo)} deste item no cross.`); return; }
+  if (!aut) { alert('Informe quem autorizou o descarte.'); return; }
+  if (!obs) { alert('Descreva a avaria.'); return; }
+  if (!arquivos.length) { alert('A foto da avaria é obrigatória.'); return; }
+  const btn = document.getElementById('crx-desc-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Enviando fotos…'; }
+  try {
+    const caminhos = [];
+    for (const f of arquivos) {
+      const dataUrl = (typeof comprimirImagem === 'function') ? await comprimirImagem(f) : await new Promise((ok, erro) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = erro; r.readAsDataURL(f); });
+      caminhos.push(await crossSubirFoto(dataUrl, dev.id));
+    }
+    const mov = crossNovoMov('DESCARTE', dev, est.item, qtd, { observacao: obs, autorizado_por: aut, fotos_paths: caminhos });
+    await crossGravar(mov);
+    window._cross.movs = (window._cross.movs || []).concat([mov]);
+    closeModal();
+    showToast(`🗑️ Descarte registrado: ${crossQtdTxt(qtd)} de ${est.item.produto_descricao}.`);
+    renderApp();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = '🗑️ Confirmar descarte'; }
+    alert('❌ ' + err.message);
+  }
+}
+window.crossConfirmarDescarte = crossConfirmarDescarte;
 
 async function crossGerarManifesto() {
   const placa = String(document.getElementById('crx-emb-placa').value || '').trim().toUpperCase();
@@ -635,7 +830,8 @@ function crossRenderManifestos() {
 async function crossExcluirMovimento(id) {
   const m = (window._cross.movs || []).find(x => String(x.id) === String(id));
   if (!m) return;
-  if (!confirm(`Tirar ${crossQtdTxt(m.quantidade)} de ${m.produto_descricao || 'item'} (${m.numero_devolucao}) do ${m.tipo === 'EMBARQUE' ? 'manifesto ' + m.manifesto : 'recebimento'}? O lançamento fica no histórico como excluído.`)) return;
+  const onde = { EMBARQUE: 'do manifesto ' + m.manifesto, SEM_PRODUTO: 'da marcação "sem produto"', DESCARTE: 'do descarte' }[m.tipo] || 'do recebimento';
+  if (!confirm(`Desfazer ${crossQtdTxt(m.quantidade)} de ${m.produto_descricao || 'item'} (${m.numero_devolucao}) ${onde}? O item volta para a etapa anterior e o lançamento fica no histórico como excluído.`)) return;
   const agora = agoraIsoBrasilia();
   const reg = Object.assign({}, m, { is_deleted: true, deleted_at: agora, deleted_by_nome: crossUsuario(), atualizado_por: crossUsuario(), atualizado_em: agora });
   try {

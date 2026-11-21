@@ -13313,7 +13313,9 @@ function openCdModal(devId, { edicao = false } = {}) {
   const relAtual = edicao ? relatorioDivergenciaDaDevolucao(devId) : null;
   const escAttr = v => String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   const pre = (item) => {
-    if (!edicao) return { destino: 'ESTOQUE_REUTILIZACAO', validade: '', obs: '', div: null };
+    // 7.7.0: item que Palmas marcou sem produto ou descartou já vem com o
+    // destino certo (Falta — Não Retorna / Avaria / Descarte).
+    if (!edicao) return { destino: (typeof crossDestinoSugerido === 'function' && crossDestinoSugerido(dev, item)) || 'ESTOQUE_REUTILIZACAO', validade: '', obs: '', div: null };
     return {
       destino: item.destino_item || dev.destino_cd || 'ESTOQUE_REUTILIZACAO',
       validade: String(item.data_validade || '').split('T')[0],
