@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 82).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 83).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -272,6 +272,10 @@ partir do branch `main` do GitHub.
   gravado. Confronto = registrado × cross × embarcado × conferido no CD.
   Terceiro nunca traz de Palmas (só deixa e segue): não há transbordo avulso.
   Reentrega de Palmas sai do cross: `local_armazenagem` "CROSS PALMAS...".
+  7.7.0 (migration 82): tipos SEM_PRODUTO (falta/inversão/renegociado, não
+  vira estoque) e DESCARTE (avaria descartada em Palmas, foto obrigatória em
+  devolucoes-fotos/cross/, `autorizado_por`). Local derivado ganha
+  SEM_RETORNO ("nada a voltar"); o modal do CD sugere o destino.
 - 2º ajudante (6.11.0, migration 58 APLICADA): coluna `ajudante_2` em matrizes
   e linhas. "A / B" vindo das planilhas é separado ao carregar
   (`escSepararAjudantes`) e gravado separado na próxima edição. Fusion:
