@@ -21243,7 +21243,10 @@ function renderCadSubTabContent() {
     return `
       <div class="space-y-5">
         <form onsubmit="handleCadClienteSubmit(event)" class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-          <h3 class="font-bold text-emerald-400 text-xs uppercase">🏢 Novo Cliente</h3>
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h3 class="font-bold text-emerald-400 text-xs uppercase">🏢 Novo Cliente</h3>
+            <button type="button" onclick="cliImportarWinthor()" class="bg-sky-700 hover:bg-sky-600 text-white font-bold px-3 py-1.5 rounded text-xs" title="Exportação PCCLIENT do WinThor (CSV ou Excel): cadastra de uma vez os códigos que faltam">📥 Importar do WinThor</button>
+          </div>
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div><label class="block text-[10px] text-slate-400">Código ERP</label><input type="text" id="cad-cli-cod" placeholder="Ex: 1052" class="w-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold rounded p-1.5 text-xs" oninput="forcarMaiuscula(this)"></div>
             <div class="sm:col-span-2"><label class="block text-[10px] text-slate-400">Nome Razão Social / Fantasia *</label><input type="text" id="cad-cli-nome" required placeholder="SUPERMERCADO SILVA LTDA" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 text-xs uppercase" oninput="forcarMaiuscula(this)"></div>
@@ -21607,6 +21610,285 @@ function handleCadAjudanteSubmit(e) { e.preventDefault(); db.addAjudante(documen
 function handleCadProdutoSubmit(e) { e.preventDefault(); db.addProduto(document.getElementById('cad-prod-cod').value,document.getElementById('cad-prod-desc').value,document.getElementById('cad-prod-cat').value,0); alert('✅ Produto cadastrado!'); renderApp(); }
 function handleCadVeiculoSubmit(e) { e.preventDefault(); db.addVeiculo(document.getElementById('cad-veic-placa').value,document.getElementById('cad-veic-tipo').value,document.getElementById('cad-veic-situacao').value,document.getElementById('cad-veic-setor').value,document.getElementById('cad-veic-uso').value); alert('✅ Veículo cadastrado!'); renderApp(); }
 function handleCadClienteSubmit(e) { e.preventDefault(); const res = db.addCliente({ codigo: document.getElementById('cad-cli-cod')?.value, nome: document.getElementById('cad-cli-nome')?.value, cidade: document.getElementById('cad-cli-cidade')?.value, cnpj_cpf: document.getElementById('cad-cli-cnpj')?.value }); if (res) { showToast('Cliente cadastrado com sucesso!'); renderApp(); } }
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTAR CLIENTES DO WINTHOR (7.8.0, 23/11/2026)
+// ─────────────────────────────────────────────────────────────────────────────
+// Pedido do Tiago: a lista de clientes que faltavam (348 em 23/11) era grande
+// demais para cadastrar um a um. O usuário exporta a PCCLIENT do WinThor (CSV
+// ou Excel; colunas CODCLI, CLIENTE, MUNICCOB, ESTCOB, CGCENT) e o app
+// compara PELO CÓDIGO com o que já existe:
+//   - código novo ............ entra (marcado por padrão);
+//   - código que já existe ... só muda se o nome, a cidade ou a UF forem
+//     diferentes E o usuário marcar a opção (nome e cidade/UF são duas
+//     opções, ambas desmarcadas por padrão): cada cliente da planilha
+//     alterado passa a viajar no delta do catálogo para sempre, e o WinThor
+//     corta a cidade em 15 letras.
+//   - código na Lixeira ...... fica como está (restaurar é pela Lixeira).
+// Nada é gravado antes do botão Cadastrar. O CNPJ só entra em cliente novo
+// e só se nenhum outro cliente usar o mesmo: a tabela tem índice único de
+// CNPJ, e um repetido derrubaria o envio do catálogo inteiro.
+const CLI_IMPORT_COLUNAS = {
+  codigo: ['CODCLI', 'CODIGO', 'COD', 'CODIGO CLIENTE', 'CODIGO_CLIENTE', 'COD CLIENTE', 'COD. CLIENTE'],
+  nome:   ['CLIENTE', 'RAZAO SOCIAL', 'RAZAO_SOCIAL', 'RAZAO', 'NOME', 'NOME CLIENTE'],
+  cidade: ['MUNICCOB', 'MUNICENT', 'CIDADE', 'MUNICIPIO'],
+  uf:     ['ESTCOB', 'ESTENT', 'UF', 'ESTADO'],
+  cnpj:   ['CGCENT', 'CNPJ', 'CPF', 'CNPJ/CPF', 'CPF/CNPJ', 'CNPJ_CPF', 'CNPJ CPF']
+};
+
+function cliImpEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+// Texto do WinThor: tira o lixo do começo ('+TAB, que veio em 2 nomes do
+// PCCLIENT de 23/11), junta espaço repetido e põe em maiúscula.
+function cliImpLimpar(s) {
+  return String(s == null ? '' : s).replace(/^[\s'"`]+/, '').replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
+function cliImportarWinthor() {
+  if (typeof XLSX === 'undefined') { alert('⚠️ A biblioteca de leitura de Excel (SheetJS) não está carregada.'); return; }
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.csv,.xlsx,.xls,.txt';
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    const ehTexto = /\.(csv|txt)$/i.test(f.name);
+    const falhou = err => alert('❌ Erro ao ler o arquivo: ' + ((err && err.message) || err));
+    const processar = wb => {
+      const lidos = cliImpLerPlanilha(wb);
+      if (lidos.erro) { alert('⚠️ ' + lidos.erro); return; }
+      cliImpAbrirConferencia(lidos.linhas, f.name);
+    };
+    if (ehTexto) {
+      // CSV lido como TEXTO: o SheetJS lendo bytes de um CSV UTF-8 sem BOM
+      // troca "NÃO" por "NÃƒO". Se vier caractere inválido, o arquivo é
+      // ANSI (Windows-1252) e é relido assim.
+      const lerComo = (enc, depois) => {
+        const r = new FileReader();
+        r.onload = e => depois(String(e.target.result || ''));
+        r.onerror = () => falhou(r.error);
+        r.readAsText(f, enc);
+      };
+      lerComo('UTF-8', txt => {
+        const usar = t => { try { processar(XLSX.read(t.replace(/^﻿/, ''), { type: 'string', raw: true })); } catch (err) { falhou(err); } };
+        if (txt.indexOf('�') >= 0) lerComo('windows-1252', usar); else usar(txt);
+      });
+    } else {
+      const r = new FileReader();
+      r.onload = e => { try { processar(XLSX.read(new Uint8Array(e.target.result), { type: 'array' })); } catch (err) { falhou(err); } };
+      r.onerror = () => falhou(r.error);
+      r.readAsArrayBuffer(f);
+    }
+  };
+  inp.click();
+}
+window.cliImportarWinthor = cliImportarWinthor;
+
+function cliImpLerPlanilha(wb) {
+  const sh = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sh, { header: 1, raw: false, defval: '' });
+  const norm = v => normalizeStr(v).replace(/[^A-Z0-9/ _.]/g, '').trim();
+  let iCab = -1, col = null;
+  for (let i = 0; i < Math.min(rows.length, 15) && iCab < 0; i++) {
+    const cab = (rows[i] || []).map(norm);
+    const achar = nomes => cab.findIndex(c => nomes.includes(c));
+    const c = {};
+    Object.keys(CLI_IMPORT_COLUNAS).forEach(k => { c[k] = achar(CLI_IMPORT_COLUNAS[k]); });
+    if (c.codigo >= 0 && c.nome >= 0) { iCab = i; col = c; }
+  }
+  if (iCab < 0) return { erro: 'Não achei as colunas de código e nome do cliente. Use a exportação PCCLIENT do WinThor (colunas CODCLI e CLIENTE).' };
+
+  const pegar = (r, k) => (col[k] >= 0 ? String(r[col[k]] == null ? '' : r[col[k]]) : '');
+  const vistos = new Set();
+  const linhas = [];
+  let repetidos = 0;
+  rows.slice(iCab + 1).forEach(r => {
+    const codigo = pegar(r, 'codigo').trim().replace(/\.0+$/, '');
+    const nome = cliImpLimpar(pegar(r, 'nome')).slice(0, 150);
+    if (!codigo || !nome) return;
+    if (vistos.has(codigo)) { repetidos++; return; }
+    vistos.add(codigo);
+    const uf = cliImpLimpar(pegar(r, 'uf'));
+    linhas.push({
+      codigo,
+      nome,
+      cidade: cliImpLimpar(pegar(r, 'cidade')).slice(0, 80),
+      uf: /^[A-Z]{2}$/.test(uf) ? uf : '',
+      cnpj: pegar(r, 'cnpj').trim()
+    });
+  });
+  if (!linhas.length) return { erro: 'O arquivo não tem nenhuma linha com código e nome de cliente.' };
+  linhas.repetidos = repetidos;
+  return { linhas };
+}
+
+// Cidade do WinThor vem cortada em 15 letras ("PARAISO DO TOCA"): é a mesma
+// cidade se uma começa pela outra, sem acento.
+function cliImpMesmaCidade(a, b) {
+  const x = normalizeStr(a), y = normalizeStr(b);
+  if (!x || !y) return x === y;
+  return x === y || x.startsWith(y) || y.startsWith(x);
+}
+
+function cliImpAbrirConferencia(linhas, nomeArquivo) {
+  const todos = db.data.clientes || [];
+  const codDe = c => String(c.codigo || c.codigo_cliente || '').replace(/^CLI-/i, '').trim();
+  const porCodigo = new Map();
+  todos.forEach(c => { const k = codDe(c); if (k && (!porCodigo.has(k) || porCodigo.get(k).is_deleted)) porCodigo.set(k, c); });
+  const soDigitos = s => String(s || '').replace(/\D/g, '');
+  const cnpjsUsados = new Set();
+  todos.forEach(c => { const d = soDigitos(c.cnpj); if (d) cnpjsUsados.add(d); });
+
+  const novos = [], divergentes = [];
+  let iguais = 0, naLixeira = 0, semCnpj = 0;
+  linhas.forEach(l => {
+    const atual = porCodigo.get(l.codigo);
+    if (!atual) {
+      const d = soDigitos(l.cnpj);
+      let cnpj = l.cnpj;
+      if (!d || l.cnpj.length > 20 || cnpjsUsados.has(d)) { cnpj = null; if (d) semCnpj++; }
+      else cnpjsUsados.add(d);
+      novos.push(Object.assign({}, l, { cnpj }));
+      return;
+    }
+    if (atual.is_deleted) { naLixeira++; return; }
+    const nomeAtual = cliImpLimpar(atual.razao_social || atual.nome);
+    const mudancas = {};
+    if (normalizeStr(nomeAtual) !== normalizeStr(l.nome)) mudancas.nome = l.nome;
+    if (l.cidade && !cliImpMesmaCidade(atual.cidade, l.cidade)) mudancas.cidade = l.cidade;
+    if (l.uf && String(atual.uf || '').toUpperCase() !== l.uf) mudancas.uf = l.uf;
+    if (Object.keys(mudancas).length) {
+      divergentes.push({ id: atual.id, codigo: l.codigo, antes: { nome: nomeAtual, cidade: atual.cidade || '', uf: atual.uf || '' }, mudancas });
+    } else iguais++;
+  });
+
+  // Nome e cidade/UF são opções SEPARADAS. A planilha Dados SAC que virou a
+  // semente não tinha cidade: quase todo cliente antigo ficou "Araguaína/TO"
+  // (13.148 de 15.139 no PCCLIENT de 23/11). Misturar os dois enterraria as
+  // poucas dezenas de nomes realmente diferentes numa lista de 13 mil.
+  const porCod = (a, b) => (Number(a.codigo) - Number(b.codigo)) || String(a.codigo).localeCompare(String(b.codigo));
+  novos.sort(porCod);
+  divergentes.sort(porCod);
+  const divNome = divergentes.filter(d => d.mudancas.nome);
+  const divLocal = divergentes.filter(d => d.mudancas.cidade || d.mudancas.uf);
+  window._cliImp = { novos, divNome, divLocal, marcarNovos: true, marcarNome: false, marcarLocal: false };
+  const modal = document.getElementById('modal-container');
+  if (!modal) return;
+
+  const amostraNovos = novos.slice(0, 200).map(n => `<tr class="hover:bg-slate-800/40"><td class="p-1.5 font-bold text-emerald-400">${cliImpEsc(n.codigo)}</td><td class="p-1.5 text-white">${cliImpEsc(n.nome)}</td><td class="p-1.5 text-slate-400">${cliImpEsc(n.cidade || '—')}/${cliImpEsc(n.uf || '—')}</td><td class="p-1.5 text-slate-500">${cliImpEsc(n.cnpj || '—')}</td></tr>`).join('');
+  const linhaDiv = (d, campos) => {
+    const m = d.mudancas;
+    const partes = [];
+    if (campos.includes('nome') && m.nome) partes.push(`${cliImpEsc(d.antes.nome || '—')} → <b class="text-amber-300">${cliImpEsc(m.nome)}</b>`);
+    if (campos.includes('local') && (m.cidade || m.uf)) partes.push(`${cliImpEsc(d.antes.cidade || '—')}/${cliImpEsc(d.antes.uf || '—')} → <b class="text-amber-300">${cliImpEsc(m.cidade || d.antes.cidade || '—')}/${cliImpEsc(m.uf || d.antes.uf || '—')}</b>`);
+    return `<tr class="hover:bg-slate-800/40"><td class="p-1.5 font-bold text-amber-400 align-top">${cliImpEsc(d.codigo)}</td><td class="p-1.5 text-slate-300">${partes.join('<br>')}</td></tr>`;
+  };
+  const amostraNome = divNome.slice(0, 200).map(d => linhaDiv(d, ['nome'])).join('');
+  const amostraLocal = divLocal.slice(0, 50).map(d => linhaDiv(d, ['local'])).join('');
+  const mais = (n, mostrados) => n > mostrados ? `<p class="text-[10px] text-slate-500 p-1.5">… e mais ${n - mostrados}.</p>` : '';
+
+  modal.innerHTML = `
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-4 max-w-4xl w-full shadow-2xl space-y-3 max-h-[92vh] flex flex-col">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+        <h3 class="text-sm font-extrabold text-white">📥 Importar clientes do WinThor</h3>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+      </div>
+      <p class="text-[11px] text-slate-400">Arquivo <b class="text-slate-200">${cliImpEsc(nomeArquivo)}</b>: ${linhas.length} cliente(s) lidos${linhas.repetidos ? `, ${linhas.repetidos} código(s) repetidos ignorados` : ''}. A comparação é pelo código.</p>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+        <div class="bg-emerald-950/40 border border-emerald-800 rounded-lg p-2"><div class="text-lg font-extrabold text-emerald-400">${novos.length}</div><div class="text-[10px] text-slate-400">novos</div></div>
+        <div class="bg-amber-950/40 border border-amber-800 rounded-lg p-2"><div class="text-lg font-extrabold text-amber-400">${divergentes.length}</div><div class="text-[10px] text-slate-400">já existem, com nome/cidade/UF diferente</div></div>
+        <div class="bg-slate-950 border border-slate-800 rounded-lg p-2"><div class="text-lg font-extrabold text-slate-300">${iguais}</div><div class="text-[10px] text-slate-400">já existem, iguais</div></div>
+        <div class="bg-slate-950 border border-slate-800 rounded-lg p-2"><div class="text-lg font-extrabold text-slate-300">${naLixeira}</div><div class="text-[10px] text-slate-400">na Lixeira (não mexe)</div></div>
+      </div>
+      <div class="overflow-y-auto flex-1 space-y-3 pr-1">
+        <div class="border border-slate-800 rounded-lg">
+          <label class="flex items-center gap-2 p-2 bg-slate-950 text-xs font-bold text-emerald-400 cursor-pointer">
+            <input type="checkbox" ${novos.length ? 'checked' : 'disabled'} onchange="window._cliImp.marcarNovos=this.checked; cliImpResumo()"> Cadastrar os ${novos.length} novos
+          </label>
+          ${novos.length ? `<div class="max-h-60 overflow-y-auto"><table class="w-full text-left text-[11px]"><thead class="bg-slate-950 text-slate-500 uppercase text-[9px] sticky top-0"><tr><th class="p-1.5">Cód.</th><th class="p-1.5">Nome</th><th class="p-1.5">Cidade/UF</th><th class="p-1.5">CNPJ/CPF</th></tr></thead><tbody class="divide-y divide-slate-800">${amostraNovos}</tbody></table>${mais(novos.length, 200)}</div>` : '<p class="text-[11px] text-slate-500 p-2">Nenhum código novo: todos os clientes do arquivo já estão cadastrados.</p>'}
+          ${semCnpj ? `<p class="text-[10px] text-slate-500 p-2 border-t border-slate-800">${semCnpj} novo(s) entram sem CNPJ/CPF porque outro cliente já usa o mesmo número.</p>` : ''}
+        </div>
+        ${divNome.length ? `
+        <div class="border border-slate-800 rounded-lg">
+          <label class="flex items-center gap-2 p-2 bg-slate-950 text-xs font-bold text-amber-400 cursor-pointer">
+            <input type="checkbox" onchange="window._cliImp.marcarNome=this.checked; cliImpResumo()"> Corrigir o nome de ${divNome.length} cliente(s) pelo WinThor
+          </label>
+          <div class="max-h-60 overflow-y-auto"><table class="w-full text-left text-[11px]"><tbody class="divide-y divide-slate-800">${amostraNome}</tbody></table>${mais(divNome.length, 200)}</div>
+        </div>` : ''}
+        ${divLocal.length ? `
+        <div class="border border-slate-800 rounded-lg">
+          <label class="flex items-center gap-2 p-2 bg-slate-950 text-xs font-bold text-amber-400 cursor-pointer">
+            <input type="checkbox" onchange="window._cliImp.marcarLocal=this.checked; cliImpResumo()"> Corrigir cidade/UF de ${divLocal.length} cliente(s) pelo WinThor
+          </label>
+          ${divLocal.length > 1000 ? `<p class="text-[10px] text-amber-300/80 p-2 border-b border-slate-800">⚠️ São muitos: a planilha antiga do app gravou Araguaína/TO em quase todos. Marcar isto envia ${divLocal.length} clientes para a nuvem de uma vez e cada aparelho baixa todos na próxima sincronização.</p>` : ''}
+          <div class="max-h-48 overflow-y-auto"><table class="w-full text-left text-[11px]"><tbody class="divide-y divide-slate-800">${amostraLocal}</tbody></table>${mais(divLocal.length, 50)}</div>
+        </div>` : ''}
+      </div>
+      <div class="flex items-center justify-between gap-2 border-t border-slate-800 pt-3">
+        <span id="cli-imp-resumo" class="text-[11px] text-slate-400"></span>
+        <div class="flex gap-2">
+          <button onclick="closeModal()" class="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-1.5 rounded text-xs">Cancelar</button>
+          <button id="cli-imp-aplicar" onclick="cliImpAplicar()" class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold px-4 py-1.5 rounded text-xs">Cadastrar</button>
+        </div>
+      </div>
+    </div>`;
+  modal.classList.remove('hidden');
+  cliImpResumo();
+}
+
+// Junta, por cliente, só os campos das opções marcadas: quem tem nome E
+// cidade diferentes e só "nome" marcado muda só o nome.
+function cliImpAtualizacoes(st) {
+  const porId = new Map();
+  const juntar = (lista, campos) => lista.forEach(d => {
+    const a = porId.get(d.id) || { id: d.id };
+    campos.forEach(c => { if (d.mudancas[c]) a[c] = d.mudancas[c]; });
+    porId.set(d.id, a);
+  });
+  if (st.marcarNome) juntar(st.divNome, ['nome']);
+  if (st.marcarLocal) juntar(st.divLocal, ['cidade', 'uf']);
+  return Array.from(porId.values());
+}
+
+function cliImpResumo() {
+  const st = window._cliImp;
+  if (!st) return;
+  const n = st.marcarNovos ? st.novos.length : 0;
+  const d = cliImpAtualizacoes(st).length;
+  const el = document.getElementById('cli-imp-resumo');
+  if (el) el.textContent = (n || d) ? `Vai gravar: ${n} novo(s)${d ? ` e ${d} atualização(ões)` : ''}.` : 'Nada marcado para gravar.';
+  const bt = document.getElementById('cli-imp-aplicar');
+  if (bt) bt.disabled = !(n || d);
+}
+window.cliImpResumo = cliImpResumo;
+
+function cliImpAplicar() {
+  const st = window._cliImp;
+  if (!st || st.aplicando) return;
+  const novos = st.marcarNovos ? st.novos : [];
+  const atualizacoes = cliImpAtualizacoes(st);
+  if (!novos.length && !atualizacoes.length) return;
+  // Trava de duplo toque (mesma lição da 6.8.7 na devolução).
+  st.aplicando = true;
+  const bt = document.getElementById('cli-imp-aplicar');
+  if (bt) { bt.disabled = true; bt.textContent = 'Gravando…'; }
+  let res;
+  try {
+    res = db.importarClientes(novos, atualizacoes);
+  } catch (err) {
+    st.aplicando = false;
+    if (bt) { bt.disabled = false; bt.textContent = 'Cadastrar'; }
+    alert('❌ Não foi possível gravar: ' + ((err && err.message) || err));
+    return;
+  }
+  window._cliImp = null;
+  closeModal();
+  showToast(`✅ ${res.incluidos} cliente(s) cadastrado(s)${res.atualizados ? `, ${res.atualizados} atualizado(s)` : ''}. Os outros aparelhos recebem na próxima sincronização.`);
+  renderApp();
+}
+window.cliImpAplicar = cliImpAplicar;
+
 function handleCadRotaSubmit(e) { e.preventDefault(); const r=db.addRota(document.getElementById('cad-rota-nome').value); if(r) alert('✅ Rota cadastrada!'); renderApp(); }
 function handleCadCargaSubmit(e) { e.preventDefault(); db.addCargaRota(document.getElementById('cad-car-num').value,document.getElementById('cad-car-rota').value,document.getElementById('cad-car-mot').value,document.getElementById('cad-car-aju').value,document.getElementById('cad-car-veic').value); alert('✅ Carga cadastrada!'); renderApp(); }
 function deleteCad(col, id) {

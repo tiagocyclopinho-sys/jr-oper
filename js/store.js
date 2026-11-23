@@ -3558,6 +3558,67 @@ class Store {
     return this.softDelete('clientes', id);
   }
 
+  // 7.8.0 — IMPORTAÇÃO EM MASSA DE CLIENTES (PCCLIENT do WinThor, 23/11/2026)
+  //
+  // Recebe o que a tela de conferência já decidiu: `novos` (código que não
+  // existe aqui) e `atualizacoes` (código que existe, com nome/cidade/UF
+  // diferentes, só se o usuário marcou). Grava tudo de uma vez: UM save(),
+  // UM registro de auditoria. 348 chamadas de addCliente() seriam 348
+  // gravações do catálogo e 348 linhas de audit_logs no localStorage.
+  //
+  // O id do cliente novo é o PRÓPRIO CÓDIGO, como na semente (mockData.js) e
+  // na carga feita por SQL em 23/11. Isso torna a importação idempotente:
+  // dois aparelhos que importem o mesmo arquivo antes de sincronizar geram
+  // o mesmo id, e o upsert da nuvem só sobrescreve a linha com o mesmo dado.
+  // Com gerarIdUnico() viriam dois ids para o mesmo código, e o segundo
+  // derrubaria o lote do catálogo inteiro no índice uq_clientes_codigo.
+  importarClientes(novos, atualizacoes) {
+    if (!this.data.clientes) this.data.clientes = [];
+    const ids = new Set(this.data.clientes.map(c => String(c.id)));
+    let incluidos = 0, atualizados = 0;
+    const codigos = [];
+
+    (novos || []).forEach(n => {
+      const cod = String(n.codigo || '').trim();
+      const nome = String(n.nome || '').trim().toUpperCase();
+      if (!cod || !nome) return;
+      const id = (/^\d{1,15}$/.test(cod) && !ids.has(cod)) ? cod : String(this.gerarIdUnico());
+      ids.add(id);
+      this.data.clientes.push({
+        id,
+        codigo: cod,
+        codigo_cliente: cod,
+        nome,
+        razao_social: nome,
+        cnpj: n.cnpj || null,
+        cidade: n.cidade || '',
+        uf: n.uf || ''
+      });
+      incluidos++;
+      codigos.push(cod);
+    });
+
+    (atualizacoes || []).forEach(a => {
+      const reg = this.data.clientes.find(c => String(c.id) === String(a.id));
+      if (!reg) return;
+      if (a.nome) { reg.nome = a.nome; reg.razao_social = a.nome; }
+      if (a.cidade) reg.cidade = a.cidade;
+      if (a.uf) reg.uf = a.uf;
+      atualizados++;
+    });
+
+    if (!incluidos && !atualizados) return { incluidos, atualizados };
+    this.marcarCatalogoSujo();
+    this.logAudit({
+      acao: 'IMPORTACAO',
+      modulo: 'clientes',
+      registro_id: 'LOTE',
+      diff: { depois: { incluidos, atualizados, codigos_incluidos: codigos.slice(0, 500).join(',') } }
+    });
+    this.save();
+    return { incluidos, atualizados };
+  }
+
   // ===== GOVERNANÇA: SOFT DELETE, LIXEIRA, AUDITORIA & VERSIONAMENTO =====
   // PRIORIDADE 7c: fonte única da senha de admin (window.JR_CONFIG.adminPassword)
   getAdminPassword() {
