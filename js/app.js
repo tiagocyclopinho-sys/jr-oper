@@ -6121,6 +6121,7 @@ const TIPOS_ERRO = [
   'ERRO INDÚSTRIA',
   'ERRO LOGÍSTICO',
   'ERRO MOTORISTA',
+  'ERRO T.I.',           // 23/11/2026: falha de sistema (pedido/nota/integração)
   'PROBLEMA MECÂNICO',
   'RESP. NÃO IDENTIFICADO'
 ];
@@ -6161,7 +6162,8 @@ const RESPONSAVEL_POR_TIPO_ERRO = {
   'RESP. NÃO IDENTIFICADO': 'VICTOR HUGO',
   'ERRO COMERCIAL':         'TIAGO FERREIRA',
   'ERRO INDÚSTRIA':         'TIAGO FERREIRA',
-  'ERRO CLIENTE':           'TIAGO FERREIRA'
+  'ERRO CLIENTE':           'TIAGO FERREIRA',
+  'ERRO T.I.':              'TIAGO FERREIRA'
   // ERRO CARREGAMENTO não entra aqui de propósito: sai do turno do
   // separador/conferente, em supervisorCarregamentoDaSecao().
   // OUTRO (categoria antiga) também não: não há a quem atribuir um registro
