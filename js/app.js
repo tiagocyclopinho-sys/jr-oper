@@ -18374,6 +18374,46 @@ function renderRotaOcorrenciasView() {
 }
 
 // ===== SUB-ABA: TROCA DE VEÍCULOS =====
+// 7.8.3: filtros da tela num lugar só, para a tabela e as exportações
+// (Excel e PDF) saírem com as mesmas linhas.
+function listarTrocasVeiculosFiltradas(base) {
+  const fMotivo = window._trocaFiltroMotivo || '';
+  const fAutorizado = window._trocaFiltroAutorizado || '';
+  const fVeic = (window._trocaFiltroVeiculo || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  let lista = base || db.getTrocasVeiculos() || [];
+  if (fMotivo) lista = lista.filter(t => t.motivo_resumido === fMotivo);
+  if (fAutorizado) lista = lista.filter(t => t.autorizado_por === fAutorizado);
+  if (fVeic) {
+    lista = lista.filter(t => {
+      const esc = String(t.veiculo_escalado || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const troc = String(t.veiculo_trocado || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      return esc.includes(fVeic) || troc.includes(fVeic);
+    });
+  }
+  return lista;
+}
+
+function _motivoTrocaTexto(t) {
+  const m = t.motivo_resumido || t.motivo || '';
+  return (/^OUTROS/.test(m) && t.motivo_outro) ? `OUTROS: ${t.motivo_outro}` : m;
+}
+
+function exportarTrocasVeiculosCsv() {
+  const lista = listarTrocasVeiculosFiltradas();
+  if (lista.length === 0) { alert('Nenhuma troca para exportar com os filtros atuais.'); return; }
+  const esc = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+  const linhas = [['Data', 'Veículo Escalado', 'Veículo Trocado', 'Motivo', 'Detalhamento', 'Autorizado Por'].map(esc).join(';')];
+  lista.forEach(t => linhas.push([
+    formatarData(t.data || t.data_troca || t.criado_em),
+    t.veiculo_escalado || t.veiculo_anterior,
+    t.veiculo_trocado || t.veiculo_novo,
+    _motivoTrocaTexto(t),
+    t.detalhamento,
+    t.autorizado_por
+  ].map(esc).join(';')));
+  baixarCsv(`trocas_veiculos_${hojeIsoBrasilia()}.csv`, linhas.join('\n'));
+}
+
 function renderViagensTrocaVeiculosSubTab() {
   const trocas = db.getTrocasVeiculos();
   const veiculos = db.data.veiculos || [];
@@ -18400,18 +18440,7 @@ function renderViagensTrocaVeiculosSubTab() {
 
   const fMotivo = window._trocaFiltroMotivo || '';
   const fAutorizado = window._trocaFiltroAutorizado || '';
-  const fVeic = (window._trocaFiltroVeiculo || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-
-  let trocasFiltradas = trocas;
-  if (fMotivo) trocasFiltradas = trocasFiltradas.filter(t => t.motivo_resumido === fMotivo);
-  if (fAutorizado) trocasFiltradas = trocasFiltradas.filter(t => t.autorizado_por === fAutorizado);
-  if (fVeic) {
-    trocasFiltradas = trocasFiltradas.filter(t => {
-      const esc = String(t.veiculo_escalado || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const troc = String(t.veiculo_trocado || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-      return esc.includes(fVeic) || troc.includes(fVeic);
-    });
-  }
+  const trocasFiltradas = listarTrocasVeiculosFiltradas(trocas);
 
   return `
     <div class="space-y-5">
@@ -18494,6 +18523,8 @@ function renderViagensTrocaVeiculosSubTab() {
               <option value="">Todos Autorizadores</option>
               ${autorizadores.map(a => `<option value="${a}" ${fAutorizado===a?'selected':''}>${a}</option>`).join('')}
             </select>
+            <button onclick="exportarTrocasVeiculosCsv()" class="bg-emerald-800 hover:bg-emerald-700 text-white font-bold px-3 py-1 rounded text-xs" title="Baixa as trocas filtradas em planilha (abre no Excel)">📊 Excel</button>
+            <button onclick="gerarRelatorioTrocasVeiculosPdf({ lista: listarTrocasVeiculosFiltradas() })" class="bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold px-3 py-1 rounded text-xs border border-purple-800/60" title="PDF das trocas filtradas">📋 PDF</button>
           </div>
         </div>
 
@@ -29580,15 +29611,27 @@ function imprimirTratativaDevolucaoPdf(devId) {
   win.document.close();
 }
 
-function gerarRelatorioTrocasVeiculosPdf() {
-  const trocas = db.getTrocasVeiculos() || [];
-  const fDe = window._pdfFiltroDe || '';
-  const fAte = window._pdfFiltroAte || '';
+// 7.8.3: as colunas liam carga/motorista/veiculo_anterior/veiculo_novo/motivo,
+// campos que a troca nunca gravou — o PDF saía todo com "-". Agora usa os
+// campos reais (os antigos ficam só de reserva). Sem argumentos usa o
+// período da Central de PDFs; a tela Troca de Veículos passa a lista filtrada.
+function gerarRelatorioTrocasVeiculosPdf(opts) {
+  const daTela = !!(opts && Array.isArray(opts.lista));
+  const fDe = daTela ? '' : (window._pdfFiltroDe || '');
+  const fAte = daTela ? '' : (window._pdfFiltroAte || '');
+  const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
-  let filtrados = trocas.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
+  const filtrados = daTela ? opts.lista
+    : (db.getTrocasVeiculos() || []).filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
+
+  const porMotivo = {};
+  filtrados.forEach(t => { const m = t.motivo_resumido || t.motivo || 'SEM MOTIVO'; porMotivo[m] = (porMotivo[m] || 0) + 1; });
+  const resumoMotivos = Object.entries(porMotivo).sort((a, b) => b[1] - a[1])
+    .map(([m, n]) => `<span class="chip">${esc(m)}: <b>${n}</b></span>`).join(' ');
 
   const win = window.open('', '_blank');
+  if (!win) { alert('O navegador bloqueou a janela do PDF. Libere pop-ups para o JR Oper e tente de novo.'); return; }
   win.document.write(`
     <!DOCTYPE html>
     <html lang="pt-BR">
@@ -29599,34 +29642,38 @@ function gerarRelatorioTrocasVeiculosPdf() {
         body { font-family: sans-serif; padding: 20px; color: #0f172a; }
         h1 { font-size: 18px; border-bottom: 2px solid #0f172a; padding-bottom: 8px; text-transform: uppercase; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 11px; }
-        th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; }
-        th { background: #f1f5f9; font-weight: bold; uppercase; }
+        th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }
+        th { background: #f1f5f9; font-weight: bold; text-transform: uppercase; }
+        tr { page-break-inside: avoid; }
+        .chip { display: inline-block; border: 1px solid #cbd5e1; border-radius: 10px; padding: 2px 8px; margin: 2px 4px 2px 0; font-size: 11px; }
+        @page { size: A4 landscape; margin: 12mm; }
       </style>
     </head>
     <body onload="window.print()">
-      <h1>🔄 Relatório Corporativo de Trocas e Substituições de Veículos</h1>
-      <p>Emissão: ${formatarData(new Date())} ${fDe || fAte ? `(Período: ${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'})` : ''}</p>
+      <h1>🔄 Relatório de Trocas e Substituições de Veículos</h1>
+      <p>Emissão: ${formatarData(new Date())} ${fDe || fAte ? `(Período: ${formatarData(fDe) || 'Início'} até ${formatarData(fAte) || 'Hoje'})` : ''} · <b>${filtrados.length}</b> troca(s)</p>
+      ${resumoMotivos ? `<div>${resumoMotivos}</div>` : ''}
       <table>
         <thead>
           <tr>
-            <th>Data</th>
-            <th>Carga / Rota</th>
-            <th>Motorista</th>
-            <th>Veículo Retirado (Defeito)</th>
-            <th>Veículo Substituto</th>
-            <th>Motivo da Troca</th>
+            <th style="width:75px;">Data</th>
+            <th>Veículo Escalado</th>
+            <th>Veículo Trocado</th>
+            <th>Motivo</th>
+            <th>Detalhamento</th>
+            <th>Autorizado Por</th>
           </tr>
         </thead>
         <tbody>
           ${filtrados.length === 0 ? '<tr><td colspan="6" style="text-align:center;">Nenhuma troca de veículo registrada no período.</td></tr>' :
             filtrados.map(t => `
               <tr>
-                <td>${formatarData(t.data)}</td>
-                <td>${t.carga || '-'} (${t.rota || '-'})</td>
-                <td><b>${t.motorista || '-'}</b></td>
-                <td><span style="color:#b91c1c; font-weight:bold;">${t.veiculo_anterior || '-'}</span></td>
-                <td><span style="color:#047857; font-weight:bold;">${t.veiculo_novo || '-'}</span></td>
-                <td>${t.motivo || '-'}</td>
+                <td>${formatarData(t.data || t.data_troca || t.criado_em)}</td>
+                <td><span style="color:#b45309; font-weight:bold;">${esc(t.veiculo_escalado || t.veiculo_anterior || '-')}</span></td>
+                <td><span style="color:#047857; font-weight:bold;">${esc(t.veiculo_trocado || t.veiculo_novo || '-')}</span></td>
+                <td>${esc(_motivoTrocaTexto(t) || '-')}</td>
+                <td>${esc(t.detalhamento || '-')}</td>
+                <td><b>${esc(t.autorizado_por || '-')}</b></td>
               </tr>
             `).join('')}
         </tbody>
