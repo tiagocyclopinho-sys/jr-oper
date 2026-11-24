@@ -82,7 +82,9 @@ async function carregarDados(rest, am) {
   const meses = [...new Set([...Array.from({ length: m }, (_, i) => a * 100 + i + 1), ant, am - 100])].join(',');
   const [periodos, ind, quad, pontos, sac, trocas, analises, cargasOperAmplo, indSac, colabsCd, custoHist] = await Promise.all([
     rest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes'),
-    rest('vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=in.(${meses})`),
+    // Em paginas: o ano passou de 1.000 indicadores em 24/11/2026 e o abastecimento de
+    // novembro sumia do painel (a leitura unica corta em 1.000 linhas).
+    lerTudo(rest, 'vo_indicadores', `select=ano_mes,secao,indicador,valor,valor_atual&ano_mes=in.(${meses})&order=ano_mes,secao,indicador`),
     lerTudo(rest, 'vo_quadros', `select=secao,quadro,rotulo,ordem,valor,valor2,valor3&ano_mes=eq.${am}&order=secao,quadro,ordem`),
     rest('prod_pontuacao', `select=nome,cargo,setor,pontuacao,qtd_os,qtd_apanhos,kg_total,kg_entrada&ano_mes=eq.${am}`),
     rest('ocorrencias_devolucao', `select=id,numero_devolucao,motivo_real_causa_raiz,carga_numero,criado_em,data_acao_gestor,responsavel_analise,tipo_erro,status_gestao,valor_reclamado,forma_acerto,data_entrada_cd,sem_itens&or=(is_deleted.is.null,is_deleted.is.false)&criado_em=gte.${iso(a, m - 1, 26)}&criado_em=lt.${iso(a, m, 26)}`),
