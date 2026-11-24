@@ -1,6 +1,7 @@
 {
-  "build": "periodo-trocas-veiculos-7.8.4",
+  "build": "imprimir-ocorrencias-multimotivo-7.8.5",
   "publicado_em": "2026-11-24",
+  "resumo_imprimir_multimotivo_785": "7.8.5 - OCORRENCIAS OPERACIONAIS: os botoes de impressao (Geral, Pendentes, Finalizadas, Imprimir Pendentes, Imprimir Finalizadas) davam erro antes de abrir a janela (variavel de periodo inexistente); corrigido. Imprimir Pendentes agora sai igual ao quadro (todas as pendentes, sem filtro). Filtro de Motivo aceita varios motivos marcados, nas Ocorrencias Operacionais e na Troca de Veiculos; o relatorio lista os motivos escolhidos. Sem migration.",
   "resumo_periodo_trocas_784": "7.8.4 - TROCA DE VEICULOS: filtro de periodo (De / Ate) na tela, junto de placa, motivo e autorizador, e botao Limpar. Excel e PDF saem com o periodo escolhido, e o PDF mostra o periodo no cabecalho. Sem migration.",
   "resumo_exportar_trocas_783": "7.8.3 - TROCA DE VEICULOS: botoes Excel e PDF na tela, saindo com os filtros aplicados (placa, motivo, autorizador). O PDF da Central (Historico Trocas) saia todo com tracos porque lia campos que a troca nunca gravou; agora mostra data, veiculo escalado, trocado, motivo, detalhamento e autorizado por. Sem migration.",
   "resumo_visao_indicadores_paginados_782": "7.8.2 - VISAO OPERACAO: o painel lia no maximo 1.000 indicadores e o ano passou disso; o abastecimento de novembro aparecia em branco. Agora le em paginas.",
