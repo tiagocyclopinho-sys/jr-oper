@@ -1,6 +1,7 @@
 {
-  "build": "exportar-trocas-veiculos-7.8.3",
+  "build": "periodo-trocas-veiculos-7.8.4",
   "publicado_em": "2026-11-24",
+  "resumo_periodo_trocas_784": "7.8.4 - TROCA DE VEICULOS: filtro de periodo (De / Ate) na tela, junto de placa, motivo e autorizador, e botao Limpar. Excel e PDF saem com o periodo escolhido, e o PDF mostra o periodo no cabecalho. Sem migration.",
   "resumo_exportar_trocas_783": "7.8.3 - TROCA DE VEICULOS: botoes Excel e PDF na tela, saindo com os filtros aplicados (placa, motivo, autorizador). O PDF da Central (Historico Trocas) saia todo com tracos porque lia campos que a troca nunca gravou; agora mostra data, veiculo escalado, trocado, motivo, detalhamento e autorizado por. Sem migration.",
   "resumo_visao_indicadores_paginados_782": "7.8.2 - VISAO OPERACAO: o painel lia no maximo 1.000 indicadores e o ano passou disso; o abastecimento de novembro aparecia em branco. Agora le em paginas.",
   "resumo_erro_ti_781": "7.8.1 - ERRO T.I. Novo Tipo de Erro / Categoria na apuracao do analista SAC e no filtro do gestor, para falha de sistema (pedido, nota, integracao). Responsavel pela devolucao: TIAGO FERREIRA. Conta como responsabilidade identificada no % Responsabilidade. Sem migration (tipo_erro e texto livre no banco).",
