@@ -17095,7 +17095,7 @@ function ocFiltrarOcorrenciasViagem(lista) {
   const fFunc   = window._ocFiltroFunc    || '';
   const fPlaca  = window._ocFiltroPlaca   || '';
   const fRota   = window._ocFiltroRota    || '';
-  const fMotivo = window._ocFiltroMotivo  || '';
+  const fMotivos = filtroMotivosLista(window._ocFiltroMotivo);
 
   let saida = lista || [];
   if (fDe)     saida = saida.filter(o => (o.data || '') >= fDe);
@@ -17104,8 +17104,44 @@ function ocFiltrarOcorrenciasViagem(lista) {
   if (fFunc)   saida = saida.filter(o => (o.funcionario || '').toLowerCase().includes(fFunc.toLowerCase()));
   if (fPlaca)  saida = saida.filter(o => (o.placa || '').toLowerCase().includes(fPlaca.toLowerCase()));
   if (fRota)   saida = saida.filter(o => (o.rota || '').toLowerCase().includes(fRota.toLowerCase()));
-  if (fMotivo) saida = saida.filter(o => o.motivo === fMotivo);
+  if (fMotivos.length) saida = saida.filter(o => fMotivos.includes(o.motivo));
   return saida;
+}
+
+// 7.8.5: filtro de motivo com mais de um motivo marcado. O valor guardado em
+// window[chave] passa a ser lista; texto solto (versão antiga) vira lista de um.
+function filtroMotivosLista(v) {
+  return Array.isArray(v) ? v.filter(Boolean) : (v ? [v] : []);
+}
+
+function alternarFiltroMotivo(chave, valor, marcado) {
+  let sel = filtroMotivosLista(window[chave]);
+  sel = marcado ? [...new Set([...sel, valor])] : sel.filter(x => x !== valor);
+  window[chave] = sel;
+  window._multiMotivoAberto = chave;
+  renderApp();
+}
+
+function htmlFiltroMultiMotivo(chave, opcoes, classeCor) {
+  const sel = filtroMotivosLista(window[chave]);
+  const aberto = window._multiMotivoAberto === chave;
+  const rotulo = sel.length === 0 ? 'Todos os Motivos' : (sel.length === 1 ? sel[0] : `${sel.length} motivos`);
+  const attr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return `
+    <details class="relative" ${aberto ? 'open' : ''} ontoggle="if (this.open) { window._multiMotivoAberto='${chave}'; } else if (window._multiMotivoAberto==='${chave}') { window._multiMotivoAberto=''; }">
+      <summary class="list-none cursor-pointer bg-slate-800 border border-slate-700 ${classeCor || 'text-white'} rounded p-1 text-xs font-bold select-none whitespace-nowrap" title="${attr(sel.join(', ') || 'Todos os motivos')}">${attr(rotulo)} ▾</summary>
+      <div class="absolute z-50 mt-1 right-0 min-w-[240px] max-h-72 overflow-y-auto bg-slate-900 border border-slate-700 rounded-lg shadow-2xl p-2 space-y-1">
+        <div class="flex justify-between gap-2 text-[10px] pb-1 mb-1 border-b border-slate-800">
+          <button type="button" onclick="window['${chave}']=[]; window._multiMotivoAberto='${chave}'; renderApp()" class="text-slate-400 hover:text-white underline">Todos (limpar)</button>
+          <button type="button" onclick="window._multiMotivoAberto=''; renderApp()" class="text-slate-400 hover:text-white underline">Fechar</button>
+        </div>
+        ${opcoes.map(m => `
+          <label class="flex items-center gap-2 text-[11px] text-slate-200 cursor-pointer hover:bg-slate-800 rounded px-1 py-0.5">
+            <input type="checkbox" value="${attr(m)}" ${sel.includes(m) ? 'checked' : ''} onchange="alternarFiltroMotivo('${chave}', this.value, this.checked)" class="accent-purple-500">
+            <span>${attr(m)}</span>
+          </label>`).join('')}
+      </div>
+    </details>`;
 }
 
 function ocResumoDosFiltros() {
@@ -17117,7 +17153,7 @@ function ocResumoDosFiltros() {
   add('Funcionário', window._ocFiltroFunc);
   add('Placa', window._ocFiltroPlaca);
   add('Rota', window._ocFiltroRota);
-  add('Motivo', window._ocFiltroMotivo);
+  add(filtroMotivosLista(window._ocFiltroMotivo).length > 1 ? 'Motivos' : 'Motivo', filtroMotivosLista(window._ocFiltroMotivo).join(', '));
   return partes;
 }
 
@@ -17311,8 +17347,8 @@ function renderViagensOcorrenciasSubTab() {
       </div>
 
       <!-- PAINEL 2: OCORRÊNCIAS FINALIZADAS (COM FILTROS) -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
-        <div class="p-3 bg-slate-950 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl shadow-xl">
+        <div class="p-3 rounded-t-xl bg-slate-950 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div class="flex items-center gap-2">
             <span class="text-base">✅</span>
             <h3 class="font-bold text-emerald-400 text-xs uppercase tracking-wider">Ocorrências Operacionais Finalizadas</h3>
@@ -17367,10 +17403,7 @@ function renderViagensOcorrenciasSubTab() {
           </div>
           <div>
             <label class="block text-[9px] text-slate-400 font-bold uppercase mb-0.5">Motivo</label>
-            <select onchange="window._ocFiltroMotivo=this.value; renderApp()" class="w-full bg-slate-800 border border-slate-700 text-amber-300 font-bold rounded p-1 text-xs">
-              <option value="">Todos</option>
-              ${motivos.map(m => `<option value="${m}" ${fMotivo===m?'selected':''}>${m}</option>`).join('')}
-            </select>
+            ${htmlFiltroMultiMotivo('_ocFiltroMotivo', motivos, 'text-amber-300')}
           </div>
         </div>
 
@@ -18377,7 +18410,7 @@ function renderRotaOcorrenciasView() {
 // 7.8.3: filtros da tela num lugar só, para a tabela e as exportações
 // (Excel e PDF) saírem com as mesmas linhas.
 function listarTrocasVeiculosFiltradas(base) {
-  const fMotivo = window._trocaFiltroMotivo || '';
+  const fMotivos = filtroMotivosLista(window._trocaFiltroMotivo);
   const fAutorizado = window._trocaFiltroAutorizado || '';
   const fVeic = (window._trocaFiltroVeiculo || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
   const fDe = window._trocaFiltroDe || '';
@@ -18385,7 +18418,7 @@ function listarTrocasVeiculosFiltradas(base) {
   let lista = base || db.getTrocasVeiculos() || [];
   // 7.8.4: período De/Até, mesmo recorte de data do Dashboard.
   if (fDe || fAte) lista = lista.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
-  if (fMotivo) lista = lista.filter(t => t.motivo_resumido === fMotivo);
+  if (fMotivos.length) lista = lista.filter(t => fMotivos.includes(t.motivo_resumido));
   if (fAutorizado) lista = lista.filter(t => t.autorizado_por === fAutorizado);
   if (fVeic) {
     lista = lista.filter(t => {
@@ -18511,8 +18544,8 @@ function renderViagensTrocaVeiculosSubTab() {
       </div>
 
       <!-- TABELA DE TROCAS DE VEÍCULOS -->
-      <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
-        <div class="p-3 bg-slate-950 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl shadow-xl">
+        <div class="p-3 rounded-t-xl bg-slate-950 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div class="flex items-center gap-2">
             <span class="text-base">🔄</span>
             <h3 class="font-bold text-purple-400 text-xs uppercase tracking-wider">Histórico de Trocas de Veículos</h3>
@@ -18522,12 +18555,9 @@ function renderViagensTrocaVeiculosSubTab() {
             <input type="date" value="${window._trocaFiltroDe || ''}" onchange="window._trocaFiltroDe=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1" title="Data inicial">
             <label class="text-[10px] text-slate-400">Até</label>
             <input type="date" value="${window._trocaFiltroAte || ''}" onchange="window._trocaFiltroAte=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1" title="Data final">
-            ${(window._trocaFiltroDe || window._trocaFiltroAte || window._trocaFiltroVeiculo || window._trocaFiltroMotivo || window._trocaFiltroAutorizado) ? `<button onclick="window._trocaFiltroDe='';window._trocaFiltroAte='';window._trocaFiltroVeiculo='';window._trocaFiltroMotivo='';window._trocaFiltroAutorizado=''; renderApp()" class="text-[11px] text-slate-400 hover:text-white underline" title="Limpar todos os filtros">Limpar</button>` : ''}
+            ${(window._trocaFiltroDe || window._trocaFiltroAte || window._trocaFiltroVeiculo || filtroMotivosLista(window._trocaFiltroMotivo).length || window._trocaFiltroAutorizado) ? `<button onclick="window._trocaFiltroDe='';window._trocaFiltroAte='';window._trocaFiltroVeiculo='';window._trocaFiltroMotivo=[];window._trocaFiltroAutorizado=''; renderApp()" class="text-[11px] text-slate-400 hover:text-white underline" title="Limpar todos os filtros">Limpar</button>` : ''}
             <input type="text" id="troca-filtro-veiculo" value="${window._trocaFiltroVeiculo || ''}" placeholder="Buscar Placa (ex: H89)..." oninput="forcarMaiuscula(this); window._trocaFiltroVeiculo=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1 focus:border-purple-500 focus:outline-none">
-            <select onchange="window._trocaFiltroMotivo=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1">
-              <option value="">Todos os Motivos</option>
-              ${motivos.map(m => `<option value="${m}" ${fMotivo===m?'selected':''}>${m}</option>`).join('')}
-            </select>
+            ${htmlFiltroMultiMotivo('_trocaFiltroMotivo', motivos, 'text-white')}
             <select onchange="window._trocaFiltroAutorizado=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-purple-300 rounded text-xs p-1 font-bold">
               <option value="">Todos Autorizadores</option>
               ${autorizadores.map(a => `<option value="${a}" ${fAutorizado===a?'selected':''}>${a}</option>`).join('')}
@@ -19780,12 +19810,20 @@ function gerarRelatorioOcOperacionaisModal(tipo = 'TODAS') {
   // Saiu junto o encadeamento `|| window._vgFiltroDataDe`, que apontava para
   // uma variável inexistente (a mesma do Boletim de Largada) e por isso
   // nunca teve efeito nenhum.
-  const filtrosAtivos = ocResumoDosFiltros();
+  // 7.8.5: PENDENTES imprime o que o quadro de pendentes mostra — todas,
+  // sem filtro (a barra de filtros fica no quadro das finalizadas). Antes,
+  // com um motivo marcado, Imprimir Pendentes saía vazio com 3 na tela.
+  const usaFiltro = tipo !== 'PENDENTES';
+  const filtrosAtivos = usaFiltro ? ocResumoDosFiltros() : [];
+  // 7.8.5: fDe/fAte não existiam nesta função; o ReferenceError na linha do
+  // período derrubava os três botões de impressão antes de abrir a janela.
+  const fDe  = usaFiltro ? (window._ocFiltroDataDe  || '') : '';
+  const fAte = usaFiltro ? (window._ocFiltroDataAte || '') : '';
 
   let ocs = todasOcs;
   if (tipo === 'PENDENTES')       ocs = ocs.filter(o => o.status !== 'FINALIZADA');
   else if (tipo === 'FINALIZADAS') ocs = ocs.filter(o => o.status === 'FINALIZADA');
-  ocs = ocFiltrarOcorrenciasViagem(ocs);
+  if (usaFiltro) ocs = ocFiltrarOcorrenciasViagem(ocs);
 
   const totOcs         = ocs.length;
   const totPendentes   = ocs.filter(o => o.status !== 'FINALIZADA').length;
@@ -19875,7 +19913,7 @@ function gerarRelatorioOcOperacionaisModal(tipo = 'TODAS') {
     <strong style="text-transform:uppercase;">Filtros aplicados:</strong>
     ${filtrosAtivos.length
       ? filtrosAtivos.map(f => `<span style="display:inline-block;background:#e0e7ff;color:#3730a3;border:1px solid #a5b4fc;border-radius:4px;padding:1px 6px;margin:2px 3px 0 0;font-weight:bold;">${f}</span>`).join('')
-      : '<span style="color:#b45309;font-weight:bold;">nenhum — este relatório traz TODAS as ocorrências da base</span>'}
+      : (tipo === 'PENDENTES' ? '<span style="color:#475569;font-weight:bold;">nenhum — todas as pendentes, como no quadro da tela</span>' : '<span style="color:#b45309;font-weight:bold;">nenhum — este relatório traz TODAS as ocorrências da base</span>')}
     <span style="float:right;font-weight:bold;color:#475569;">${ocs.length} de ${todasOcs.length} ocorrência(s)</span>
   </div>
 
