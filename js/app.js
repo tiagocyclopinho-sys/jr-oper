@@ -18380,7 +18380,11 @@ function listarTrocasVeiculosFiltradas(base) {
   const fMotivo = window._trocaFiltroMotivo || '';
   const fAutorizado = window._trocaFiltroAutorizado || '';
   const fVeic = (window._trocaFiltroVeiculo || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const fDe = window._trocaFiltroDe || '';
+  const fAte = window._trocaFiltroAte || '';
   let lista = base || db.getTrocasVeiculos() || [];
+  // 7.8.4: período De/Até, mesmo recorte de data do Dashboard.
+  if (fDe || fAte) lista = lista.filter(t => registroNoPeriodo(t, 'trocas_veiculos', fDe, fAte));
   if (fMotivo) lista = lista.filter(t => t.motivo_resumido === fMotivo);
   if (fAutorizado) lista = lista.filter(t => t.autorizado_por === fAutorizado);
   if (fVeic) {
@@ -18514,6 +18518,11 @@ function renderViagensTrocaVeiculosSubTab() {
             <h3 class="font-bold text-purple-400 text-xs uppercase tracking-wider">Histórico de Trocas de Veículos</h3>
           </div>
           <div class="flex flex-wrap items-center gap-2">
+            <label class="text-[10px] text-slate-400">De</label>
+            <input type="date" value="${window._trocaFiltroDe || ''}" onchange="window._trocaFiltroDe=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1" title="Data inicial">
+            <label class="text-[10px] text-slate-400">Até</label>
+            <input type="date" value="${window._trocaFiltroAte || ''}" onchange="window._trocaFiltroAte=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1" title="Data final">
+            ${(window._trocaFiltroDe || window._trocaFiltroAte || window._trocaFiltroVeiculo || window._trocaFiltroMotivo || window._trocaFiltroAutorizado) ? `<button onclick="window._trocaFiltroDe='';window._trocaFiltroAte='';window._trocaFiltroVeiculo='';window._trocaFiltroMotivo='';window._trocaFiltroAutorizado=''; renderApp()" class="text-[11px] text-slate-400 hover:text-white underline" title="Limpar todos os filtros">Limpar</button>` : ''}
             <input type="text" id="troca-filtro-veiculo" value="${window._trocaFiltroVeiculo || ''}" placeholder="Buscar Placa (ex: H89)..." oninput="forcarMaiuscula(this); window._trocaFiltroVeiculo=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1 focus:border-purple-500 focus:outline-none">
             <select onchange="window._trocaFiltroMotivo=this.value; renderApp()" class="bg-slate-800 border border-slate-700 text-white rounded text-xs p-1">
               <option value="">Todos os Motivos</option>
@@ -18524,7 +18533,7 @@ function renderViagensTrocaVeiculosSubTab() {
               ${autorizadores.map(a => `<option value="${a}" ${fAutorizado===a?'selected':''}>${a}</option>`).join('')}
             </select>
             <button onclick="exportarTrocasVeiculosCsv()" class="bg-emerald-800 hover:bg-emerald-700 text-white font-bold px-3 py-1 rounded text-xs" title="Baixa as trocas filtradas em planilha (abre no Excel)">📊 Excel</button>
-            <button onclick="gerarRelatorioTrocasVeiculosPdf({ lista: listarTrocasVeiculosFiltradas() })" class="bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold px-3 py-1 rounded text-xs border border-purple-800/60" title="PDF das trocas filtradas">📋 PDF</button>
+            <button onclick="gerarRelatorioTrocasVeiculosPdf({ lista: listarTrocasVeiculosFiltradas(), de: window._trocaFiltroDe || '', ate: window._trocaFiltroAte || '' })" class="bg-slate-800 hover:bg-slate-700 text-purple-300 font-bold px-3 py-1 rounded text-xs border border-purple-800/60" title="PDF das trocas filtradas">📋 PDF</button>
           </div>
         </div>
 
@@ -29617,8 +29626,8 @@ function imprimirTratativaDevolucaoPdf(devId) {
 // período da Central de PDFs; a tela Troca de Veículos passa a lista filtrada.
 function gerarRelatorioTrocasVeiculosPdf(opts) {
   const daTela = !!(opts && Array.isArray(opts.lista));
-  const fDe = daTela ? '' : (window._pdfFiltroDe || '');
-  const fAte = daTela ? '' : (window._pdfFiltroAte || '');
+  const fDe = daTela ? (opts.de || '') : (window._pdfFiltroDe || '');
+  const fAte = daTela ? (opts.ate || '') : (window._pdfFiltroAte || '');
   const esc = v => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   // (26/08) mesmo recorte do Dashboard, via CAMPOS_DATA_POR_COLECAO.
