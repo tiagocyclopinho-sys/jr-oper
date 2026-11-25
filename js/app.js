@@ -31426,7 +31426,8 @@ function renderProdutividadeCDView() {
 // monta tudo (carga, analise e graficos) e js/visaoOperacao.js, comum aos dois.
 // - Le a nuvem so quando a tela abre: as tabelas vo_* (foto mensal tirada do
 //   Power BI pela Edge Function sync-visao-operacao) nao entram na sincronizacao.
-// - Abre no ultimo mes congelado; o mes em andamento aparece como previa.
+// - A partir do dia 5 abre no mes corrente, mesmo em previa (7.8.6); do dia 1 ao 4,
+//   no ultimo mes congelado.
 // - A pagina vai num iframe (srcdoc) para o CSS dela nao brigar com o Tailwind
 //   do app. O quadro tem a altura da tela e rola por dentro (6.9.5): assim o
 //   menu de secoes da pagina fica travado no topo enquanto se desce.
@@ -31440,6 +31441,16 @@ async function voRest(tabela, query) {
   const r = await fetch(`${cs.config.url}/rest/v1/${tabela}?${query}`, { headers: cs._headers() });
   if (!r.ok) throw new Error(`Não foi possível ler ${tabela} (${r.status}).`);
   return r.json();
+}
+
+// Mes em que a tela abre (Tiago, 25/11/2026). Data de Brasilia; periodos vem do mais
+// novo para o mais antigo.
+const VO_DIA_MES_CORRENTE = 5;
+function voMesInicial(periodos, agora = new Date()) {
+  const h = new Date(agora.getTime() - 3 * 3600000);
+  const corrente = h.getUTCFullYear() * 100 + h.getUTCMonth() + 1;
+  if (h.getUTCDate() >= VO_DIA_MES_CORRENTE && periodos.some(p => p.ano_mes === corrente)) return corrente;
+  return (periodos.find(p => p.status === 'fechado') || periodos[0] || {}).ano_mes || null;
 }
 
 async function carregarVisaoOperacao(forcar = false) {
@@ -31460,8 +31471,7 @@ async function carregarVisaoOperacao(forcar = false) {
     if (forcar || !st.periodos) {
       st.periodos = await voRest('vo_periodos', 'select=ano_mes,status,congelado_em&order=ano_mes.desc');
       if (!st.mes || !st.periodos.some(p => p.ano_mes === st.mes)) {
-        const fechado = st.periodos.find(p => p.status === 'fechado');
-        st.mes = (fechado || st.periodos[0] || {}).ano_mes || null;
+        st.mes = voMesInicial(st.periodos);
       }
     }
     if (st.mes && (forcar || !st.paginas[st.mes])) {
