@@ -57,6 +57,9 @@ const ESC_JANELA_VIAGEM_DIAS = 20;
 const ESC_USO_ESCALA = { ROTA: 'Rota', TRANSBORDO: 'Só transbordo', FIXA: 'Rota fixa', NAO: 'Não faz viagem' };
 // Veículo de serviço fixo (migration 70) não entra nos disponíveis, mas segue nas sugestões.
 const ESC_USO_VEICULO = { ROTA: 'Rota', FIXA: 'Rota fixa' };
+// Ajudante de serviço fixo (migration 83, Gabriel da carne): fora da
+// Disponibilidade e do sobreaviso, mas segue nas sugestões.
+const ESC_USO_AJUDANTE = { ROTA: 'Rota', FIXA: 'Rota fixa' };
 
 function escEsc(v) {
   return String(v === null || v === undefined ? '' : v)
@@ -292,7 +295,8 @@ function escListas() {
   const uso = m => m.uso_escala || 'ROTA';
   const ativos = (data.motoristas || []).filter(m => vivo(m) && m.ativo !== false && !m.data_desligamento);
   const motoristas = ativos.map(nome);
-  const ajudantes = (data.ajudantes || []).filter(a => vivo(a) && a.ativo !== false).map(a => String(a.nome || '').toUpperCase());
+  const ajudantesAtivos = (data.ajudantes || []).filter(a => vivo(a) && a.ativo !== false);
+  const ajudantes = ajudantesAtivos.map(nome);
   const placas = (data.veiculos || []).filter(v => vivo(v) && String(v.situacao || '').toUpperCase() !== 'INATIVO').map(v => String(v.placa || '').toUpperCase());
   const rotas = new Set((data.rotas || []).map(r => String(r || '').toUpperCase()));
   (window._escala.matrizes || []).forEach(m => m.rota && rotas.add(m.rota));
@@ -301,6 +305,7 @@ function escListas() {
     motoristas: uniq(motoristas), ajudantes: uniq(ajudantes), pessoas: uniq(motoristas.concat(ajudantes)), placas: uniq(placas), rotas: uniq(Array.from(rotas)),
     motoristasRota: uniq(ativos.filter(m => uso(m) === 'ROTA').map(nome)),
     motoristasTransbordo: uniq(ativos.filter(m => uso(m) === 'TRANSBORDO').map(nome)),
+    ajudantesRota: uniq(ajudantesAtivos.filter(a => uso(a) !== 'FIXA').map(nome)),
     pessoasEscala: uniq(ativos.filter(m => uso(m) !== 'NAO').map(nome).concat(ajudantes))
   };
 }
@@ -644,10 +649,29 @@ function escPessoasCadastro() {
 
 // Nome curto em viagem ("EDSON VELOSO / ALESSANCO") vale pelo nome completo do
 // cadastro quando só um começa assim. Sem isso a pessoa pareceria livre.
+// 7.8.8 (26/11): o Fusion e o cadastro também divergem no meio ou no fim do
+// nome ("ADEMAR FILHO DE OLIVEIRA" x "ADEMAR FILHO SILVA DE OLIVEIRA";
+// "NILMAR PEREIRA DOS SANTOS SOUZA" x "NILMAR PEREIRA DOS SANTOS"), e a pessoa
+// escalada aparecia como disponível. Agora vale também: mesmo primeiro nome e
+// todas as partes de um contidas no outro (sem DE/DA/DOS...), com pelo menos
+// dois nomes, e um único candidato no cadastro.
+function escPartesNome(n) {
+  return escNorm(n).split(' ').filter(t => t && !['DE', 'DA', 'DO', 'DAS', 'DOS', 'E'].includes(t));
+}
 function escResolverPessoa(p, cadastro) {
   if (cadastro.has(p)) return p;
-  const achados = Array.from(cadastro.keys()).filter(n => n.startsWith(p + ' '));
-  return achados.length === 1 ? achados[0] : p;
+  const chaves = Array.from(cadastro.keys());
+  const achados = chaves.filter(n => n.startsWith(p + ' '));
+  if (achados.length === 1) return achados[0];
+  if (achados.length > 1) return p;
+  const a = escPartesNome(p);
+  if (a.length < 2) return p;
+  const contido = (x, y) => x.every(t => y.includes(t));
+  const parecidos = chaves.filter(n => {
+    const b = escPartesNome(n);
+    return b.length >= 2 && b[0] === a[0] && (contido(a, b) || contido(b, a));
+  });
+  return parecidos.length === 1 ? parecidos[0] : p;
 }
 
 // Quem está fora por viagem, numa regra só para os avisos e a Disponibilidade.
@@ -1389,6 +1413,14 @@ function escCasarFusion(rows, linhas) {
   return pares;
 }
 
+// Carga da carne (Silvestre/Gabriel, migration 83): a viagem já nasce sozinha
+// no Controle de Viagens e não passa pela escala.
+function escFusionViagemFixa(f) {
+  if (/CARNE/.test(escNorm(f.destino))) return true;
+  const fixos = new Set(((typeof db !== 'undefined' && db.data.motoristas) || []).filter(m => m.uso_escala === 'FIXA').map(m => escNorm(m.nome)));
+  return !!f.motorista && fixos.has(escResolverPessoa(escNorm(f.motorista), escPessoasCadastro()));
+}
+
 function escAbrirConferenciaFusion(rows, nomeArquivo) {
   const st = window._escala;
   const linhas = escLinhasDaData();
@@ -1432,7 +1464,7 @@ function escAbrirConferenciaFusion(rows, nomeArquivo) {
               const l = linhas.find(x => String(x.id) === pares[i]);
               return `<tr class="border-t border-slate-800 align-top">
                 <td class="p-1.5 font-bold text-white whitespace-nowrap">${escEsc(f.carga)}</td>
-                <td class="p-1.5 text-slate-200">${escEsc(f.destino)}${f.crossDocking ? `<br><span class="text-[10px] text-sky-300">via cross-docking ${escEsc(f.crossDocking)}</span>` : ''}</td>
+                <td class="p-1.5 text-slate-200">${escEsc(f.destino)}${f.crossDocking ? `<br><span class="text-[10px] text-sky-300">via cross-docking ${escEsc(f.crossDocking)}</span>` : ''}${escFusionViagemFixa(f) ? `<br><span class="text-[10px] text-amber-300">🥩 viagem fixa: deixe em Ignorar e lance a carga na viagem já criada no Controle de Viagens</span>` : ''}</td>
                 <td class="p-1.5 text-slate-300">${escEsc(f.placa)}<br><span class="text-[10px]">${escEsc(f.motorista)}</span><br><span class="text-[10px] text-slate-500">${escEsc(escAjudantesTexto(f))}</span></td>
                 <td class="p-1.5 text-right">${escFmt(f.peso)}</td>
                 <td class="p-1.5 text-right whitespace-nowrap">R$ ${escFmt(f.valor)}</td>
@@ -2339,7 +2371,7 @@ function escDisponibilidade(dataIso) {
   const fazTransbordo = v => ['CARRETA', 'CAVALO'].includes(escNorm(v.tipo));
   return {
     MOTORISTA: ordenar(listas.motoristasRota.map(pessoa).concat(foraDoCadastro('motoristas'))),
-    AJUDANTE: ordenar(listas.ajudantes.map(pessoa).concat(foraDoCadastro('ajudantes'))),
+    AJUDANTE: ordenar(listas.ajudantesRota.map(pessoa).concat(foraDoCadastro('ajudantes'))),
     VEICULO: ordenar(veiculos.filter(fazRota)),
     TRANSBORDO: ordenar(listas.motoristasTransbordo.map(pessoa).map(x => Object.assign(x, { tipo: 'MOTORISTA' })).concat(veiculos.filter(fazTransbordo)))
   };

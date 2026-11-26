@@ -21546,9 +21546,9 @@ function renderCadSubTabContent() {
         ${cadBarraBusca('ajudantes', 'Buscar por nome ou código ERP...')}
         <div class="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <table class="w-full text-left text-xs">
-            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
+            <thead class="bg-slate-950 text-slate-400 uppercase text-[10px] sticky top-0"><tr><th class="p-2">ERP</th><th class="p-2">Nome</th><th class="p-2">Uso na escala</th><th class="p-2">Situação</th><th class="p-2 text-right">Ação</th></tr></thead>
             <tbody class="divide-y divide-slate-800">
-              ${cadFiltrar('ajudantes', a => [a.id, a.nome]).map(a=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${a.id}</td><td class="p-2 font-semibold text-white">${escEsc(a.nome)}</td><td class="p-2">${cadSituacaoPessoa(a)}</td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('ajudantes','${a.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('ajudantes','${a.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
+              ${cadFiltrar('ajudantes', cadCamposBusca('ajudantes')).map(a=>`<tr class="hover:bg-slate-800/40"><td class="p-2 font-bold text-emerald-400">${a.id}</td><td class="p-2 font-semibold text-white">${escEsc(a.nome)}</td><td class="p-2 text-slate-300 whitespace-nowrap">${ESC_USO_AJUDANTE[a.uso_escala || 'ROTA'] || '—'}</td><td class="p-2">${cadSituacaoPessoa(a)}</td><td class="p-2 text-right whitespace-nowrap"><button onclick="abrirEdicaoCadastro('ajudantes','${a.id}')" class="text-blue-400 hover:text-blue-300 text-[10px] font-bold mr-2">✏️ Editar</button><button onclick="deleteCad('ajudantes','${a.id}')" class="text-red-400 hover:text-red-300 text-[10px]">Excluir</button></td></tr>`).join('')}
             </tbody>
           </table>
         </div>
@@ -22012,7 +22012,7 @@ function cadBarraBusca(colecao, placeholder) {
 function cadCamposBusca(colecao) {
   if (colecao === 'veiculos') return v => [v.placa, v.tipo, v.modelo, v.situacao, v.setor, ESC_USO_VEICULO[v.uso_escala || 'ROTA']];
   if (colecao === 'motoristas') return m => [m.id, m.nome, m.cnh, m.telefone, ESC_USO_ESCALA[m.uso_escala || 'ROTA']];
-  return a => [a.id, a.nome];
+  return a => [a.id, a.nome, ESC_USO_AJUDANTE[a.uso_escala || 'ROTA']];
 }
 
 // Busca sem acento e sem diferença de espaço; ordem alfabética.
@@ -22050,7 +22050,9 @@ function abrirEdicaoCadastro(colecao, id) {
   } else if (colecao === 'ajudantes') {
     campos = `
       <div class="col-span-2"><label class="block text-[10px] text-slate-400 mb-1">Nome completo *</label><input id="ed-cad-nome" required class="${cls}" value="${v(item.nome)}" oninput="forcarMaiuscula(this)"></div>
-      <div><label class="block text-[10px] text-slate-400 mb-1">Ativo</label><select id="ed-cad-ativo" class="${cls}"><option value="sim" ${item.ativo !== false ? 'selected' : ''}>Sim</option><option value="nao" ${item.ativo === false ? 'selected' : ''}>Não</option></select></div>`;
+      <div><label class="block text-[10px] text-slate-400 mb-1">Uso na escala</label><select id="ed-cad-uso-aju" class="${cls}">${Object.entries(ESC_USO_AJUDANTE).map(([k, t]) => `<option value="${k}" ${(item.uso_escala || 'ROTA') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div><label class="block text-[10px] text-slate-400 mb-1">Ativo</label><select id="ed-cad-ativo" class="${cls}"><option value="sim" ${item.ativo !== false ? 'selected' : ''}>Sim</option><option value="nao" ${item.ativo === false ? 'selected' : ''}>Não</option></select></div>
+      <p class="col-span-2 text-[10px] text-slate-500">Rota fixa: não entra na Disponibilidade nem no sobreaviso da convocação (ex.: ajudante da carne).</p>`;
   } else {
     const grupos = ['TOCO', 'TRUCK', 'CARRETA', '3/4', 'VUC', 'CAVALO', 'UTILITARIO', 'PASSEIO'];
     const atual = String(item.tipo || item.modelo || '').toUpperCase();
@@ -22106,6 +22108,7 @@ async function salvarEdicaoCadastro(e, colecao, id) {
     item.uso_escala = val('ed-cad-uso') || 'ROTA';
     item.ativo = val('ed-cad-ativo') !== 'nao';
   } else if (colecao === 'ajudantes') {
+    item.uso_escala = val('ed-cad-uso-aju') || 'ROTA';
     item.ativo = val('ed-cad-ativo') !== 'nao';
   } else {
     item.tipo = val('ed-cad-tipo');
