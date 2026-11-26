@@ -1013,12 +1013,12 @@ const PA_CSS_PDF = `
   html,body{margin:0;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif;font-size:10px}
   .cab{display:flex;align-items:center;gap:14px;border-bottom:3px solid #14532d;padding-bottom:6px;margin-bottom:8px}
   .cab img{height:46px} .cab h1{margin:0;font-size:18px;color:#14532d;letter-spacing:.5px} .cab .sub{color:#555;font-size:10px;margin-top:2px}
-  table{border-collapse:collapse;width:100%} th{background:#14532d;color:#fff;font-size:9px;text-transform:uppercase;padding:4px;text-align:left}
-  td{border:1px solid #d4d4d4;padding:4px;vertical-align:top} tr:nth-child(even) td{background:#f8faf8}
+  table{border-collapse:collapse;width:100%} th{background:#14532d;color:#fff;font-size:9px;text-transform:uppercase;padding:4px;text-align:center;vertical-align:middle}
+  td{border:1px solid #d4d4d4;padding:4px;vertical-align:middle;text-align:center} tr:nth-child(even) td{background:#f8faf8}
   .selo{display:inline-block;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:9px;white-space:nowrap}
   .c{text-align:center} .nw{white-space:nowrap} .mut{color:#666;font-size:9px}
   .cards{display:flex;gap:10px;margin-bottom:8px} .bloco{flex:1;border:1px solid #d4d4d4;border-radius:4px;padding:5px}
-  .bloco h3{margin:0 0 3px;font-size:10px;color:#14532d;text-transform:uppercase} .bloco td{border:0;border-bottom:1px solid #eee;padding:2px 3px;background:none!important}
+  .bloco h3{margin:0 0 3px;font-size:10px;color:#14532d;text-transform:uppercase;text-align:center} .bloco td{border:0;border-bottom:1px solid #eee;padding:2px 3px;background:none!important}
 `;
 function paTempoPdf(t) {
   if (t === null) return '';
