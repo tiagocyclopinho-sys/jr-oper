@@ -4030,7 +4030,9 @@ const NAV_GRUPOS = [
     itens: [
       { tab: 'dashboard', icon: '📊', label: 'Dashboard Executivo', papeis: null },
       // 6.9.4: fechamento mensal (Power BI + Jr-Oper), a mesma pagina do .html do gerador.
-      { tab: 'visao_operacao', icon: '📈', label: 'Visão Operação', papeis: null }
+      { tab: 'visao_operacao', icon: '📈', label: 'Visão Operação', papeis: null },
+      // 7.9.0: plano de acao (substitui a planilha da Reuniao de Manutencao). Todos veem e editam.
+      { tab: 'plano_acao', icon: '🎯', label: 'Plano de Ação', papeis: null }
     ]
   },
   {
@@ -4363,6 +4365,9 @@ function renderApp() {
         break;
       case 'cross_palmas':
         html = renderCrossPalmasView();
+        break;
+      case 'plano_acao':
+        html = (typeof renderPlanoAcaoView === 'function') ? renderPlanoAcaoView() : '<div class="p-6 text-slate-400">Recarregue a página (Ctrl+Shift+R): falta o arquivo do Plano de Ação.</div>';
         break;
       case 'controle_viagens':
         activeViagensSubTab = 'largada';
