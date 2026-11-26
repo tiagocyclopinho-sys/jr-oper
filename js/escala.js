@@ -1699,6 +1699,16 @@ async function escDesenhar(tipo) {
   let H = 0;
   setores.forEach(s => { H += H_TIT + H_CAB + linhas.filter(l => l.setor === s).length * H_LIN + H_LIN + GAP; });
   if (fech) H += H_LIN + 10;
+  // SOBREAVISO (7.8.7, 26/11): na convocação, quem está disponível na data sai
+  // embaixo, para o prestador fora da escala saber que está de sobreaviso e não
+  // marcar outro compromisso. Mesma regra da tela Disponibilidade.
+  let sobreaviso = null;
+  if (!fech) {
+    const b = escBlocosDisponiveis(st.data);
+    sobreaviso = { motoristas: b.motoristas.map(x => x.nome), ajudantes: b.ajudantes.map(x => x.nome) };
+    sobreaviso.linhas = Math.max(1, sobreaviso.motoristas.length, sobreaviso.ajudantes.length);
+    H += H_TIT + H_CAB + sobreaviso.linhas * H_LIN;
+  }
   const canvas = document.createElement('canvas');
   const esc = 1.5;
   canvas.width = Math.ceil(W * esc); canvas.height = Math.ceil(H * esc);
@@ -1790,6 +1800,23 @@ async function escDesenhar(tipo) {
     texto(escFmt(t.peso), xx, y, cols[6][1], H_LIN, '#111', 17, 'right'); xx += cols[6][1];
     texto('R$ ' + escFmt(t.valor), xx, y, cols[7][1], H_LIN, '#111', 17, 'right'); xx += cols[7][1];
     texto(t.entregas, xx, y, cols[8][1], H_LIN, '#111', 17);
+  }
+  if (sobreaviso) {
+    caixa(0, y, W, H_TIT, AMARELO);
+    ctx.font = 'bold 34px Arial'; ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('SOBREAVISO', W / 2, y + H_TIT / 2 + 2);
+    y += H_TIT;
+    const metade = W / 2;
+    [['MOTORISTA DISPONÍVEL', sobreaviso.motoristas], ['AJUDANTE DISPONÍVEL', sobreaviso.ajudantes]].forEach(([titulo, nomes], k) => {
+      const x = k * metade;
+      caixa(x, y, metade, H_CAB, VERDE_ESCURO);
+      texto(titulo, x, y, metade, H_CAB, '#ffffff', 18);
+      for (let i = 0; i < sobreaviso.linhas; i++) {
+        const yy = y + H_CAB + i * H_LIN;
+        caixa(x, yy, metade, H_LIN, i % 2 ? '#ffffff' : LINHA_A);
+        texto(nomes[i] || (i === 0 && !nomes.length ? '—' : ''), x, yy, metade, H_LIN, '#111', 14);
+      }
+    });
   }
   return canvas;
 }
