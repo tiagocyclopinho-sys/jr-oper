@@ -1,6 +1,7 @@
 {
-  "build": "visao-abre-mes-corrente-7.8.6",
-  "publicado_em": "2026-11-25",
+  "build": "sobreaviso-convocacao-7.8.7",
+  "publicado_em": "2026-11-26",
+  "resumo_sobreaviso_convocacao_787": "7.8.7 - SOBREAVISO NA IMAGEM DA CONVOCACAO. Abaixo do frio e do seco, a imagem da convocacao ganha o bloco SOBREAVISO com duas colunas, Motorista disponivel e Ajudante disponivel: quem esta ativo, fora da escala, sem viagem aberta e sem folga na data (a mesma regra da tela Disponibilidade). Assim o prestador que nao foi escalado sabe que esta de sobreaviso. A imagem do fechamento nao muda. Sem migration.",
   "resumo_visao_abre_mes_corrente_786": "7.8.6 - VISAO OPERACAO: a partir do dia 5 de cada mes a tela abre no mes corrente, mesmo em previa. Do dia 1 ao 4 abre no ultimo mes fechado.",
   "resumo_imprimir_multimotivo_785": "7.8.5 - OCORRENCIAS OPERACIONAIS: os botoes de impressao (Geral, Pendentes, Finalizadas, Imprimir Pendentes, Imprimir Finalizadas) davam erro antes de abrir a janela (variavel de periodo inexistente); corrigido. Imprimir Pendentes agora sai igual ao quadro (todas as pendentes, sem filtro). Filtro de Motivo aceita varios motivos marcados, nas Ocorrencias Operacionais e na Troca de Veiculos; o relatorio lista os motivos escolhidos. Sem migration.",
   "resumo_periodo_trocas_784": "7.8.4 - TROCA DE VEICULOS: filtro de periodo (De / Ate) na tela, junto de placa, motivo e autorizador, e botao Limpar. Excel e PDF saem com o periodo escolhido, e o PDF mostra o periodo no cabecalho. Sem migration.",
