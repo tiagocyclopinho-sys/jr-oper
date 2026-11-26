@@ -8,7 +8,7 @@
 // APAGAR o cache da versao anterior, entao nenhum aparelho fica servindo um
 // js/app.js velho quando abrir sem sinal. Trocar o byte do sw.js e tambem o
 // que faz o navegador reinstalar o service worker.
-const CACHE_NAME = 'jr-oper-v7.8.8';
+const CACHE_NAME = 'jr-oper-v7.9.0';
 
 // Arquivos que serão salvos para funcionar offline
 const FILES_TO_CACHE = [
@@ -30,6 +30,8 @@ const FILES_TO_CACHE = [
   './js/escala.js',
   './js/tratativas.js',   // 7.5.0: condutas com o gestor + evidencias da Oc. Operacional
   './js/crossPalmas.js',  // 7.6.0: Cross Palmas (recebimento, transbordo, confronto)
+  './js/planoAcao.js',    // 7.9.0: Plano de Acao (Visao Geral)
+  './js/exceljs.min.js',  // 7.9.0: Excel com logo/cores do Plano de Acao (carrega so ao exportar)
   './js/app.js',
   './js/tailwind.cdn.js',
   './js/xlsx.full.min.js',

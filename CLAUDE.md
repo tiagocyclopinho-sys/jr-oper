@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 84).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 85).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -82,8 +82,16 @@ partir do branch `main` do GitHub.
   ABONADO, senão DESCONTADO. Falta lançada em dia de folga aprovada vale como a
   folga (sem conduta, sem contar o dia duas vezes); os dias da folga são
   contados antes dos da falta.
-- Pendente (26/11): arquivo do DP com novatos (entram de forma diferenciada) e
-  desligados (sair), para atualizar BD e abas Motorista/Ajudante do 11.2026. Condutas
+- Relação do DP (27/11): `tools/atualizar_cadastro_requisitos.js AJUDANTE|MOTORISTA
+  "Relação de Folha ... .xlsx" [AAAAMM] [--simular]` compara a relação do DP com a
+  aba Ajudante/Motorista e a BD: tira quem saiu, inclui novato em ordem alfabética
+  (copia a linha de cima) com os Dias DIGITADOS do 1º dia (admissão no cadastro do
+  app ou 1ª viagem) até o dia 25, como o Victor fazia. Aplica pelo Excel (.ps1 ao
+  lado), na BD só colunas B–F, guarda "(antes do DP).xlsx". Usa do DP só código,
+  nome e cidade (o arquivo tem CNPJ, valores e conta bancária: não ler/copiar).
+  Código do DP = id do cadastro do app; casa por código, então ARMANO (código 18,
+  "ATOS FELIPE" no DP: o filho emite a nota para ele receber, combinado com a
+  empresa) fica como ARMANO na planilha, sempre. Aplicado no 11.2026 em 27/11. Condutas
   (`REGRAS_CONDUTA`): limpeza/conservação, dano, atolamento → Sinistro &
   Conservação; desvio de rota → Fusion / FURO DE CERCA (nome antigo; hoje é o
   monitoramento com telemetria); checklist → Manut. Veículo / Aparelho.
