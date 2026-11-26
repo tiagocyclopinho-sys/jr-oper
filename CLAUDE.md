@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 83).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 84).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -63,9 +63,34 @@ partir do branch `main` do GitHub.
   26/10), o gerador tira as placas `VEICULOS_FORA_MOTOR_OCIOSO` (OLH8E48,
   OLI0E88, OLI2E18, OLI2E91, QWA2318, TVD0F56) e remove os filtros manuais da
   tabela dinâmica (Veículo e Motorista; o do modelo escondia nomes/placas
-  novos). Sem motorista = "(SEM VÍNCULO)". Isenções: manuais. Decisão de
-  26/10: a aba Motor Ocioso é só apoio; na Ocorrências entram apenas os
-  eventos confirmados pela CCO (Oc. Operacional).
+  novos). Sem motorista = "(SEM VÍNCULO)". Isenções: manuais (a isenção
+  registrada pela CCO vai no Complemento).
+- Regras de 26/11/2026 (Tiago, a partir do que o Victor fez à mão em out/26):
+  Ocorrências leva, além dos eventos confirmados pela CCO, UMA linha por
+  motorista "MOTORISTA TEVE N OCORRÊNCIAS DE MOTOR OCIOSO" (Média Consumo).
+  Falta: função vem da planilha (abas Motorista/Ajudante/BD), não do motivo;
+  ajudante = Pontualidade + Prazo Rota, motorista = Prazo Rota (prestador, sem
+  pontualidade). Dias de falta = dias da viagem perdida (saída → retorno, achada
+  pela carga: o app não liga a falta à viagem) até a véspera da próxima viagem
+  da pessoa; dia já contado por outra falta não repete. Folgas-Falta: INÍCIO/FIM
+  com esses dias, todas DESCONTADO. O arquivo é só o respaldo: o Victor avalia,
+  abona e decide o pagamento. A coluna Dias das abas Motorista/Ajudante é
+  fórmula do Victor (30 − dias DESCONTADO da Folgas-Falta): não mexer.
+- Folgas (26/11): vêm de `escala_folgas` (sem NEGADO/CANCELADO), cortadas no
+  26→25, na mesma aba Folgas-Falta; contam os dias fora da escala mas NÃO geram
+  Prazo Rota nem Pontualidade. Status = ABONADO se o tratamento da Escala for
+  ABONADO, senão DESCONTADO. Falta lançada em dia de folga aprovada vale como a
+  folga (sem conduta, sem contar o dia duas vezes); os dias da folga são
+  contados antes dos da falta.
+- Pendente (26/11): arquivo do DP com novatos (entram de forma diferenciada) e
+  desligados (sair), para atualizar BD e abas Motorista/Ajudante do 11.2026. Condutas
+  (`REGRAS_CONDUTA`): limpeza/conservação, dano, atolamento → Sinistro &
+  Conservação; desvio de rota → Fusion / FURO DE CERCA (nome antigo; hoje é o
+  monitoramento com telemetria); checklist → Manut. Veículo / Aparelho.
+  `NOMES_PLANILHA`: ARMANDO LIMA DA CUNHA → ARMANO (cadastro errado no
+  sistema de pagamento; a aba Motorista usa ARMANO e a BD não tem o nome).
+- O Power BI da CCO deixou de ter linhas duplicadas (visto em 26/11): out/26
+  foi fechado com números inflados (NANDERSON 69, hoje 51).
 - No mesmo workspace também há os modelos "Motorista e Ajudantes",
   "Abastecimento", "Despesa" e "PIX Pendente" (candidatos para Média de
   Consumo / Acerto de Caixa). "Motorista e Ajudantes" estoura o limite de
@@ -330,6 +355,16 @@ partir do branch `main` do GitHub.
   na mesma lista, da largada mais cedo para a mais tarde, formato "16/11/2026 - 15:00",
   sem peso/valor/entregas, coluna "Saída real / visto". Aviso automático de quem não saiu
   fica para quando houver API do WhatsApp.
+- SOBREAVISO (7.8.7): a imagem da convocação traz, no fim, Motorista disponível | Ajudante
+  disponível (`escBlocosDisponiveis`, só DISPONIVEL). Fechamento não muda.
+- Fixos da carne (7.8.8, migration 83 APLICADA em 26/11): `ajudantes.uso_escala` (ROTA/FIXA,
+  Gabriel = FIXA) tira da Disponibilidade e do sobreaviso. `escala_viagens_fixas` +
+  `jr_criar_viagens_fixas(data)` + pg_cron `escala-viagens-fixas` (5h UTC = 2h Brasília, o próprio dia)
+  lançam ARAGUAINA CARNE e CARNE TARDE (Silvestre/Gabriel, RIN7G15) no Controle de Viagens,
+  seg–sáb, sem carga: não passam pela Escala/Fechamento (decisão do Tiago: não dá para saber
+  qual carga é de qual). Mudar placa/pessoa/dias: UPDATE em escala_viagens_fixas.
+- Nome do Fusion x cadastro (7.8.8): `escResolverPessoa` casa também mesmo 1º nome + partes de
+  um contidas no outro (sem DE/DA/DOS), único candidato (Ademar e Nilmar em 26/11).
 - SQL que mexe em escala_* (ou qualquer tabela com a guarda de carimbo):
   `atualizado_em = (now() AT TIME ZONE 'America/Sao_Paulo')`, NUNCA `now()`
   puro. O app grava hora de Brasília; um carimbo em UTC fica 3 h no futuro e
