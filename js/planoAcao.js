@@ -432,7 +432,7 @@ function renderPlanoAcaoView() {
       </div>
       <div class="flex gap-2 flex-wrap">
         <button onclick="paAbrirFormAcao()" class="bg-emerald-600 hover:bg-emerald-500 text-white ${PA_BTN}">➕ Nova ação</button>
-        <button onclick="paExportarPdfPainel()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">📄 PDF</button>
+        <button onclick="paImprimirPainel()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">🖨️ Imprimir</button>
         <button onclick="paExportarXlsx()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">📊 Excel</button>
         <button onclick="paAbrirAreas()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">🏷️ Áreas</button>
         <button onclick="paAbrirSemAcesso()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">👤 Sem acesso${semAcesso ? ` <span class="bg-amber-600 text-white rounded px-1">${semAcesso}</span>` : ''}</button>
@@ -693,7 +693,7 @@ function paRenderFicha() {
     <div class="flex flex-wrap gap-2">
       <button onclick="paAlterarPrazo(${Number(a.id)})" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">📅 Alterar prazo</button>
       <button onclick="paAbrirFormAcao(${Number(a.id)})" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">✏️ Editar</button>
-      <button onclick="paExportarPdfAcao(${Number(a.id)})" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">🖨️ Imprimir esta ação</button>
+      <button onclick="paImprimirAcao(${Number(a.id)})" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 ${PA_BTN}">🖨️ Imprimir esta ação</button>
       <button onclick="paExcluirAcao(${Number(a.id)})" class="bg-red-950 hover:bg-red-900 text-red-300 border border-red-800 ${PA_BTN}">🗑️ Excluir</button>
     </div>
 
@@ -968,30 +968,35 @@ function paNomeArquivo(base, ext) {
   const d = new Date();
   return `${base} ${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}.${ext}`;
 }
-async function paPdfDeHtml(html, paisagem) {
-  if (typeof html2pdf === 'undefined') throw new Error('Biblioteca de PDF não carregada. Recarregue a página (Ctrl+F5).');
-  const largura = paisagem ? 1123 : 794;
-  const iframe = document.createElement('iframe');
-  iframe.setAttribute('aria-hidden', 'true');
-  iframe.style.cssText = `position:fixed;left:-20000px;top:0;width:${largura}px;height:${paisagem ? 794 : 1123}px;border:0;visibility:hidden;`;
-  document.body.appendChild(iframe);
-  try {
-    const doc = iframe.contentDocument;
-    doc.open(); doc.write(html); doc.close();
-    const imgs = Array.prototype.slice.call(doc.images || []);
-    await Promise.all(imgs.map(img => img.complete ? null : new Promise(r => { img.onload = r; img.onerror = r; setTimeout(r, 5000); })));
-    await new Promise(r => setTimeout(r, 250));
-    return await html2pdf().set({
-      margin: 7,
-      image: { type: 'jpeg', quality: 0.92 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: largura },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: paisagem ? 'landscape' : 'portrait', compress: true },
-      pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.evitar'] }
-    }).from(doc.body).outputPdf('blob');
-  } finally {
-    iframe.remove();
-  }
+// 7.9.1: IMPRESSÃO, não arquivo PDF (pedido do Tiago em 26/11): abre a prévia
+// numa janela do app com o botão Imprimir, no mesmo padrão da Via da portaria
+// (escala.js). Quem quiser PDF escolhe "Salvar como PDF" na caixa de impressão.
+function paAbrirImpressao(html, titulo, voltarFicha) {
+  const mc = document.getElementById('modal-container');
+  if (!mc) return;
+  mc.innerHTML = `
+  <div onclick="event.stopPropagation()" class="bg-slate-900 border border-slate-700 rounded-xl p-4 max-w-6xl w-full h-[92vh] shadow-2xl flex flex-col gap-3 text-xs">
+    <div class="flex justify-between items-center">
+      <h3 class="font-bold text-white text-base">🖨️ ${paEsc(titulo)}</h3>
+      <button onclick="${voltarFicha ? `paAbrirFicha(${Number(voltarFicha)})` : 'closeModal()'}" class="text-slate-400 hover:text-white font-bold text-xl leading-none">✕</button>
+    </div>
+    <p class="text-[11px] text-slate-400">Confira a prévia e clique em Imprimir. Para guardar em arquivo, escolha <b>Salvar como PDF</b> como impressora.</p>
+    <iframe id="pa-impressao-frame" class="bg-white rounded flex-1 w-full border-0"></iframe>
+    <div class="flex justify-end gap-2">
+      <button onclick="${voltarFicha ? `paAbrirFicha(${Number(voltarFicha)})` : 'closeModal()'}" class="bg-slate-800 hover:bg-slate-700 text-slate-300 ${PA_BTN}">Fechar</button>
+      <button onclick="paImprimirFrame()" class="bg-amber-600 hover:bg-amber-500 text-white ${PA_BTN}">🖨️ Imprimir</button>
+    </div>
+  </div>`;
+  mc.classList.remove('hidden');
+  document.getElementById('pa-impressao-frame').srcdoc = html;
 }
+function paImprimirFrame() {
+  const f = document.getElementById('pa-impressao-frame');
+  if (!f || !f.contentWindow) return;
+  f.contentWindow.focus();
+  f.contentWindow.print();
+}
+window.paImprimirFrame = paImprimirFrame;
 async function paEntregar(blob, nome, rotulo) {
   if (typeof _entregarPdf === 'function' && /\.pdf$/i.test(nome)) return _entregarPdf(blob, nome, rotulo);
   const url = URL.createObjectURL(blob);
@@ -1002,7 +1007,10 @@ async function paEntregar(blob, nome, rotulo) {
   showToast(`Arquivo baixado (${nome}).`);
 }
 const PA_CSS_PDF = `
-  *{box-sizing:border-box} html,body{margin:0;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif;font-size:10px}
+  *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  thead{display:table-header-group} tr,.evitar{page-break-inside:avoid;break-inside:avoid}
+  @media screen{body{padding:12px}}
+  html,body{margin:0;background:#fff;color:#111;font-family:Arial,Helvetica,sans-serif;font-size:10px}
   .cab{display:flex;align-items:center;gap:14px;border-bottom:3px solid #14532d;padding-bottom:6px;margin-bottom:8px}
   .cab img{height:46px} .cab h1{margin:0;font-size:18px;color:#14532d;letter-spacing:.5px} .cab .sub{color:#555;font-size:10px;margin-top:2px}
   table{border-collapse:collapse;width:100%} th{background:#14532d;color:#fff;font-size:9px;text-transform:uppercase;padding:4px;text-align:left}
@@ -1021,7 +1029,7 @@ function paSeloPdf(a) {
   const ef = paStatusEfetivo(a);
   return `<span class="selo" style="background:${PA_STATUS[ef].pdf}">${PA_STATUS[ef].label}${paPrazoVencidoAguardando(a) ? ' · prazo vencido' : ''}</span>`;
 }
-async function paExportarPdfPainel() {
+function paImprimirPainel() {
   const lista = paFiltrar();
   if (!lista.length) { alert('Nenhuma ação com os filtros atuais.'); return; }
   const r = paResumo(lista);
@@ -1047,21 +1055,17 @@ async function paExportarPdfPainel() {
       <td class="c nw">${p ? `${p.feitas}/${p.total}` : ''}</td>
     </tr>`;
   }).join('');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>${PA_CSS_PDF}</style></head><body>
-    <div class="cab"><img src="${logo}"><div><h1>PLANO DE AÇÃO</h1><div class="sub">${paEsc(paTextoFiltros())} · ${r.total} ação(ões) · gerado em ${paDataHora(paAgora())} por ${paEsc(paUsuario())}</div></div></div>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>PLANO DE AÇÃO ${paNomeArquivo('', '').trim().replace(/\.$/, '')}</title><style>@page{size:A4 landscape;margin:8mm}${PA_CSS_PDF}</style></head><body>
+    <div class="cab"><img src="${logo}"><div><h1>PLANO DE AÇÃO</h1><div class="sub">${paEsc(paTextoFiltros())} · ${r.total} ação(ões) · impresso em ${paDataHora(paAgora())} por ${paEsc(paUsuario())}</div></div></div>
     <div class="cards">${blocoTab('Por status', stLin)}${blocoTab('Por área', arLin)}${blocoTab('Por responsável <span style="color:#b91c1c;font-weight:normal">(atrasadas)</span>', rsLin)}</div>
     <table><thead><tr><th>Código</th><th>Ação (o quê?)</th><th>Como?</th><th>Onde?</th><th>Área</th><th>Quem?</th><th>Início</th><th>Prazo</th><th>Realizada</th><th>Status</th><th>Tempo</th><th>Etapas</th></tr></thead>
     <tbody>${linhas}</tbody></table>
   </body></html>`;
-  showToast('⏳ Gerando PDF…', 'warning');
-  try {
-    const blob = await paPdfDeHtml(html, true);
-    await paEntregar(blob, paNomeArquivo('PLANO DE AÇÃO', 'pdf'), 'Plano de Ação');
-  } catch (e) { alert('❌ ' + (e.message || e)); }
+  paAbrirImpressao(html, `Imprimir plano de ação · ${r.total} ação(ões)`);
 }
-window.paExportarPdfPainel = paExportarPdfPainel;
+window.paImprimirPainel = paImprimirPainel;
 
-async function paExportarPdfAcao(id) {
+function paImprimirAcao(id) {
   const a = paAcao(id);
   if (!a) return;
   const logo = new URL(PA_LOGO, location.href).href;
@@ -1069,7 +1073,7 @@ async function paExportarPdfAcao(id) {
   const eventos = paEventosDa(id);
   const fotos = l => (Array.isArray(l) && l.length) ? `<div style="margin-top:3px">${l.map(c => `<img src="${paEsc(paUrlFoto(c))}" crossorigin="anonymous" style="height:90px;margin:2px;border:1px solid #ccc;border-radius:3px">`).join('')}</div>` : '';
   const campo = (r, v) => `<td style="width:25%"><div class="mut">${r}</div><b>${v || '—'}</b></td>`;
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>${PA_CSS_PDF} td{font-size:10px}</style></head><body>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>PLANO DE AÇÃO ${paCodigo(a)}</title><style>@page{size:A4 portrait;margin:10mm}${PA_CSS_PDF} td{font-size:10px}</style></head><body>
     <div class="cab"><img src="${logo}"><div><h1>PLANO DE AÇÃO · ${paCodigo(a)}</h1><div class="sub">${a.origem ? 'Origem: ' + paEsc(a.origem) + (a.origem_data ? ' · ' + paData(a.origem_data) : '') + ' · ' : ''}impresso em ${paDataHora(paAgora())}</div></div></div>
     <table><tr><td colspan="4" style="font-size:13px"><div class="mut">Ação (o quê?)</div><b>${paEsc(a.acao)}</b></td></tr>
       <tr><td colspan="4"><div class="mut">Descrição (como?)</div>${paEsc(a.descricao || '—').replace(/\n/g, '<br>')}</td></tr>
@@ -1086,13 +1090,9 @@ async function paExportarPdfAcao(id) {
       ${eventos.map(ev => `<tr class="evitar"><td class="nw">${paDataHora(ev.criado_em)}</td><td>${paEsc(ev.autor || '')}</td><td>${paEsc(ev.texto || '')}${fotos(ev.fotos_paths)}</td></tr>`).join('')}
     </tbody></table>
   </body></html>`;
-  showToast('⏳ Gerando PDF da ação…', 'warning');
-  try {
-    const blob = await paPdfDeHtml(html, false);
-    await paEntregar(blob, paNomeArquivo(`PLANO DE AÇÃO ${paCodigo(a)}`, 'pdf'), `Plano de Ação ${paCodigo(a)}`);
-  } catch (e) { alert('❌ ' + (e.message || e)); }
+  paAbrirImpressao(html, `Imprimir ${paCodigo(a)}`, id);
 }
-window.paExportarPdfAcao = paExportarPdfAcao;
+window.paImprimirAcao = paImprimirAcao;
 
 // ExcelJS só é carregado na hora de exportar (quase 1 MB), não na abertura do app.
 function paCarregarExcelJS() {
