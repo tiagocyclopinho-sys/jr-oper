@@ -34,6 +34,8 @@ create table if not exists public.cco_motor_ocioso (
   primary key (veiculo, data, hora, regra)
 );
 alter table public.cco_motor_ocioso add column if not exists qtd int not null default 1;
+-- 27/11: motorista refeito pelas viagens do JR-Oper; o do Power BI fica aqui
+alter table public.cco_motor_ocioso add column if not exists motorista_pbi text;
 create index if not exists cco_motor_ocioso_data_idx on public.cco_motor_ocioso (data);
 
 create table if not exists public.cco_sync_log (
