@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Acerto de Motoristas</title>
+<link rel="icon" href="/favicon.ico">
+<!--
+  Acerto de motoristas e ajudantes (7.10.0, 27/11/2026). Fora do app, COM login:
+  e a unica parte do JR-Oper com valores em R$ (excecao decidida pelo Tiago).
+  Tudo passa pelas funcoes acerto_* (migration 85), que conferem a sessao; as
+  tabelas nao sao legiveis pela chave publica. Regras versionadas por mes
+  (js/acertoRegras.js). Etapa 1: login + matriz de regras. O calculo, os
+  requisitos, Folgas e Faltas e o PDF vem nas proximas etapas.
+-->
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --tx:#1f2937; --mut:#6b7280; --bd:#e5e7eb; --verde:#0f7a4a; --verde2:#e7f5ee; --amb:#9a6700; --amb2:#fff6dd; --verm:#b42318; --verm2:#fdecea; --azul:#1d4ed8; --azul2:#e8efff; --esc:#0b3d2a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--tx); font-size:14px; }
+  header { background:var(--esc); color:#fff; padding:12px 16px; }
+  header .in { max-width:1180px; margin:0 auto; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header img { height:34px; }
+  header h1 { font-size:17px; margin:0; }
+  header p { font-size:12px; margin:2px 0 0; opacity:.8; }
+  header .usu { margin-left:auto; display:flex; align-items:center; gap:8px; font-size:13px; flex-wrap:wrap; }
+  header .usu button { background:rgba(255,255,255,.14); color:#fff; border:0; border-radius:8px; padding:6px 10px; cursor:pointer; font-size:12px; }
+  main { max-width:1180px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:16px; margin-bottom:16px; }
+  h2 { font-size:15px; margin:0 0 10px; }
+  h3 { font-size:14px; margin:16px 0 8px; }
+  label.f { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; font-weight:600; }
+  input, select, textarea { font:inherit; border:1px solid #cbd5e1; border-radius:8px; padding:8px 10px; width:100%; background:#fff; color:var(--tx); }
+  input:focus, select:focus, textarea:focus { outline:2px solid var(--verde); outline-offset:-1px; }
+  input.n { text-align:right; }
+  .btn { border:0; border-radius:9px; padding:9px 14px; font-weight:700; font-size:13px; cursor:pointer; }
+  .btn.pri { background:var(--verde); color:#fff; }
+  .btn.sec { background:#e5e7eb; color:var(--tx); }
+  .btn.peq { padding:5px 9px; font-size:12px; font-weight:600; }
+  .btn.lnk { background:none; color:var(--azul); padding:4px 0; font-weight:600; }
+  .btn.verm { background:var(--verm2); color:var(--verm); }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .acoes { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; align-items:center; }
+  .msg { border-radius:10px; padding:10px 12px; font-size:13px; margin-top:10px; }
+  .msg.ok { background:var(--verde2); color:var(--verde); }
+  .msg.av { background:var(--amb2); color:var(--amb); }
+  .msg.er { background:var(--verm2); color:var(--verm); }
+  .msg.in { background:var(--azul2); color:var(--azul); }
+  .login { max-width:380px; margin:40px auto; }
+  .barra { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .barra select { width:auto; }
+  .chip { display:inline-block; border-radius:999px; padding:2px 9px; font-size:11px; font-weight:700; white-space:nowrap; }
+  .chip.v { background:var(--verde2); color:var(--verde); }
+  .chip.a { background:var(--amb2); color:var(--amb); }
+  .chip.r { background:var(--verm2); color:var(--verm); }
+  .chip.s { background:#eef0f3; color:var(--mut); }
+  .chip.b { background:var(--azul2); color:var(--azul); }
+  .abas { display:flex; gap:4px; flex-wrap:wrap; border-bottom:1px solid var(--bd); margin-bottom:14px; }
+  .abas button { border:0; background:none; padding:9px 12px; font:inherit; font-weight:600; color:var(--mut); cursor:pointer; border-bottom:3px solid transparent; }
+  .abas button.on { color:var(--verde); border-bottom-color:var(--verde); }
+  .abas button:disabled { cursor:default; opacity:.55; }
+  .abas.sub button { padding:7px 10px; font-size:13px; }
+  .rola { overflow-x:auto; }
+  .tab { width:100%; border-collapse:collapse; font-size:13px; }
+  .tab th, .tab td { padding:7px 6px; border-bottom:1px solid var(--bd); text-align:left; vertical-align:top; }
+  .tab th { color:var(--mut); font-weight:600; font-size:12px; white-space:nowrap; }
+  .tab .n { text-align:right; white-space:nowrap; }
+  .tab tr:hover td { background:#fafbfc; }
+  .mut { color:var(--mut); font-size:12px; }
+  .grade { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
+  .perfil { border:1px solid var(--bd); border-radius:12px; padding:14px; }
+  .perfil h4 { margin:0 0 2px; font-size:14px; }
+  .perfil dl { display:grid; grid-template-columns:1fr auto; gap:3px 10px; margin:10px 0 0; font-size:13px; }
+  .perfil dt { color:var(--mut); }
+  .perfil dd { margin:0; text-align:right; font-weight:600; }
+  .filtros { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .filtros input, .filtros select { width:auto; min-width:160px; }
+  .esc { display:none !important; }
+  .fundo { position:fixed; inset:0; background:rgba(15,23,42,.45); display:flex; align-items:flex-start; justify-content:center; padding:24px 16px; overflow:auto; z-index:20; }
+  .modal { background:#fff; border-radius:14px; width:100%; max-width:620px; padding:18px; }
+  .modal .cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0 12px; }
+  .versoes { margin-top:16px; border-top:1px solid var(--bd); padding-top:10px; }
+  .versoes li { margin:4px 0; }
+  .aviso-mes { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  footer { text-align:center; color:var(--mut); font-size:12px; padding:8px 16px 24px; }
+  @media (max-width:640px) { header .usu { margin-left:0; } .filtros input, .filtros select { min-width:0; width:100%; } }
+</style>
+</head>
+<body>
+<header><div class="in">
+  <img src="/public/logo_jr_branca.png" alt="JR" onerror="this.style.display='none'">
+  <div><h1>Acerto de Motoristas e Ajudantes</h1><p>Requisitos, regras e acerto do mês · acesso restrito</p></div>
+  <div class="usu esc" id="usu"><span id="usuNome"></span><button id="btSenha">Trocar senha</button><button id="btSair">Sair</button></div>
+</div></header>
+
+<main>
+  <!-- Login -->
+  <section class="card login esc" id="telaLogin">
+    <h2>Entrar</h2>
+    <form id="fLogin" autocomplete="on">
+      <label class="f" for="lLogin">Usuário</label>
+      <input id="lLogin" name="username" autocomplete="username" required>
+      <label class="f" for="lSenha">Senha</label>
+      <input id="lSenha" name="password" type="password" autocomplete="current-password" required>
+      <div class="acoes"><button class="btn pri" type="submit">Entrar</button>
+        <button class="btn lnk" type="button" id="irConvite">Primeiro acesso (tenho um convite)</button></div>
+      <div id="lMsg"></div>
+    </form>
+  </section>
+
+  <section class="card login esc" id="telaConvite">
+    <h2>Primeiro acesso</h2>
+    <p class="mut" style="margin-top:-4px">Use o código de convite que o Tiago passou. Ele vale uma vez só e por 7 dias.</p>
+    <form id="fConvite" autocomplete="off">
+      <label class="f" for="cLogin">Usuário</label>
+      <input id="cLogin" autocomplete="username" required>
+      <label class="f" for="cCodigo">Código de convite</label>
+      <input id="cCodigo" required style="text-transform:uppercase;letter-spacing:2px">
+      <label class="f" for="cSenha">Crie sua senha (mínimo 8 caracteres)</label>
+      <input id="cSenha" type="password" autocomplete="new-password" minlength="8" required>
+      <label class="f" for="cSenha2">Repita a senha</label>
+      <input id="cSenha2" type="password" autocomplete="new-password" minlength="8" required>
+      <div class="acoes"><button class="btn pri" type="submit">Criar senha e entrar</button>
+        <button class="btn lnk" type="button" id="irLogin">Voltar</button></div>
+      <div id="cMsg"></div>
+    </form>
+  </section>
+
+  <!-- Painel -->
+  <div id="telaPainel" class="esc">
+    <section class="card">
+      <div class="barra">
+        <label for="selMes" style="font-weight:700">Competência</label>
+        <select id="selMes"></select>
+        <span id="mesPeriodo" class="mut"></span>
+        <span id="mesStatus"></span>
+        <button class="btn sec peq" id="btAtualizar" style="margin-left:auto">Atualizar</button>
+      </div>
+      <div id="avisoMes"></div>
+    </section>
+
+    <section class="card">
+      <nav class="abas" id="abas">
+        <button data-aba="regras" class="on">Regras</button>
+        <button disabled title="Próxima etapa">Acerto do mês</button>
+        <button disabled title="Próxima etapa">Requisitos</button>
+        <button disabled title="Próxima etapa">Folgas e Faltas</button>
+      </nav>
+
+      <nav class="abas sub" id="subabas">
+        <button data-sub="perfis" class="on">Perfis</button>
+        <button data-sub="pessoas">Pessoas</button>
+        <button data-sub="rotas">Rotas</button>
+        <button data-sub="faixas">Faixas</button>
+        <button data-sub="compras">Compras</button>
+        <button data-sub="parametros">Parâmetros</button>
+        <button data-sub="historico">Histórico</button>
+      </nav>
+      <div id="conteudo"></div>
+    </section>
+  </div>
+  <div id="carregando" class="card esc">Carregando…</div>
+</main>
+<footer>JR Distribuidora · JR Oper · os valores desta página não aparecem no app</footer>
+
+<div id="modal" class="fundo esc"><div class="modal" id="modalCorpo"></div></div>
+
+<script src="/js/config.js"></script>
+<script src="/js/acertoRegras.js"></script>
+<script>
+(function () {
+  'use strict';
+  const R = window.AcertoRegras;
+  const SB = (window.JR_CONFIG || {}).supabase || {};
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const msg = (tipo, html) => `<div class="msg ${tipo}">${html}</div>`;
+  const brl = (v) => v == null || v === '' || isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const num = (v, d = 2) => v == null || v === '' || isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: d });
+  const dataHora = (t) => t ? new Date(t).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+  const diaBr = (d) => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—';
+  // Le "1.234,56", "1234.56" ou vazio (null).
+  function lerNum(v) {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return null;
+    const t = s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s;
+    const n = Number(t);
+    return isFinite(n) ? n : NaN;
+  }
+  const valIn = (v) => v == null ? '' : String(v).replace('.', ',');
+
+  // ---------------------------------------------------------------- sessao
+  const SESSAO = 'jr_acerto_sessao';
+  let sessao = null;
+  try { sessao = JSON.parse(sessionStorage.getItem(SESSAO) || 'null'); } catch (e) { sessao = null; }
+  function guardarSessao(s) { sessao = s; try { s ? sessionStorage.setItem(SESSAO, JSON.stringify(s)) : sessionStorage.removeItem(SESSAO); } catch (e) { /* sem storage: fica na memoria */ } }
+
+  const ERROS = {
+    LOGIN_INVALIDO: 'Usuário ou senha não conferem.',
+    BLOQUEADO: 'Muitas tentativas erradas. Espere 15 minutos e tente de novo.',
+    PRIMEIRO_ACESSO: 'Este usuário ainda não criou a senha. Use "Primeiro acesso" com o código de convite.',
+    CONVITE_INVALIDO: 'Usuário ou código de convite não confere (ou o convite venceu). Peça um novo ao Tiago.',
+    SENHA_CURTA: 'A senha precisa ter pelo menos 8 caracteres.',
+    SENHA_ATUAL: 'A senha atual não confere.',
+    SESSAO_INVALIDA: 'Sua sessão terminou. Entre de novo.',
+    SEM_PERMISSAO: 'Seu acesso é só de consulta.',
+    MES_FECHADO: 'Este mês já foi fechado: a mudança só pode valer a partir do mês seguinte.',
+  };
+  const textoErro = (e) => ERROS[e && e.message] || ERROS[e] || (e && (e.hint || e.message)) || String(e);
+
+  async function rpc(fn, args) {
+    const r = await fetch(`${SB.url}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: { apikey: SB.anonKey, Authorization: 'Bearer ' + SB.anonKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify(args || {}),
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) {
+      const e = new Error((j && j.message) || `Erro ${r.status}`);
+      e.hint = j && j.hint;
+      if (e.message === 'SESSAO_INVALIDA') { guardarSessao(null); mostrarLogin(ERROS.SESSAO_INVALIDA); }
+      throw e;
+    }
+    return j;
+  }
+
+  // ---------------------------------------------------------------- telas
+  function so(id) {
+    ['telaLogin', 'telaConvite', 'telaPainel', 'carregando'].forEach((t) => $(t).classList.toggle('esc', t !== id));
+    $('usu').classList.toggle('esc', id !== 'telaPainel');
+  }
+  function mostrarLogin(aviso) {
+    so('telaLogin');
+    $('lMsg').innerHTML = aviso ? msg('av', esc(aviso)) : '';
+    $('lSenha').value = '';
+    setTimeout(() => ($('lLogin').value ? $('lSenha') : $('lLogin')).focus(), 30);
+  }
+
+  $('irConvite').onclick = () => { so('telaConvite'); $('cLogin').value = $('lLogin').value; $('cMsg').innerHTML = ''; };
+  $('irLogin').onclick = () => mostrarLogin();
+
+  $('fLogin').onsubmit = async (ev) => {
+    ev.preventDefault();
+    $('lMsg').innerHTML = msg('in', 'Conferindo…');
+    try {
+      const j = await rpc('acerto_entrar', { p_login: $('lLogin').value, p_senha: $('lSenha').value });
+      if (j.erro) { $('lMsg').innerHTML = msg('er', esc(ERROS[j.erro] || j.erro)); return; }
+      guardarSessao(j); carregar();
+    } catch (e) { $('lMsg').innerHTML = msg('er', 'Não foi possível entrar agora: ' + esc(textoErro(e))); }
+  };
+
+  $('fConvite').onsubmit = async (ev) => {
+    ev.preventDefault();
+    if ($('cSenha').value !== $('cSenha2').value) { $('cMsg').innerHTML = msg('er', 'As duas senhas não são iguais.'); return; }
+    $('cMsg').innerHTML = msg('in', 'Conferindo…');
+    try {
+      const j = await rpc('acerto_primeiro_acesso', { p_login: $('cLogin').value, p_convite: $('cCodigo').value, p_senha: $('cSenha').value });
+      if (j.erro) { $('cMsg').innerHTML = msg('er', esc(ERROS[j.erro] || j.erro)); return; }
+      $('fConvite').reset(); guardarSessao(j); carregar();
+    } catch (e) { $('cMsg').innerHTML = msg('er', esc(textoErro(e))); }
+  };
+
+  $('btSair').onclick = async () => {
+    try { if (sessao) await rpc('acerto_sair', { p_token: sessao.token }); } catch (e) { /* sai mesmo assim */ }
+    guardarSessao(null); D = null; mostrarLogin('Você saiu.');
+  };
+
+  $('btSenha').onclick = () => abrirModal(`
+    <h2>Trocar senha</h2>
+    <form id="fSenha">
+      <label class="f">Senha atual</label><input id="sAtual" type="password" autocomplete="current-password" required>
+      <label class="f">Nova senha (mínimo 8)</label><input id="sNova" type="password" autocomplete="new-password" minlength="8" required>
+      <label class="f">Repita a nova senha</label><input id="sNova2" type="password" autocomplete="new-password" minlength="8" required>
+      <div class="acoes"><button class="btn pri" type="submit">Trocar</button><button class="btn sec" type="button" data-fechar>Cancelar</button></div>
+      <div id="sMsg"></div>
+    </form>`, () => {
+    $('fSenha').onsubmit = async (ev) => {
+      ev.preventDefault();
+      if ($('sNova').value !== $('sNova2').value) { $('sMsg').innerHTML = msg('er', 'As duas senhas não são iguais.'); return; }
+      try {
+        const j = await rpc('acerto_trocar_senha', { p_token: sessao.token, p_atual: $('sAtual').value, p_nova: $('sNova').value });
+        if (j.erro) { $('sMsg').innerHTML = msg('er', esc(ERROS[j.erro] || j.erro)); return; }
+        $('sMsg').innerHTML = msg('ok', 'Senha trocada. As outras sessões abertas com o seu usuário foram encerradas.');
+        setTimeout(fecharModal, 1600);
+      } catch (e) { $('sMsg').innerHTML = msg('er', esc(textoErro(e))); }
+    };
+  });
+
+  // ---------------------------------------------------------------- modal
+  function abrirModal(html, depois) {
+    $('modalCorpo').innerHTML = html;
+    $('modal').classList.remove('esc');
+    $('modalCorpo').querySelectorAll('[data-fechar]').forEach((b) => (b.onclick = fecharModal));
+    if (depois) depois();
+    const f = $('modalCorpo').querySelector('input:not([type=checkbox]),select');
+    if (f) setTimeout(() => f.focus(), 30);
+  }
+  function fecharModal() { $('modal').classList.add('esc'); $('modalCorpo').innerHTML = ''; }
+  $('modal').addEventListener('mousedown', (e) => { if (e.target === $('modal')) fecharModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('modal').classList.contains('esc')) fecharModal(); });
+
+  // ---------------------------------------------------------------- dados
+  let D = null;        // resposta de acerto_dados
+  let IDX = {};        // regras indexadas
+  let mes = null;      // competencia escolhida
+  let sub = 'perfis';
+  let filtro = { pessoas: { q: '', funcao: '' }, rotas: { q: '', so: '' } };
+
+  const podeEditar = () => D && ['ADMIN', 'EDITOR'].includes(D.usuario.papel) && !mesFechado();
+  const mesFechado = () => !!(D && D.fechado_ate && mes <= D.fechado_ate);
+
+  async function carregar(manterMes) {
+    if (!sessao) { mostrarLogin(); return; }
+    if (!D) so('carregando');
+    const pedido = manterMes && mes ? mes : (mes || R.competencia(new Date()));
+    try {
+      D = await rpc('acerto_dados', { p_token: sessao.token, p_mes: pedido });
+      mes = D.mes;
+      IDX = R.indexar(D.regras);
+      montarMeses();
+      $('usuNome').textContent = `${D.usuario.nome} · ${({ ADMIN: 'administrador', EDITOR: 'edita as regras', CONFERENTE: 'consulta' })[D.usuario.papel] || D.usuario.papel}`;
+      so('telaPainel');
+      desenhar();
+    } catch (e) {
+      if (e.message !== 'SESSAO_INVALIDA') { so('telaPainel'); $('conteudo').innerHTML = msg('er', 'Não foi possível carregar: ' + esc(textoErro(e))); }
+    }
+  }
+
+  function montarMeses() {
+    const atual = D.competencia_atual;
+    const lista = [];
+    for (let i = 2; i >= -14; i--) lista.push(R.somaMes(atual, i));
+    if (!lista.includes(mes)) lista.push(mes);
+    lista.sort().reverse();
+    $('selMes').innerHTML = lista.map((m) => `<option value="${m}" ${m === mes ? 'selected' : ''}>${R.mesTexto(m)}${m === atual ? ' (atual)' : ''}</option>`).join('');
+    const p = D.periodo;
+    $('mesPeriodo').textContent = `${diaBr(p.ini)} a ${diaBr(p.fim)}`;
+    $('mesStatus').innerHTML = mesFechado() ? '<span class="chip r">fechado</span>' : '<span class="chip v">aberto</span>';
+    let aviso = '';
+    if (D.usuario.papel === 'CONFERENTE') aviso = msg('in', 'Seu acesso é de consulta: você vê as regras e o histórico, mas não altera.');
+    else if (mesFechado()) aviso = msg('av', `O mês ${R.mesTexto(mes)} está fechado: as regras dele não mudam mais. Para mudar, escolha um mês aberto.`);
+    else aviso = msg('in', `<div class="aviso-mes"><b>Mudanças feitas agora valem a partir de ${R.mesTexto(mes)}</b> e seguem nos meses seguintes. Os meses anteriores continuam com o valor que tinham.</div>`);
+    $('avisoMes').innerHTML = aviso;
+  }
+
+  $('selMes').onchange = () => { mes = $('selMes').value; carregar(true); };
+  $('btAtualizar').onclick = () => carregar(true);
+  $('subabas').onclick = (e) => {
+    const b = e.target.closest('button[data-sub]'); if (!b) return;
+    sub = b.dataset.sub;
+    $('subabas').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    desenhar();
+  };
+
+  async function salvar(tipo, ch, dados, okMsg) {
+    await rpc('acerto_salvar', { p_token: sessao.token, p_tipo: tipo, p_chave: ch, p_vigencia: mes, p_dados: dados });
+    await carregar(true);
+    if (okMsg) toast(okMsg);
+  }
+  async function desfazer(tipo, ch, vig) {
+    if (!confirm(`Apagar a versão de ${R.mesTexto(vig)}? A versão anterior volta a valer.`)) return;
+    try {
+      await rpc('acerto_desfazer', { p_token: sessao.token, p_tipo: tipo, p_chave: ch, p_vigencia: vig });
+      fecharModal(); await carregar(true); toast('Versão apagada.');
+    } catch (e) { alert(textoErro(e)); }
+  }
+  function toast(t) {
+    const d = document.createElement('div');
+    d.className = 'msg ok'; d.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:30;box-shadow:0 4px 18px rgba(0,0,0,.15)';
+    d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 2600);
+  }
+
+  // Selo "desde mes/ano" + aviso de mudanca futura.
+  function selo(tipo, ch) {
+    const v = R.vigente(IDX, tipo, ch, mes);
+    const prox = R.proximaVersao(IDX, tipo, ch, mes);
+    let h = v ? `<span class="chip s" title="Alterado por ${esc(v.alterado_por || '—')} em ${dataHora(v.alterado_em)}">desde ${R.mesTexto(v.vigencia)}</span>` : '';
+    if (prox) h += ` <span class="chip b" title="Alterado por ${esc(prox.alterado_por || '—')}">muda em ${R.mesTexto(prox.vigencia)}</span>`;
+    return h;
+  }
+  function blocoVersoes(tipo, ch) {
+    const l = ((IDX[tipo] || {})[ch] || []).slice().reverse();
+    if (!l.length) return '';
+    return `<div class="versoes"><b style="font-size:13px">Versões</b><ul class="mut" style="padding-left:18px;margin:6px 0 0">${l.map((v) => `
+      <li>${R.mesTexto(v.vigencia)} · ${esc(v.alterado_por || '—')} em ${dataHora(v.alterado_em)}${
+        podeEditar() && (!D.fechado_ate || v.vigencia > D.fechado_ate) && l.length > 1
+          ? ` <button class="btn lnk peq" data-desfazer="${esc(v.vigencia)}">apagar esta versão</button>` : ''}</li>`).join('')}</ul></div>`;
+  }
+  function ligarDesfazer(tipo, ch) {
+    $('modalCorpo').querySelectorAll('[data-desfazer]').forEach((b) => (b.onclick = () => desfazer(tipo, ch, b.dataset.desfazer)));
+  }
+  const botaoEditar = (attrs, txt = 'Editar') => podeEditar() ? `<button class="btn sec peq" ${attrs}>${txt}</button>` : '';
+
+  // ---------------------------------------------------------------- desenho
+  function desenhar() {
+    const f = { perfis, pessoas, rotas, faixas, compras, parametros, historico }[sub];
+    $('conteudo').innerHTML = '';
+    f();
+  }
+
+  // ----- Perfis
+  function perfis() {
+    const l = R.vigentes(IDX, 'perfil', mes).filter((p) => p.dados.ativo !== false)
+      .sort((a, b) => b.dados.funcao.localeCompare(a.dados.funcao) || (b.chave.endsWith('_PADRAO') - a.chave.endsWith('_PADRAO')) || a.chave.localeCompare(b.chave));
+    const uso = {};
+    R.vigentes(IDX, 'pessoa', mes).forEach((p) => { uso[p.dados.perfil] = (uso[p.dados.perfil] || 0) + 1; });
+    const cartao = (p) => {
+      const d = p.dados, kp = R.KPIS[d.funcao] || [];
+      const padrao = p.chave === `${d.funcao}_PADRAO`;
+      return `<div class="perfil">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+          <div><h4>${esc(d.nome || p.chave)}</h4><span class="mut">${d.funcao === 'MOTORISTA' ? 'Motorista' : 'Ajudante'}${d.tipo && d.tipo !== 'AJUDANTE' ? ' · ' + esc(d.tipo.toLowerCase()) : ''}
+            · ${padrao ? 'padrão de quem não tem perfil' : `${uso[p.chave] || 0} pessoa(s)`}</span></div>
+          ${botaoEditar(`data-perfil="${esc(p.chave)}"`)}
+        </div>
+        <div style="margin-top:6px">${selo('perfil', p.chave)}</div>
+        <dl>
+          <dt>Tonelada garantida</dt><dd>${num(d.ton_garantida)} t</dd>
+          ${d.funcao === 'MOTORISTA' ? `<dt>% comissão</dt><dd>${num(d.perc_comissao)}%</dd><dt>Bônus por entrega</dt><dd>${brl(d.bonus_entrega)}</dd>` : ''}
+          <dt>R$/t fixo</dt><dd>${d.vl_ton_fixo != null ? brl(d.vl_ton_fixo) : '<span class="mut">pela rota</span>'}</dd>
+          ${d.funcao === 'MOTORISTA' ? `<dt>Tonelada carne</dt><dd>${d.ton_carne ? 'Sim' : 'Não'}</dd>` : ''}
+          ${kp.map(([k, t]) => `<dt>${t}</dt><dd>${d.kpis && d.kpis[k] != null ? brl(d.kpis[k]) : '<span class="mut">não se aplica</span>'}</dd>`).join('')}
+        </dl>
+        ${d.obs ? `<p class="mut" style="margin:10px 0 0">${esc(d.obs)}</p>` : ''}
+      </div>`;
+    };
+    $('conteudo').innerHTML = `
+      <div class="barra" style="margin-bottom:12px"><p class="mut" style="margin:0">Cada pessoa usa o perfil da aba Pessoas; quem não tem perfil usa o padrão da função.
+        O valor de cada requisito é pago quando ele está OK no mês.</p>
+        ${podeEditar() ? '<button class="btn pri peq" id="novoPerfil" style="margin-left:auto">Novo perfil</button>' : ''}</div>
+      <div class="grade">${l.map(cartao).join('')}</div>`;
+    $('conteudo').querySelectorAll('[data-perfil]').forEach((b) => (b.onclick = () => editarPerfil(b.dataset.perfil)));
+    if ($('novoPerfil')) $('novoPerfil').onclick = () => editarPerfil(null);
+  }
+
+  function editarPerfil(ch) {
+    const v = ch ? R.vigente(IDX, 'perfil', ch, mes) : null;
+    const d = v ? JSON.parse(JSON.stringify(v.dados)) : { funcao: 'MOTORISTA', tipo: 'CAMINHONEIRO', ton_garantida: 70, perc_comissao: 10, bonus_entrega: 0.25, kpis: {} };
+    const corpo = () => {
+      const kp = R.KPIS[d.funcao] || [];
+      return `
+      <h2>${ch ? 'Editar perfil' : 'Novo perfil'}</h2>
+      <p class="mut" style="margin-top:-4px">Vale a partir de <b>${R.mesTexto(mes)}</b>.</p>
+      <div class="cols">
+        <div><label class="f">Nome</label><input id="pNome" value="${esc(d.nome || '')}" required></div>
+        <div><label class="f">Função</label><select id="pFuncao" ${ch ? 'disabled' : ''}>
+          <option value="MOTORISTA" ${d.funcao === 'MOTORISTA' ? 'selected' : ''}>Motorista</option>
+          <option value="AJUDANTE" ${d.funcao === 'AJUDANTE' ? 'selected' : ''}>Ajudante</option></select></div>
+        ${d.funcao === 'MOTORISTA' ? `<div><label class="f">Tipo</label><select id="pTipo">
+          <option value="CAMINHONEIRO" ${d.tipo !== 'CARRETEIRO' ? 'selected' : ''}>Caminhoneiro</option>
+          <option value="CARRETEIRO" ${d.tipo === 'CARRETEIRO' ? 'selected' : ''}>Carreteiro</option></select></div>` : ''}
+        <div><label class="f">Tonelada garantida (t)</label><input id="pTon" class="n" value="${valIn(d.ton_garantida)}"></div>
+        ${d.funcao === 'MOTORISTA' ? `
+        <div><label class="f">% comissão</label><input id="pPerc" class="n" value="${valIn(d.perc_comissao)}"></div>
+        <div><label class="f">Bônus por entrega (R$)</label><input id="pBonus" class="n" value="${valIn(d.bonus_entrega)}"></div>` : ''}
+        <div><label class="f">R$/t fixo (vazio = pela rota)</label><input id="pFixo" class="n" value="${valIn(d.vl_ton_fixo)}"></div>
+        ${d.funcao === 'MOTORISTA' ? `<div><label class="f">&nbsp;</label><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="pCarne" style="width:auto" ${d.ton_carne ? 'checked' : ''}> Tonelada carne</label></div>` : ''}
+      </div>
+      <h3>Valor de cada requisito (R$) <span class="mut" style="font-weight:400">· vazio = não se aplica</span></h3>
+      <div class="cols">${kp.map(([k, t]) => `<div><label class="f">${t}</label><input class="n" data-kpi="${k}" value="${valIn(d.kpis && d.kpis[k])}"></div>`).join('')}</div>
+      <label class="f">Observação</label><textarea id="pObs" rows="2">${esc(d.obs || '')}</textarea>
+      ${ch && ch.endsWith('_PADRAO') ? '' : (ch ? `<label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="pInativo" style="width:auto"> Desativar este perfil a partir de ${R.mesTexto(mes)}</label>` : '')}
+      <div class="acoes"><button class="btn pri" id="pSalvar">Salvar</button><button class="btn sec" data-fechar>Cancelar</button></div>
+      <div id="pMsg"></div>
+      ${ch ? blocoVersoes('perfil', ch) : ''}`;
+    };
+    const ligar = () => {
+      if (!ch) $('pFuncao').onchange = () => { d.funcao = $('pFuncao').value; d.tipo = d.funcao === 'AJUDANTE' ? 'AJUDANTE' : 'CAMINHONEIRO'; abrirModal(corpo(), ligar); };
+      if (ch) ligarDesfazer('perfil', ch);
+      $('pSalvar').onclick = async () => {
+        const n = { ...d, nome: $('pNome').value.trim(), ton_garantida: lerNum($('pTon').value), vl_ton_fixo: lerNum($('pFixo').value), obs: $('pObs').value.trim() || undefined };
+        if (d.funcao === 'MOTORISTA') { n.tipo = $('pTipo').value; n.perc_comissao = lerNum($('pPerc').value); n.bonus_entrega = lerNum($('pBonus').value); n.ton_carne = $('pCarne').checked; }
+        else { n.tipo = 'AJUDANTE'; n.perc_comissao = null; n.bonus_entrega = null; n.ton_carne = false; }
+        n.kpis = {};
+        let ruim = !n.nome;
+        $('modalCorpo').querySelectorAll('[data-kpi]').forEach((i) => { const x = lerNum(i.value); if (Number.isNaN(x)) ruim = true; else if (x != null) n.kpis[i.dataset.kpi] = x; });
+        [n.ton_garantida, n.vl_ton_fixo, n.perc_comissao, n.bonus_entrega].forEach((x) => { if (Number.isNaN(x)) ruim = true; });
+        if (ruim) { $('pMsg').innerHTML = msg('er', 'Confira o nome e os números (use vírgula para os centavos).'); return; }
+        if ($('pInativo') && $('pInativo').checked) n.ativo = false; else delete n.ativo;
+        const k = ch || (n.funcao + '_' + R.chave(n.nome).replace(/ /g, '_')).slice(0, 60);
+        if (!ch && (IDX.perfil || {})[k]) { $('pMsg').innerHTML = msg('er', 'Já existe um perfil com esse nome.'); return; }
+        try { await salvar('perfil', k, n, 'Perfil salvo.'); fecharModal(); } catch (e) { $('pMsg').innerHTML = msg('er', esc(textoErro(e))); }
+      };
+    };
+    abrirModal(corpo(), ligar);
+  }
+
+  // ----- Pessoas
+  function pessoas() {
+    const perfisAtivos = R.vigentes(IDX, 'perfil', mes).filter((p) => p.dados.ativo !== false);
+    const linhas = [];
+    [['MOTORISTA', D.motoristas], ['AJUDANTE', D.ajudantes]].forEach(([fn, l]) => l.forEach((p) => {
+      if (!p.ativo) return;
+      const pp = R.perfilDaPessoa(IDX, fn, p.id, mes);
+      linhas.push({ fn, p, pp });
+    }));
+    const f = filtro.pessoas, q = R.chave(f.q);
+    const vis = linhas.filter((x) => (!f.funcao || x.fn === f.funcao) && (!q || q.split(' ').every((w) => R.chave(x.p.nome).includes(w))));
+    $('conteudo').innerHTML = `
+      <div class="filtros">
+        <input id="fpQ" placeholder="Buscar nome" value="${esc(f.q)}">
+        <select id="fpF"><option value="">Motoristas e ajudantes</option><option value="MOTORISTA" ${f.funcao === 'MOTORISTA' ? 'selected' : ''}>Motoristas</option><option value="AJUDANTE" ${f.funcao === 'AJUDANTE' ? 'selected' : ''}>Ajudantes</option></select>
+        <span class="mut" style="align-self:center">${vis.length} pessoa(s) ativas no cadastro do JR-Oper</span>
+      </div>
+      <div class="rola"><table class="tab"><thead><tr><th>Nome</th><th>Função</th><th>Perfil</th><th></th><th>Observação</th></tr></thead><tbody>
+      ${vis.map((x) => {
+        const opts = perfisAtivos.filter((pf) => pf.dados.funcao === x.fn);
+        const sel = podeEditar() ? `<select data-pessoa="${x.fn}:${x.p.id}" style="width:auto;min-width:180px">${opts.map((pf) => `<option value="${esc(pf.chave)}" ${pf.chave === x.pp.codigo ? 'selected' : ''}>${esc(pf.dados.nome)}</option>`).join('')}</select>`
+          : esc(x.pp.perfil ? x.pp.perfil.nome : x.pp.codigo);
+        return `<tr><td>${esc(x.p.nome)}</td><td>${x.fn === 'MOTORISTA' ? 'Motorista' : 'Ajudante'}</td><td>${sel}</td>
+          <td>${x.pp.regraPessoa ? selo('pessoa', `${x.fn}:${x.p.id}`) : '<span class="chip s">padrão</span>'}</td>
+          <td class="mut">${esc((x.pp.regraPessoa && x.pp.regraPessoa.dados.obs) || '')}</td></tr>`;
+      }).join('') || '<tr><td colspan="5" class="mut">Ninguém encontrado.</td></tr>'}
+      </tbody></table></div>
+      <p class="mut">Faixa de Transbordo, Ajuda Extra e Observação do mês ficam na aba Acerto do mês (próxima etapa), porque mudam todo mês.</p>`;
+    $('fpQ').oninput = (e) => { f.q = e.target.value; const pos = e.target.selectionStart; pessoas(); const i = $('fpQ'); i.focus(); i.setSelectionRange(pos, pos); };
+    $('fpF').onchange = (e) => { f.funcao = e.target.value; pessoas(); };
+    $('conteudo').querySelectorAll('[data-pessoa]').forEach((s) => (s.onchange = async () => {
+      const [fn, id] = s.dataset.pessoa.split(':');
+      const p = (fn === 'MOTORISTA' ? D.motoristas : D.ajudantes).find((x) => String(x.id) === id);
+      s.disabled = true;
+      try { await salvar('pessoa', s.dataset.pessoa, { funcao: fn, pessoa_id: Number(id), nome: p.nome, perfil: s.value }, `${p.nome}: perfil salvo a partir de ${R.mesTexto(mes)}.`); }
+      catch (e) { alert(textoErro(e)); s.disabled = false; }
+    }));
+  }
+
+  // ----- Rotas
+  function rotas() {
+    const lista = R.vigentes(IDX, 'rota', mes).filter((r) => r.dados.ativo !== false);
+    const viagens = {}; // chave da rota -> viagens no mes
+    const soltas = [];
+    (D.rotas_viagens || []).forEach((v) => {
+      const r = R.rotaDaViagem(IDX, v.rota, mes);
+      if (r) viagens[r.chave] = (viagens[r.chave] || 0) + v.viagens;
+      else soltas.push(v);
+    });
+    const f = filtro.rotas, q = R.chave(f.q);
+    const vis = lista.filter((r) => {
+      if (q && !q.split(' ').every((w) => (R.chave(r.dados.nome) + ' ' + (r.dados.apelidos || []).map(R.chave).join(' ')).includes(w))) return false;
+      if (f.so === 'sem') return r.dados.faixa == null && !r.dados.ignorar;
+      if (f.so === 'mes') return !!viagens[r.chave];
+      return true;
+    }).sort((a, b) => (viagens[b.chave] || 0) - (viagens[a.chave] || 0) || a.dados.nome.localeCompare(b.dados.nome));
+    const semFaixa = lista.filter((r) => r.dados.faixa == null && !r.dados.ignorar && viagens[r.chave]).length;
+    $('conteudo').innerHTML = `
+      ${soltas.length ? msg('av', `<b>${soltas.length} nome(s) de rota das viagens de ${R.mesTexto(mes)} não estão na matriz.</b> Ligue cada um a uma rota (vira apelido) ou crie a rota.
+        <div class="rola" style="margin-top:8px"><table class="tab"><tbody>${soltas.map((s) => `<tr><td>${esc(s.rota)}</td><td class="n">${s.viagens} viagem(ns)</td><td class="n">${
+          podeEditar() ? `<button class="btn sec peq" data-ligar="${esc(s.rota)}">Ligar a uma rota</button> <button class="btn sec peq" data-criar="${esc(s.rota)}">Criar rota</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`) : ''}
+      ${semFaixa ? msg('er', `<b>${semFaixa} rota(s) com viagem em ${R.mesTexto(mes)} estão sem faixa.</b> Use o filtro "Sem faixa" para preencher.`) : ''}
+      <div class="filtros" style="margin-top:12px">
+        <input id="frQ" placeholder="Buscar rota ou apelido" value="${esc(f.q)}">
+        <select id="frS"><option value="">Todas</option><option value="mes" ${f.so === 'mes' ? 'selected' : ''}>Com viagem no mês</option><option value="sem" ${f.so === 'sem' ? 'selected' : ''}>Sem faixa</option></select>
+        <span class="mut" style="align-self:center">${vis.length} de ${lista.length} rotas · faixa pela rota do JR-Oper (Controle de Viagens)</span>
+        ${podeEditar() ? '<button class="btn pri peq" id="novaRota" style="margin-left:auto">Nova rota</button>' : ''}
+      </div>
+      <div class="rola"><table class="tab"><thead><tr><th>Rota (JR-Oper)</th><th class="n">Faixa</th><th class="n">R$/t motorista</th><th class="n">%</th><th class="n">R$/t ajudante</th><th class="n">Viagens no mês</th><th>Apelidos</th><th></th><th></th></tr></thead><tbody>
+      ${vis.map((r) => { const d = r.dados; return `<tr>
+        <td><b>${esc(d.nome)}</b><div class="mut">${esc(d.origem || '')}</div></td>
+        <td class="n">${d.ignorar ? '<span class="chip s">não paga</span>' : (d.faixa != null ? d.faixa : '<span class="chip r">sem faixa</span>')}</td>
+        <td class="n">${d.ignorar ? '' : brl(d.vl_ton_mot)}</td><td class="n">${d.ignorar ? '' : (d.perc != null ? num(d.perc) + '%' : '—')}</td><td class="n">${d.ignorar ? '' : brl(d.vl_ton_ajud)}</td>
+        <td class="n">${viagens[r.chave] || ''}</td>
+        <td class="mut">${esc((d.apelidos || []).join(', '))}</td>
+        <td>${selo('rota', r.chave)}</td>
+        <td class="n">${podeEditar() ? `<button class="btn sec peq" data-rota="${esc(r.chave)}">Editar</button>` : `<button class="btn lnk peq" data-rota="${esc(r.chave)}">Versões</button>`}</td></tr>`; }).join('') || '<tr><td colspan="9" class="mut">Nenhuma rota.</td></tr>'}
+      </tbody></table></div>`;
+    $('frQ').oninput = (e) => { f.q = e.target.value; const pos = e.target.selectionStart; rotas(); const i = $('frQ'); i.focus(); i.setSelectionRange(pos, pos); };
+    $('frS').onchange = (e) => { f.so = e.target.value; rotas(); };
+    $('conteudo').querySelectorAll('[data-rota]').forEach((b) => (b.onclick = () => editarRota(b.dataset.rota)));
+    $('conteudo').querySelectorAll('[data-criar]').forEach((b) => (b.onclick = () => editarRota(null, b.dataset.criar)));
+    $('conteudo').querySelectorAll('[data-ligar]').forEach((b) => (b.onclick = () => ligarApelido(b.dataset.ligar, lista)));
+    if ($('novaRota')) $('novaRota').onclick = () => editarRota(null, '');
+  }
+
+  function sugestoesPcrotaexp(nome) {
+    const palavras = R.chave(nome).split(' ').filter((w) => w.length > 2 && !['SECO', 'ROTA', 'REDE', 'REDES'].includes(w));
+    return R.vigentes(IDX, 'pcrotaexp', mes).filter((p) => p.dados.vl_ton_mot != null && palavras.some((w) => R.chave(p.dados.descricao).split(' ').includes(w)))
+      .sort((a, b) => a.dados.descricao.localeCompare(b.dados.descricao)).slice(0, 8);
+  }
+
+  function editarRota(ch, nomeNovo) {
+    const v = ch ? R.vigente(IDX, 'rota', ch, mes) : null;
+    const d = v ? JSON.parse(JSON.stringify(v.dados)) : { nome: nomeNovo || '', apelidos: [], origem: 'criada na tela' };
+    const faixas = R.vigentes(IDX, 'faixa', mes).sort((a, b) => Number(a.chave) - Number(b.chave));
+    const sug = sugestoesPcrotaexp(d.nome);
+    const so = !podeEditar();
+    abrirModal(`
+      <h2>${ch ? esc(d.nome) : 'Nova rota'}</h2>
+      ${so ? '' : `<p class="mut" style="margin-top:-4px">Vale a partir de <b>${R.mesTexto(mes)}</b>.</p>`}
+      <div class="cols">
+        <div style="grid-column:1/-1"><label class="f">Nome da rota (como no JR-Oper)</label><input id="rNome" value="${esc(d.nome)}" ${ch || so ? 'disabled' : ''}></div>
+        <div><label class="f">Faixa</label><select id="rFaixa" ${so ? 'disabled' : ''}><option value="">— sem faixa —</option>${faixas.map((fx) => `<option value="${fx.chave}" ${String(d.faixa) === fx.chave ? 'selected' : ''}>Faixa ${fx.chave} (${brl(fx.dados.vl_ton_mot)})</option>`).join('')}</select></div>
+        <div><label class="f">R$/t motorista</label><input id="rMot" class="n" value="${valIn(d.vl_ton_mot)}" ${so ? 'disabled' : ''}></div>
+        <div><label class="f">% comissão</label><input id="rPerc" class="n" value="${valIn(d.perc)}" ${so ? 'disabled' : ''}></div>
+        <div><label class="f">R$/t ajudante</label><input id="rAju" class="n" value="${valIn(d.vl_ton_ajud)}" ${so ? 'disabled' : ''}></div>
+      </div>
+      <p class="mut" style="margin:6px 0 0">Ao escolher a faixa, os três valores vêm da aba Faixas; dá para mudar só nesta rota.</p>
+      <label class="f">Apelidos (outros nomes que aparecem nas viagens, separados por ponto e vírgula)</label>
+      <input id="rApel" value="${esc((d.apelidos || []).join('; '))}" ${so ? 'disabled' : ''}>
+      <label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="rIgn" style="width:auto" ${d.ignorar ? 'checked' : ''} ${so ? 'disabled' : ''}> Não paga por tonelada (ex.: carregamento, saída para oficina)</label>
+      ${!so && ch ? `<label style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" id="rInativo" style="width:auto"> Tirar esta rota da matriz a partir de ${R.mesTexto(mes)}</label>` : ''}
+      ${sug.length && !so ? `<h3>Na PCROTAEXP do WinThor</h3><div class="rola"><table class="tab"><tbody>${sug.map((p) => `<tr><td>${p.dados.codrota} · ${esc(p.dados.descricao)}</td><td class="n">faixa ${p.dados.faixa}</td><td class="n">${brl(p.dados.vl_ton_mot)} · ${num(p.dados.perc)}% · ${brl(p.dados.vl_ton_ajud)}</td><td class="n"><button class="btn lnk peq" data-usar="${p.chave}">usar</button></td></tr>`).join('')}</tbody></table></div>` : ''}
+      <div class="acoes">${so ? '' : '<button class="btn pri" id="rSalvar">Salvar</button>'}<button class="btn sec" data-fechar>${so ? 'Fechar' : 'Cancelar'}</button></div>
+      <div id="rMsg"></div>
+      ${ch ? blocoVersoes('rota', ch) : ''}`, () => {
+      if (ch) ligarDesfazer('rota', ch);
+      if (so) return;
+      $('rFaixa').onchange = () => {
+        const fx = faixas.find((x) => x.chave === $('rFaixa').value);
+        if (fx) { $('rMot').value = valIn(fx.dados.vl_ton_mot); $('rPerc').value = valIn(fx.dados.perc); $('rAju').value = valIn(fx.dados.vl_ton_ajud); }
+      };
+      $('modalCorpo').querySelectorAll('[data-usar]').forEach((b) => (b.onclick = () => {
+        const p = R.vigente(IDX, 'pcrotaexp', b.dataset.usar, mes).dados;
+        $('rFaixa').value = p.faixa != null ? String(p.faixa) : ''; $('rMot').value = valIn(p.vl_ton_mot); $('rPerc').value = valIn(p.perc); $('rAju').value = valIn(p.vl_ton_ajud);
+        d.origem = `PCROTAEXP ${p.codrota} - ${p.descricao}`;
+      }));
+      $('rSalvar').onclick = async () => {
+        const nome = (ch ? d.nome : $('rNome').value).trim().toUpperCase();
+        const k = ch || R.chave(nome);
+        if (!k) { $('rMsg').innerHTML = msg('er', 'Informe o nome da rota.'); return; }
+        if (!ch && R.vigente(IDX, 'rota', k, mes)) { $('rMsg').innerHTML = msg('er', 'Essa rota já existe na matriz (o nome casa com outra, sem acento e sem pontuação).'); return; }
+        const n = { ...d, nome, faixa: $('rFaixa').value ? Number($('rFaixa').value) : null, vl_ton_mot: lerNum($('rMot').value), perc: lerNum($('rPerc').value), vl_ton_ajud: lerNum($('rAju').value),
+          apelidos: $('rApel').value.split(';').map((s) => s.trim()).filter(Boolean), ignorar: $('rIgn').checked };
+        if ([n.vl_ton_mot, n.perc, n.vl_ton_ajud].some(Number.isNaN)) { $('rMsg').innerHTML = msg('er', 'Confira os números (use vírgula para os centavos).'); return; }
+        const conflito = n.apelidos.find((a) => { const r = R.rotaDaViagem(IDX, a, mes); return r && r.chave !== k; });
+        if (conflito) { $('rMsg').innerHTML = msg('er', `O apelido "${esc(conflito)}" já pertence a outra rota.`); return; }
+        if ($('rInativo') && $('rInativo').checked) n.ativo = false; else delete n.ativo;
+        try { await salvar('rota', k, n, 'Rota salva.'); fecharModal(); } catch (e) { $('rMsg').innerHTML = msg('er', esc(textoErro(e))); }
+      };
+    });
+  }
+
+  function ligarApelido(nomeViagem, lista) {
+    const ord = lista.slice().sort((a, b) => a.dados.nome.localeCompare(b.dados.nome));
+    abrirModal(`
+      <h2>Ligar "${esc(nomeViagem)}"</h2>
+      <p class="mut" style="margin-top:-4px">O nome vira apelido da rota escolhida e as viagens com ele passam a usar a faixa dela, a partir de <b>${R.mesTexto(mes)}</b>.</p>
+      <label class="f">Rota da matriz</label>
+      <select id="aRota"><option value="">— escolha —</option>${ord.map((r) => `<option value="${esc(r.chave)}">${esc(r.dados.nome)}${r.dados.faixa != null ? ' · faixa ' + r.dados.faixa : ''}</option>`).join('')}</select>
+      <div class="acoes"><button class="btn pri" id="aSalvar">Ligar</button><button class="btn sec" data-fechar>Cancelar</button></div><div id="aMsg"></div>`, () => {
+      $('aSalvar').onclick = async () => {
+        const k = $('aRota').value; if (!k) return;
+        const d = JSON.parse(JSON.stringify(R.vigente(IDX, 'rota', k, mes).dados));
+        d.apelidos = [...new Set([...(d.apelidos || []), nomeViagem])];
+        try { await salvar('rota', k, d, `"${nomeViagem}" ligado a ${d.nome}.`); fecharModal(); } catch (e) { $('aMsg').innerHTML = msg('er', esc(textoErro(e))); }
+      };
+    });
+  }
+
+  // ----- Faixas
+  function faixas() {
+    const l = R.vigentes(IDX, 'faixa', mes).sort((a, b) => Number(a.chave) - Number(b.chave));
+    const usoRotas = {};
+    R.vigentes(IDX, 'rota', mes).forEach((r) => { if (r.dados.faixa != null && r.dados.ativo !== false) usoRotas[r.dados.faixa] = (usoRotas[r.dados.faixa] || 0) + 1; });
+    $('conteudo').innerHTML = `
+      <p class="mut" style="margin-top:0">Valores de referência de cada faixa. Mudar aqui NÃO muda as rotas sozinho: cada rota guarda o próprio valor
+        (há rotas da mesma faixa com valores diferentes na PCROTAEXP). Ao escolher a faixa de uma rota, ela recebe estes valores.</p>
+      <div class="rola"><table class="tab"><thead><tr><th>Faixa</th><th class="n">R$/t motorista</th><th class="n">% comissão</th><th class="n">R$/t ajudante</th><th class="n">Rotas</th><th></th><th></th></tr></thead><tbody>
+      ${l.map((fx) => `<tr><td><b>Faixa ${fx.chave}</b></td><td class="n">${brl(fx.dados.vl_ton_mot)}</td><td class="n">${num(fx.dados.perc)}%</td><td class="n">${brl(fx.dados.vl_ton_ajud)}</td>
+        <td class="n">${usoRotas[fx.chave] || 0}</td><td>${selo('faixa', fx.chave)}</td><td class="n">${botaoEditar(`data-faixa="${fx.chave}"`)}</td></tr>`).join('')}
+      </tbody></table></div>
+      ${podeEditar() ? '<div class="acoes"><button class="btn sec peq" id="novaFaixa">Nova faixa</button></div>' : ''}`;
+    $('conteudo').querySelectorAll('[data-faixa]').forEach((b) => (b.onclick = () => editarFaixa(b.dataset.faixa)));
+    if ($('novaFaixa')) $('novaFaixa').onclick = () => editarFaixa(String(Math.max(0, ...l.map((x) => Number(x.chave))) + 1), true);
+  }
+
+  function editarFaixa(ch, nova) {
+    const v = nova ? null : R.vigente(IDX, 'faixa', ch, mes);
+    const d = v ? v.dados : {};
+    abrirModal(`
+      <h2>Faixa ${esc(ch)}</h2><p class="mut" style="margin-top:-4px">Vale a partir de <b>${R.mesTexto(mes)}</b>.</p>
+      <div class="cols">
+        <div><label class="f">R$/t motorista</label><input id="xMot" class="n" value="${valIn(d.vl_ton_mot)}"></div>
+        <div><label class="f">% comissão</label><input id="xPerc" class="n" value="${valIn(d.perc)}"></div>
+        <div><label class="f">R$/t ajudante</label><input id="xAju" class="n" value="${valIn(d.vl_ton_ajud)}"></div>
+      </div>
+      <div class="acoes"><button class="btn pri" id="xSalvar">Salvar</button><button class="btn sec" data-fechar>Cancelar</button></div><div id="xMsg"></div>
+      ${nova ? '' : blocoVersoes('faixa', ch)}`, () => {
+      if (!nova) ligarDesfazer('faixa', ch);
+      $('xSalvar').onclick = async () => {
+        const n = { vl_ton_mot: lerNum($('xMot').value), perc: lerNum($('xPerc').value), vl_ton_ajud: lerNum($('xAju').value) };
+        if (Object.values(n).some((x) => x == null || Number.isNaN(x))) { $('xMsg').innerHTML = msg('er', 'Preencha os três valores.'); return; }
+        try { await salvar('faixa', ch, n, `Faixa ${ch} salva.`); fecharModal(); } catch (e) { $('xMsg').innerHTML = msg('er', esc(textoErro(e))); }
+      };
+    });
+  }
+
+  // ----- Compras
+  function compras() {
+    const l = R.vigentes(IDX, 'compra', mes).filter((c) => c.dados.ativo !== false).sort((a, b) => a.dados.fornecedor.localeCompare(b.dados.fornecedor));
+    $('conteudo').innerHTML = `
+      <p class="mut" style="margin-top:0">Fretes de compra (retirada em fornecedor): o nome do fornecedor do frete no WinThor diz quem fez.
+        Carreteiros e aproveitamentos de quem já entrega na cidade da retirada. A lista de fornecedores do Power BI entra com o cálculo do acerto;
+        por enquanto cadastre à mão os que já conhece.</p>
+      ${podeEditar() ? '<div class="acoes" style="margin:0 0 10px"><button class="btn pri peq" id="novaCompra">Novo fornecedor</button></div>' : ''}
+      <div class="rola"><table class="tab"><thead><tr><th>Fornecedor do frete</th><th>Pessoa</th><th class="n">Faixa</th><th class="n">R$/t</th><th>Observação</th><th></th><th></th></tr></thead><tbody>
+      ${l.map((c) => `<tr><td><b>${esc(c.dados.fornecedor)}</b></td><td>${esc(c.dados.nome || '—')}<div class="mut">${c.dados.funcao === 'AJUDANTE' ? 'ajudante' : 'motorista'}</div></td>
+        <td class="n">${c.dados.faixa != null ? c.dados.faixa : '—'}</td><td class="n">${brl(c.dados.vl_ton)}</td><td class="mut">${esc(c.dados.obs || '')}</td>
+        <td>${selo('compra', c.chave)}</td><td class="n">${botaoEditar(`data-compra="${esc(c.chave)}"`)}</td></tr>`).join('') || '<tr><td colspan="7" class="mut">Nenhum fornecedor cadastrado.</td></tr>'}
+      </tbody></table></div>`;
+    $('conteudo').querySelectorAll('[data-compra]').forEach((b) => (b.onclick = () => editarCompra(b.dataset.compra)));
+    if ($('novaCompra')) $('novaCompra').onclick = () => editarCompra(null);
+  }
+
+  function editarCompra(ch) {
+    const v = ch ? R.vigente(IDX, 'compra', ch, mes) : null;
+    const d = v ? v.dados : { funcao: 'MOTORISTA' };
+    const faixasL = R.vigentes(IDX, 'faixa', mes).sort((a, b) => Number(a.chave) - Number(b.chave));
+    const ops = (fn) => (fn === 'AJUDANTE' ? D.ajudantes : D.motoristas).filter((p) => p.ativo || p.id === d.pessoa_id)
+      .map((p) => `<option value="${p.id}" ${p.id === d.pessoa_id ? 'selected' : ''}>${esc(p.nome)}</option>`).join('');
+    abrirModal(`
+      <h2>${ch ? esc(d.fornecedor) : 'Novo fornecedor do frete'}</h2><p class="mut" style="margin-top:-4px">Vale a partir de <b>${R.mesTexto(mes)}</b>.</p>
+      <label class="f">Fornecedor do frete (nome como no WinThor)</label><input id="kForn" value="${esc(d.fornecedor || '')}" ${ch ? 'disabled' : ''}>
+      <div class="cols">
+        <div><label class="f">Função</label><select id="kFn"><option value="MOTORISTA" ${d.funcao !== 'AJUDANTE' ? 'selected' : ''}>Motorista</option><option value="AJUDANTE" ${d.funcao === 'AJUDANTE' ? 'selected' : ''}>Ajudante</option></select></div>
+        <div style="grid-column:span 2"><label class="f">Pessoa</label><select id="kPes"><option value="">— escolha —</option>${ops(d.funcao)}</select></div>
+        <div><label class="f">Faixa</label><select id="kFaixa"><option value="">—</option>${faixasL.map((fx) => `<option value="${fx.chave}" ${String(d.faixa) === fx.chave ? 'selected' : ''}>Faixa ${fx.chave}</option>`).join('')}</select></div>
+        <div><label class="f">R$/t (vazio = pela faixa)</label><input id="kTon" class="n" value="${valIn(d.vl_ton)}"></div>
+      </div>
+      <label class="f">Observação</label><input id="kObs" value="${esc(d.obs || '')}">
+      ${ch ? `<label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="kInativo" style="width:auto"> Tirar a partir de ${R.mesTexto(mes)}</label>` : ''}
+      <div class="acoes"><button class="btn pri" id="kSalvar">Salvar</button><button class="btn sec" data-fechar>Cancelar</button></div><div id="kMsg"></div>
+      ${ch ? blocoVersoes('compra', ch) : ''}`, () => {
+      if (ch) ligarDesfazer('compra', ch);
+      $('kFn').onchange = () => { d.funcao = $('kFn').value; d.pessoa_id = null; $('kPes').innerHTML = '<option value="">— escolha —</option>' + ops(d.funcao); };
+      $('kSalvar').onclick = async () => {
+        const forn = (ch ? d.fornecedor : $('kForn').value).trim().toUpperCase();
+        const k = ch || R.chave(forn);
+        const fn = $('kFn').value, pid = Number($('kPes').value) || null;
+        const p = pid && (fn === 'AJUDANTE' ? D.ajudantes : D.motoristas).find((x) => x.id === pid);
+        const n = { fornecedor: forn, funcao: fn, pessoa_id: pid, nome: p ? p.nome : null, faixa: $('kFaixa').value ? Number($('kFaixa').value) : null, vl_ton: lerNum($('kTon').value), obs: $('kObs').value.trim() || undefined };
+        if (!k || !pid) { $('kMsg').innerHTML = msg('er', 'Informe o fornecedor e a pessoa.'); return; }
+        if (Number.isNaN(n.vl_ton)) { $('kMsg').innerHTML = msg('er', 'Confira o R$/t.'); return; }
+        if (!ch && R.vigente(IDX, 'compra', k, mes)) { $('kMsg').innerHTML = msg('er', 'Esse fornecedor já está cadastrado.'); return; }
+        if ($('kInativo') && $('kInativo').checked) n.ativo = false;
+        try { await salvar('compra', k, n, 'Fornecedor salvo.'); fecharModal(); } catch (e) { $('kMsg').innerHTML = msg('er', esc(textoErro(e))); }
+      };
+    });
+  }
+
+  // ----- Parametros
+  function parametros() {
+    const l = R.vigentes(IDX, 'parametro', mes).sort((a, b) => a.chave.localeCompare(b.chave));
+    const ehHora = (k) => /_H$/.test(k);
+    $('conteudo').innerHTML = `
+      <div class="rola"><table class="tab"><thead><tr><th>Parâmetro</th><th class="n">Valor</th><th></th><th></th></tr></thead><tbody>
+      ${l.map((p) => `<tr><td>${esc(p.dados.rotulo || p.chave)}<div class="mut">${esc(p.chave)}</div></td>
+        <td class="n"><b>${ehHora(p.chave) ? num(p.dados.valor) + ' h' : brl(p.dados.valor)}</b></td><td>${selo('parametro', p.chave)}</td>
+        <td class="n">${botaoEditar(`data-par="${esc(p.chave)}"`)}</td></tr>`).join('')}
+      </tbody></table></div>`;
+    $('conteudo').querySelectorAll('[data-par]').forEach((b) => (b.onclick = () => {
+      const ch = b.dataset.par, d = R.vigente(IDX, 'parametro', ch, mes).dados;
+      abrirModal(`<h2>${esc(d.rotulo || ch)}</h2><p class="mut" style="margin-top:-4px">Vale a partir de <b>${R.mesTexto(mes)}</b>.</p>
+        <label class="f">Valor${ehHora(ch) ? ' (horas)' : ' (R$)'}</label><input id="qVal" class="n" value="${valIn(d.valor)}">
+        <div class="acoes"><button class="btn pri" id="qSalvar">Salvar</button><button class="btn sec" data-fechar>Cancelar</button></div><div id="qMsg"></div>
+        ${blocoVersoes('parametro', ch)}`, () => {
+        ligarDesfazer('parametro', ch);
+        $('qSalvar').onclick = async () => {
+          const x = lerNum($('qVal').value);
+          if (x == null || Number.isNaN(x)) { $('qMsg').innerHTML = msg('er', 'Informe um número.'); return; }
+          try { await salvar('parametro', ch, { ...d, valor: x }, 'Parâmetro salvo.'); fecharModal(); } catch (e) { $('qMsg').innerHTML = msg('er', esc(textoErro(e))); }
+        };
+      });
+    }));
+  }
+
+  // ----- Historico
+  async function historico() {
+    $('conteudo').innerHTML = '<p class="mut">Carregando…</p>';
+    try {
+      const l = await rpc('acerto_historico', { p_token: sessao.token, p_limite: 300 });
+      const ACAO = { SALVOU: 'alterou', DESFEZ: 'apagou a versão', ENTROU: 'entrou', DEFINIU_SENHA: 'criou a senha', TROCOU_SENHA: 'trocou a senha' };
+      const TIPO = { perfil: 'Perfil', pessoa: 'Pessoa', rota: 'Rota', faixa: 'Faixa', compra: 'Compra', parametro: 'Parâmetro' };
+      const nomeDe = (x) => { const d = x.depois || x.antes || {}; return d.nome || d.fornecedor || d.rotulo || x.chave || ''; };
+      $('conteudo').innerHTML = `<div class="rola"><table class="tab"><thead><tr><th>Quando</th><th>Quem</th><th>O quê</th><th>Item</th><th>Vale a partir de</th></tr></thead><tbody>
+        ${l.map((x) => `<tr><td>${dataHora(x.em)}</td><td>${esc(x.usuario || '—')}</td><td>${ACAO[x.acao] || esc(x.acao)}</td>
+          <td>${x.tipo ? `${TIPO[x.tipo] || esc(x.tipo)}: ${esc(nomeDe(x))}` : ''}</td><td>${x.vigencia ? R.mesTexto(x.vigencia) : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="mut">Nada ainda.</td></tr>'}
+        </tbody></table></div>`;
+    } catch (e) { $('conteudo').innerHTML = msg('er', esc(textoErro(e))); }
+  }
+
+  // ---------------------------------------------------------------- inicio
+  if (!R || !SB.url) { $('telaLogin').classList.remove('esc'); $('lMsg').innerHTML = msg('er', 'A página não carregou por completo. Atualize (F5).'); return; }
+  if (sessao && sessao.token && (!sessao.expira_em || new Date(sessao.expira_em) > new Date())) carregar();
+  else { guardarSessao(null); mostrarLogin(); }
+})();
+</script>
+</body>
+</html>
