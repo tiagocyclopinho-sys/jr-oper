@@ -9,7 +9,8 @@
 // - Mes de referencia M (AAAAMM). Cortes: 26/(M-1) a 25/M. Devolucao, despesa,
 //   abastecimento, motoristas e rastreamento: mes cheio. Inventario: 01/01 ate
 //   o fim de M.
-// - Sem corpo (pg_cron, todo dia): atualiza a previa do mes corrente; o mes
+// - Sem corpo (pg_cron, todo dia): atualiza a previa do mes corrente (e, a partir
+//   do dia 26, o periodo de 26 a 25 do mes seguinte); o mes
 //   anterior e recapturado ate o dia 2 e CONGELADO a partir do dia 3. Depois
 //   de congelado, so vo_indicadores.valor_atual muda (lancamentos atrasados).
 // - Corpo { "meses": [202601, ...], "congelar": true } recaptura esses meses
@@ -44,6 +45,8 @@ const WORKSPACE_DO_MODELO: Record<string, string> = {
   hora_extra: "d12a419a-cb88-41f7-9c18-702e5ac59b72", // GERENCIA
 };
 const DIA_CONGELAR = 3;
+// Secoes que usam o periodo de 26 a 25 (a devolucao grava tambem o faturamento de 26 a 25)
+const PERIODO_26_A_25 = ["cortes", "devolucao", "metas_setor"];
 const TOP = 15;
 
 function chaveServico(): string {
@@ -632,6 +635,16 @@ Deno.serve(async (req: Request) => {
       }
       detalhe[am] = await capturar(token, am, "completo");
       await marcar(am, false);
+      // A partir do dia 26 o periodo de 26 a 25 ja e o do mes seguinte (corte, faturamento
+      // de 26 a 25 e metas por setor). Sem isto o corte do dia 26 em diante so entrava no
+      // dia 1 (Tiago, 27/11/2026).
+      if (dia >= 26) {
+        const prox = am % 100 === 12 ? am + 89 : am + 1;
+        if ((await statusDe(prox)) !== "fechado") {
+          detalhe[prox] = await capturar(token, prox, "completo", PERIODO_26_A_25);
+          await marcar(prox, false);
+        }
+      }
       // Meses ja fechados: so a lista de cargas do WinThor (notas que entraram depois)
       for (let k = 0, mm = mesAnterior(ant); k < MESES_CARGA_WIN - 1; k++, mm = mesAnterior(mm)) {
         detalhe[mm] = { carga_win: await atualizarCargaWin(token, mm) };
