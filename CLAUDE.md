@@ -117,6 +117,68 @@ partir do branch `main` do GitHub.
   (⋯ → Gerenciar permissões); preferir isso a pôr o app no workspace inteiro.
 - `.claude/settings.local.json` libera `deploy_edge_function` do Supabase.
 
+## Acerto de motoristas e ajudantes (planejado, 27/11/2026)
+- Hoje: rotinas WinThor 8003 (motorista) e 8009 (ajudante), uma por pessoa, com
+  os requisitos OK/NÃO digitados à mão; impressas e não salvas (~2 dias/mês).
+  Exemplos em `REQUISITOS\08.2026 MOTORISTAS\` e `AJUDANTE MOTORISTA 08.2026\`.
+  Tabela de valores: `20 - VICTOR HUGO\MOTORISTAS E AJUDANTES REMUNERAÇÃO.xlsx`.
+- EXCEÇÃO à regra de R$ (decisão do Tiago, 27/11): este acerto mostra valores,
+  mas em OUTRO link (como /banco-horas), com login e senha. Usuários: Tiago,
+  Victor Hugo e Paulo Silva (confere no fim).
+- Conta (conferida com ADEMAR e ADRIANO, ago/26): motorista = Σ peso líq (t) ×
+  VLTONFAIXA da rota × PERCFAIXA% + entregas × 0,25 + KPIs OK + diferença até o
+  garantido; KPIs 200 manut., 100 pneus, 200 sinistro, 100 consumo, 400 prazo
+  rota (COMUNIC), 100 caixa, 100 devolução, 400 Fusion. Ajudante = Σ peso líq (t)
+  × VLTONAJUDFAIXA + KPIs 100 devolução/pontualidade/prazo rota + (garantido −
+  peso) × valor médio por t. Peso líq = TOTPESO − devolução (DEVOLITEM 12).
+  "Peso Diário/Garantido" da planilha de Requisitos é TONELADA (70 t), não R$.
+- Fontes: Power BI "Motorista e Ajudantes" (f_MOTORISTA, f_AJUDANTE, transb, ent
+  = compras, PCFORNEC com FAIXA) e "Devolução" (f_DEVOLUCAO: DEVOLITEM, TOTPESO).
+  Faixas: CSV da PCROTAEXP (`C:\Users\thiago.ferreira\PCROTAEXP_202611271335.csv`).
+  Exceções: só carreteiros (Fagno, Célio: 120 t) e carne (Silvestre: 140 t);
+  ajuda de custo/extra é manual.
+- Requisitos: Acerto de Caixa = flag marcada pelo setor de Fechamento de Caixa;
+  Cuidado com Pneus = registro específico da manutenção (orientar); Média de
+  Consumo = motor ocioso até 2027 (depois meta × realizado); Prazo Rota =
+  viagem que fecha depois da previsão da matriz + 15 h sem justificativa.
+- Teste: novembro/26 em paralelo com o manual do Victor (nov já fechado à mão;
+  o sistema refaz só para comparar).
+- Decisões de 27/11: desligado no meio do mês (DP) não entra no fechamento;
+  o painel terá a aba Folgas e Faltas, onde o Victor valida descontado/abonado;
+  devolução: a regra seria só "Descontar Produtividade" do gestor, mas puxa todas
+  enquanto as tratativas estiverem atrasadas; Acerto de Caixa: o Financeiro avisa
+  e o Victor marca; isenção de motor ocioso já é lançada no JR-Oper; Prazo Rota
+  passa a ser automático. Cuidado com Pneus: Oc. Operacional, motivos FALTA DE
+  CUIDADO COM PNEUS e PNEU DANIFICADO (7.9.3). A lista `motivos_ocorrencia` vem
+  do mockData e fica salva em cada aparelho (sem tela de cadastro nem tabela na
+  nuvem; Cadastros Mestres só edita motivos de devolução): motivo novo precisa
+  entrar no mockData E no acréscimo do Store.init (store.js), como o CROSS. O
+  gerador casa pneu pelo MOTIVO (`doMotivo` em REGRAS_CONDUTA), não pelo texto.
+- Matriz de regras EDITÁVEL no link (decisão do Tiago, 27/11: a planilha de
+  remuneração e a rotina estão desatualizadas; ex.: KPIs do carreteiro 250/250/
+  200/200/100 na planilha × 200/100/200/100/400 na rotina). Valores com vigência,
+  para mês fechado não mudar. Partes: perfis (motorista padrão, carreteiro,
+  carne; ajudante padrão, lombador) com t garantida, % comissão, bônus/entrega e
+  KPIs; pessoa → perfil; rotas; compras (fornecedor do frete → pessoa:
+  carreteiros + aproveitamentos de quem já entrega na cidade da retirada).
+- Faixa pela ROTA DO JR-OPER (carga → viagem do Controle de Viagens), não pela
+  CODROTAPRINC do WinThor: a rota "Palmas" do WinThor junta saída de Araguaína e
+  do cross de Palmas, que têm faixa diferente. PCROTAEXP é só a semente (editável).
+  Os nomes de rota das viagens variam do cadastro (acento, "MARABA 02"/"MARABA
+  II", "SECO - ARAGUAINA"): a matriz precisa casar sem acento e aceitar apelidos.
+  Campos da tela da 8003 (print de 27/11) → parâmetros da consulta: BONUS POR
+  ENTREGA = AJUD_EXT; VLR TON EXTERNA/INTERNA DERIVADOS = vlr_ton_externa/
+  interna (só a coluna informativa "Vlr Fat", não entram no pagamento); VLR TON
+  CARNE = vlr_ton_carne (tela: 300); PERCENTUAL COMISSÃO = percom; AJUDA EXTRA =
+  dif_soma; TON. GARANTIDA = PESO_MINIMO; TIPO MOTORISTA Carreteiro/Caminhoneiro
+  = TIPOMOTORA (carreteiro: sem caixa, devolução e Fusion); TONELADA CARNE Sim =
+  ton_carne (todas as cargas pagam o VLR TON CARNE); FAIXA DE TRANSBORDO =
+  vfaixa (Sim: todas as cargas a R$ 250/t; Não: faixa da rota, e as cargas em que
+  ele é o motorista do transbordo a R$ 350/t). Na 8009 o campo Faixa do ajudante
+  (1 = menor faixa, 3 = R$ 23/t) é o do lombador (Gabriel). Silvestre (carne)
+  usa TONELADA CARNE, não a faixa de transbordo. No app: FAIXA DE TRANSBORDO
+  fica como opção marcável por pessoa e por mês, desligada por padrão (Tiago, 27/11).
+
 ## Custo de gestão (7.1.13, 06/11/2026)
 - Edge Function `sync-custo-gestao` (migration 73) grava a seção `custo_gestao` em
   vo_indicadores/vo_quadros, separada da sync-visao-operacao para não travar o
