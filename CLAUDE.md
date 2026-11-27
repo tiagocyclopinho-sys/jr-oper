@@ -58,13 +58,23 @@ partir do branch `main` do GitHub.
   vem do vínculo com a viagem). Edge Function `supabase/functions/sync-cco`
   grava em `cco_motor_ocioso` / `cco_sync_log` (migration 54), pg_cron
   `cco-sync-powerbi` 06h10 e 13h10. O Power BI tem ~7% de linhas idênticas
-  que o relatório da CCO CONTA: a tabela guarda uma linha com `qtd`. Para a aba
-  Motor Ocioso bater com o gráfico "Motorista Resp" do relatório (conferido em
-  26/10), o gerador tira as placas `VEICULOS_FORA_MOTOR_OCIOSO` (OLH8E48,
-  OLI0E88, OLI2E18, OLI2E91, QWA2318, TVD0F56) e remove os filtros manuais da
-  tabela dinâmica (Veículo e Motorista; o do modelo escondia nomes/placas
-  novos). Sem motorista = "(SEM VÍNCULO)". Isenções: manuais (a isenção
-  registrada pela CCO vai no Complemento).
+  que o relatório da CCO CONTA: a tabela guarda uma linha com `qtd`.
+  Caminhão 3/4 é ISENTO de motor ocioso (Tiago, 27/11): o gerador tira as placas
+  com `veiculos.tipo = '3/4'` do cadastro (`TIPO_ISENTO_MOTOR_OCIOSO`) e remove os
+  filtros manuais da tabela dinâmica (Veículo e Motorista). Sem motorista =
+  "(SEM VÍNCULO)". Isenções: manuais (a isenção registrada pela CCO vai no
+  Complemento).
+- MOTORISTA DO ALERTA (27/11): o Power BI da CCO lê `controle_viagens` SEM tirar
+  as apagadas; viagem apagada fica sem retorno e "aberta para sempre" (carga
+  45132, RICARDO/TVA8I21, apagada na correção da escala de 04/11: 101 alertas
+  dele em nov, eram 32; o resto era do NANDERSON). A sync-cco refaz o vínculo
+  pela `vw_bi_controle_viagens`: mesma placa, entre saída e retorno = Em Viagem,
+  até 15 min antes/depois = Pré/Pós, senão sem motorista; viagem sem retorno vai
+  até a próxima saída da placa (máx. 7 dias). O do Power BI fica em
+  `motorista_pbi`. Antes da 1ª viagem do JR-Oper (ago/26) vale o do Power BI.
+  Recarregado desde 01/08 em 27/11. Corrigir também o Power Query do modelo CCO
+  (trocar a fonte para `vw_bi_controle_viagens`): o relatório Gestão MOOV segue
+  errado até lá.
 - Regras de 26/11/2026 (Tiago, a partir do que o Victor fez à mão em out/26):
   Ocorrências leva, além dos eventos confirmados pela CCO, UMA linha por
   motorista "MOTORISTA TEVE N OCORRÊNCIAS DE MOTOR OCIOSO" (Média Consumo).
