@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 86).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 87).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -192,10 +192,16 @@ partir do branch `main` do GitHub.
   (`acerto/index.html`, rewrite no vercel.json, fora do service worker) + `js/acertoRegras.js`
   (UMD). SEGURANÇA DIFERENTE do resto: tabelas `acerto_*` com RLS e SEM política, sem grant
   para anon; tudo pelas funções `acerto_*` (security definer) com token de sessão (só o
-  SHA-256 fica no banco, 12 h). Senha em bcrypt no servidor. Papéis: tiago ADMIN, victor e
-  paulo EDITOR (Tiago, 27/11); o papel CONFERENTE (só consulta) existe, sem ninguém. 1º acesso por convite de uso único (7 dias):
-  `select acerto_admin_convite('login');` no SQL (não liberado ao anon); os de 27/11
-  ficaram em `%LOCALAPPDATA%AcertoMotoristasconvites.txt` no PC do Tiago. 5 erros = 15 min.
+  SHA-256 fica no banco, 12 h). LOGIN = O MESMO DO JR-OPER (7.10.1, migration 86, decisão do
+  Tiago: nada de senha nova): `acerto_entrar` acha o usuário como o app (e-mail, nome ou
+  começo do nome; começo ambíguo pede o e-mail) e confere a senha no servidor com
+  `acerto__hash_app`, cópia em SQL da sha256Sync (não é SHA-256 padrão: primos até 300).
+  Mudou a sha256Sync? Mude a função junto. O próprio hash NÃO vale como senha aqui. Só entra
+  quem está em `acerto_usuarios.usuario_id`: Tiago (ids 5 e 1787514068461840, ADMIN) e Paulo
+  Silva e Victor Hugo (EDITOR; o cadastro do Victor, id 1786993272306, só existia no PC dele e
+  foi reenviado pelo console em 27/11). Liberar outro: `select acerto_admin_liberar(<usuarios.id>,
+  'EDITOR', 'Nome');` (só pelo SQL).
+  5 erros = 15 min. A senha se troca no JR-Oper.
 - Matriz em `acerto_regras` (tipo, chave, vigencia AAAA-MM, dados jsonb): vale a versão de
   maior vigência <= mês; editar cria a versão do mês escolhido na tela; mês FECHADO
   (`acerto_meses`) recusa versão nova. Tipos: parametro, faixa (1–5), perfil (MOTORISTA_PADRAO,

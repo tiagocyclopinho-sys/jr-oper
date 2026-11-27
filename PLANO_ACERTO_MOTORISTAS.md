@@ -19,7 +19,8 @@ JR-Oper (como /banco-horas), com login e senha, para Tiago, Victor Hugo e Paulo 
 - 7.9.3: motivos FALTA DE CUIDADO COM PNEUS e PNEU DANIFICADO na Oc. Operacional.
 
 ## Feito em 27/11 (7.10.0, migration 85 aplicada, falta publicar)
-- Página /acerto com login (convites em %LOCALAPPDATA%AcertoMotoristasconvites.txt).
+- Página /acerto com o mesmo login e senha do JR-Oper (7.10.1, migration 86). Liberados: Tiago,
+  Paulo Silva e Victor Hugo.
 - Matriz de regras editável e versionada: Perfis, Pessoas, Rotas, Faixas, Compras, Parâmetros, Histórico.
 - Falta preencher na tela: 41 rotas sem faixa e os nomes de rota das viagens que não casaram.
 
