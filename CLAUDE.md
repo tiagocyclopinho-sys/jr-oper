@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 85).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 86).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -188,6 +188,23 @@ partir do branch `main` do GitHub.
   (1 = menor faixa, 3 = R$ 23/t) é o do lombador (Gabriel). Silvestre (carne)
   usa TONELADA CARNE, não a faixa de transbordo. No app: FAIXA DE TRANSBORDO
   fica como opção marcável por pessoa e por mês, desligada por padrão (Tiago, 27/11).
+- Etapa 1 PRONTA (7.10.0, 27/11, migration 85 APLICADA; falta deploy): página `/acerto`
+  (`acerto/index.html`, rewrite no vercel.json, fora do service worker) + `js/acertoRegras.js`
+  (UMD). SEGURANÇA DIFERENTE do resto: tabelas `acerto_*` com RLS e SEM política, sem grant
+  para anon; tudo pelas funções `acerto_*` (security definer) com token de sessão (só o
+  SHA-256 fica no banco, 12 h). Senha em bcrypt no servidor. Papéis: tiago ADMIN, victor e
+  paulo EDITOR (Tiago, 27/11); o papel CONFERENTE (só consulta) existe, sem ninguém. 1º acesso por convite de uso único (7 dias):
+  `select acerto_admin_convite('login');` no SQL (não liberado ao anon); os de 27/11
+  ficaram em `%LOCALAPPDATA%AcertoMotoristasconvites.txt` no PC do Tiago. 5 erros = 15 min.
+- Matriz em `acerto_regras` (tipo, chave, vigencia AAAA-MM, dados jsonb): vale a versão de
+  maior vigência <= mês; editar cria a versão do mês escolhido na tela; mês FECHADO
+  (`acerto_meses`) recusa versão nova. Tipos: parametro, faixa (1–5), perfil (MOTORISTA_PADRAO,
+  _CARRETEIRO, _CARNE, AJUDANTE_PADRAO, _LOMBADOR), pessoa (`FUNCAO:id`; sem regra = padrão),
+  rota (chave = `acerto_chave(nome)`: sem acento/pontuação, 01→I, palavras em ordem; apelidos
+  para os nomes das viagens), compra (fornecedor do frete) e pcrotaexp (referência). Carga
+  inicial vigência 2026-01; 33 de 77 rotas do cadastro casaram com a PCROTAEXP, as outras e
+  os nomes de viagem soltos o Victor liga na aba Rotas. Rota tem valor PRÓPRIO (a faixa só
+  preenche). `acerto_log` guarda antes/depois.
 
 ## Custo de gestão (7.1.13, 06/11/2026)
 - Edge Function `sync-custo-gestao` (migration 73) grava a seção `custo_gestao` em
