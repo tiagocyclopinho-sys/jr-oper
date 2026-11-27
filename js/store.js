@@ -337,6 +337,14 @@ class Store {
     ensureArray('controle_viagens');
     ensureArray('ocorrencias_viagens');
     ensureArray('motivos_ocorrencia');
+    // 7.9.3: motivos de pneu na Oc. Operacional (requisito Cuidado com Pneus da
+    // planilha de Requisitos). A lista fica salva no aparelho; sem isto quem já
+    // usava o app não veria os motivos novos. Entram na ordem alfabética.
+    ['FALTA DE CUIDADO COM PNEUS', 'PNEU DANIFICADO'].forEach(m => {
+      if (this.data.motivos_ocorrencia.includes(m)) return;
+      const i = this.data.motivos_ocorrencia.findIndex(x => String(x).localeCompare(m, 'pt-BR') > 0);
+      if (i < 0) this.data.motivos_ocorrencia.push(m); else this.data.motivos_ocorrencia.splice(i, 0, m);
+    });
     ensureArray('resumo_diario_cd');
     ensureArray('trocas_veiculos');
     ensureArray('audit_logs');
