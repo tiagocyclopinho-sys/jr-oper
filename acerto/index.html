@@ -11,7 +11,8 @@
   e a unica parte do JR-Oper com valores em R$ (excecao decidida pelo Tiago).
   Tudo passa pelas funcoes acerto_* (migration 85), que conferem a sessao; as
   tabelas nao sao legiveis pela chave publica. Regras versionadas por mes
-  (js/acertoRegras.js). Etapa 1: login + matriz de regras. O calculo, os
+  (js/acertoRegras.js). Login = o mesmo do JR-Oper (7.10.1, migration 86), so
+  para quem esta em acerto_usuarios. Etapa 1: login + matriz de regras. O calculo, os
   requisitos, Folgas e Faltas e o PDF vem nas proximas etapas.
 -->
 <style>
@@ -90,7 +91,7 @@
 <header><div class="in">
   <img src="/public/logo_jr_branca.png" alt="JR" onerror="this.style.display='none'">
   <div><h1>Acerto de Motoristas e Ajudantes</h1><p>Requisitos, regras e acerto do mês · acesso restrito</p></div>
-  <div class="usu esc" id="usu"><span id="usuNome"></span><button id="btSenha">Trocar senha</button><button id="btSair">Sair</button></div>
+  <div class="usu esc" id="usu"><span id="usuNome"></span><button id="btSair">Sair</button></div>
 </div></header>
 
 <main>
@@ -98,31 +99,13 @@
   <section class="card login esc" id="telaLogin">
     <h2>Entrar</h2>
     <form id="fLogin" autocomplete="on">
-      <label class="f" for="lLogin">Usuário</label>
+      <label class="f" for="lLogin">Login do JR-Oper (e-mail ou nome)</label>
       <input id="lLogin" name="username" autocomplete="username" required>
       <label class="f" for="lSenha">Senha</label>
       <input id="lSenha" name="password" type="password" autocomplete="current-password" required>
-      <div class="acoes"><button class="btn pri" type="submit">Entrar</button>
-        <button class="btn lnk" type="button" id="irConvite">Primeiro acesso (tenho um convite)</button></div>
+      <div class="acoes"><button class="btn pri" type="submit">Entrar</button></div>
+      <p class="mut" style="margin:12px 0 0">Use o mesmo login (e-mail ou nome) e a mesma senha do JR-Oper. A senha se troca no próprio JR-Oper.</p>
       <div id="lMsg"></div>
-    </form>
-  </section>
-
-  <section class="card login esc" id="telaConvite">
-    <h2>Primeiro acesso</h2>
-    <p class="mut" style="margin-top:-4px">Use o código de convite que o Tiago passou. Ele vale uma vez só e por 7 dias.</p>
-    <form id="fConvite" autocomplete="off">
-      <label class="f" for="cLogin">Usuário</label>
-      <input id="cLogin" autocomplete="username" required>
-      <label class="f" for="cCodigo">Código de convite</label>
-      <input id="cCodigo" required style="text-transform:uppercase;letter-spacing:2px">
-      <label class="f" for="cSenha">Crie sua senha (mínimo 8 caracteres)</label>
-      <input id="cSenha" type="password" autocomplete="new-password" minlength="8" required>
-      <label class="f" for="cSenha2">Repita a senha</label>
-      <input id="cSenha2" type="password" autocomplete="new-password" minlength="8" required>
-      <div class="acoes"><button class="btn pri" type="submit">Criar senha e entrar</button>
-        <button class="btn lnk" type="button" id="irLogin">Voltar</button></div>
-      <div id="cMsg"></div>
     </form>
   </section>
 
@@ -196,12 +179,10 @@
   function guardarSessao(s) { sessao = s; try { s ? sessionStorage.setItem(SESSAO, JSON.stringify(s)) : sessionStorage.removeItem(SESSAO); } catch (e) { /* sem storage: fica na memoria */ } }
 
   const ERROS = {
-    LOGIN_INVALIDO: 'Usuário ou senha não conferem.',
+    LOGIN_INVALIDO: 'Login ou senha não conferem (os mesmos do JR-Oper).',
     BLOQUEADO: 'Muitas tentativas erradas. Espere 15 minutos e tente de novo.',
-    PRIMEIRO_ACESSO: 'Este usuário ainda não criou a senha. Use "Primeiro acesso" com o código de convite.',
-    CONVITE_INVALIDO: 'Usuário ou código de convite não confere (ou o convite venceu). Peça um novo ao Tiago.',
-    SENHA_CURTA: 'A senha precisa ter pelo menos 8 caracteres.',
-    SENHA_ATUAL: 'A senha atual não confere.',
+    LOGIN_AMBIGUO: 'Esse começo de nome serve para mais de uma pessoa. Digite o e-mail ou o nome completo.',
+    SEM_ACESSO: 'Login e senha conferem, mas seu usuário não tem acesso ao acerto. Fale com o Tiago.',
     SESSAO_INVALIDA: 'Sua sessão terminou. Entre de novo.',
     SEM_PERMISSAO: 'Seu acesso é só de consulta.',
     MES_FECHADO: 'Este mês já foi fechado: a mudança só pode valer a partir do mês seguinte.',
@@ -226,7 +207,7 @@
 
   // ---------------------------------------------------------------- telas
   function so(id) {
-    ['telaLogin', 'telaConvite', 'telaPainel', 'carregando'].forEach((t) => $(t).classList.toggle('esc', t !== id));
+    ['telaLogin', 'telaPainel', 'carregando'].forEach((t) => $(t).classList.toggle('esc', t !== id));
     $('usu').classList.toggle('esc', id !== 'telaPainel');
   }
   function mostrarLogin(aviso) {
@@ -235,9 +216,6 @@
     $('lSenha').value = '';
     setTimeout(() => ($('lLogin').value ? $('lSenha') : $('lLogin')).focus(), 30);
   }
-
-  $('irConvite').onclick = () => { so('telaConvite'); $('cLogin').value = $('lLogin').value; $('cMsg').innerHTML = ''; };
-  $('irLogin').onclick = () => mostrarLogin();
 
   $('fLogin').onsubmit = async (ev) => {
     ev.preventDefault();
@@ -249,42 +227,10 @@
     } catch (e) { $('lMsg').innerHTML = msg('er', 'Não foi possível entrar agora: ' + esc(textoErro(e))); }
   };
 
-  $('fConvite').onsubmit = async (ev) => {
-    ev.preventDefault();
-    if ($('cSenha').value !== $('cSenha2').value) { $('cMsg').innerHTML = msg('er', 'As duas senhas não são iguais.'); return; }
-    $('cMsg').innerHTML = msg('in', 'Conferindo…');
-    try {
-      const j = await rpc('acerto_primeiro_acesso', { p_login: $('cLogin').value, p_convite: $('cCodigo').value, p_senha: $('cSenha').value });
-      if (j.erro) { $('cMsg').innerHTML = msg('er', esc(ERROS[j.erro] || j.erro)); return; }
-      $('fConvite').reset(); guardarSessao(j); carregar();
-    } catch (e) { $('cMsg').innerHTML = msg('er', esc(textoErro(e))); }
-  };
-
   $('btSair').onclick = async () => {
     try { if (sessao) await rpc('acerto_sair', { p_token: sessao.token }); } catch (e) { /* sai mesmo assim */ }
     guardarSessao(null); D = null; mostrarLogin('Você saiu.');
   };
-
-  $('btSenha').onclick = () => abrirModal(`
-    <h2>Trocar senha</h2>
-    <form id="fSenha">
-      <label class="f">Senha atual</label><input id="sAtual" type="password" autocomplete="current-password" required>
-      <label class="f">Nova senha (mínimo 8)</label><input id="sNova" type="password" autocomplete="new-password" minlength="8" required>
-      <label class="f">Repita a nova senha</label><input id="sNova2" type="password" autocomplete="new-password" minlength="8" required>
-      <div class="acoes"><button class="btn pri" type="submit">Trocar</button><button class="btn sec" type="button" data-fechar>Cancelar</button></div>
-      <div id="sMsg"></div>
-    </form>`, () => {
-    $('fSenha').onsubmit = async (ev) => {
-      ev.preventDefault();
-      if ($('sNova').value !== $('sNova2').value) { $('sMsg').innerHTML = msg('er', 'As duas senhas não são iguais.'); return; }
-      try {
-        const j = await rpc('acerto_trocar_senha', { p_token: sessao.token, p_atual: $('sAtual').value, p_nova: $('sNova').value });
-        if (j.erro) { $('sMsg').innerHTML = msg('er', esc(ERROS[j.erro] || j.erro)); return; }
-        $('sMsg').innerHTML = msg('ok', 'Senha trocada. As outras sessões abertas com o seu usuário foram encerradas.');
-        setTimeout(fecharModal, 1600);
-      } catch (e) { $('sMsg').innerHTML = msg('er', esc(textoErro(e))); }
-    };
-  });
 
   // ---------------------------------------------------------------- modal
   function abrirModal(html, depois) {
