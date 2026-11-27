@@ -13,6 +13,8 @@
 //   status como a produtividade: aqui o dado e o alerta, que nao muda).
 // - Linhas identicas no Power BI viram uma linha com qtd (o relatorio da CCO
 //   conta todas).
+// - O motorista do alerta e refeito pelas viagens do JR-Oper (sem as apagadas);
+//   o do Power BI fica em motorista_pbi. Ver vincularPelasViagens.
 //
 // Chamada: POST com cabecalho x-sync-token (mesmo token 'prod_sync_token' do
 // Vault usado pela sync-produtividade; o pg_cron envia). Opcional no corpo:
@@ -98,6 +100,84 @@ function inicioJanela(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Motorista do alerta pelas viagens do JR-Oper (27/11/2026)
+//
+// O Power BI liga o alerta ao motorista lendo a tabela controle_viagens sem
+// tirar as viagens APAGADAS. Uma viagem apagada fica sem retorno, e o Power BI
+// a trata como aberta para sempre: caso real, carga 45132 (RICARDO, TVA8I21,
+// apagada na correcao da escala de 04/11) fez todos os alertas da TVA8I21 irem
+// para ele ate o fim de novembro, inclusive nas viagens do NANDERSON.
+// Aqui o vinculo e refeito pela view vw_bi_controle_viagens (sem apagadas):
+// mesma placa, entre a saida e o retorno = "Em Viagem"; ate MARGEM_MINUTOS antes
+// da saida ou depois do retorno = "Pre/Pos Viagem"; fora disso, sem motorista.
+// Viagem sem retorno vale ate a proxima saida da mesma placa (no maximo
+// ABERTA_MAX_DIAS). O motorista do Power BI fica em motorista_pbi para conferir.
+// Antes da 1a viagem lancada no JR-Oper (ago/26) vale o do Power BI.
+// ---------------------------------------------------------------------------
+// 15 min cobre a diferenca entre a hora digitada no Controle de Viagens e a
+// real, sem pegar o caminhao parado no patio horas antes (medido em nov/26: o
+// Power BI nao usa margem fixa; com 2 h entravam 83 alertas de patio a mais).
+const MARGEM_MINUTOS = 15;
+const ABERTA_MAX_DIAS = 7;
+
+const placaChave = (p: any) => String(p ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const ms = (iso: string) => Date.parse(iso + "Z");
+
+async function vincularPelasViagens(linhas: any[], de: string) {
+  const desde = new Date(ms(`${de}T00:00:00`) - 10 * 86400000).toISOString().slice(0, 10);
+  const viagens: any[] = [];
+  for (let i = 0; ; i += 1000) {
+    const { data, error } = await db.from("vw_bi_controle_viagens")
+      .select("placa,motorista,saida_em,retorno_em,data_saida")
+      .gte("data_saida", desde).order("saida_em", { ascending: true }).range(i, i + 999);
+    if (error) throw error;
+    viagens.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  const { data: primeira } = await db.from("vw_bi_controle_viagens")
+    .select("data_saida").not("data_saida", "is", null).order("data_saida", { ascending: true }).limit(1);
+  const inicioOper = primeira?.[0]?.data_saida ?? "9999-12-31";
+
+  // Janelas por placa, em ordem de saida.
+  const porPlaca = new Map<string, { ini: number; fim: number; motorista: string }[]>();
+  for (const v of viagens) {
+    if (!v.saida_em || !v.motorista) continue;
+    const p = placaChave(v.placa);
+    if (!p) continue;
+    const lista = porPlaca.get(p) ?? [];
+    lista.push({ ini: ms(String(v.saida_em).slice(0, 19)), fim: v.retorno_em ? ms(String(v.retorno_em).slice(0, 19)) : NaN,
+      motorista: String(v.motorista).replace(/\s+/g, " ").trim().toUpperCase() });
+    porPlaca.set(p, lista);
+  }
+  for (const lista of porPlaca.values()) {
+    lista.sort((x, y) => x.ini - y.ini);
+    lista.forEach((j, k) => {
+      if (!isNaN(j.fim)) return;
+      const prox = lista[k + 1];
+      // Horas das viagens e dos alertas sao de Brasilia: o "agora" tambem.
+      j.fim = Math.min(prox ? prox.ini - 1000 : Date.now() - 3 * 3600000, j.ini + ABERTA_MAX_DIAS * 86400000);
+    });
+  }
+
+  const margem = MARGEM_MINUTOS * 60000;
+  for (const l of linhas) {
+    l.motorista_pbi = l.motorista;
+    if (l.data < inicioOper) continue; // sem viagens no JR-Oper ainda: fica o do Power BI
+    const t = ms(`${l.data}T${l.hora}`);
+    const lista = porPlaca.get(placaChave(l.veiculo)) ?? [];
+    let dentro: any = null, perto: any = null, dist = Infinity;
+    for (const j of lista) {
+      if (t >= j.ini && t <= j.fim) { if (!dentro || j.ini > dentro.ini) dentro = j; continue; }
+      const d = t < j.ini ? j.ini - t : t - j.fim;
+      if (d <= margem && d < dist) { perto = j; dist = d; }
+    }
+    if (dentro) { l.motorista = dentro.motorista; l.status_vinculo = "Em Viagem"; }
+    else if (perto) { l.motorista = perto.motorista; l.status_vinculo = "Pré/Pós Viagem"; }
+    else { l.motorista = null; l.status_vinculo = "Sem Vínculo"; }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sincronizacao
 // ---------------------------------------------------------------------------
 async function sincronizar(de: string) {
@@ -136,6 +216,7 @@ async function sincronizar(de: string) {
     });
   }
   const linhas = [...porChave.values()];
+  await vincularPelasViagens(linhas, de);
 
   const { error: eDel } = await db.from("cco_motor_ocioso").delete().gte("data", de);
   if (eDel) throw eDel;
