@@ -46,6 +46,8 @@ const { execFileSync } = require('child_process');
 const TAR_WIN = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
 const TAR = process.platform === 'win32' && fs.existsSync(TAR_WIN) ? TAR_WIN : 'tar';
 const PASTA_PADRAO = 'S:\\Logistica\\01 - LOGISTICA INFORMATIVO\\00 - PAGAMENTO DE PRODUTIVIDADE\\02 - PAGAMENTO DE PRODUTIVIDADE';
+// Fora da planilha de pagamento mesmo que o cadastro diga OK (nome como no cadastro).
+const SEM_PRODUTIVIDADE = ['GUSTAVO CARDOSO DUARTE FILHO'];
 // Cadastro mestre de funcionarios (o mesmo que o Power BI le).
 const ARQ_FUNCIONARIOS = 'S:\\Logistica\\01 - LOGISTICA INFORMATIVO\\10 - POWER BI\\03 - Produtividade\\BD Funcionário\\Funcionários.xlsx';
 
@@ -98,7 +100,8 @@ function montarXml(p) {
   return `${p.antes}<sheetData>${corpo}</sheetData>${p.depois}`;
 }
 
-const estilo = attrs => (attrs.match(/ s="(\d+)"/) || [])[1];
+// attrs da celula lida, ou o xml de uma celula ja reescrita (que nao guarda attrs).
+const estilo = attrs => (String(attrs || '').match(/ s="(\d+)"/) || [])[1];
 const formula = xml => (xml.match(/<f>([\s\S]*?)<\/f>/) || [])[1];
 
 function celula(ref, s, v) {
@@ -280,6 +283,9 @@ async function main() {
           if (c === 'J' || c === 'K' || c === 'L') return; // formulas do modelo
           let v = cadastro[i][k];
           if (c === 'F' && typeof v === 'number') v += ajusteData;
+          // Nome sem espaco sobrando: o Demonstrativo e a folha sao digitados sem
+          // ele, e o PROCV exato zerava a pessoa (Artur, 27/11/2026).
+          if (c === 'B' && typeof v === 'string') v = v.trim();
           out[c] = v === '' ? null : v;
         });
         return out;
@@ -295,7 +301,7 @@ async function main() {
     if (!/refreshOnLoad=/.test(x)) gravar(arq, x.replace(/<pivotCacheDefinition /, '<pivotCacheDefinition refreshOnLoad="1" '));
   }
 
-  const nomesBD = new Map(cadastro.map(r => [String(r[1]).trim(), String(r[1])]));
+  const nomesBD = new Map(cadastro.map(r => [String(r[1]).trim(), String(r[1]).trim()]));
   const nomeBD = n => nomesBD.get(String(n).trim()) || String(n).trim();
 
   // So quem tem ELEGIBILIDADE = OK no cadastro vai para Pontos e Producao
@@ -304,6 +310,9 @@ async function main() {
   // comparacao.
   const elegib = new Map(cadastro.map(r => [String(r[1]).trim(),
     String(r[7]).trim().toUpperCase() === 'INATIVO' ? 'INATIVO' : String(r[6]).trim().toUpperCase()]));
+  // Nunca recebem produtividade, seja qual for a elegibilidade no cadastro
+  // (26/11/2026: Gustavo e menor aprendiz).
+  for (const n of SEM_PRODUTIVIDADE) if (elegib.has(n)) elegib.set(n, 'SEM PRODUTIVIDADE');
   const elegivel = p => elegib.get(String(p.nome).trim()) === 'OK';
   const foraPorTipo = {};
   pontos.filter(p => !elegivel(p)).forEach(p => {
@@ -378,7 +387,10 @@ async function main() {
     for (const [r, l] of p.linhas) {
       if (r < 6) continue;
       if (!l.celulas.some(c => c.col === 'F')) continue;
+      const nomeDem = ((wbLido.Sheets['Demonstrativo'] || {})['F' + r] || {}).v;
       l.celulas = l.celulas.map(c => {
+        // NOME sem espaco sobrando, como no BD Funcionario (que o gerador apara).
+        if (c.col === 'F' && typeof nomeDem === 'string' && nomeDem !== nomeDem.trim()) return { col: 'F', xml: celula('F' + r, estilo(c.attrs), nomeDem.trim()) };
         if (!colCalc[c.col]) return c;
         const f = `IFERROR(VLOOKUP(Tabela3[[#This Row],[NOME]],'Cálculo'!$B:$L,${colCalc[c.col]},0),0)`;
         return { col: c.col, xml: celula(c.col + r, estilo(c.attrs), { f: esc(f) }) };
@@ -396,6 +408,17 @@ async function main() {
     const cols = [];
     for (let c = colNum(m[1]); c <= colNum(m[3]); c++) cols.push(String.fromCharCode(64 + c));
     reescrever(p, { primeira: Number(m[2]) + 1, ultimaModelo: Number(m[4]), cols, total: 0, minimo: 1, valores: () => ({}) });
+    // A linha em branco perde a formula do MAT; devolve a da coluna calculada.
+    const txTab = ler(tab), r1 = Number(m[2]) + 1;
+    const nomesCol = [...txTab.matchAll(/<tableColumn [^>]*?name="([^"]+)"[^>]*?(?:\/>|>([\s\S]*?)<\/tableColumn>)/g)];
+    nomesCol.forEach((tc, k) => {
+      const f = ((tc[2] || '').match(/<calculatedColumnFormula>([\s\S]*?)<\/calculatedColumnFormula>/) || [])[1];
+      if (!f) return;
+      const col = String.fromCharCode(colNum(m[1]) + k + 64);
+      const l = p.linhas.get(r1);
+      const cel = l && l.celulas.find(c => c.col === col);
+      if (cel) cel.xml = celula(col + r1, estilo(cel.attrs || cel.xml), { f });
+    });
     gravar(aba, montarXml(p));
     gravar(tab, ajustarTabela(ler(tab), `${m[1]}${m[2]}:${m[3]}${Number(m[2]) + 1}`));
   }
@@ -405,6 +428,7 @@ async function main() {
   const MESES = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
   const nomesAbas = [...wb.matchAll(/<sheet name="([^"]+)"/g)].map(x => x[1]);
   const abaFolha = nomesAbas[nomesAbas.length - 1];
+  const nomesFolha = [];
   if (/^Prod [A-Za-z]{3} \d{2}$/.test(abaFolha)) {
     const arq = arqAba(abaFolha);
     const p = lerLinhas(ler(arq));
@@ -419,8 +443,26 @@ async function main() {
     if (iRH >= 0 && iFim > iRH) {
       for (let r = iRH + 3; r <= iFim; r++) { // pula o titulo e o cabecalho NOME/DETALHAMENTO...
         const l = p.linhas.get(r);
-        if (l) l.celulas = l.celulas.map(c => ({ col: c.col, xml: celula(c.col + r, estilo(c.attrs), null) }));
+        if (l) l.celulas = l.celulas.map(c => ({ col: c.col, xml: celula(c.col + r, estilo(c.attrs || c.xml), null) }));
       }
+    }
+    // Coluna OCORRENCIAS (D) da lista de pagamento: anotacoes do mes anterior
+    // ("FALTA", "ADV. ESC") saem; as do mes sao marcadas depois.
+    const iTotal = linhasFolha.findIndex(l => String(l[0]).trim().toUpperCase() === 'TOTAL');
+    for (let r = 4; iTotal > 0 && r <= iTotal; r++) {
+      const l = p.linhas.get(r);
+      if (l) l.celulas = l.celulas.map(c => c.col === 'D' ? { col: c.col, xml: celula('D' + r, estilo(c.attrs || c.xml), null) } : c);
+      // Nome sem espaco sobrando (o PROCV da coluna C busca no Demonstrativo).
+      const nomeA = (wbLido.Sheets[abaFolha]['A' + r] || {}).v;
+      if (l && typeof nomeA === 'string' && nomeA !== nomeA.trim()) l.celulas = l.celulas.map(c => c.col === 'A' ? { col: 'A', xml: celula('A' + r, estilo(c.attrs || c.xml), nomeA.trim()) } : c);
+      // PROCV com o nome digitado entre aspas passa a usar a celula A da linha.
+      if (l) l.celulas = l.celulas.map(c => c.col === 'C' ? { col: 'C', xml: c.xml.replace(/<f>VLOOKUP\((?:&quot;[^&]*&quot;|"[^"]*"),/, `<f>VLOOKUP(A${r},`).replace(/<v>[^<]*<\/v>/, '') } : c);
+    }
+    // Quem esta na lista com formula (o pagamento vem do Demonstrativo).
+    for (let r = 4; iTotal > 0 && r <= iTotal; r++) {
+      const l = p.linhas.get(r);
+      const nome = String((linhasFolha[r - 1] || [])[0] || '').trim();
+      if (nome && nome.toUpperCase() !== 'TOTAL' && l && l.celulas.some(c => c.col === 'C' && /<f>/.test(c.xml))) nomesFolha.push(nome);
     }
     gravar(arq, montarXml(p));
     // Nome da aba: so troca se nenhuma formula de outra aba aponta para ela.
@@ -458,8 +500,28 @@ async function main() {
   const semBD = [...new Set(pontos.map(p => p.nome.trim()))].filter(n => !nomesBD.has(n));
   if (semBD.length) console.log(`  ATENCAO - com pontos no Power BI mas fora do Funcionarios.xlsx (cadastrar): ${semBD.join('; ')}`);
   if (semDesc.length) console.log(`  Para a gerencia olhar - no app o gestor deixou SEM desconto: ${semDesc.join(', ')}`);
+
+  // Listas que continuam a mao: Demonstrativo, folha de assinatura e as
+  // formulas da aba Calculo (a tabela dinamica cresce com os elegiveis).
+  const elegiveis = cadastro.filter(r => elegib.get(String(r[1]).trim()) === 'OK').map(r => String(r[1]).trim());
+  const nomesDem = XLSX.utils.sheet_to_json(wbLido.Sheets['Demonstrativo'] || {}, { header: 1, defval: '' })
+    .slice(5).map(l => String(l[4] || '').trim()).filter(n => n && n !== 'NOME');
+  const aviso = (txt, lista) => { if (lista.length) console.log(`  ATENCAO - ${txt}: ${lista.join('; ')}`); };
+  aviso('elegivel (OK) sem linha no Demonstrativo (incluir)', elegiveis.filter(n => !nomesDem.includes(n)));
+  aviso('no Demonstrativo mas nao elegivel (conferir)', nomesDem.filter(n => !elegiveis.includes(n)));
+  if (nomesFolha.length) {
+    aviso(`elegivel (OK) fora da folha de assinatura (incluir)`, elegiveis.filter(n => !nomesFolha.includes(n)));
+    aviso(`na folha de assinatura mas nao elegivel (conferir)`, nomesFolha.filter(n => !elegiveis.includes(n)));
+  }
+  const calc = wbLido.Sheets['Cálculo'];
+  if (calc) {
+    let ultForm = 0;
+    for (let r = 6; r < 200; r++) if (calc['L' + r] && calc['L' + r].v !== undefined && calc['B' + r] && String(calc['B' + r].v).trim() && String(calc['B' + r].v) !== 'Total Geral') ultForm = r;
+    const precisa = 5 + elegiveis.length;
+    if (ultForm && ultForm < precisa) console.log(`  ATENCAO - aba Calculo: formulas F a L ate a linha ${ultForm}; com ${elegiveis.length} elegiveis a tabela dinamica vai ate ~${precisa}. Depois de Atualizar Tudo, puxe as formulas ate o ultimo nome (e apague as da linha Total Geral).`);
+  }
   console.log('\nFalta preencher: Status final e Gravidade (aba Ocorrencia, pela gerencia geral) e a aba Oc. RH.');
   console.log('Depois, Dados > Atualizar Tudo (para a tabela dinamica da aba Calculo).');
 }
 
-main().catch(e => { console.error('\nERRO: ' + (e.message || e)); process.exit(1); });
+main().catch(e => { console.error('\nERRO: ' + (e.message || e)); if (process.env.DEBUG) console.error(e.stack); process.exit(1); });
