@@ -272,6 +272,20 @@ partir do branch `main` do GitHub.
   do Armando. PCFORNEC[FAIXA] vem vazio: faixa da compra por UF (TO R$ 350/t, GO R$ 500/t).
   Explorar o modelo: `pbi-explorar` com "modelo":"Motorista e Ajudantes".
 
+- Cálculo (28/11): `js/acertoCalculo.js` (UMD, `AcertoCalculo.calcular`). Valor da carga pela ROTA
+  PRINCIPAL DO WINTHOR (tipo pcrotaexp da matriz, chave CODROTAPRINC), como a 8003/8009, e NÃO
+  pela rota do JR-Oper (a decisão de 27/11 fica para depois, se quiserem separar o cross).
+  Perfil com R$/t fixo/tonelada carne troca o R$/t; % do perfil vale sobre o da rota;
+  transbordo = parâmetro TON_MOTORISTA_TRANSBORDO; compra = COMPRA_TON (350) ou COMPRA_TON_GO
+  (500). Perfil AJUDANTE_FAIXA1 (R$ 38/t fixo) = campo Faixa 1 da 8009 (Guilherme, Gustavo
+  Carvalho, Rubens, Wesly). Requisitos pagos se o perfil tem e a planilha não tem ocorrência
+  (N/C não paga). Garantido = falta × R$/t médio, SEM o bônus em dobro. Teste nov/26: 60 de 71
+  iguais aos PDFs (fora o bônus em dobro); os 11 restantes são garantido digitado ≠ planilha
+  (Almir, Lusimar; Fabrício/Fagno com planilha errada), NF faltando (Nilmar) ou repetida
+  (Armando), Kauan (Desconto NÃO), Edimar (Devolução NÃO sem ocorrência), devolução de
+  67,71 kg descontada no peso (Gilcimar, carga 45193: falta ligar o peso devolvido do Power
+  BI "Devolução") e rodapés de PDF que o leitor não leu.
+
 ## Custo de gestão (7.1.13, 06/11/2026)
 - Edge Function `sync-custo-gestao` (migration 73) grava a seção `custo_gestao` em
   vo_indicadores/vo_quadros, separada da sync-visao-operacao para não travar o
