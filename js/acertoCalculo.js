@@ -106,6 +106,9 @@
         papel: 'compra', vlton, perc, regra: pf.vl_ton_fixo != null ? 'R$/t fixo do perfil' : `compra ${n.uf || ''}`.trim(), valor: t * vlton * perc / 100, bonus: 0 });
     }
 
+    // quem esta na planilha de Requisitos entra mesmo sem carga (novato, garantido)
+    for (const k of Object.keys(e.requisitos || {})) { const [fn, id] = k.split(':'); if (fn && id) pessoa(fn, Number(id)); }
+
     const out = [];
     for (const p of pessoas.values()) {
       const pf = p.perfilDados, mot = p.funcao === 'MOTORISTA';
