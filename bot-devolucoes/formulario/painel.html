@@ -111,7 +111,8 @@
 
 <script>
 const API = "https://ywsjvxlasbaytvmwpsbd.supabase.co/functions/v1/formulario-devolucao";
-const ATUALIZAR_A_CADA_MS = 60000;
+const ATUALIZAR_A_CADA_MS = 30000;
+const TITULO = document.title;
 
 const $ = (id) => document.getElementById(id);
 const NOMES_STATUS = {
@@ -197,7 +198,49 @@ $("abas").onclick = (e) => {
   carregarLista();
 };
 
+// ---------------------------------------------------------------------------
+// Alerta de solicitacao nova (som, contador no titulo e aviso do Windows)
+// ---------------------------------------------------------------------------
+let vistas = null;          // ids "A analisar" ja conhecidos nesta aba
+let somCtx = null;
+function prepararSom() {    // o navegador so libera som depois de um clique
+  try { somCtx = somCtx || new (window.AudioContext || window.webkitAudioContext)(); somCtx.resume(); } catch (_) {}
+  try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission(); } catch (_) {}
+}
+function tocar() {
+  if (!somCtx) return;
+  [0, 0.25].forEach((t) => {
+    const o = somCtx.createOscillator(), g = somCtx.createGain();
+    o.frequency.value = 880; g.gain.value = 0.15;
+    o.connect(g); g.connect(somCtx.destination);
+    o.start(somCtx.currentTime + t); o.stop(somCtx.currentTime + t + 0.15);
+  });
+}
+async function verificarNovas() {
+  try {
+    const { itens } = await api("painel_lista", { params: { status: "aguardando_sac" } });
+    document.title = itens.length ? `(${itens.length}) ${TITULO}` : TITULO;
+    const ids = new Set(itens.map((s) => s.id));
+    if (vistas) {
+      const novas = itens.filter((s) => !vistas.has(s.id));
+      if (novas.length) {
+        tocar();
+        try {
+          if ("Notification" in window && Notification.permission === "granted") {
+            const n = novas[0];
+            new Notification(novas.length > 1 ? `${novas.length} devoluções novas` : `Devolução nova: ${n.protocolo}`,
+              { body: `${n.motorista_nome} · NF ${n.nota_fiscal}`, tag: "jr-devolucao" });
+          }
+        } catch (_) {}
+      }
+    }
+    vistas = ids;
+  } catch (_) { /* tenta de novo no proximo ciclo */ }
+}
+document.addEventListener("click", prepararSom, { once: true });
+
 async function carregarLista() {
+  verificarNovas();
   const box = $("lista");
   try {
     const { itens } = await api("painel_lista", { params: { status: filtro } });
@@ -250,7 +293,9 @@ async function abrir(id) {
       <a href="${esc(a.url)}" target="_blank" rel="noopener"><img src="${esc(a.url)}" alt="${a.tipo === "canhoto" ? "Canhoto" : "Foto do produto"}" loading="lazy"><span>${a.tipo === "canhoto" ? "Canhoto" : "Produto"}</span></a>`).join("");
     const resumo = resumoTexto(s, itens);
 
-    const podeDecidir = ["aguardando_sac", "pendente_complemento"].includes(s.status);
+    const pendente = ["aguardando_sac", "pendente_complemento"].includes(s.status);
+    const peloWhats = s.origem === "whatsapp";
+    const podeDecidir = pendente && !peloWhats;
     box.innerHTML = `
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:start;flex-wrap:wrap">
         <div><h2>${esc(s.protocolo)}</h2><div class="sub" style="color:var(--cinza)">Enviada em ${fmt(s.criado_em)}</div></div>
@@ -286,6 +331,10 @@ async function abrir(id) {
           : '<button type="button" class="btn" data-acao="complemento_recebido">Complemento recebido</button>'}
         <button type="button" class="btn perigo" data-acao="reprovar">Reprovar</button>
       </div>` : ""}
+      ${pendente && peloWhats ? `
+      <h3>Decisão</h3>
+      <div class="alerta">Veio pelo WhatsApp: responda <b>na conversa do motorista</b>, que o bot registra e avisa.<br>
+        <b>DEV 149</b> · ocorrência aberta &nbsp;|&nbsp; <b>#complemento</b> o que falta &nbsp;|&nbsp; <b>#reprovar</b> motivo</div>` : ""}
       <h3>Histórico</h3>
       <ul class="hist">${historico.map((h) => `<li>${fmt(h.criado_em)} · ${esc(NOMES_STATUS[h.status_novo] || h.status_novo)} · ${esc(h.autor_nome || h.autor_tipo)}${h.comentario ? " · " + esc(h.comentario) : ""}</li>`).join("")}</ul>`;
 

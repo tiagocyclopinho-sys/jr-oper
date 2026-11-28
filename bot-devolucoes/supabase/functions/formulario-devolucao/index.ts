@@ -26,6 +26,9 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const BUCKET = "devolucoes-telegram";
+// Formulario do motorista (reprovado em 01/10/2026): desligado, a menos que o
+// secret FORMULARIO_PUBLICO = "sim". O painel do SAC funciona sempre.
+const FORMULARIO_PUBLICO = Deno.env.get("FORMULARIO_PUBLICO") === "sim";
 
 const MAX_FOTOS = 10;
 const MAX_CANHOTOS = 3;
@@ -345,6 +348,8 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const acao = url.searchParams.get("acao") ?? "";
   try {
+    const rotaPublica = ["dados", "motoristas", "clientes", "enviar"].includes(acao);
+    if (rotaPublica && !FORMULARIO_PUBLICO) return erro("Formulario desativado.", 404);
     if (req.method === "GET" && acao === "dados") return await dados();
     if (req.method === "GET" && (acao === "motoristas" || acao === "clientes")) {
       return await buscar(acao, texto(url.searchParams.get("q"), 60));

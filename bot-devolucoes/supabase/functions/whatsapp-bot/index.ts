@@ -17,10 +17,17 @@
 //       #complemento <texto> -> pede complemento ao motorista
 //       #desvincular         -> desfaz o vinculo deste numero com o motorista
 //     (chegam aqui pelo webhook smb_message_echoes)
+//   - Se o SAC escrever outra coisa no meio das perguntas, o bot PAUSA: nao
+//     responde nem grava a conversa ate o motorista tocar em um botao do bot
+//     ou escrever "continuar" ("cancelar" tambem vale).
+//   - Janela de 24 h da Meta: o bot so manda mensagem livre se o motorista
+//     escreveu nas ultimas 24 h. Fora disso, o pedido de complemento sai pelo
+//     modelo aprovado (bot_config: wa_modelo_complemento, padrao
+//     "complemento_devolucao", pt_BR, 2 variaveis: protocolo e pedido).
 //
 // Rotas
 //   GET  ?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...  verificacao da Meta
-//   POST ?k=<wa_webhook_chave>                                       webhook (Meta)
+//   POST ?k=<wa_webhook_chave>  ou  POST /<wa_webhook_chave>          webhook (Meta)
 //   GET  ?acao=status&k=<wa_webhook_chave>                           situacao (simulacao ou real)
 //
 // Segredo: DUALHOOK_KEY (dh_live_...). Sem ele = MODO SIMULACAO: nada e
@@ -158,6 +165,42 @@ async function vinculoDo(waId: string) {
   if (!data || data.motoristas?.is_deleted || data.motoristas?.ativo === false) return null;
   return data;
 }
+
+// O motorista escreveu nas ultimas 24 h? (margem de 30 min)
+const janelaAberta = (vinc: any) =>
+  !!vinc?.ultima_msg_motorista_em &&
+  Date.now() - new Date(vinc.ultima_msg_motorista_em).getTime() < 23.5 * 3600e3;
+
+// Marca a hora da ultima mensagem do motorista (sem guardar o conteudo)
+async function marcarJanela(waId: string) {
+  await db.from("motoristas_whatsapp").update({ ultima_msg_motorista_em: new Date().toISOString() })
+    .eq("telefone_chave", chaveTelefone(waId)).eq("ativo", true);
+}
+
+// Pedido de complemento pelo modelo aprovado (fora da janela de 24 h).
+// Variavel de modelo nao aceita quebra de linha nem 4+ espacos seguidos.
+async function modeloComplemento(wa: string, sol: any, pedido: string) {
+  const nome = (await cfg("wa_modelo_complemento")) || "complemento_devolucao";
+  const limpa = (t: string) => corta(String(t).replace(/\s+/g, " ").trim(), 500);
+  return enviarWA(wa, {
+    type: "template",
+    template: {
+      name: nome, language: { code: "pt_BR" },
+      components: [{ type: "body", parameters: [
+        { type: "text", text: limpa(sol.protocolo) }, { type: "text", text: limpa(pedido) },
+      ] }],
+    },
+  });
+}
+
+// Ha perguntas em andamento para este motorista?
+async function emAndamento(vinc: any): Promise<boolean> {
+  return !!(vinc.solicitacao_ativa_id || (await solEmColeta(vinc.motorista_id)));
+}
+
+// O que o motorista pode mandar para o bot durante a pausa
+const FALA_COM_BOT_PAUSADO = (botao: string | null, txt: string) =>
+  !!botao || ["continuar", "cancelar"].includes(semAcento(txt));
 
 async function carregarSol(id: number) {
   const { data } = await db.from("solicitacoes_devolucao").select("*").eq("id", id).maybeSingle();
@@ -408,6 +451,20 @@ async function tratarMotorista(msg: any, waId: string, nomePerfil: string) {
   const nomeMot = vinc.motoristas?.nome ?? "motorista";
   if (vinc.wa_id !== waId) await db.from("motoristas_whatsapp").update({ wa_id: waId }).eq("id", vinc.id);
 
+  // --- pausado: o SAC esta conversando com o motorista
+  if (vinc.pausado_em) {
+    if ((await emAndamento(vinc)) && !FALA_COM_BOT_PAUSADO(botao, txt)) return;
+    await db.from("motoristas_whatsapp").update({ pausado_em: null }).eq("id", vinc.id);
+    if (botao === "retomar" || semAcento(txt) === "continuar") {
+      const alvo = vinc.solicitacao_ativa_id ? await carregarSol(vinc.solicitacao_ativa_id) : null;
+      if (alvo?.status === "pendente_complemento") return pedirComplemento(alvo, waId);
+      const parada = await solEmColeta(vinc.motorista_id);
+      if (parada) return perguntar(await atualizarSol(parada.id, { wa_id: waId }));
+      return;
+    }
+  }
+  if (botao === "retomar") return; // botao antigo, ja retomado
+
   // --- complemento pedido pelo SAC
   if (vinc.solicitacao_ativa_id) {
     const alvo = await carregarSol(vinc.solicitacao_ativa_id);
@@ -509,7 +566,8 @@ async function tratarEtapa(sol: any, msg: any) {
       return avancar(nova, "nf");
     }
     case "cliente": {
-      if (txt.length < 3) return texto(wa, "Digite pelo menos *3 letras* do nome ou o *código* do cliente.");
+      // Codigo pode ter 1 ou 2 digitos; so o nome exige 3 letras.
+      if (!/\d/.test(txt) && txt.length < 3) return texto(wa, "Digite pelo menos *3 letras* do nome ou o *código* do cliente.");
       const { data: achados, error } = await db.rpc("bot_buscar_clientes", { p_termo: txt, p_limite: 9 });
       if (error) throw new Error(`bot_buscar_clientes: ${error.message}`);
       if (!achados?.length) {
@@ -553,7 +611,7 @@ async function tratarEtapa(sol: any, msg: any) {
         .eq("solicitacao_id", sol.id).eq("tipo", tipoAnexo).order("id", { ascending: false }).limit(1).maybeSingle();
       if (ultimo && ultimo.id !== anexoId) return;
       const atual = await carregarSol(sol.id);
-      if (atual?.etapa !== sol.etapa) return;
+      if (atual?.etapa !== sol.etapa || (await vinculoDo(wa))?.pausado_em) return;
       if (tipoAnexo === "canhoto") {
         await texto(wa, "✔️ Canhoto recebido.");
         return avancar(atual, "canhoto");
@@ -686,6 +744,10 @@ async function tratarBotao(sol: any, botao: string, nomeMot: string, vinc: any) 
 // ---------------------------------------------------------------------------
 // Complemento pedido pelo SAC
 // ---------------------------------------------------------------------------
+const pedirComplemento = (sol: any, wa: string) =>
+  botoes(wa, `📎 O SAC pediu um complemento na *${sol.protocolo}*. Mande aqui (texto, foto ou áudio) e depois toque em *Terminei*.`,
+    [[`comp_fim:${sol.id}`, "✅ Terminei"]]);
+
 async function tratarComplemento(sol: any, msg: any, vinc: any, nomeMot: string) {
   const wa = vinc.wa_id;
   const { botao, txt, tipo } = lerMensagem(msg);
@@ -708,6 +770,8 @@ async function tratarComplemento(sol: any, msg: any, vinc: any, nomeMot: string)
   const { data: ultimo } = await db.from("solicitacao_anexos").select("criado_em")
     .eq("solicitacao_id", sol.id).order("id", { ascending: false }).limit(1).maybeSingle();
   if (ultimo && Date.now() - new Date(ultimo.criado_em).getTime() < ESPERA_ALBUM_MS - 500) return;
+  // Se o motorista ja tocou em Terminei durante a espera, nao manda mais nada
+  if ((await carregarSol(sol.id))?.status !== "pendente_complemento") return;
   return botoes(wa, "Recebido. Mande mais, se precisar, ou toque em *Terminei*.", [[`comp_fim:${sol.id}`, "✅ Terminei"]]);
 }
 
@@ -727,6 +791,30 @@ function lerComandoSac(t: string): ComandoSac | null {
   if (m) return { acao: "complemento", valor: m[1].trim() };
   if (/^#desvincular\b/i.test(s)) return { acao: "desvincular", valor: "" };
   return null;
+}
+
+// SAC escreveu algo que nao e comando. Pausa so se houver perguntas em
+// andamento. Guarda apenas o id do eco, nunca o conteudo.
+async function pausarPeloSac(eco: any) {
+  const waId = String(eco.to ?? "");
+  const tiposConversa = ["text", "image", "audio", "video", "document", "sticker", "location", "contacts"];
+  if (!waId || !tiposConversa.includes(eco.type)) return;
+  const vinc = await vinculoDo(waId);
+  if (!vinc) {
+    // Motorista ainda escolhendo o nome: o bot sai; recomeca com "devolucao"
+    await db.from("whatsapp_cadastro").delete().eq("telefone_chave", chaveTelefone(waId));
+    return;
+  }
+  if (vinc.pausado_em || !(await emAndamento(vinc))) return;
+  if (!(await registrarEvento(eco.id, "smb_message_echoes", waId, eco.type, null))) return;
+  // So um dos ecos simultaneos consegue pausar (e avisar)
+  const { data } = await db.from("motoristas_whatsapp").update({ pausado_em: new Date().toISOString() })
+    .eq("id", vinc.id).is("pausado_em", null).select("id");
+  if (data?.length && janelaAberta(vinc)) {
+    await botoes(vinc.wa_id, "⏸️ O SAC entrou na conversa e as perguntas ficaram *pausadas*. Quando terminar, toque em *Continuar*.",
+      [["retomar", "▶️ Continuar"]]);
+  }
+  await concluirEvento(eco.id, null);
 }
 
 async function tratarEcoSac(eco: any) {
@@ -757,9 +845,16 @@ async function tratarEcoSac(eco: any) {
   } else if (cmd.acao === "complemento") {
     if (sol.status !== "aguardando_sac") return true;
     await mudarStatus(sol, "pendente_complemento", { complemento_pedido: cmd.valor }, "sac", autor, cmd.valor);
-    await db.from("motoristas_whatsapp").update({ solicitacao_ativa_id: sol.id }).eq("id", vinc.id);
-    await botoes(vinc.wa_id, `📎 O SAC pediu um complemento na *${sol.protocolo}*. Mande aqui (texto, foto ou áudio) e depois toque em *Terminei*.`,
-      [[`comp_fim:${sol.id}`, "✅ Terminei"]]);
+    await db.from("motoristas_whatsapp").update({ solicitacao_ativa_id: sol.id, pausado_em: null }).eq("id", vinc.id);
+    if (janelaAberta(vinc)) {
+      await pedirComplemento(sol, vinc.wa_id);
+    } else {
+      const env = await modeloComplemento(vinc.wa_id, sol, cmd.valor);
+      await historico(sol.id, "pendente_complemento", "pendente_complemento", "sistema", "bot",
+        env?.error
+          ? `Aviso NAO entregue ao motorista (erro ${env.error.code ?? "?"}): escreva para ele pelo app.`
+          : "Motorista sem conversa nas ultimas 24 h: aviso enviado pelo modelo de mensagem.");
+    }
   }
   return true;
 }
@@ -773,10 +868,11 @@ async function relevanteDoMotorista(msg: any, waId: string): Promise<boolean> {
   const vinc = await vinculoDo(waId);
   if (vinc) {
     const { botao, txt } = lerMensagem(msg);
+    if (vinc.pausado_em && (await emAndamento(vinc))) return FALA_COM_BOT_PAUSADO(botao, txt);
     return !!(vinc.solicitacao_ativa_id || botao || PALAVRA_GATILHO(txt) || (await solEmColeta(vinc.motorista_id)));
   }
   const { data: cad } = await db.from("whatsapp_cadastro").select("criado_em").eq("telefone_chave", chaveTelefone(waId)).maybeSingle();
-  if (cad) return true;
+  if (cad && Date.now() - new Date(cad.criado_em).getTime() < HORAS_ABANDONO * 3600e3) return true;
   return PALAVRA_GATILHO(msg.text?.body ?? "");
 }
 
@@ -805,14 +901,19 @@ async function processar(corpo: any) {
         const nomes = Object.fromEntries((v.contacts ?? []).map((c: any) => [c.wa_id, c.profile?.name ?? ""]));
         for (const msg of v.messages ?? []) {
           const waId = String(msg.from ?? "");
-          if (!waId || !(await relevanteDoMotorista(msg, waId))) continue;
+          if (!waId) continue;
+          try { await marcarJanela(waId); } catch (e) { console.error("[janela]", (e as Error).message); }
+          if (!(await relevanteDoMotorista(msg, waId))) continue;
           if (!(await registrarEvento(msg.id, "messages", waId, msg.type, msg))) continue;
           try { await tratarMotorista(msg, waId, nomes[waId] ?? ""); await concluirEvento(msg.id, null); }
           catch (e) { console.error("[motorista]", (e as Error).message); await concluirEvento(msg.id, (e as Error).message); }
         }
       } else if (ch.field === "smb_message_echoes") {
         for (const eco of v.message_echoes ?? []) {
-          if (eco.type !== "text" || !lerComandoSac(eco.text?.body ?? "")) continue;
+          if (eco.type !== "text" || !lerComandoSac(eco.text?.body ?? "")) {
+            try { await pausarPeloSac(eco); } catch (e) { console.error("[pausa]", (e as Error).message); }
+            continue;
+          }
           if (!(await registrarEvento(eco.id, "smb_message_echoes", String(eco.to ?? ""), eco.type, eco))) continue;
           try { await tratarEcoSac(eco); await concluirEvento(eco.id, null); }
           catch (e) { console.error("[eco]", (e as Error).message); await concluirEvento(eco.id, (e as Error).message); }
@@ -836,7 +937,10 @@ Deno.serve(async (req) => {
   }
 
   const chave = await cfg("wa_webhook_chave");
-  if (!chave || url.searchParams.get("k") !== chave) return new Response("not found", { status: 404 });
+  // Chave na URL: ?k=<chave> ou no fim do caminho (.../whatsapp-bot/<chave>),
+  // caso o painel do Dualhook nao aceite query string no endereco.
+  const chaveUrl = url.searchParams.get("k") ?? url.pathname.split("/").filter(Boolean).pop();
+  if (!chave || chaveUrl !== chave) return new Response("not found", { status: 404 });
 
   if (req.method === "GET" && url.searchParams.get("acao") === "status") {
     return json({ ok: true, modo: SIMULACAO ? "simulacao" : "real", phone_number_id: await cfg("wa_phone_number_id") });

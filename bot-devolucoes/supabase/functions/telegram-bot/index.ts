@@ -333,7 +333,7 @@ async function perguntar(sol: any) {
     case "nf":
       return enviar(chat, "🧾 Qual o <b>número da nota fiscal</b>?\n<i>Só os números. Ex.: 1320080</i>");
     case "cliente":
-      return enviar(chat, "🏪 Qual o <b>cliente</b>?\n<i>Digite o código ou parte do nome. Ex.: QUARTETTO</i>");
+      return enviar(chat, "🏪 Qual o <b>cliente</b>?\n<i>Digite o código (está na nota) ou parte do nome. Ex.: 7631 ou QUARTETTO</i>");
     case "cliente_manual":
       return enviar(chat, "✍️ Digite o <b>nome do cliente</b> como está na nota:");
     case "motivo": {
@@ -631,7 +631,8 @@ async function tratarEtapa(sol: any, msg: any) {
       return avancar(nova, "nf");
     }
     case "cliente": {
-      if (texto.length < 3) return enviar(chat, "Digite pelo menos <b>3 letras</b> do nome ou o <b>código</b> do cliente.");
+      // Codigo pode ter 1 ou 2 digitos; so o nome exige 3 letras.
+      if (!/\d/.test(texto) && texto.length < 3) return enviar(chat, "Digite pelo menos <b>3 letras</b> do nome ou o <b>código</b> do cliente.");
       const { data: achados, error } = await db.rpc("bot_buscar_clientes", { p_termo: texto, p_limite: 6 });
       if (error) throw new Error(`bot_buscar_clientes: ${error.message}`);
       if (!achados?.length) {
