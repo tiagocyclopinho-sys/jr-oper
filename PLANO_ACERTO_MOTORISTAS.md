@@ -34,7 +34,8 @@ JR-Oper (como /banco-horas), com login e senha, para Tiago, Victor Hugo e Paulo 
      Tonelada Carne, tipo, Ajuda Extra, Observação;
    - rotas do JR-Oper → faixa, R$/t motorista, R$/t ajudante, % (semente = PCROTAEXP,
      editável; nomes casados sem acento + apelidos);
-   - compras: fornecedor do frete → pessoa (carreteiros + aproveitamentos), faixa editável.
+   - compras: ligadas pelo CPF (f_MOTORISTA ent); faixa da compra: TO = 2 (R$ 350/t),
+     GO = 3 (R$ 500/t) em nov/26; % do perfil (carreteiro 11%, Armando R$ 250/t).
 3. Cálculo do acerto (conferido com ADEMAR e ADRIANO, ago/26):
    - motorista = Σ peso líq (t) × R$/t da rota × % comissão + entregas × 0,25
      + KPIs OK + diferença até o garantido;
@@ -57,12 +58,23 @@ JR-Oper (como /banco-horas), com login e senha, para Tiago, Victor Hugo e Paulo 
 - Faixas: CSV da PCROTAEXP (`C:\Users\thiago.ferreira\PCROTAEXP_202611271335.csv`).
 - Valores de referência: `20 - VICTOR HUGO\MOTORISTAS E AJUDANTES REMUNERAÇÃO.xlsx`
   (desatualizada, assim como a rotina: por isso a matriz editável).
-- Ligação compra → motorista pelo nome do fornecedor do frete (sem CPF; não ler dim_PCEMPR).
+- Ligação compra → motorista pelo CPF do f_MOTORISTA ent (decisão do Tiago, 28/11: o CPF é o
+  código que a empresa usa; nome do fornecedor e nº da NF não servem, NF repete entre
+  fornecedores). O CPF só liga, não aparece na tela. dim_PCEMPR continua fora (salário).
+
+## Conferência de nov/26 (27–28/11)
+- Planilha: `20 - VICTOR HUGOREQUISITOS6DIVERGÊNCIAS ACERTO 11.2026.xlsx`.
+- Decidido: período pela data da carga no WinThor; cargas/equipe/transbordo do Power BI;
+  devolução só com Desconto Aplicado = SIM; desligados pela Relação de Folha.
+- Pendente: bônus em dobro no garantido (confirmar com o Victor); ajustes na matriz
+  (carreteiro 11%, Armando = transbordo R$ 250/t, Gabriel garantido 140 t).
+- Novo: painel de divergências JR-Oper × Power BI durante o mês (equipe e transbordo).
+- 28/11: sync-acerto (Power BI) + cálculo (js/acertoCalculo.js, 60/71 iguais em nov) + aba
+  Acerto do mês (7.11.0, migrations 87 e 88). Falta: peso devolvido, PDF, fechar o mês.
 
 ## Regras de negócio decididas
 - Desligado no meio do mês não entra no fechamento.
-- Devoluções: todas as ERRO MOTORISTA (o certo seria só "Descontar Produtividade",
-  mas as tratativas do gestor estão atrasadas).
+- Devoluções: só com "Desconto Aplicado? = SIM" na tratativa (28/11).
 - Média de Consumo = motor ocioso até 2027 (depois, meta × realizado).
 - Isenções de motor ocioso já são lançadas no JR-Oper.
 - ARMANDO fica "ARMANO LIMA DA CUNHA" (código 18; no DP aparece "ATOS FELIPE": o filho

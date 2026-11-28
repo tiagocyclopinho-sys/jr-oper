@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 88).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 89).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -285,6 +285,16 @@ partir do branch `main` do GitHub.
   (Armando), Kauan (Desconto NÃO), Edimar (Devolução NÃO sem ocorrência), devolução de
   67,71 kg descontada no peso (Gilcimar, carga 45193: falta ligar o peso devolvido do Power
   BI "Devolução") e rodapés de PDF que o leitor não leu.
+
+- Tela Acerto do mês (7.11.0, 28/11, migration 88 APLICADA): aba padrão do /acerto.
+  `acerto_dados_mes(token, mes)` devolve cargas faturadas e não canceladas, compras,
+  requisitos, extras e cadastros; o cálculo roda no navegador (`AcertoCalculo`). Requisitos
+  vêm da planilha do mês importada na tela (`acerto_importar_requisitos`, abas Motorista e
+  Ajudante, "Cód. ERP", Dias, Peso Garantido; substitui a anterior); nov/26 já importado.
+  Ajuda extra + motivo por pessoa/mês (`acerto_salvar_extra`, tabela acerto_pessoa_mes).
+  Desligado no cadastro e código sem cadastro vão para "Fora do fechamento". Mês fechado
+  recusa importação e ajuda extra. Falta: peso devolvido (f_DEVOLUCAO), PDF por pessoa,
+  fechar o mês (congelar), abas Requisitos e Folgas e Faltas dentro do app.
 
 ## Custo de gestão (7.1.13, 06/11/2026)
 - Edge Function `sync-custo-gestao` (migration 73) grava a seção `custo_gestao` em
