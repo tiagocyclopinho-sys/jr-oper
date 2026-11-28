@@ -194,6 +194,8 @@
     SEM_ACESSO: 'Login e senha conferem, mas seu usuário não tem acesso ao acerto. Fale com o Tiago.',
     SESSAO_INVALIDA: 'Sua sessão terminou. Entre de novo.',
     SEM_PERMISSAO: 'Seu acesso é só de consulta.',
+    REABRIR_SO_ULTIMO: 'Só o último mês fechado pode ser reaberto.',
+    MOTIVO_OBRIGATORIO: 'Informe o motivo (pelo menos 5 letras).',
     MES_FECHADO: 'Este mês já foi fechado: a mudança só pode valer a partir do mês seguinte.',
   };
   const textoErro = (e) => ERROS[e && e.message] || ERROS[e] || (e && (e.hint || e.message)) || String(e);
@@ -386,6 +388,9 @@
     const extras = {}; DM.extras.forEach((x) => (extras[`${x.funcao}:${x.pessoa_id}`] = { ajuda: x.ajuda, obs: x.obs }));
     RES = window.AcertoCalculo.calcular({ R, idx: IDX, mes, cargas: DM.cargas, compras: DM.compras, nomes, requisitos, extras });
     RES.forEach((r) => { const c = cad[r.chave]; r.situacao = !c ? 'SEM_CADASTRO' : c.ativo === false ? 'DESLIGADO' : 'ATIVO'; });
+    // mes fechado: vale a foto gravada no fechamento, nao o calculo de hoje
+    const fechado = DM.status && DM.status.status === 'FECHADO' && Array.isArray(DM.fechamento) ? DM.status : null;
+    if (fechado) RES = DM.fechamento.map((x) => ({ ...x, situacao: 'ATIVO' }));
 
     const temReq = DM.requisitos.length > 0;
     const imp = DM.requisitos[0];
@@ -402,11 +407,17 @@
         <div class="cartao"><small>Total do mês</small><b>${brl(soma(ativos, 'total'))}</b><small>${DM.cargas.length} cargas faturadas, ${DM.compras.length} compras</small></div>
         <div class="cartao"><small>Power BI</small><b style="font-size:14px">${DM.sync ? dataHora(DM.sync.em) : '—'}</b><small>${DM.sync && DM.sync.status !== 'ok' ? 'última leitura com erro' : 'atualiza 06h30 e 13h30'}${DM.sem_faturar ? ` · ${DM.sem_faturar} carga(s) sem faturar fora` : ''}</small></div>
       </div>
-      ${temReq ? msg('in', `Requisitos: planilha <b>${esc(imp.arquivo || '')}</b>, importada por ${esc(imp.importado_por || '—')} em ${dataHora(imp.importado_em)} (${DM.requisitos.length} pessoas).
+      ${fechado ? msg('ok', `<b>Mês fechado</b> em ${dataHora(fechado.fechado_em)} por ${esc(fechado.fechado_por || '—')}. Os valores abaixo são a foto do fechamento e não mudam mais.${D.usuario.papel === 'ADMIN' ? ' <button class="btn lnk peq" id="btReabrir">Reabrir</button>' : ''}`) : ''}
+      ${fechado ? '' : temReq ? msg('in', `Requisitos: planilha <b>${esc(imp.arquivo || '')}</b>, importada por ${esc(imp.importado_por || '—')} em ${dataHora(imp.importado_em)} (${DM.requisitos.length} pessoas).
           ${podeEditar() ? ' <button class="btn lnk peq" id="btImportar">Importar de novo</button>' : ''}`)
         : msg('av', `<b>Falta a planilha de Requisitos de ${R.mesTexto(mes)}.</b> Sem ela os requisitos saem como OK e o garantido usa o do perfil (sem os dias).
           ${podeEditar() ? ' <button class="btn pri peq" id="btImportar" style="margin-left:8px">Importar planilha</button>' : ''}`)}
       <input type="file" id="arqReq" class="esc" accept=".xlsx,.xls">
+      <div class="acoes" style="margin-top:10px">
+        <button class="btn sec peq" id="btImprLista">Imprimir ${f.funcao === 'MOTORISTA' ? 'motoristas' : 'ajudantes'} (${vis.length})</button>
+        <button class="btn sec peq" id="btImprTodos">Imprimir todos (${ativos.length})</button>
+        ${!fechado && podeEditar() ? '<button class="btn pri peq" id="btFechar" style="margin-left:auto">Fechar o mês</button>' : ''}
+      </div>
       <div class="filtros" style="margin-top:12px">
         <select id="faF"><option value="MOTORISTA" ${f.funcao === 'MOTORISTA' ? 'selected' : ''}>Motoristas</option><option value="AJUDANTE" ${f.funcao === 'AJUDANTE' ? 'selected' : ''}>Ajudantes</option></select>
         <input id="faQ" placeholder="Buscar nome" value="${esc(f.q)}">
@@ -431,6 +442,10 @@
     $('faF').onchange = (e) => { f.funcao = e.target.value; acertoMes(); };
     $('faQ').oninput = (e) => { f.q = e.target.value; const pos = e.target.selectionStart; acertoMes(); const i = $('faQ'); i.focus(); i.setSelectionRange(pos, pos); };
     $('conteudo').querySelectorAll('[data-p]').forEach((tr) => (tr.onclick = () => detalheAcerto(tr.dataset.p)));
+    $('btImprLista').onclick = () => imprimirAcertos(vis);
+    $('btImprTodos').onclick = () => imprimirAcertos([...ativos.filter((r) => r.funcao === 'MOTORISTA'), ...ativos.filter((r) => r.funcao === 'AJUDANTE')]);
+    if ($('btFechar')) $('btFechar').onclick = fecharMes;
+    if ($('btReabrir')) $('btReabrir').onclick = reabrirMes;
     if ($('btImportar')) { $('btImportar').onclick = () => $('arqReq').click(); $('arqReq').onchange = (e) => importarRequisitos(e.target.files[0]); }
   }
 
@@ -440,7 +455,7 @@
     abrirModal(`
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap">
         <div><h2 style="margin:0">${esc(r.nome)}</h2><span class="mut">${mot ? 'Motorista' : 'Ajudante'} · cód. ${r.id} · ${esc(r.perfilNome)} · ${R.mesTexto(mes)}</span></div>
-        <button class="btn sec peq" data-fechar>Fechar</button>
+        <div class="acoes" style="margin:0"><button class="btn sec peq" id="btImprUm">Imprimir</button><button class="btn sec peq" data-fechar>Fechar</button></div>
       </div>
       <div class="cartoes" style="margin-top:12px">
         <div class="cartao"><small>Cargas${r.compras ? ' e compras' : ''}</small><b>${brl(r.valor)}</b><small>${t3(r.peso_t)} t · ${r.cargas} carga(s)${r.compras ? ` · ${r.compras} compra(s)` : ''}</small></div>
@@ -475,6 +490,7 @@
         ${mot ? `<td class="n">${i.ent || ''}</td><td class="n">${i.bonus ? brl(i.bonus) : ''}</td>` : ''}</tr>`).join('')}
       </tbody></table></div>`, () => {
       $('modalCorpo').classList.add('largo');
+      $('btImprUm').onclick = () => imprimirAcertos([r]);
       if (!$('ajS')) return;
       $('ajS').onclick = async () => {
         const v = lerNum($('ajV').value);
@@ -485,6 +501,90 @@
         } catch (e) { $('ajM').innerHTML = msg('er', esc(textoErro(e))); }
       };
     });
+  }
+
+  // ---------------------------------------------------------------- impressao
+  // Um acerto por pagina (A4 em pe), no formato da 8003/8009: requisitos, cargas,
+  // resumo e assinaturas. Imprime pela caixa do navegador (da para "Salvar como
+  // PDF"), mesmo padrao da Via da portaria e do Plano de Acao.
+  function htmlAcerto(r, info) {
+    const mot = r.funcao === 'MOTORISTA';
+    const reqs = r.kpis.filter((k) => k.valor != null);
+    const meio = Math.ceil(reqs.length / 2);
+    const colReq = (l) => l.map((k) => `<tr><td>${ROTULO_KPI[k.k] || k.k}</td><td class="c">${k.ok ? 'OK' : '<b>NÃO</b>'}</td><td class="n">${brl(k.valor)}</td></tr>`).join('');
+    return `<section class="pg">
+      <div class="cab"><div><b>JR DISTRIBUIDORA</b><br>Acerto de ${mot ? 'Motorista' : 'Ajudante'} · ${R.mesTexto(info.mes)} (${diaBr(info.ini)} a ${diaBr(info.fim)})</div>
+        <div class="dir">${info.fechado ? `FECHADO em ${dataHora(info.fechado.fechado_em)}<br>por ${esc(info.fechado.fechado_por || '')}` : '<b>PRÉVIA</b> (mês aberto)'}<br><span class="mut">Emitido em ${dataHora(new Date().toISOString())}</span></div></div>
+      <h1>${esc(r.nome)}</h1>
+      <div class="mut">Cód. ${r.id} · ${esc(r.perfilNome)} · garantido ${t3(r.garantido_t)} t${r.dias != null ? ` (${r.dias} dias)` : ''}</div>
+      <h2>Requisitos</h2>
+      <div class="duas"><table>${colReq(reqs.slice(0, meio))}</table><table>${colReq(reqs.slice(meio))}</table></div>
+      <h2>Cargas${r.compras ? ' e compras' : ''}</h2>
+      <table class="itens"><thead><tr><th>Data</th><th>Carga/NF</th><th>Rota / destino</th><th>Papel</th><th class="n">Peso (t)</th><th class="n">R$/t</th>${mot ? '<th class="n">%</th>' : ''}<th class="n">Valor</th>${mot ? '<th class="n">Ent.</th><th class="n">Bônus</th>' : ''}</tr></thead><tbody>
+      ${r.itens.map((i) => `<tr><td>${diaBr(i.data)}</td><td>${esc(i.ref)}</td><td>${esc(i.rota)}${i.destino && i.destino !== i.rota ? ` <span class="mut">${esc(i.destino)}</span>` : ''}</td><td>${esc(i.papel)}</td>
+        <td class="n">${t3(i.t)}</td><td class="n">${num(i.vlton)}</td>${mot ? `<td class="n">${num(i.perc)}</td>` : ''}<td class="n">${num(i.valor)}</td>${mot ? `<td class="n">${i.ent || ''}</td><td class="n">${i.bonus ? num(i.bonus) : ''}</td>` : ''}</tr>`).join('')}
+      </tbody><tfoot><tr><td colspan="4">${r.cargas} carga(s)${r.compras ? `, ${r.compras} compra(s)` : ''}</td><td class="n">${t3(r.peso_t)}</td><td></td>${mot ? '<td></td>' : ''}<td class="n">${num(r.valor)}</td>${mot ? `<td class="n">${r.entregas}</td><td class="n">${num(r.bonus)}</td>` : ''}</tr></tfoot></table>
+      <h2>Resumo</h2>
+      <table class="res">
+        <tr><td>Valor das cargas${r.compras ? ' e compras' : ''}</td><td class="n">${brl(r.valor)}</td></tr>
+        ${mot ? `<tr><td>Bônus por entrega (${r.entregas} entregas)</td><td class="n">${brl(r.bonus)}</td></tr>` : ''}
+        <tr><td>Requisitos</td><td class="n">${brl(r.kpi)}</td></tr>
+        <tr><td>Diferença do garantido${r.falta_t > 0 ? ` (faltou ${t3(r.falta_t)} t × ${brl(r.medio)}/t)` : ''}</td><td class="n">${brl(r.garantido)}</td></tr>
+        <tr><td>Ajuda extra${r.obs ? ` <span class="mut">${esc(r.obs)}</span>` : ''}</td><td class="n">${brl(r.ajuda)}</td></tr>
+        <tr class="tot"><td>TOTAL</td><td class="n">${brl(r.total)}</td></tr>
+      </table>
+      <div class="ass"><div>${esc(r.nome)}<br><span class="mut">Prestador</span></div><div>&nbsp;<br><span class="mut">Conferido por</span></div></div>
+    </section>`;
+  }
+
+  function imprimirAcertos(lista) {
+    if (!lista.length) { alert('Ninguém para imprimir.'); return; }
+    const fechado = DM.status && DM.status.status === 'FECHADO' ? DM.status : null;
+    const info = { mes, ini: DM.ini, fim: DM.fim, fechado };
+    const doc = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Acerto ${R.mesTexto(mes)}</title><style>
+      @page { size: A4 portrait; margin: 12mm; }
+      body { font-family: Arial, sans-serif; font-size: 10.5px; color: #111; margin: 0; }
+      .pg { page-break-after: always; } .pg:last-child { page-break-after: auto; }
+      .cab { display: flex; justify-content: space-between; border-bottom: 2px solid #0b3d2a; padding-bottom: 6px; margin-bottom: 8px; }
+      .dir { text-align: right; }
+      h1 { font-size: 16px; margin: 6px 0 2px; } h2 { font-size: 12px; margin: 12px 0 4px; border-bottom: 1px solid #ccc; }
+      table { width: 100%; border-collapse: collapse; } td, th { padding: 2px 4px; border-bottom: 1px solid #e5e5e5; text-align: left; }
+      th { background: #f2f2f2; font-size: 9.5px; } .n { text-align: right; white-space: nowrap; } .c { text-align: center; }
+      .mut { color: #666; } .duas { display: flex; gap: 16px; } .duas table { flex: 1; }
+      .itens td, .itens th { font-size: 9.5px; } tfoot td { font-weight: bold; border-top: 1px solid #999; }
+      .res { width: 60%; margin-left: auto; } .res .tot td { font-weight: bold; font-size: 13px; border-top: 2px solid #0b3d2a; }
+      .ass { display: flex; gap: 40px; margin-top: 40px; } .ass div { flex: 1; border-top: 1px solid #333; padding-top: 4px; text-align: center; }
+    </style></head><body>${lista.map((r) => htmlAcerto(r, info)).join('')}</body></html>`;
+    const fr = document.createElement('iframe');
+    fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.appendChild(fr);
+    fr.onload = () => { setTimeout(() => { fr.contentWindow.focus(); fr.contentWindow.print(); setTimeout(() => fr.remove(), 60000); }, 200); };
+    fr.srcdoc = doc;
+  }
+
+  // ---------------------------------------------------------------- fechar o mes
+  async function fecharMes() {
+    const ativos = RES.filter((r) => r.situacao === 'ATIVO');
+    const soma = ativos.reduce((s, r) => s + r.total, 0);
+    const avisos = [];
+    if (!DM.requisitos.length) avisos.push('A planilha de Requisitos do mês NÃO foi importada (requisitos saem todos OK).');
+    const comAviso = ativos.filter((r) => r.avisos.length).length;
+    if (comAviso) avisos.push(`${comAviso} pessoa(s) com aviso (ver na lista).`);
+    if (!DM.extras.length) avisos.push('Nenhuma ajuda extra lançada no mês.');
+    if (DM.sync && DM.sync.status !== 'ok') avisos.push('A última leitura do Power BI deu erro.');
+    const txt = `Fechar ${R.mesTexto(mes)}?\n\n${ativos.length} pessoas, total ${brl(soma)}.\n${avisos.length ? '\nAtenção:\n- ' + avisos.join('\n- ') + '\n' : ''}\nDepois de fechar, os valores ficam congelados: a matriz, a planilha e a ajuda extra deste mês não mudam mais (só o administrador reabre).`;
+    if (!confirm(txt)) return;
+    try {
+      const j = await rpc('acerto_fechar_mes', { p_token: sessao.token, p_mes: mes, p_resultado: ativos });
+      DM = null; await carregar(true); toast(`Mês fechado: ${j.pessoas} pessoas, ${brl(j.total)}.`);
+    } catch (e) { alert('Não foi possível fechar: ' + textoErro(e)); }
+  }
+
+  async function reabrirMes() {
+    const motivo = prompt(`Reabrir ${R.mesTexto(mes)}? A foto do fechamento é apagada (fica no histórico) e o mês volta a ser calculado.\n\nMotivo:`);
+    if (motivo == null) return;
+    try { await rpc('acerto_reabrir_mes', { p_token: sessao.token, p_mes: mes, p_motivo: motivo }); DM = null; await carregar(true); toast('Mês reaberto.'); }
+    catch (e) { alert('Não foi possível reabrir: ' + textoErro(e)); }
   }
 
   // Planilha de Requisitos: abas Motorista e Ajudante (Cód. ERP, contagem por

@@ -12,7 +12,7 @@ partir do branch `main` do GitHub.
 - Toda entrega sobe a versão em 4 lugares: `js/config.js` (appVersion),
   `js/cloudStore.js` (CloudStore.BUILD), `sw.js` (CACHE_NAME) e `version.json`
   (build, publicado_em e um `resumo_...` novo no topo).
-- Migrations ficam em `database/migration_NN_*.sql` (próxima: 89).
+- Migrations ficam em `database/migration_NN_*.sql` (próxima: 90).
 - Conferir sintaxe com `node --check js/app.js` antes de entregar.
 
 ## Regras do usuário
@@ -293,8 +293,14 @@ partir do branch `main` do GitHub.
   Ajudante, "Cód. ERP", Dias, Peso Garantido; substitui a anterior); nov/26 já importado.
   Ajuda extra + motivo por pessoa/mês (`acerto_salvar_extra`, tabela acerto_pessoa_mes).
   Desligado no cadastro e código sem cadastro vão para "Fora do fechamento". Mês fechado
-  recusa importação e ajuda extra. Falta: peso devolvido (f_DEVOLUCAO), PDF por pessoa,
-  fechar o mês (congelar), abas Requisitos e Folgas e Faltas dentro do app.
+  recusa importação e ajuda extra.
+- Impressão e fechamento (7.12.0, 28/11, migration 89 APLICADA): Imprimir (pessoa, função ou
+  todos) monta um documento A4 por pessoa num iframe e abre a caixa de impressão (Salvar como
+  PDF); salvar sozinho na pasta S: não dá pelo navegador. Fechar o mês (ADMIN/EDITOR) grava o
+  resultado de cada pessoa ATIVA em `acerto_fechamentos` (dados jsonb = objeto do cálculo) e
+  marca acerto_meses FECHADO; a tela passa a mostrar a foto. Reabrir: só ADMIN, só o último
+  mês fechado, com motivo (a foto vai para o acerto_log). Falta: peso devolvido, abas Requisitos
+  e Folgas e Faltas no app.
 
 ## Custo de gestão (7.1.13, 06/11/2026)
 - Edge Function `sync-custo-gestao` (migration 73) grava a seção `custo_gestao` em
