@@ -77,6 +77,14 @@
   .filtros { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
   .filtros input, .filtros select { width:auto; min-width:160px; }
   .esc { display:none !important; }
+  .tab tr.clica { cursor:pointer; }
+  .tab tr.apagada td { color:var(--mut); }
+  .tab tfoot td { font-weight:700; border-top:2px solid var(--bd); }
+  .cartoes { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-bottom:12px; }
+  .cartao { border:1px solid var(--bd); border-radius:10px; padding:10px; }
+  .cartao small { display:block; color:var(--mut); font-size:12px; }
+  .cartao b { font-size:17px; }
+  .modal.largo { max-width:980px; }
   .fundo { position:fixed; inset:0; background:rgba(15,23,42,.45); display:flex; align-items:flex-start; justify-content:center; padding:24px 16px; overflow:auto; z-index:20; }
   .modal { background:#fff; border-radius:14px; width:100%; max-width:620px; padding:18px; }
   .modal .cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0 12px; }
@@ -124,13 +132,13 @@
 
     <section class="card">
       <nav class="abas" id="abas">
-        <button data-aba="regras" class="on">Regras</button>
-        <button disabled title="Próxima etapa">Acerto do mês</button>
+        <button data-aba="acerto" class="on">Acerto do mês</button>
+        <button data-aba="regras">Regras</button>
         <button disabled title="Próxima etapa">Requisitos</button>
         <button disabled title="Próxima etapa">Folgas e Faltas</button>
       </nav>
 
-      <nav class="abas sub" id="subabas">
+      <nav class="abas sub esc" id="subabas">
         <button data-sub="perfis" class="on">Perfis</button>
         <button data-sub="pessoas">Pessoas</button>
         <button data-sub="rotas">Rotas</button>
@@ -150,6 +158,7 @@
 
 <script src="/js/config.js"></script>
 <script src="/js/acertoRegras.js"></script>
+<script src="/js/acertoCalculo.js"></script>
 <script>
 (function () {
   'use strict';
@@ -234,6 +243,7 @@
 
   // ---------------------------------------------------------------- modal
   function abrirModal(html, depois) {
+    $('modalCorpo').classList.remove('largo');
     $('modalCorpo').innerHTML = html;
     $('modal').classList.remove('esc');
     $('modalCorpo').querySelectorAll('[data-fechar]').forEach((b) => (b.onclick = fecharModal));
@@ -250,6 +260,9 @@
   let IDX = {};        // regras indexadas
   let mes = null;      // competencia escolhida
   let sub = 'perfis';
+  let aba = 'acerto';
+  let DM = null;       // acerto_dados_mes do mes carregado
+  let filtroAc = { q: '', funcao: 'MOTORISTA' };
   let filtro = { pessoas: { q: '', funcao: '' }, rotas: { q: '', so: '' } };
 
   const podeEditar = () => D && ['ADMIN', 'EDITOR'].includes(D.usuario.papel) && !mesFechado();
@@ -289,8 +302,14 @@
     $('avisoMes').innerHTML = aviso;
   }
 
-  $('selMes').onchange = () => { mes = $('selMes').value; carregar(true); };
-  $('btAtualizar').onclick = () => carregar(true);
+  $('selMes').onchange = () => { mes = $('selMes').value; DM = null; carregar(true); };
+  $('btAtualizar').onclick = () => { DM = null; carregar(true); };
+  $('abas').onclick = (e) => {
+    const b = e.target.closest('button[data-aba]'); if (!b) return;
+    aba = b.dataset.aba;
+    $('abas').querySelectorAll('button[data-aba]').forEach((x) => x.classList.toggle('on', x === b));
+    desenhar();
+  };
   $('subabas').onclick = (e) => {
     const b = e.target.closest('button[data-sub]'); if (!b) return;
     sub = b.dataset.sub;
@@ -339,9 +358,181 @@
 
   // ---------------------------------------------------------------- desenho
   function desenhar() {
+    $('subabas').classList.toggle('esc', aba !== 'regras');
+    if (aba === 'acerto') { acertoMes(); return; }
     const f = { perfis, pessoas, rotas, faixas, compras, parametros, historico }[sub];
     $('conteudo').innerHTML = '';
     f();
+  }
+
+  // ================================================================ ACERTO DO MES
+  // Dados do mes (Power BI + planilha de Requisitos + ajuda extra) e o calculo
+  // de js/acertoCalculo.js com a matriz que vale no mes.
+  const ROTULO_KPI = { MANUTENCAO: 'Manutenção', PNEUS: 'Pneus', SINISTRO: 'Sinistro', CONSUMO: 'Média de consumo', PRAZO_ROTA: 'Prazo rota',
+    CAIXA: 'Acerto de caixa', DEVOLUCAO: 'Devolução', FUSION: 'Fusion', PONTUALIDADE: 'Pontualidade' };
+  const t3 = (x) => num(x, 2);
+  let RES = [];
+
+  async function acertoMes() {
+    if (!DM || DM.mes !== mes) {
+      $('conteudo').innerHTML = '<p class="mut">Calculando…</p>';
+      try { DM = await rpc('acerto_dados_mes', { p_token: sessao.token, p_mes: mes }); }
+      catch (e) { $('conteudo').innerHTML = msg('er', 'Não foi possível carregar o mês: ' + esc(textoErro(e))); return; }
+    }
+    const nomes = {}, cad = {};
+    DM.motoristas.forEach((p) => { nomes['MOTORISTA:' + p.id] = p.nome; cad['MOTORISTA:' + p.id] = p; });
+    DM.ajudantes.forEach((p) => { nomes['AJUDANTE:' + p.id] = p.nome; cad['AJUDANTE:' + p.id] = p; });
+    const requisitos = {}; DM.requisitos.forEach((r) => (requisitos[`${r.funcao}:${r.pessoa_id}`] = { req: r.req, dias: r.dias, garantido_t: r.garantido_t }));
+    const extras = {}; DM.extras.forEach((x) => (extras[`${x.funcao}:${x.pessoa_id}`] = { ajuda: x.ajuda, obs: x.obs }));
+    RES = window.AcertoCalculo.calcular({ R, idx: IDX, mes, cargas: DM.cargas, compras: DM.compras, nomes, requisitos, extras });
+    RES.forEach((r) => { const c = cad[r.chave]; r.situacao = !c ? 'SEM_CADASTRO' : c.ativo === false ? 'DESLIGADO' : 'ATIVO'; });
+
+    const temReq = DM.requisitos.length > 0;
+    const imp = DM.requisitos[0];
+    const ativos = RES.filter((r) => r.situacao === 'ATIVO');
+    const soma = (l, k) => l.reduce((s, r) => s + (r[k] || 0), 0);
+    const f = filtroAc, q = R.chave(f.q);
+    const vis = ativos.filter((r) => r.funcao === f.funcao && (!q || q.split(' ').every((w) => R.chave(r.nome).includes(w))));
+    const fora = RES.filter((r) => r.situacao !== 'ATIVO' && r.funcao === f.funcao);
+
+    $('conteudo').innerHTML = `
+      <div class="cartoes">
+        <div class="cartao"><small>Motoristas</small><b>${ativos.filter((r) => r.funcao === 'MOTORISTA').length}</b><small>${brl(soma(ativos.filter((r) => r.funcao === 'MOTORISTA'), 'total'))}</small></div>
+        <div class="cartao"><small>Ajudantes</small><b>${ativos.filter((r) => r.funcao === 'AJUDANTE').length}</b><small>${brl(soma(ativos.filter((r) => r.funcao === 'AJUDANTE'), 'total'))}</small></div>
+        <div class="cartao"><small>Total do mês</small><b>${brl(soma(ativos, 'total'))}</b><small>${DM.cargas.length} cargas faturadas, ${DM.compras.length} compras</small></div>
+        <div class="cartao"><small>Power BI</small><b style="font-size:14px">${DM.sync ? dataHora(DM.sync.em) : '—'}</b><small>${DM.sync && DM.sync.status !== 'ok' ? 'última leitura com erro' : 'atualiza 06h30 e 13h30'}${DM.sem_faturar ? ` · ${DM.sem_faturar} carga(s) sem faturar fora` : ''}</small></div>
+      </div>
+      ${temReq ? msg('in', `Requisitos: planilha <b>${esc(imp.arquivo || '')}</b>, importada por ${esc(imp.importado_por || '—')} em ${dataHora(imp.importado_em)} (${DM.requisitos.length} pessoas).
+          ${podeEditar() ? ' <button class="btn lnk peq" id="btImportar">Importar de novo</button>' : ''}`)
+        : msg('av', `<b>Falta a planilha de Requisitos de ${R.mesTexto(mes)}.</b> Sem ela os requisitos saem como OK e o garantido usa o do perfil (sem os dias).
+          ${podeEditar() ? ' <button class="btn pri peq" id="btImportar" style="margin-left:8px">Importar planilha</button>' : ''}`)}
+      <input type="file" id="arqReq" class="esc" accept=".xlsx,.xls">
+      <div class="filtros" style="margin-top:12px">
+        <select id="faF"><option value="MOTORISTA" ${f.funcao === 'MOTORISTA' ? 'selected' : ''}>Motoristas</option><option value="AJUDANTE" ${f.funcao === 'AJUDANTE' ? 'selected' : ''}>Ajudantes</option></select>
+        <input id="faQ" placeholder="Buscar nome" value="${esc(f.q)}">
+        <span class="mut" style="align-self:center">Clique na pessoa para ver carga a carga, os requisitos e lançar a ajuda extra.</span>
+      </div>
+      <div class="rola"><table class="tab"><thead><tr><th>Nome</th><th>Perfil</th><th class="n">Cargas</th><th class="n">Peso (t)</th><th class="n">Cargas R$</th>
+        ${f.funcao === 'MOTORISTA' ? '<th class="n">Bônus</th>' : ''}<th class="n">Requisitos</th><th class="n">Garantido</th><th class="n">Ajuda extra</th><th class="n">Total</th><th></th></tr></thead><tbody>
+      ${vis.map((r) => `<tr class="clica" data-p="${esc(r.chave)}"><td><b>${esc(r.nome)}</b></td><td class="mut">${esc(r.perfilNome)}</td>
+        <td class="n">${r.cargas}${r.compras ? ` + ${r.compras} compra(s)` : ''}</td><td class="n">${t3(r.peso_t)}</td><td class="n">${brl(r.valor)}</td>
+        ${f.funcao === 'MOTORISTA' ? `<td class="n">${brl(r.bonus)}</td>` : ''}<td class="n">${brl(r.kpi)}${r.kpis.some((k) => k.valor != null && !k.ok) ? ' <span class="chip r">' + r.kpis.filter((k) => k.valor != null && !k.ok).length + '</span>' : ''}</td>
+        <td class="n">${r.garantido ? brl(r.garantido) : '—'}</td><td class="n">${r.ajuda ? brl(r.ajuda) : '—'}</td><td class="n"><b>${brl(r.total)}</b></td>
+        <td>${r.avisos.length ? `<span class="chip a" title="${esc(r.avisos.join('\n'))}">${r.avisos.length} aviso(s)</span>` : ''}</td></tr>`).join('') || '<tr><td colspan="11" class="mut">Ninguém.</td></tr>'}
+      </tbody><tfoot><tr><td colspan="3">${vis.length} pessoa(s)</td><td class="n">${t3(soma(vis, 'peso_t'))}</td><td class="n">${brl(soma(vis, 'valor'))}</td>
+        ${f.funcao === 'MOTORISTA' ? `<td class="n">${brl(soma(vis, 'bonus'))}</td>` : ''}<td class="n">${brl(soma(vis, 'kpi'))}</td><td class="n">${brl(soma(vis, 'garantido'))}</td>
+        <td class="n">${brl(soma(vis, 'ajuda'))}</td><td class="n">${brl(soma(vis, 'total'))}</td><td></td></tr></tfoot></table></div>
+      ${fora.length ? `<h3>Fora do fechamento (${fora.length})</h3>
+        <p class="mut" style="margin-top:-4px">Desligado no cadastro do JR-Oper não entra no fechamento. Código sem cadastro é do WinThor (balcão, genérico) ou falta cadastrar.</p>
+        <div class="rola"><table class="tab"><tbody>${fora.map((r) => `<tr class="clica apagada" data-p="${esc(r.chave)}"><td>${esc(r.nome)}</td>
+          <td>${r.situacao === 'DESLIGADO' ? '<span class="chip s">desligado</span>' : '<span class="chip a">sem cadastro no JR-Oper</span>'}</td>
+          <td class="n">${r.cargas} carga(s)</td><td class="n">${t3(r.peso_t)} t</td><td class="n">${brl(r.total)}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+
+    $('faF').onchange = (e) => { f.funcao = e.target.value; acertoMes(); };
+    $('faQ').oninput = (e) => { f.q = e.target.value; const pos = e.target.selectionStart; acertoMes(); const i = $('faQ'); i.focus(); i.setSelectionRange(pos, pos); };
+    $('conteudo').querySelectorAll('[data-p]').forEach((tr) => (tr.onclick = () => detalheAcerto(tr.dataset.p)));
+    if ($('btImportar')) { $('btImportar').onclick = () => $('arqReq').click(); $('arqReq').onchange = (e) => importarRequisitos(e.target.files[0]); }
+  }
+
+  function detalheAcerto(ch) {
+    const r = RES.find((x) => x.chave === ch); if (!r) return;
+    const mot = r.funcao === 'MOTORISTA';
+    abrirModal(`
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap">
+        <div><h2 style="margin:0">${esc(r.nome)}</h2><span class="mut">${mot ? 'Motorista' : 'Ajudante'} · cód. ${r.id} · ${esc(r.perfilNome)} · ${R.mesTexto(mes)}</span></div>
+        <button class="btn sec peq" data-fechar>Fechar</button>
+      </div>
+      <div class="cartoes" style="margin-top:12px">
+        <div class="cartao"><small>Cargas${r.compras ? ' e compras' : ''}</small><b>${brl(r.valor)}</b><small>${t3(r.peso_t)} t · ${r.cargas} carga(s)${r.compras ? ` · ${r.compras} compra(s)` : ''}</small></div>
+        ${mot ? `<div class="cartao"><small>Bônus por entrega</small><b>${brl(r.bonus)}</b><small>${r.entregas} entregas</small></div>` : ''}
+        <div class="cartao"><small>Requisitos</small><b>${brl(r.kpi)}</b></div>
+        <div class="cartao"><small>Garantido</small><b>${brl(r.garantido)}</b><small>${t3(r.garantido_t)} t${r.dias != null ? ` (${r.dias} dias)` : ''}</small></div>
+        <div class="cartao"><small>Ajuda extra</small><b>${brl(r.ajuda)}</b></div>
+        <div class="cartao" style="border-color:var(--verde)"><small>Total</small><b>${brl(r.total)}</b></div>
+      </div>
+      ${r.avisos.length ? msg('av', r.avisos.map(esc).join('<br>')) : ''}
+      <h3>Requisitos</h3>
+      <div class="rola"><table class="tab"><thead><tr><th>Requisito</th><th class="n">Ocorrências</th><th class="n">Valor</th><th class="n">Pago</th></tr></thead><tbody>
+      ${r.kpis.map((k) => `<tr><td>${ROTULO_KPI[k.k] || k.k}</td><td class="n">${k.ocorrencias === 'N/C' ? 'N/C' : k.ocorrencias || '—'}</td>
+        <td class="n">${k.valor == null ? '<span class="mut">não se aplica</span>' : brl(k.valor)}</td>
+        <td class="n">${k.valor == null ? '' : k.ok ? '<span class="chip v">OK</span> ' + brl(k.pago) : '<span class="chip r">NÃO</span>'}</td></tr>`).join('')}
+      </tbody></table></div>
+      <h3>Garantido</h3>
+      <p style="margin:0">${r.falta_t > 0
+        ? `Garantido ${t3(r.garantido_t)} t − peso ${t3(r.peso_t)} t = faltou <b>${t3(r.falta_t)} t</b> × R$/t médio ${brl(r.medio)} = <b>${brl(r.garantido)}</b>.`
+        : `Passou do garantido (${t3(r.peso_t)} t de ${t3(r.garantido_t)} t): nada a completar.`}</p>
+      ${r.bonus_dobro_rotina ? `<p class="mut" style="margin:4px 0 0">A rotina 8003 somaria o bônus de novo aqui (R$ ${num(r.bonus_dobro_rotina)} a mais). O sistema não soma: em confirmação com o Victor.</p>` : ''}
+      <h3>Ajuda extra</h3>
+      ${podeEditar() ? `<div class="cols" style="display:grid;grid-template-columns:160px 1fr auto;gap:8px;align-items:end">
+          <div><label class="f">Valor (R$)</label><input id="ajV" class="n" value="${valIn(r.ajuda || '')}"></div>
+          <div><label class="f">Motivo (sai no acerto)</label><input id="ajO" value="${esc(r.obs || '')}" placeholder="Ex.: feriado 20/11; 4 cargas de faixa 5"></div>
+          <div><button class="btn pri" id="ajS">Salvar</button></div></div><div id="ajM"></div>`
+        : `<p style="margin:0">${r.ajuda ? brl(r.ajuda) + ' · ' + esc(r.obs || '') : 'Nenhuma.'}</p>`}
+      <h3>Cargas${r.compras ? ' e compras' : ''} (${r.itens.length})</h3>
+      <div class="rola"><table class="tab"><thead><tr><th>Data</th><th>Carga / NF</th><th>Rota (WinThor)</th><th>Papel</th><th class="n">Peso (t)</th><th class="n">R$/t</th>${mot ? '<th class="n">%</th>' : ''}<th class="n">Valor</th>${mot ? '<th class="n">Entregas</th><th class="n">Bônus</th>' : ''}</tr></thead><tbody>
+      ${r.itens.map((i) => `<tr><td>${diaBr(i.data)}</td><td>${esc(i.ref)}</td><td>${esc(i.rota)}<div class="mut">${esc(i.destino || '')}</div></td><td>${esc(i.papel)}<div class="mut">${esc(i.regra)}</div></td>
+        <td class="n">${t3(i.t)}</td><td class="n">${brl(i.vlton)}</td>${mot ? `<td class="n">${num(i.perc)}%</td>` : ''}<td class="n">${brl(i.valor)}</td>
+        ${mot ? `<td class="n">${i.ent || ''}</td><td class="n">${i.bonus ? brl(i.bonus) : ''}</td>` : ''}</tr>`).join('')}
+      </tbody></table></div>`, () => {
+      $('modalCorpo').classList.add('largo');
+      if (!$('ajS')) return;
+      $('ajS').onclick = async () => {
+        const v = lerNum($('ajV').value);
+        if (Number.isNaN(v) || (v || 0) < 0) { $('ajM').innerHTML = msg('er', 'Valor inválido.'); return; }
+        try {
+          await rpc('acerto_salvar_extra', { p_token: sessao.token, p_mes: mes, p_funcao: r.funcao, p_pessoa_id: r.id, p_ajuda: v || 0, p_obs: $('ajO').value });
+          DM = null; fecharModal(); await acertoMes(); toast('Ajuda extra salva.'); detalheAcerto(ch);
+        } catch (e) { $('ajM').innerHTML = msg('er', esc(textoErro(e))); }
+      };
+    });
+  }
+
+  // Planilha de Requisitos: abas Motorista e Ajudante (Cód. ERP, contagem por
+  // requisito, Dias e Peso Garantido). O leitor do Excel so carrega quando usa.
+  function carregarXlsx() {
+    return new Promise((ok, erro) => {
+      if (window.XLSX) return ok();
+      const s = document.createElement('script'); s.src = '/js/xlsx.full.min.js';
+      s.onload = () => ok(); s.onerror = () => erro(new Error('O leitor de Excel não carregou.'));
+      document.head.appendChild(s);
+    });
+  }
+  const COLS_REQ = {
+    MOTORISTA: ['Motorista', { MANUTENCAO: ['Manut. Veiculo / Aparelho'], PNEUS: ['Cuidado Pneus'], SINISTRO: ['Sinistro & Conservação'], CONSUMO: ['Média Consumo'],
+      CAIXA: ['Acerto Caixa'], DEVOLUCAO: ['Devolução'], PRAZO_ROTA: ['Prazo Rota', 'ENTREGA FORA DO LOCAL'], FUSION: ['Fusion', 'FALTA', 'FURO DE CERCA'] }],
+    AJUDANTE: ['Ajudante', { DEVOLUCAO: ['Devolução'], PONTUALIDADE: ['Pontualidade'], PRAZO_ROTA: ['Prazo Rota'] }],
+  };
+  async function importarRequisitos(arq) {
+    if (!arq) return;
+    try {
+      await carregarXlsx();
+      const wb = window.XLSX.read(new Uint8Array(await arq.arrayBuffer()));
+      const linhas = [], falta = [];
+      for (const [fn, [nomeAba, cols]] of Object.entries(COLS_REQ)) {
+        const nAba = wb.SheetNames.find((s) => s.trim().toUpperCase() === nomeAba.toUpperCase());
+        if (!nAba) { falta.push(`aba ${nomeAba}`); continue; }
+        const l = window.XLSX.utils.sheet_to_json(wb.Sheets[nAba], { header: 1, defval: '' });
+        const ih = l.findIndex((x) => x.some((c) => String(c).trim() === 'Cód. ERP'));
+        if (ih < 0) { falta.push(`cabeçalho da aba ${nomeAba}`); continue; }
+        const h = l[ih].map((c) => String(c).trim());
+        const col = (nome) => h.indexOf(nome);
+        for (const r of l.slice(ih + 1)) {
+          const cod = Number(r[col('Cód. ERP')]); if (!cod) continue;
+          const req = {};
+          for (const [k, cs] of Object.entries(cols)) {
+            const vals = cs.map((c) => (col(c) >= 0 ? r[col(c)] : ''));
+            req[k] = String(vals[0]).trim().toUpperCase() === 'N/C' ? 'N/C' : vals.reduce((s, v) => s + (Number(v) || 0), 0);
+          }
+          linhas.push({ funcao: fn, pessoa_id: cod, nome: String(r[col(fn === 'MOTORISTA' ? 'Nome Motorista' : 'Nome Ajudante')] || '').trim(), req,
+            dias: r[col('Dias')] === '' ? null : Number(r[col('Dias')]), garantido_t: r[col('Peso Garantido')] === '' ? null : Math.round(Number(r[col('Peso Garantido')]) * 1000) / 1000 });
+        }
+      }
+      if (!linhas.length) throw new Error('Não achei as abas Motorista e Ajudante com a coluna "Cód. ERP".' + (falta.length ? ' Faltou: ' + falta.join(', ') : ''));
+      const nm = linhas.filter((x) => x.funcao === 'MOTORISTA').length, na = linhas.length - nm;
+      if (!confirm(`Importar ${nm} motorista(s) e ${na} ajudante(s) de "${arq.name}" para ${R.mesTexto(mes)}? A importação anterior do mês é substituída.`)) return;
+      await rpc('acerto_importar_requisitos', { p_token: sessao.token, p_mes: mes, p_arquivo: arq.name, p_linhas: linhas });
+      DM = null; await acertoMes(); toast('Planilha de Requisitos importada.');
+    } catch (e) { alert('Não foi possível importar: ' + textoErro(e)); }
   }
 
   // ----- Perfis
