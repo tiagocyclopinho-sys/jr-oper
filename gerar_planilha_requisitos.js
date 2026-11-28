@@ -8,16 +8,30 @@
 //                            todas; quem abona e o Victor Hugo, na planilha)
 //       * Motor ocioso confirmado pela CCO (Oc. Operacional, motivo MOTOR
 //         OCIOSO) ....................... Media Consumo, uma linha por evento
+//       * Motor ocioso do rastreador (Power BI) ........... Media Consumo, uma
+//         linha por motorista: "MOTORISTA TEVE N OCORRENCIAS DE MOTOR OCIOSO"
+//         (forma correta segundo o Tiago em 26/11/2026, pela quantidade)
+//       * Conduta / desvio / atolamento (Oc. Operacional), pelo texto:
+//         limpeza, conservacao, dano no veiculo, atolamento ... Sinistro &
+//         Conservacao; desvio de rota ... Fusion / FURO DE CERCA (nome antigo,
+//         hoje e o monitoramento com a telemetria); checklist ... Manut.
+//         Veiculo / Aparelho. As outras condutas ficam para avaliar.
+//       * Motivo de pneu (FALTA DE CUIDADO COM PNEUS / PNEU DANIFICADO, Oc.
+//         Operacional, 7.9.3) ............................... Cuidado Pneus
 //       * Checklist nao realizado (Controle de Viagens) .. Manut. Veiculo /
 //         Aparelho, uma linha por motorista com o total (saida + chegada)
 //       * Fusion nao iniciado (Controle de Viagens) ...... Fusion / FALTA,
 //         uma linha por motorista com o total de viagens
 //       * Sinistro (Investigacao de Sinistro) ............ Sinistro & Conservacao
-//       * Devolucao ERRO MOTORISTA (todas, analisadas ou nao) .. Devolucao, uma linha
-//         para o motorista e uma para cada ajudante da carga
-//       * Falta de ajudante (Oc. Operacional, vale o nome) .. Pontualidade
+//       * Devolucao ERRO MOTORISTA com Desconto Aplicado = SIM (28/11) .. Devolucao,
+//         uma linha para o motorista e uma para cada ajudante da carga
+//       * Falta (Oc. Operacional, vale o nome): de ajudante ... Pontualidade;
+//         de motorista ... Prazo Rota (motorista e prestador, nao tem
+//         pontualidade; so conta se atrasou as entregas - o Victor confere)
 //   - abas de apoio, com o detalhe que gerou cada linha: OCORRENCIAS PLN,
-//     Folgas-Falta (faltas do Oc. Operacional, todas DESCONTADO), Checklist,
+//     Folgas-Falta (faltas do Oc. Operacional, todas DESCONTADO: o app so lanca,
+//     quem avalia e abona e o Victor Hugo; e folgas da Escala, que contam os
+//     dias fora da escala mas nao geram Prazo Rota/Pontualidade), Checklist,
 //     Fusion NA, Devolucao e Tempo de Rota
 //   - aba Motor Ocioso: todos os alertas do rastreador no periodo (Power BI,
 //     modelo CCO, copiado para cco_motor_ocioso pela Edge Function sync-cco),
@@ -30,8 +44,9 @@
 //
 // NAO mexe nas abas Motorista, Ajudante e BD (ficam por conta do usuario), nem
 // em Media de Consumo, Fusion NF e Fusion Desvio. Nenhum valor em R$ entra.
-// Os nomes vao como estao no app: quem nao estiver na aba BD aparece com #N/D
-// no Cod. ERP / Funcao - o resumo no fim lista quem e.
+// Os nomes vao como estao no app (com a troca de NOMES_PLANILHA): quem nao
+// estiver na aba BD aparece com #N/D no Cod. ERP / Funcao - o resumo no fim
+// lista quem e.
 //
 // Uso (precisa do Node instalado):
 //   node tools/gerar_planilha_requisitos.js [AAAAMM] [modelo.xlsx] [saida.xlsx]
@@ -57,17 +72,34 @@ const nomeArquivo = (ano, mes) => `REQUISITOS MOTORISTAS E AJUDANTES - ${String(
 // nao estava com o motorista ou o aplicativo falhou).
 const JUSTIFICADO = /SEM (TELEFONE|APARELHO|CELULAR)|INCONSIST|CELULAR (NA|SE ENCONTRA)|PROBLEMA NO APLICATIVO|SENHA DE ACESSO|IMPOSSIBILIT/;
 
-// Placas que o relatorio da CCO no Power BI deixa fora do grafico de motor
-// ocioso (conferido em 26/10/2026 contra o grafico "Motorista Resp"). A aba
-// Motor Ocioso sai sem elas, e a tabela dinamica dela sem filtro de veiculo,
-// para os totais baterem com o Power BI.
-const VEICULOS_FORA_MOTOR_OCIOSO = ['OLH8E48', 'OLI0E88', 'OLI2E18', 'OLI2E91', 'QWA2318', 'TVD0F56'];
+// Caminhao 3/4 e isento de motor ocioso (Tiago, 27/11/2026). As placas isentas
+// saem do cadastro de veiculos do JR-Oper (tipo "3/4"): caminhao novo cadastrado
+// como 3/4 ja sai isento. A aba Motor Ocioso sai sem elas, e a tabela dinamica
+// dela sem filtro de veiculo. (Antes era uma lista fixa, conferida contra o
+// grafico da CCO em 26/10, que tinha esquecido a TVD1E68.)
+const TIPO_ISENTO_MOTOR_OCIOSO = '3/4';
+
+// Nome no app -> nome na planilha (o das abas Motorista/Ajudante, que vem do
+// cadastro do sistema de pagamento). ARMANDO foi cadastrado la como ARMANO.
+const NOMES_PLANILHA = { 'ARMANDO LIMA DA CUNHA': 'ARMANO LIMA DA CUNHA' };
 
 // Textos que as formulas das abas Motorista/Ajudante procuram (COUNTIFS).
 const REQ = {
   checklist: 'Manut. Veiculo / Aparelho', sinistro: 'Sinistro & Conservação', motorOcioso: 'Média Consumo',
-  devolucao: 'Devolução', fusion: 'Fusion', pontualidade: 'Pontualidade'
+  devolucao: 'Devolução', fusion: 'Fusion', pontualidade: 'Pontualidade', prazoRota: 'Prazo Rota',
+  pneus: 'Cuidado Pneus'
 };
+
+// Conduta / desvio da Oc. Operacional -> requisito, pelo motivo + causa +
+// ocorrencia (combinado com o Tiago em 26/11/2026). Primeira regra que bate vale.
+// doMotivo: casa so com o motivo lancado (os de pneu, criados na 7.9.3 para a
+// manutencao registrar; "pneu" no texto livre de outra ocorrencia nao conta).
+const REGRAS_CONDUTA = [
+  { doMotivo: /PNEU/, requisito: REQ.pneus },
+  { texto: /DESVIO DE ROTA/, requisito: REQ.fusion, motivo: 'FURO DE CERCA' },
+  { texto: /CHECK ?LIST/, requisito: REQ.checklist },
+  { texto: /LIMPEZA|CONSERVA|SUJO|ATOLA|SINISTRO|COLIS|ACIDENTE|AVARIA|DANIF|AMASS|QUEBR|BARRA DE PROTE|ARRANH|BATID/, requisito: REQ.sinistro }
+];
 
 function lerConfig() {
   const cfg = fs.readFileSync(path.join(__dirname, '..', 'js', 'config.js'), 'utf8');
@@ -230,20 +262,49 @@ async function main() {
   const sinistros = (await rest(cfg, 'sinistros', 'select=*&limit=5000'))
     .filter(s => naoApagado(s) && noPeriodo(isoDe(s.data_acidente)));
   const motoristas = await rest(cfg, 'motoristas', 'select=id,nome&limit=5000');
+  // Folgas da Escala (escala_folgas): negada ou cancelada nao tira ninguem da escala.
+  const folgas = (await rest(cfg, 'escala_folgas', `select=*&is_deleted=is.false&data_inicio=lte.${fim}&data_fim=gte.${inicio}&order=data_inicio.asc`))
+    .filter(f => f.parecer !== 'NEGADO' && f.parecer !== 'CANCELADO');
   const alertas = await rest(cfg, 'cco_motor_ocioso',
     `select=*&data=gte.${inicio}&data=lte.${fim}&order=data.asc,hora.asc,veiculo.asc`);
-  const alertasAba = alertas.filter(a => !VEICULOS_FORA_MOTOR_OCIOSO.includes(a.veiculo));
+  const placaChave = p => String(p || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const placasIsentas = (await rest(cfg, 'veiculos', 'select=placa,tipo,is_deleted&limit=5000'))
+    .filter(v => !v.is_deleted && String(v.tipo || '').trim() === TIPO_ISENTO_MOTOR_OCIOSO).map(v => placaChave(v.placa)).sort();
+  const alertasAba = alertas.filter(a => !placasIsentas.includes(placaChave(a.veiculo)));
   const ultimoSync = (await rest(cfg, 'cco_sync_log', 'select=finalizado_em&status=eq.ok&order=id.desc&limit=1'))[0];
   const nomeMotorista = Object.fromEntries(motoristas.map(m => [String(m.id), m.nome]));
 
   // Equipe de cada carga pelo Controle de Viagens (todas as datas: a
   // devolucao pode abrir dias depois da viagem). Mesmo caminho do app.
-  const todasViagens = (await rest(cfg, 'controle_viagens', 'select=carga,rota,motorista,ajudante,ajudante_2,is_deleted&limit=20000')).filter(naoApagado);
+  const todasViagens = (await rest(cfg, 'controle_viagens', 'select=carga,rota,motorista,ajudante,ajudante_2,data_saida,data_retorno,is_deleted&limit=20000'))
+    .filter(naoApagado).map(v => ({ ...v, iso: isoDe(v.data_saida) }));
   const chaveCarga = c => String(c || '').trim().toUpperCase();
   const equipePorCarga = new Map(todasViagens.map(v => [chaveCarga(v.carga), v]));
 
-  const nome = n => String(n || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const nomeApp = n => String(n || '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const nome = n => { const x = nomeApp(n); return NOMES_PLANILHA[x] || x; };
   const valido = n => n && !/^(N\/A|-+|—)$/.test(n);
+
+  // Nomes e funcao do modelo (abas Motorista, Ajudante e BD): a funcao decide
+  // se a falta e Pontualidade (ajudante) ou Prazo Rota (motorista).
+  const XLSX = require(path.join(__dirname, '..', 'js', 'xlsx.full.min.js'));
+  const wbLido = XLSX.read(fs.readFileSync(modelo));
+  const linhasAba = n => XLSX.utils.sheet_to_json(wbLido.Sheets[wbLido.SheetNames.find(s => s.trim().toUpperCase() === n.toUpperCase())] || {}, { header: 1, defval: '' });
+  const colunaNome = (linhas, re) => {
+    const i = linhas.findIndex(l => l.some(c => re.test(String(c).trim())));
+    if (i < 0) return [];
+    const j = linhas[i].findIndex(c => re.test(String(c).trim()));
+    return linhas.slice(i + 1).map(l => nomeApp(l[j])).filter(Boolean);
+  };
+  const nomesMotoristaAba = new Set(colunaNome(linhasAba('Motorista'), /^NOME MOTORISTA$/i));
+  const nomesAjudanteAba = new Set(colunaNome(linhasAba('Ajudante'), /^NOME AJUDANTE$/i));
+  const bd = linhasAba('BD');
+  const colNomeBD = Math.max(0, (bd[0] || []).findIndex(h => /^FUNCION/i.test(String(h).trim())));
+  const colFuncaoBD = (bd[0] || []).findIndex(h => /^FUN[CÇ][AÃ]O$/i.test(String(h).trim()));
+  const funcaoBD = new Map(bd.slice(1).filter(r => nomeApp(r[colNomeBD])).map(r => [nomeApp(r[colNomeBD]), nomeApp(colFuncaoBD >= 0 ? r[colFuncaoBD] : '')]));
+  const nomesBD = new Set(funcaoBD.keys());
+  const funcaoDe = (n, reserva) => (nomesMotoristaAba.has(n) ? 'MOTORISTA' : nomesAjudanteAba.has(n) ? 'AJUDANTE'
+    : funcaoBD.get(n) || nomeApp(reserva));
 
   // ---- Linhas de Ocorrencias
   const oc = [];
@@ -257,6 +318,33 @@ async function main() {
   ocv.filter(o => nome(o.motivo) === 'MOTOR OCIOSO' && !isencao(o))
     .forEach(o => add(o.iso, o.funcionario, REQ.motorOcioso, 'MOTOR OCIOSO - COM CONTATO E CONFIRMAÇÃO DA CCO',
       [o.carga && `CARGA ${o.carga}`, o.causa].filter(Boolean).join(' - ')));
+
+  // Motor ocioso do rastreador: uma linha por motorista com o total do periodo
+  // (mesma conta da aba Motor Ocioso e do grafico da CCO). Isencao registrada
+  // pela CCO vai no Complemento para o Victor descontar.
+  const totalOcioso = new Map();
+  alertasAba.filter(a => a.motorista).forEach(a => totalOcioso.set(nome(a.motorista), (totalOcioso.get(nome(a.motorista)) || 0) + (a.qtd || 1)));
+  const isencoesPorNome = new Map();
+  ocv.filter(o => nome(o.motivo) === 'MOTOR OCIOSO' && isencao(o))
+    .forEach(o => isencoesPorNome.set(nome(o.funcionario), [...(isencoesPorNome.get(nome(o.funcionario)) || []), `${ddmm(o.iso)}: ${o.causa || o.ocorrencia}`]));
+  [...totalOcioso.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).forEach(([mot, n]) =>
+    add(fim, mot, REQ.motorOcioso, `MOTORISTA TEVE ${n} OCORRÊNCIAS DE MOTOR OCIOSO`,
+      isencoesPorNome.has(mot) ? `ISENÇÃO REGISTRADA PELA CCO - ${isencoesPorNome.get(mot).join(' | ')}` : null));
+
+  // Conduta, desvio de rota, atolamento etc.: requisito pelo texto (REGRAS_CONDUTA).
+  const textoOcv = o => nome(`${o.motivo} ${o.causa} ${o.ocorrencia}`);
+  const regraConduta = o => REGRAS_CONDUTA.find(r => (r.doMotivo ? r.doMotivo.test(nome(o.motivo)) : r.texto.test(textoOcv(o))));
+  const gestorPendente = o => (Array.isArray(o.tratativas) ? o.tratativas : [])
+    .some(t => t && t.area === 'GESTOR' && String(t.status || '').toUpperCase() !== 'CONCLUIDA');
+  const outrasOcv = ocv.filter(o => !/^(MOTOR OCIOSO|FALTA AJUDANTE|FALTA MOTORISTA|INCONSISTENCIA CHECK LIST)$/.test(nome(o.motivo)));
+  // Texto do app numa linha so, sem emoji (o desvio vem em formato de mensagem).
+  const limpo = t => String(t || '').replace(/[\u{1F000}-\u{1FAFF}\u{2300}-\u{23FF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '')
+    .replace(/\s+/g, ' ').trim().slice(0, 250);
+  outrasOcv.filter(regraConduta).forEach(o => {
+    const r = regraConduta(o);
+    add(o.iso, o.funcionario, r.requisito, r.motivo || limpo(o.ocorrencia || o.causa || o.motivo),
+      [limpo(r.motivo ? o.ocorrencia || o.causa : o.causa), gestorPendente(o) ? '(tratativa do gestor pendente)' : null].filter(Boolean).join(' - '));
+  });
 
   // Checklist e Fusion: uma linha por (viagem, tipo) nao iniciado.
   const justificado = v => JUSTIFICADO.test(String(v.observacao || '').toUpperCase());
@@ -296,19 +384,93 @@ async function main() {
       motorista: nome(eq.motorista) || nome(nomeMotorista[String(d.motorista_id)]),
       ajudante: nome(eq.ajudante), ajudante2: nome(eq.ajudante_2) };
   });
-  // Todas contam, com ou sem analise/desconto do gestor (decisao de 26/10/2026:
-  // a devolucao ocorreu). Sem causa raiz ainda, vai o motivo reclamado.
+  // So conta a devolucao com "Desconto Aplicado = SIM" do gestor
+  // (desconto_produtividade_gestor), decisao do Tiago em 28/11/2026, igual ao
+  // acerto. Substitui a de 26/10 ("todas contam"). A aba Devolucao continua com
+  // todas as ERRO MOTORISTA e a coluna Desconto Aplicado, para o Victor conferir;
+  // as que ainda estao sem analise do gestor saem no aviso do fim.
+  const descontaDev = d => d.desconto_produtividade_gestor === true;
   const motivoDev = d => d.motivo_real_causa_raiz || d.motivo_reclamado;
-  const complDev = d => `${d.numero_protocolo || d.numero_devolucao}${String(d.status_gestao || '').startsWith('PENDENTE') ? ' (sem análise do gestor)' : ''}`;
-  linhasDev.forEach(x => add(x.iso, x.motorista, REQ.devolucao, motivoDev(x.d), complDev(x.d)));
-  linhasDev.forEach(x => [x.ajudante, x.ajudante2].forEach(a => add(x.iso, a, REQ.devolucao, motivoDev(x.d), complDev(x.d))));
+  const complDev = d => `${d.numero_protocolo || d.numero_devolucao}`;
+  const linhasDevConta = linhasDev.filter(x => descontaDev(x.d));
+  linhasDevConta.forEach(x => add(x.iso, x.motorista, REQ.devolucao, motivoDev(x.d), complDev(x.d)));
+  linhasDevConta.forEach(x => [x.ajudante, x.ajudante2].forEach(a => add(x.iso, a, REQ.devolucao, motivoDev(x.d), complDev(x.d))));
 
-  // Falta (de ajudante ou de motorista): o dia descontado vai na Folgas-Falta;
-  // a de ajudante tambem e Pontualidade. Vale o nome do registro, mesmo que a
-  // funcao lancada no app nao bata com o motivo.
-  const faltas = ocv.filter(o => /^FALTA (AJUDANTE|MOTORISTA)$/.test(nome(o.motivo)));
-  faltas.filter(o => nome(o.motivo) === 'FALTA AJUDANTE')
-    .forEach(o => add(o.iso, o.funcionario, REQ.pontualidade, 'FALTA DO COLABORADOR, GEROU ATRASO NA PONTUALIDADE', o.causa));
+  // Falta (de ajudante ou de motorista): vale o NOME do registro, e a funcao vem
+  // da planilha (abas Motorista/Ajudante/BD), nao do motivo lancado no app.
+  // Ajudante: Pontualidade e Prazo Rota. Motorista: Prazo Rota (prestador, nao
+  // tem pontualidade). Todas vao tambem para a Folgas-Falta como DESCONTADO: o
+  // arquivo e o respaldo, o Victor avalia, abona e decide o pagamento.
+  //
+  // Dias de falta (regra do Tiago, 26/11/2026): os dias da viagem que a pessoa
+  // perdeu (saida -> retorno), mas so ate a proxima viagem em que ela saiu. Ex.:
+  // faltou hoje numa viagem de 3 dias = 3 dias; se saiu em outra viagem amanha
+  // = 1 dia. A viagem perdida e achada pela carga (o app nao liga a falta a
+  // viagem); dia ja contado por outra falta da mesma pessoa nao conta de novo.
+  //
+  // Folga (Escala -> Folgas): conta os dias fora da escala na Folgas-Falta, mas
+  // NAO gera Prazo Rota nem Pontualidade. Falta lancada num dia de folga
+  // aprovada vale como a folga (sem conduta e sem contar o dia duas vezes).
+  const numerosCarga = c => (String(c || '').match(/\d{4,6}/g) || []);
+  const viagemDaFalta = o => {
+    const nums = numerosCarga(o.carga);
+    const perto = todasViagens.filter(v => v.iso && Math.abs(Date.parse(v.iso) - Date.parse(o.iso)) <= 86400000);
+    return perto.find(v => chaveCarga(v.carga).replace(/\s+/g, '') === chaveCarga(o.carga).replace(/\s+/g, ''))
+      || (nums.length ? perto.find(v => numerosCarga(v.carga).some(n => nums.includes(n))) : null) || null;
+  };
+  const diaMais = (iso, n) => new Date(Date.parse(iso) + n * 86400000).toISOString().slice(0, 10);
+  const diasEntre = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+  const faltas = ocv.filter(o => /^FALTA (AJUDANTE|MOTORISTA)$/.test(nome(o.motivo)))
+    .map(o => ({ ...o, funcaoPlanilha: funcaoDe(nome(o.funcionario), o.funcao), viagem: viagemDaFalta(o) }))
+    .sort((a, b) => a.iso.localeCompare(b.iso));
+  const cargasFaltadas = new Map(); // pessoa -> viagens que ela perdeu (nao valem como "proxima viagem")
+  faltas.forEach(o => o.viagem && cargasFaltadas.set(nome(o.funcionario), [...(cargasFaltadas.get(nome(o.funcionario)) || []), o.viagem]));
+  // Dias ja contados por pessoa: primeiro os das folgas, depois os das faltas.
+  const diasContados = new Map();
+  const marcar = (pessoa, de, ate) => {
+    const s = diasContados.get(pessoa) || new Set();
+    for (let d = de; d <= ate; d = diaMais(d, 1)) s.add(d);
+    diasContados.set(pessoa, s);
+  };
+  const contado = (pessoa, d) => (diasContados.get(pessoa) || new Set()).has(d);
+  const folgasPeriodo = folgas.map(f => ({ ...f, pessoa: nome(f.colaborador_nome),
+    inicioFolga: f.data_inicio < inicio ? inicio : f.data_inicio, fimFolga: f.data_fim > fim ? fim : f.data_fim }));
+  folgasPeriodo.forEach(f => marcar(f.pessoa, f.inicioFolga, f.fimFolga));
+  faltas.forEach(o => {
+    const pessoa = nome(o.funcionario);
+    const folga = folgasPeriodo.find(f => f.pessoa === pessoa && f.data_inicio <= o.iso && f.data_fim >= o.iso);
+    if (folga) {
+      o.cobertaPorFolga = true;
+      o.diasFalta = 0;
+      o.obsDias = `DIA DE FOLGA APROVADA (${folga.categoria} DE ${ddmm(folga.data_inicio)} A ${ddmm(folga.data_fim)}): CONTA SO COMO FOLGA, SEM PRAZO ROTA/PONTUALIDADE`;
+      return;
+    }
+    const retorno = o.viagem && isoDe(o.viagem.data_retorno);
+    let ate = retorno && retorno >= o.iso ? retorno : o.iso;
+    const proxima = todasViagens.filter(v => v.iso > o.iso && !(cargasFaltadas.get(pessoa) || []).includes(v)
+      && [v.motorista, v.ajudante, v.ajudante_2].some(n => nome(n) === pessoa))
+      .reduce((m, v) => (!m || v.iso < m ? v.iso : m), null);
+    if (proxima && proxima <= ate) ate = diaMais(proxima, -1);
+    if (ate > fim) ate = fim;
+    // Primeiro bloco de dias seguidos ainda nao contados (folga ou outra falta).
+    let de = o.iso;
+    while (de <= ate && contado(pessoa, de)) de = diaMais(de, 1);
+    let ult = de;
+    while (ult < ate && !contado(pessoa, diaMais(ult, 1))) ult = diaMais(ult, 1);
+    o.inicioFalta = de;
+    o.fimFalta = ult;
+    o.diasFalta = de <= ate ? diasEntre(de, ult) + 1 : 0;
+    if (o.diasFalta) marcar(pessoa, de, ult);
+    o.obsDias = !o.viagem ? '1 DIA (VIAGEM DA CARGA NAO ENCONTRADA NO CONTROLE DE VIAGENS)'
+      : !retorno ? `${o.diasFalta} DIA(S) (VIAGEM ${o.viagem.carga} SEM DATA DE RETORNO)`
+      : !o.diasFalta ? `DIAS JA CONTADOS EM OUTRA FALTA OU FOLGA (VIAGEM ${o.viagem.carga})`
+      : `${o.diasFalta} DIA(S) - VIAGEM ${o.viagem.carga} DE ${ddmm(o.viagem.iso)} A ${ddmm(retorno)}${proxima && diaMais(proxima, -1) < retorno ? `, SAIU EM OUTRA VIAGEM EM ${ddmm(proxima)}` : ''}`;
+  });
+  faltas.filter(o => !o.cobertaPorFolga).forEach(o => {
+    const compl = [o.obsDias, o.causa].filter(Boolean).join(' - ');
+    if (o.funcaoPlanilha !== 'MOTORISTA') add(o.iso, o.funcionario, REQ.pontualidade, 'FALTA DO COLABORADOR, GEROU ATRASO NA PONTUALIDADE', compl);
+    add(o.iso, o.funcionario, REQ.prazoRota, o.funcaoPlanilha === 'MOTORISTA' ? 'FALTA DO MOTORISTA NA ROTA' : 'FALTA DO AJUDANTE NA ROTA', compl);
+  });
 
   // ---- Abre o modelo
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jr-req-'));
@@ -376,11 +538,23 @@ async function main() {
   preencherTabela('OCORRÊNCIAS PLN', letras('A', 'J'), ocv,
     o => [serial(o.iso), o.carga, o.rota, o.placa, nome(o.funcionario), nome(o.funcao), o.motivo, o.causa, o.ocorrencia, o.acao]);
 
-  // --- Folgas-Falta: faltas do Oc. Operacional, todas DESCONTADO (o Victor
-  // Hugo troca para ABONADO). Ferias e folgas continuam a mao.
-  preencherTabela('Folgas-Falta', [...letras('A', 'K'), 'N', 'O', 'P'], faltas,
-    o => [serial(o.iso), nome(o.funcionario), nome(o.funcao), nome(o.motivo), serial(o.iso), serial(o.iso), undefined,
-      'INTEGRAL', null, null, 'DESCONTADO', o.causa, o.ocorrencia, o.acao]);
+  // --- Folgas-Falta: folgas da Escala e faltas do Oc. Operacional, em ordem de
+  // inicio. Falta sai DESCONTADO (o Victor troca para ABONADO); folga sai como o
+  // tratamento da Escala (ABONADO) ou DESCONTADO. Uma linha por falta com dias
+  // (a que so repete dias ja contados fica so na Ocorrencias); DIAS e a formula
+  // da propria tabela (fim - inicio + 1). Folga cortada no periodo 26 -> 25.
+  const faltasComDias = faltas.filter(o => o.diasFalta > 0);
+  const linhasFolgaFalta = [
+    ...folgasPeriodo.map(f => ({ ordem: f.inicioFolga, linha: [serial(f.data_solicitacao || f.data_inicio), f.pessoa,
+      funcaoDe(f.pessoa, f.colaborador_tipo), f.categoria, serial(f.inicioFolga), serial(f.fimFolga), undefined,
+      f.periodo || 'INTEGRAL', f.parecer, f.substituto ? nome(f.substituto) : null, f.tratamento === 'ABONADO' ? 'ABONADO' : 'DESCONTADO',
+      [f.motivo, f.data_inicio !== f.inicioFolga || f.data_fim !== f.fimFolga ? `FOLGA DE ${ddmm(f.data_inicio)} A ${ddmm(f.data_fim)} (CORTADA NO PERIODO)` : null].filter(Boolean).join(' - '),
+      'FOLGA (ESCALA)', f.aprovado_por ? `APROVADO POR ${f.aprovado_por}` : null] })),
+    ...faltasComDias.map(o => ({ ordem: o.inicioFalta, linha: [serial(o.iso), nome(o.funcionario), o.funcaoPlanilha || nome(o.funcao), nome(o.motivo),
+      serial(o.inicioFalta), serial(o.fimFalta), undefined, 'INTEGRAL', null, null, 'DESCONTADO',
+      [o.obsDias, o.causa].filter(Boolean).join(' - '), o.ocorrencia, o.acao] }))
+  ].sort((a, b) => a.ordem.localeCompare(b.ordem));
+  preencherTabela('Folgas-Falta', [...letras('A', 'K'), 'N', 'O', 'P'], linhasFolgaFalta, x => x.linha);
 
   // --- Checklist (VERIFICADO: NAO REALIZADO conta; SISTEMA INOPERANTE nao)
   preencherTabela('Checklist', letras('A', 'K'), checklists,
@@ -457,38 +631,48 @@ async function main() {
   fs.rmSync(tmp, { recursive: true, force: true });
 
   // ---- Resumo
-  const XLSX = require(path.join(__dirname, '..', 'js', 'xlsx.full.min.js'));
-  const wbLido = XLSX.read(fs.readFileSync(modelo));
-  const bd = XLSX.utils.sheet_to_json(wbLido.Sheets[acharAba('BD')] || {}, { header: 1, defval: '' });
-  const colNomeBD = Math.max(0, (bd[0] || []).findIndex(h => /^FUNCION/i.test(String(h).trim())));
-  const nomesBD = new Set(bd.slice(1).map(r => nome(r[colNomeBD])).filter(Boolean));
   const conta = req => oc.filter(o => o.requisito === req).length;
   console.log(`\nGerada: ${saida}`);
   console.log(`  Ocorrencias ........ ${oc.length} linhas`);
-  console.log(`    Motor ocioso (CCO) ...... ${conta(REQ.motorOcioso)}`);
-  console.log(`    Checklist ............... ${conta(REQ.checklist)} motoristas`);
-  console.log(`    Fusion .................. ${conta(REQ.fusion)} motoristas`);
-  console.log(`    Sinistro ................ ${conta(REQ.sinistro)}`);
-  console.log(`    Devolucao ............... ${conta(REQ.devolucao)} (${devs.length} devolucoes ERRO MOTORISTA)`);
+  console.log(`    Media Consumo ........... ${conta(REQ.motorOcioso)} (${totalOcioso.size} motoristas com o total do rastreador + eventos confirmados pela CCO)`);
+  console.log(`    Manut. Veiculo/Aparelho . ${conta(REQ.checklist)}`);
+  console.log(`    Fusion .................. ${conta(REQ.fusion)}`);
+  console.log(`    Sinistro & Conservacao .. ${conta(REQ.sinistro)}`);
+  console.log(`    Devolucao ............... ${conta(REQ.devolucao)} (${linhasDevConta.length} de ${devs.length} devolucoes ERRO MOTORISTA com Desconto Aplicado = SIM)`);
   console.log(`    Pontualidade ............ ${conta(REQ.pontualidade)}`);
-  console.log(`  Abas de apoio ...... Motor Ocioso ${alertasAba.reduce((t, a) => t + (a.qtd || 1), 0)} alertas, OCORRENCIAS PLN ${ocv.length}, Folgas-Falta ${faltas.length}, Checklist ${checklists.length}, Fusion NA ${fusions.length}, Devolucao ${linhasDev.length}, Tempo de Rota ${viagens.length}`);
-  const foraBD = [...new Set(oc.map(o => o.prestador))].filter(n => !nomesBD.has(n)).sort();
-  if (foraBD.length) console.log(`  ATENCAO - fora da aba BD (vao aparecer com #N/D): ${foraBD.join('; ')}`);
+  console.log(`    Prazo Rota (faltas) ..... ${conta(REQ.prazoRota)}`);
+  faltas.forEach(o => console.log(`      falta ${ddmm(o.iso)} ${nome(o.funcionario)} (${o.funcaoPlanilha}): ${o.obsDias}`));
+  console.log(`  Folgas (Escala) .... ${folgasPeriodo.length}, so na Folgas-Falta (sem Prazo Rota/Pontualidade)`);
+  folgasPeriodo.forEach(f => console.log(`      folga ${ddmm(f.inicioFolga)} a ${ddmm(f.fimFolga)} ${f.pessoa}: ${f.categoria}, ${diasEntre(f.inicioFolga, f.fimFolga) + 1} dia(s), ${f.tratamento === 'ABONADO' ? 'ABONADO' : 'DESCONTADO'}`));
+  console.log(`  Abas de apoio ...... Motor Ocioso ${alertasAba.reduce((t, a) => t + (a.qtd || 1), 0)} alertas, OCORRENCIAS PLN ${ocv.length}, Folgas-Falta ${linhasFolgaFalta.length}, Checklist ${checklists.length}, Fusion NA ${fusions.length}, Devolucao ${linhasDev.length}, Tempo de Rota ${viagens.length}`);
+  const prestadores = [...new Set([...oc.map(o => o.prestador), ...folgasPeriodo.map(f => f.pessoa)])].sort();
+  const foraAbas = prestadores.filter(n => !nomesMotoristaAba.has(n) && !nomesAjudanteAba.has(n));
+  if (foraAbas.length) console.log(`  ATENCAO - fora das abas Motorista/Ajudante (ocorrencia/folga nao conta para ninguem): ${foraAbas.join('; ')}`);
+  const foraBD = prestadores.filter(n => !nomesBD.has(n) && !foraAbas.includes(n));
+  if (foraBD.length) console.log(`  Fora da aba BD (Cod. ERP / Funcao com #N/D, mas a contagem funciona): ${foraBD.join('; ')}`);
   const isentos = ocv.filter(o => nome(o.motivo) === 'MOTOR OCIOSO' && isencao(o));
   if (isentos.length) console.log(`  Motor ocioso com isencao (nao entrou): ${isentos.map(o => `${ddmm(o.iso)} ${nome(o.funcionario)}`).join('; ')}`);
   const pendGestor = linhasDev.filter(x => String(x.d.status_gestao || '').startsWith('PENDENTE')).map(x => x.d.numero_protocolo);
-  if (pendGestor.length) console.log(`  Devolucao ERRO MOTORISTA ainda sem analise do gestor (entraram assim mesmo): ${pendGestor.join(', ')}`);
+  if (pendGestor.length) console.log(`  ATENCAO - devolucao ERRO MOTORISTA ainda sem analise do gestor (NAO contaram; so contam com Desconto Aplicado = SIM): ${pendGestor.join(', ')}`);
+  const semDesconto = linhasDev.filter(x => !descontaDev(x.d) && !String(x.d.status_gestao || '').startsWith('PENDENTE')).map(x => x.d.numero_protocolo);
+  if (semDesconto.length) console.log(`  Devolucao ERRO MOTORISTA com Desconto Aplicado = NAO (nao contaram): ${semDesconto.join(', ')}`);
+  // O texto da acao do gestor as vezes diz "DESCONTADO" sem a caixa marcada
+  // (DEV-236 e 241 em nov/26): o gestor tem de marcar, senao nao conta.
+  const textoDiz = linhasDev.filter(x => !descontaDev(x.d) && /DESCONTAD/i.test(x.d.acao_gestor || '') && !/N[AÃ]O\s+(HAVER[AÁ]\s+)?DESCONT/i.test(x.d.acao_gestor || '')).map(x => x.d.numero_protocolo);
+  if (textoDiz.length) console.log(`  ATENCAO - a acao do gestor diz DESCONTADO, mas Desconto Aplicado esta desmarcado (nao contaram; o gestor precisa marcar): ${textoDiz.join(', ')}`);
   const semEquipe = linhasDev.filter(x => !x.motorista).map(x => x.d.numero_protocolo);
   if (semEquipe.length) console.log(`  ATENCAO - devolucao sem motorista (carga fora do Controle de Viagens): ${semEquipe.join(', ')}`);
-  const faltaTrocada = faltas.filter(o => !nome(o.motivo).endsWith(nome(o.funcao)));
-  if (faltaTrocada.length) console.log(`  Falta com funcao diferente do motivo no app (entrou pelo nome): ${faltaTrocada.map(o => `${ddmm(o.iso)} ${nome(o.funcionario)} (${o.motivo} / ${o.funcao})`).join('; ')}`);
-  const outras = ocv.filter(o => !/^(MOTOR OCIOSO|FALTA AJUDANTE|FALTA MOTORISTA|INCONSISTENCIA CHECK LIST)$/.test(nome(o.motivo)));
+  const faltaTrocada = faltas.filter(o => !nome(o.motivo).endsWith(o.funcaoPlanilha));
+  if (faltaTrocada.length) console.log(`  Falta com motivo diferente da funcao na planilha (entrou pela funcao da planilha): ${faltaTrocada.map(o => `${ddmm(o.iso)} ${nome(o.funcionario)} (${o.motivo} / ${o.funcaoPlanilha})`).join('; ')}`);
+  const comRegra = outrasOcv.filter(regraConduta);
+  if (comRegra.length) console.log(`  Condutas com requisito: ${comRegra.map(o => `${ddmm(o.iso)} ${nome(o.funcionario)} -> ${regraConduta(o).requisito}`).join('; ')}`);
+  const outras = outrasOcv.filter(o => !regraConduta(o));
   if (outras.length) console.log(`  Para avaliar (estao so na aba OCORRENCIAS PLN): ${outras.map(o => `${ddmm(o.iso)} ${nome(o.funcionario)} - ${o.motivo}`).join('; ')}`);
   const semMot = alertasAba.filter(a => !a.motorista).reduce((t, a) => t + (a.qtd || 1), 0);
   const quando = ultimoSync ? new Date(ultimoSync.finalizado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : 'nunca';
-  console.log(`  Motor ocioso (Power BI) . ${alertasAba.reduce((t, a) => t + (a.qtd || 1), 0)} alertas (sem as placas ${VEICULOS_FORA_MOTOR_OCIOSO.join(', ')}), ${semMot} sem motorista vinculado (ultima sincronizacao: ${quando})`);
-  console.log('\nFalta preencher a mao: Acerto Caixa, Cuidado Pneus, Prazo Rota, Fusion desvio (furo de cerca /');
-  console.log('entrega fora do local), ferias e folgas, e as isencoes de motor ocioso.');
+  console.log(`  Motor ocioso (Power BI) . ${alertasAba.reduce((t, a) => t + (a.qtd || 1), 0)} alertas (sem os ${placasIsentas.length} caminhoes ${TIPO_ISENTO_MOTOR_OCIOSO}: ${placasIsentas.join(', ')}), ${semMot} sem motorista vinculado (ultima sincronizacao: ${quando})`);
+  console.log('\nFalta preencher a mao: Acerto Caixa, Cuidado Pneus fora da Oc. Operacional, Prazo Rota por atraso de entrega, folga/ferias');
+  console.log('que nao estiver na Escala, e descontar as isencoes de motor ocioso (vao no Complemento quando a CCO registra).');
   console.log('Abonos: apagar a linha ou o Requisito na aba Ocorrencias; falta abonada = ABONADO na Folgas-Falta.');
 }
 

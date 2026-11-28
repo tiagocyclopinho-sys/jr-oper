@@ -508,8 +508,8 @@ function custoGestaoSlides(pres, d) {
   cartao(s, 3.65, 1.5, 2.9, 1.2, pct(e.combFat.mes, 2), 'Combustível sobre faturamento', comparar(e.combFat.mes, e.combFat.med, md));
   cartao(s, 6.7, 1.5, 2.9, 1.2, P3(e.despFat.mes), 'Despesa sobre faturamento', comparar(e.despFat.mes, e.despFat.med, md));
   cartao(s, 9.75, 1.5, 2.95, 1.2, R3(e.despKg.mes), 'Despesa por kg faturado', comparar(e.despKg.mes, e.despKg.med, md));
-  const cols = [{ titulo: 'Gerente / Supervisor', w: 3.5 }, { titulo: 'Faturamento', w: 1.5, align: 'right' }, { titulo: 'Combustível', w: 1.2, align: 'right' }, { titulo: 'Comb./kg média', w: 1.3, align: 'right' }, { titulo: 'Comb./kg mês', w: 1.25, align: 'right' }, { titulo: 'Comb./fat. mês', w: 1.25, align: 'right' }, { titulo: 'Desp./fat. média', w: 1.1, align: 'right' }, { titulo: 'Desp./fat. mês', w: 1.0, align: 'right' }];
-  const linhas = [...c.gerentes, ...c.supervisores].map((x) => [x.nome.slice(0, 34), reais(x.fat), x.comb === null ? 'sem carro' : reais(x.comb), R4(x.combKg.med), R4(x.combKg.mes), P3(x.combFat.mes), P3(x.despFat.med), P3(x.despFat.mes)]);
+  const cols = [{ titulo: 'Gerente / Supervisor', w: 2.8 }, { titulo: 'Faturamento', w: 1.3, align: 'right' }, { titulo: 'Peso (kg)', w: 0.95, align: 'right' }, { titulo: 'Combustível', w: 1.0, align: 'right' }, { titulo: 'Despesa', w: 0.95, align: 'right' }, { titulo: 'Comb./kg média', w: 1.1, align: 'right' }, { titulo: 'Comb./kg mês', w: 1.05, align: 'right' }, { titulo: 'Comb./fat. mês', w: 1.05, align: 'right' }, { titulo: 'Desp./fat. mês', w: 1.05, align: 'right' }];
+  const linhas = [...c.gerentes, ...c.supervisores].map((x) => [x.nome.slice(0, 30), reais(x.fat), num(x.kg), x.comb === null ? 'sem carro' : reais(x.comb), reais(x.desp), R4(x.combKg.med), R4(x.combKg.mes), P3(x.combFat.mes), P3(x.despFat.mes)]);
   tabela(s, 0.6, 2.85, cols, linhas, { fonte: 9, alturaLinha: 0.25 });
   const n = 19, paginas = Math.max(Math.ceil(c.motoristas.length / (n * 2)), 1);
   for (let i = 0; i < paginas; i++) {
@@ -632,10 +632,10 @@ async function main() {
   inventario(pres, d);
   devolucao(pres, d);
   despesa(pres, d);
+  custoGestaoSlides(pres, d);
   abastecimento(pres, d);
   motoristas(pres, d);
   rastreamento(pres, d);
-  custoGestaoSlides(pres, d);
   sac(pres, d);
   slideImagem(pres, 'fim.jpg');
 

@@ -1,0 +1,8 @@
+{
+  "name": "jr-oper-tools",
+  "private": true,
+  "description": "Geradores locais do Jr-Oper (planilhas e apresentacoes). Instalar com: npm install --prefix tools",
+  "dependencies": {
+    "pptxgenjs": "3.12.0"
+  }
+}
